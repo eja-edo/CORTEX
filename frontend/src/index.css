@@ -1,55 +1,109 @@
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap');
 
 :root {
-  --ink: #0d1b2a;
-  --soft: #516174;
-  --muted: #7f8ea0;
-  --line: #d7dee8;
-  --brand: #0b8a8f;
-  --brand-hover: #076b72;
-  --danger: #cf3d2e;
-  --danger-hover: #a93125;
-  --bg-canvas: #eef4f8;
-  --panel-bg: #f9fcff;
-  --font-body: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
-  --font-heading: 'Space Grotesk', 'Plus Jakarta Sans', system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', Consolas, monospace;
+  /* Notion-inspired palette */
+  --bg: #ffffff;
+  --bg-secondary: #f7f7f5;
+  --bg-hover: #efefef;
+  --bg-active: #e9e9e7;
+  --border: #e9e9e7;
+  --border-strong: #d3d1cb;
+
+  --text-primary: #37352f;
+  --text-secondary: #787774;
+  --text-tertiary: #9b9a97;
+  --text-disabled: #c4c3bf;
+
+  --accent: #2383e2;
+  --accent-light: #e7f3ff;
+  --accent-hover: #1a6cca;
+
+  --red: #eb5757;
+  --red-light: #fff0f0;
+  --yellow: #dfab01;
+  --yellow-light: #fefae0;
+  --green: #0f7b6c;
+  --green-light: #edfaf7;
+  --purple: #9065b0;
+  --purple-light: #f6f3f9;
+
+  --sidebar-width: 300px;
+  --topbar-height: 45px;
+
+  --font: 'Geist', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'Geist Mono', 'SF Mono', Consolas, monospace;
+
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow: 0 2px 8px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.06);
 }
 
-* {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
+  margin: 0;
+  padding: 0;
 }
 
 body {
-  margin: 0;
-  color: var(--ink);
-  font-family: var(--font-body);
-  min-height: 100vh;
-  background-color: var(--bg-canvas);
-  background-image:
-    radial-gradient(circle at 8% 12%, rgba(11, 138, 143, 0.14), transparent 40%),
-    radial-gradient(circle at 88% 6%, rgba(252, 188, 116, 0.23), transparent 35%),
-    linear-gradient(180deg, #f5f9fc 0%, #ebf3f7 100%);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  background: var(--bg);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-#root {
-  min-height: 100vh;
-}
-
-h1, h2, h3, h4 {
-  margin: 0;
-  font-family: var(--font-heading);
-  color: var(--ink);
-  font-weight: 700;
-  letter-spacing: -0.025em;
+h1,
+h2,
+h3,
+h4,
+h5 {
+  font-family: var(--font);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
 }
 
 p {
   margin: 0;
 }
 
+input,
+select,
+textarea,
+button {
+  font-family: var(--font);
+  font-size: 14px;
+}
+
 ::selection {
-  background: rgba(11, 138, 143, 0.2);
-  color: #082027;
+  background: rgba(35, 131, 226, 0.2);
+  color: var(--text-primary);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 99px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
 }

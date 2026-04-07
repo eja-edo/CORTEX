@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import { clsx } from 'clsx'
 
 type AuthMode = 'login' | 'register'
 
@@ -12,11 +11,11 @@ interface AuthPanelProps {
 
 export function AuthPanel({ onLogin, onRegister, isBusy }: AuthPanelProps) {
   const [authMode, setAuthMode] = useState<AuthMode>('login')
-  const [loginEmail, setLoginEmail] = useState<string>('')
-  const [loginPassword, setLoginPassword] = useState<string>('')
-  const [registerName, setRegisterName] = useState<string>('')
-  const [registerEmail, setRegisterEmail] = useState<string>('')
-  const [registerPassword, setRegisterPassword] = useState<string>('')
+  const [loginEmail, setLoginEmail] = useState('')
+  const [loginPassword, setLoginPassword] = useState('')
+  const [registerName, setRegisterName] = useState('')
+  const [registerEmail, setRegisterEmail] = useState('')
+  const [registerPassword, setRegisterPassword] = useState('')
 
   const handleRegister = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -31,88 +30,106 @@ export function AuthPanel({ onLogin, onRegister, isBusy }: AuthPanelProps) {
   }
 
   return (
-    <section className="panel auth-panel">
-      <div className="auth-switcher">
-        <button
-          type="button"
-          className={clsx('tab', authMode === 'login' && 'active')}
-          onClick={() => setAuthMode('login')}
-        >
-          Login
-        </button>
-        <button
-          type="button"
-          className={clsx('tab', authMode === 'register' && 'active')}
-          onClick={() => setAuthMode('register')}
-        >
-          Register
-        </button>
-      </div>
+    <div className="auth-container">
+      <div className="auth-card">
+        <div className="auth-card-header">
+          <div className="auth-card-icon">C</div>
+          <div className="auth-card-title">Welcome to Cortex</div>
+          <div className="auth-card-sub">Your personal academic planner</div>
+        </div>
 
-      {authMode === 'login' ? (
-        <form className="form-grid" onSubmit={handleLogin}>
-          <label>
-            Email
-            <input
-              type="email"
-              required
-              placeholder="student@university.edu"
-              value={loginEmail}
-              onChange={(e) => setLoginEmail(e.target.value)}
-            />
-          </label>
-          <label>
-            Password
-            <input
-              type="password"
-              required
-              minLength={8}
-              placeholder="••••••••"
-              value={loginPassword}
-              onChange={(e) => setLoginPassword(e.target.value)}
-            />
-          </label>
-          <button className="primary" type="submit" disabled={isBusy}>
-            {isBusy ? 'Signing in...' : 'Sign In with PKCE'}
+        <div className="auth-tabs">
+          <button
+            type="button"
+            className={`auth-tab${authMode === 'login' ? ' active' : ''}`}
+            onClick={() => setAuthMode('login')}
+          >
+            Sign in
           </button>
-        </form>
-      ) : (
-        <form className="form-grid" onSubmit={handleRegister}>
-          <label>
-            Full Name
-            <input
-              type="text"
-              placeholder="Alice Smith"
-              value={registerName}
-              onChange={(e) => setRegisterName(e.target.value)}
-            />
-          </label>
-          <label>
-            Email
-            <input
-              type="email"
-              required
-              placeholder="student@university.edu"
-              value={registerEmail}
-              onChange={(e) => setRegisterEmail(e.target.value)}
-            />
-          </label>
-          <label>
-            Password
-            <input
-              type="password"
-              required
-              minLength={8}
-              placeholder="••••••••"
-              value={registerPassword}
-              onChange={(e) => setRegisterPassword(e.target.value)}
-            />
-          </label>
-          <button className="primary" type="submit" disabled={isBusy}>
-            {isBusy ? 'Creating...' : 'Create Account'}
+          <button
+            type="button"
+            className={`auth-tab${authMode === 'register' ? ' active' : ''}`}
+            onClick={() => setAuthMode('register')}
+          >
+            Create account
           </button>
-        </form>
-      )}
-    </section>
+        </div>
+
+        {authMode === 'login' ? (
+          <form className="auth-form" onSubmit={handleLogin}>
+            <div className="form-field">
+              <label className="form-label" htmlFor="login-email">Email</label>
+              <input
+                id="login-email"
+                className="form-input"
+                type="email"
+                required
+                placeholder="you@university.edu"
+                value={loginEmail}
+                onChange={(e) => setLoginEmail(e.target.value)}
+              />
+            </div>
+            <div className="form-field">
+              <label className="form-label" htmlFor="login-password">Password</label>
+              <input
+                id="login-password"
+                className="form-input"
+                type="password"
+                required
+                minLength={8}
+                placeholder="••••••••"
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+              />
+            </div>
+            <button className="form-submit" type="submit" disabled={isBusy}>
+              {isBusy ? 'Signing in…' : 'Continue'}
+            </button>
+          </form>
+        ) : (
+          <form className="auth-form" onSubmit={handleRegister}>
+            <div className="form-field">
+              <label className="form-label" htmlFor="reg-name">Full name</label>
+              <input
+                id="reg-name"
+                className="form-input"
+                type="text"
+                placeholder="Alice Smith"
+                value={registerName}
+                onChange={(e) => setRegisterName(e.target.value)}
+              />
+            </div>
+            <div className="form-field">
+              <label className="form-label" htmlFor="reg-email">Email</label>
+              <input
+                id="reg-email"
+                className="form-input"
+                type="email"
+                required
+                placeholder="you@university.edu"
+                value={registerEmail}
+                onChange={(e) => setRegisterEmail(e.target.value)}
+              />
+            </div>
+            <div className="form-field">
+              <label className="form-label" htmlFor="reg-password">Password</label>
+              <input
+                id="reg-password"
+                className="form-input"
+                type="password"
+                required
+                minLength={8}
+                placeholder="Min. 8 characters"
+                value={registerPassword}
+                onChange={(e) => setRegisterPassword(e.target.value)}
+              />
+            </div>
+            <button className="form-submit" type="submit" disabled={isBusy}>
+              {isBusy ? 'Creating account…' : 'Create account'}
+            </button>
+          </form>
+        )}
+      </div>
+    </div>
   )
 }
