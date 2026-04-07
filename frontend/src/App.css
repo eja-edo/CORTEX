@@ -1231,3 +1231,224 @@
     padding: 12px 20px 0;
   }
 }
+
+/* ========== APP WORKSPACE SIDEBAR + HOME WORKSPACE ========== */
+.workspace-sidebar {
+  width: 280px;
+  border-right: 1px solid var(--border);
+  background: var(--bg-secondary);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  transition: width 0.2s ease;
+}
+
+.workspace-sidebar.collapsed {
+  width: 58px;
+}
+
+.workspace-sidebar-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin: 10px 12px 6px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.workspace-sidebar-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.workspace-sidebar-body {
+  padding: 4px 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: auto;
+}
+
+.workspace-nav-item {
+  width: 100%;
+  border: none;
+  background: transparent;
+  border-radius: 10px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.workspace-nav-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.workspace-nav-item.active {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.workspace-sidebar-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+}
+
+.workspace-note-links {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.workspace-note-links .workspace-nav-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-sidebar.collapsed .workspace-sidebar-body {
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+.workspace-sidebar.collapsed .workspace-sidebar-section-title span,
+.workspace-sidebar.collapsed .workspace-nav-item span {
+  display: none;
+}
+
+.workspace-sidebar.collapsed .workspace-nav-item,
+.workspace-sidebar.collapsed .workspace-sidebar-section-title {
+  justify-content: center;
+}
+
+.workspace-area {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+}
+
+.home-workspace {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.home-schedule-area {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.home-quick-notes-area {
+  width: min(360px, 35vw);
+  min-width: 280px;
+  border-left: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.home-quick-notes-area .note-sidebar {
+  width: 100%;
+  border-right: none;
+}
+
+.workspace-note {
+  width: min(100%, 920px);
+  margin: 20px auto;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.workspace-note-header {
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.workspace-note-header h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.workspace-note-header p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.workspace-note-toolbar {
+  display: flex;
+  gap: 4px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.workspace-note-editor {
+  min-height: 58vh;
+  padding: 14px 16px 20px;
+  overflow: auto;
+  outline: none;
+  font-size: 0.94rem;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.workspace-note-editor p {
+  margin: 0 0 0.6rem;
+}
+
+.workspace-note-editor ul {
+  margin: 0 0 0.6rem;
+  padding-left: 1.2rem;
+}
+
+.workspace-empty-note {
+  width: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--text-tertiary);
+}
+
+@media (max-width: 1100px) {
+  .home-quick-notes-area {
+    width: 320px;
+    min-width: 250px;
+  }
+}
+
+@media (max-width: 920px) {
+  .home-workspace {
+    flex-direction: column;
+    overflow: auto;
+  }
+
+  .home-quick-notes-area {
+    width: 100%;
+    min-width: 0;
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
+}

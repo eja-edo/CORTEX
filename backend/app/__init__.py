@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.exc import SQLAlchemyError
 from app.config import settings
 from app.database import engine
-from app.models import Base, Note  # noqa: F401
+from app.models import Base
 from app.api.auth import router as auth_router
 from app.api.notes import router as notes_router
 from app.api.schedules import router as schedules_router
@@ -35,7 +35,7 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.BACKEND_CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

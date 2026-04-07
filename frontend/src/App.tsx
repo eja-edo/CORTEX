@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertCircle, CheckCircle2, LogOut, Plus, RefreshCw, X } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { AlertCircle, Bold, CheckCircle2, Home, Italic, List, LogOut, PanelLeftClose, PanelLeftOpen, Plus, RefreshCw, StickyNote, Underline, X } from 'lucide-react'
 import { startOfWeek, endOfWeek } from 'date-fns'
 import 'react-big-calendar/lib/css/react-big-calendar.css'
 import './App.css'
@@ -8,11 +8,41 @@ import { ScheduleForm } from './components/ScheduleForm'
 import { CalendarView } from './components/CalendarView'
 import { NoteSidebar, type NoteItem } from './components/NoteSidebar'
 import type { Schedule, TokenPair, User, ScheduleListResponse } from './types'
+import { applyMarkdownShortcutOnEnter, htmlToMarkdown, markdownToHtml, plainTextFromMarkdown } from './utils/noteMarkdown'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api'
 const PKCE_CLIENT_ID = 'cortex-web'
 const PKCE_REDIRECT_URI = window.location.origin + '/auth/callback'
 const TOKEN_STORAGE_KEY = 'cortex_tokens'
+
+type ApiNote = {
+  id: string
+  user_id: string
+  content: string
+  content_type: string
+  position: { x: number; y: number }
+  size: { width: number; height: number }
+  style: { color: string }
+  version: number
+  is_deleted: boolean
+  created_at: string
+  updated_at: string
+  rendered_html?: string | null
+}
+
+type AppNote = NoteItem & {
+  version: number
+  updatedAt: string
+}
+
+class ApiError extends Error {
+  status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.status = status
+  }
+}
 
 function toLocalInputDateTime(value: Date): string {
   const local = new Date(value.getTime() - value.getTimezoneOffset() * 60000)
@@ -65,6 +95,108 @@ async function createCodeChallenge(verifier: string): Promise<string> {
   return btoa(output).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
 }
 
+function noteTitleFromMd(md: string): string {
+  if (!md) return 'Untitled note'
+  const text = plainTextFromMarkdown(md).replace(/\s+/g, ' ').trim()
+  return text.slice(0, 64) || 'Untitled note'
+}
+
+function formatNoteDate(isoDateTime: string): string {
+  const parsed = new Date(isoDateTime)
+  if (Number.isNaN(parsed.getTime())) return 'Unknown date'
+  return parsed.toLocaleDateString('vi-VN')
+}
+
+function mapApiNoteToAppNote(note: ApiNote): AppNote {
+  return {
+    id: note.id,
+    contentMd: note.content,
+    date: formatNoteDate(note.updated_at),
+    version: note.version,
+    updatedAt: note.updated_at,
+  }
+}
+
+function WorkspaceNoteEditor({
+  note,
+  onChange,
+}: {
+  note: NoteItem
+  onChange: (id: string, contentMd: string) => void
+}) {
+  const editorRef = useRef<HTMLDivElement>(null)
+  const timerRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    const el = editorRef.current
+    if (!el) return
+    el.innerHTML = markdownToHtml(note.contentMd)
+  }, [note.id, note.contentMd])
+
+  useEffect(
+    () => () => {
+      if (timerRef.current) window.clearTimeout(timerRef.current)
+    },
+    [],
+  )
+
+  const flush = useCallback(() => {
+    const el = editorRef.current
+    if (!el) return
+    onChange(note.id, htmlToMarkdown(el.innerHTML))
+  }, [note.id, onChange])
+
+  const queueFlush = useCallback(() => {
+    if (timerRef.current) window.clearTimeout(timerRef.current)
+    timerRef.current = window.setTimeout(flush, 220)
+  }, [flush])
+
+  const applyFormat = useCallback(
+    (command: string) => {
+      const el = editorRef.current
+      if (!el) return
+      el.focus()
+      document.execCommand(command, false)
+      queueFlush()
+    },
+    [queueFlush],
+  )
+
+  return (
+    <section className="workspace-note">
+      <header className="workspace-note-header">
+        <div>
+          <h2>{noteTitleFromMd(note.contentMd)}</h2>
+          <p>{note.date}</p>
+        </div>
+      </header>
+      <div className="workspace-note-toolbar">
+        <button type="button" className="ghost icon-only" onClick={() => applyFormat('bold')} title="Bold" aria-label="Bold"><Bold size={15} /></button>
+        <button type="button" className="ghost icon-only" onClick={() => applyFormat('italic')} title="Italic" aria-label="Italic"><Italic size={15} /></button>
+        <button type="button" className="ghost icon-only" onClick={() => applyFormat('underline')} title="Underline" aria-label="Underline"><Underline size={15} /></button>
+        <button type="button" className="ghost icon-only" onClick={() => applyFormat('insertUnorderedList')} title="List" aria-label="List"><List size={15} /></button>
+      </div>
+      <div
+        ref={editorRef}
+        className="workspace-note-editor"
+        contentEditable
+        suppressContentEditableWarning
+        onKeyDown={(e) => {
+          if (e.key !== 'Enter' || e.shiftKey) return
+          const el = editorRef.current
+          if (!el) return
+          if (applyMarkdownShortcutOnEnter(el)) {
+            e.preventDefault()
+            queueFlush()
+          }
+        }}
+        onInput={queueFlush}
+        onBlur={flush}
+      />
+    </section>
+  )
+}
+
 function App() {
   const [tokens, setTokens] = useState<TokenPair | null>(() => readStoredTokens())
   const [user, setUser] = useState<User | null>(null)
@@ -73,46 +205,77 @@ function App() {
   const [errorMessage, setErrorMessage] = useState<string>('')
   const [isBusy, setIsBusy] = useState<boolean>(false)
   const [isCreateEventOpen, setIsCreateEventOpen] = useState<boolean>(false)
+  const [isWorkspaceSidebarCollapsed, setIsWorkspaceSidebarCollapsed] = useState<boolean>(false)
+  const [activeWorkspaceView, setActiveWorkspaceView] = useState<'home' | 'note'>('home')
+  const [activeWorkspaceNoteId, setActiveWorkspaceNoteId] = useState<string | null>(null)
 
   const weekRange = useMemo(() => getRangeForCurrentWeek(), [])
   const [startDate, setStartDate] = useState<string>(weekRange.startDate)
   const [endDate, setEndDate] = useState<string>(weekRange.endDate)
 
-  const [recentNotes, setRecentNotes] = useState<NoteItem[]>(() => [
-    {
-      id: 'note-1',
-      date: '4/6/2026',
-      contentHtml: `<p>Bắt đầu đi xin dấu thực tập</p><ul><li><strong>Thực tập hệ thống thông tin quản lý</strong></li><li><strong>Thực tập hệ thống thông tin tích hợp</strong></li><li><strong>Thực tập quản trị dự án phần mềm</strong></li></ul><p>https://docs.google.com/document/d/1P9ldp5hSor13MthUFvPvk2hVU2i9IFVQ/edit</p>`,
-    },
-    {
-      id: 'note-2',
-      date: '4/6/2026',
-      contentHtml: '<p>day 4/6/2026</p><ul><li><strong>Todo</strong></li><li><strong>lưu tất cả participant trong room</strong></li></ul><p>Add tất cả participant vào room data phục vụ sync.</p>',
-    },
-    {
-      id: 'note-3',
-      date: '4/3/2026',
-      contentHtml: '<p><strong>Release 2026040x</strong></p><p>Checklist triển khai bản phát hành và các hạng mục cần rà soát.</p>',
-    },
-  ])
+  const [recentNotes, setRecentNotes] = useState<AppNote[]>([])
+  const recentNotesRef = useRef<AppNote[]>([])
+  const noteSyncTimersRef = useRef<Record<string, number>>({})
 
-  const handleNoteChange = useCallback((id: string, contentHtml: string) => {
-    setRecentNotes((prev) => prev.map((n) => (n.id === id ? { ...n, contentHtml } : n)))
+  useEffect(() => {
+    recentNotesRef.current = recentNotes
+  }, [recentNotes])
+
+  const handleNoteChange = useCallback((id: string, contentMd: string) => {
+    setRecentNotes((prev) => prev.map((n) => (n.id === id ? { ...n, contentMd } : n)))
+    scheduleNotePersist(id)
+  }, [])
+  const noteSummaries = useMemo(
+    () => recentNotes.map((note) => ({ id: note.id, date: note.date, title: noteTitleFromMd(note.contentMd) })),
+    [recentNotes],
+  )
+  const activeWorkspaceNote = useMemo(
+    () => recentNotes.find((note) => note.id === activeWorkspaceNoteId) ?? null,
+    [recentNotes, activeWorkspaceNoteId],
+  )
+
+  const openWorkspaceNote = useCallback((noteId: string) => {
+    setActiveWorkspaceNoteId(noteId)
+    setActiveWorkspaceView('note')
   }, [])
 
   useEffect(() => { writeStoredTokens(tokens) }, [tokens])
 
   useEffect(() => {
-    if (!tokens) { setUser(null); setSchedules([]); return }
+    if (!recentNotes.length || activeWorkspaceNoteId) return
+    setActiveWorkspaceNoteId(recentNotes[0].id)
+  }, [recentNotes, activeWorkspaceNoteId])
+
+  useEffect(() => {
+    if (!tokens) {
+      setUser(null)
+      setSchedules([])
+      setRecentNotes([])
+      setActiveWorkspaceNoteId(null)
+      return
+    }
     void fetchCurrentUser(tokens)
     void fetchSchedules(tokens)
   }, [tokens, startDate, endDate])
+
+  useEffect(() => {
+    if (!tokens) return
+    void fetchNotes(tokens)
+  }, [tokens])
+
+  useEffect(
+    () => () => {
+      Object.values(noteSyncTimersRef.current).forEach((timerId) => window.clearTimeout(timerId))
+      noteSyncTimersRef.current = {}
+    },
+    [],
+  )
 
   async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
     const response = await fetch(url, init)
     const text = await response.text()
     const body = text ? JSON.parse(text) : null
-    if (!response.ok) throw new Error(body?.detail ?? `Request failed (${response.status})`)
+    if (!response.ok) throw new ApiError(body?.detail ?? `Request failed (${response.status})`, response.status)
     return body as T
   }
 
@@ -138,8 +301,72 @@ function App() {
     }
     const text = await response.text()
     const body = text ? JSON.parse(text) : null
-    if (!response.ok) throw new Error(body?.detail ?? `Request failed (${response.status})`)
+    if (!response.ok) throw new ApiError(body?.detail ?? `Request failed (${response.status})`, response.status)
     return body as T
+  }
+
+  async function fetchNotes(activeTokens?: TokenPair): Promise<void> {
+    const sessionTokens = activeTokens ?? tokens
+    if (!sessionTokens) return
+    try {
+      const data = await requestWithAuth<ApiNote[]>('/notes')
+      setRecentNotes(data.map(mapApiNoteToAppNote))
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Cannot load notes')
+    }
+  }
+
+  async function persistNoteContent(noteId: string): Promise<void> {
+    const target = recentNotesRef.current.find((note) => note.id === noteId)
+    if (!target) return
+    try {
+      const updated = await requestWithAuth<ApiNote>(`/notes/${noteId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ version: target.version, content: target.contentMd }),
+      })
+      const mapped = mapApiNoteToAppNote(updated)
+      setRecentNotes((prev) => prev.map((note) => (note.id === noteId ? { ...note, ...mapped } : note)))
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        setErrorMessage('Note update conflict. Reloaded latest note version.')
+        await fetchNotes()
+        return
+      }
+      setErrorMessage(error instanceof Error ? error.message : 'Cannot save note')
+    }
+  }
+
+  function scheduleNotePersist(noteId: string): void {
+    const existing = noteSyncTimersRef.current[noteId]
+    if (existing) window.clearTimeout(existing)
+    noteSyncTimersRef.current[noteId] = window.setTimeout(() => {
+      void persistNoteContent(noteId)
+      delete noteSyncTimersRef.current[noteId]
+    }, 280)
+  }
+
+  async function handleCreateNote(): Promise<void> {
+    setErrorMessage('')
+    try {
+      const created = await requestWithAuth<ApiNote>('/notes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: '# New note',
+          content_type: 'markdown',
+          position: { x: 0, y: 0 },
+          size: { width: 200, height: 200 },
+          style: { color: 'yellow' },
+        }),
+      })
+      const mapped = mapApiNoteToAppNote(created)
+      setRecentNotes((prev) => [mapped, ...prev])
+      openWorkspaceNote(mapped.id)
+      setStatusMessage('Note created.')
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Cannot create note')
+    }
   }
 
   async function fetchCurrentUser(activeTokens: TokenPair): Promise<void> {
@@ -264,7 +491,9 @@ function App() {
               <nav className="breadcrumb">
                 <span className="breadcrumb-item">Workspace</span>
                 <span className="breadcrumb-sep">/</span>
-                <span className="breadcrumb-item" style={{ color: 'var(--text-primary)', fontWeight: 500 }}>Schedule</span>
+                <span className="breadcrumb-item" style={{ color: 'var(--text-primary)', fontWeight: 500 }}>
+                  {activeWorkspaceView === 'home' ? 'Home' : (activeWorkspaceNote ? noteTitleFromMd(activeWorkspaceNote.contentMd) : 'Note')}
+                </span>
               </nav>
             </>
           )}
@@ -310,19 +539,74 @@ function App() {
         </div>
       ) : (
         <div className="main-layout">
-          <NoteSidebar notes={recentNotes} onNoteChange={handleNoteChange} />
-          <div className="content-area">
-            <CalendarView
-              schedules={schedules}
-              startDate={startDate}
-              endDate={endDate}
-              onStartDateChange={setStartDate}
-              onEndDateChange={setEndDate}
-              onFetch={() => fetchSchedules()}
-              onOpenCreateEvent={() => setIsCreateEventOpen(true)}
-              onToggleComplete={handleToggleComplete}
-              onRemove={handleRemoveSchedule}
-            />
+          <aside className={`workspace-sidebar ${isWorkspaceSidebarCollapsed ? 'collapsed' : ''}`}>
+            <button
+              type="button"
+              className="workspace-sidebar-toggle"
+              onClick={() => setIsWorkspaceSidebarCollapsed((prev) => !prev)}
+              aria-label={isWorkspaceSidebarCollapsed ? 'Mở sidebar' : 'Thu sidebar'}
+            >
+              {isWorkspaceSidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+            </button>
+
+            <div className="workspace-sidebar-body">
+              <button
+                type="button"
+                className={`workspace-nav-item ${activeWorkspaceView === 'home' ? 'active' : ''}`}
+                onClick={() => setActiveWorkspaceView('home')}
+              >
+                <Home size={15} />
+                <span>Home</span>
+              </button>
+
+              <div className="workspace-sidebar-section-title">
+                <StickyNote size={14} />
+                <span>Notes</span>
+              </div>
+              <div className="workspace-note-links">
+                {noteSummaries.map((note) => (
+                  <button
+                    key={note.id}
+                    type="button"
+                    className={`workspace-nav-item ${activeWorkspaceView === 'note' && activeWorkspaceNoteId === note.id ? 'active' : ''}`}
+                    onClick={() => openWorkspaceNote(note.id)}
+                    title={note.title}
+                  >
+                    <StickyNote size={14} />
+                    <span>{note.title}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </aside>
+
+          <div className="workspace-area">
+            {activeWorkspaceView === 'home' ? (
+              <section className="home-workspace">
+                <div className="home-schedule-area">
+                  <CalendarView
+                    schedules={schedules}
+                    startDate={startDate}
+                    endDate={endDate}
+                    onStartDateChange={setStartDate}
+                    onEndDateChange={setEndDate}
+                    onFetch={() => fetchSchedules()}
+                    onOpenCreateEvent={() => setIsCreateEventOpen(true)}
+                    onToggleComplete={handleToggleComplete}
+                    onRemove={handleRemoveSchedule}
+                  />
+                </div>
+                <div className="home-quick-notes-area">
+                  <NoteSidebar notes={recentNotes} onNoteChange={handleNoteChange} onCreateNote={handleCreateNote} />
+                </div>
+              </section>
+            ) : activeWorkspaceNote ? (
+              <WorkspaceNoteEditor note={activeWorkspaceNote} onChange={handleNoteChange} />
+            ) : (
+              <section className="workspace-empty-note">
+                <p>Chọn một note từ sidebar để mở trong workspace.</p>
+              </section>
+            )}
           </div>
         </div>
       )}

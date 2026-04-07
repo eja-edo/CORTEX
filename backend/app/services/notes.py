@@ -41,9 +41,9 @@ class NoteService:
         self.repository = NoteRepository(session)
         self.markdown = MarkdownIt("commonmark", {"html": False, "linkify": True, "typographer": True})
 
-    async def create_note(self, payload: NoteCreate) -> Note:
+    async def create_note(self, payload: NoteCreate, user_id: UUID) -> Note:
         note = Note(
-            user_id=payload.user_id,
+            user_id=user_id,
             content=payload.content,
             content_type=payload.content_type,
             position=payload.position,
@@ -70,14 +70,14 @@ class NoteService:
             return None
 
         normalized_updates = self._normalize_partial_updates(current_note, partial_updates)
-
-        async with self.session.begin():
-            return await self.repository.update_with_version(
-                note_id=note_id,
-                user_id=user_id,
-                expected_version=payload.version,
-                updates=normalized_updates,
-            )
+        updated = await self.repository.update_with_version(
+            note_id=note_id,
+            user_id=user_id,
+            expected_version=payload.version,
+            updates=normalized_updates,
+        )
+        await self.session.commit()
+        return updated
 
     async def soft_delete(self, note_id: UUID, user_id: UUID) -> bool:
         async with self.session.begin():

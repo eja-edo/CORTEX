@@ -119,7 +119,6 @@ class TokenExchangeRequest(BaseModel):
 
 
 class NoteCreate(BaseModel):
-    user_id: UUID
     content: str = Field(..., min_length=1, max_length=MAX_NOTE_CONTENT_LENGTH)
     content_type: str = Field(default="markdown", max_length=20)
     position: dict[str, Any] = Field(default_factory=lambda: {"x": 0, "y": 0})

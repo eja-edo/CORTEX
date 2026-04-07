@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import { Bold, Check, Italic, List, Plus, Search, SquareArrowOutUpRight, Strikethrough, Underline } from 'lucide-react'
+import { applyMarkdownShortcutOnEnter, htmlToMarkdown, markdownToHtml, plainTextFromMarkdown } from '../utils/noteMarkdown'
 
 export type NoteItem = {
   id: string
   date: string
-  contentHtml: string
+  contentMd: string
 }
 
 interface NoteSidebarProps {
   notes: NoteItem[]
-  onNoteChange: (id: string, contentHtml: string) => void
+  onNoteChange: (id: string, contentMd: string) => void
+  onCreateNote: () => void
 }
 
 function escapeHtml(s: string): string {
@@ -37,27 +39,27 @@ function openNotePopoutWindow(date: string, contentHtml: string): void {
   if (root) root.innerHTML = contentHtml
 }
 
-function plainTextFromHtml(html: string): string {
-  if (!html.trim()) return ''
-  const d = document.createElement('div')
-  d.innerHTML = html
-  return (d.innerText || d.textContent || '').trim()
-}
-
-/** Gets first non-empty line of plain text from HTML */
-function getTitleFromHtml(html: string): string {
-  const plain = plainTextFromHtml(html)
+/** Gets first non-empty line of plain text from markdown */
+function getTitleFromMd(md: string): string {
+  const plain = plainTextFromMarkdown(md)
   return plain.split('\n').find(l => l.trim()) || 'Untitled'
 }
 
 function NoteEditor({
-  noteId, contentHtml, isExpanded, editorRef,
-}: { noteId: string; contentHtml: string; isExpanded: boolean; editorRef: RefObject<HTMLDivElement | null> }) {
+  noteId, contentMd, isExpanded, editorRef, onMarkdownEnter,
+}: {
+  noteId: string
+  contentMd: string
+  isExpanded: boolean
+  editorRef: RefObject<HTMLDivElement | null>
+  onMarkdownEnter: (e: React.KeyboardEvent<HTMLDivElement>) => void
+}) {
   const lastExpanded = useRef(false)
 
   useEffect(() => {
     const el = editorRef.current
     if (!el) return
+    const contentHtml = markdownToHtml(contentMd)
     if (isExpanded && !lastExpanded.current) {
       el.innerHTML = contentHtml
       lastExpanded.current = true
@@ -67,7 +69,7 @@ function NoteEditor({
     if (document.activeElement !== el && el.innerHTML !== contentHtml) {
       el.innerHTML = contentHtml
     }
-  }, [contentHtml, isExpanded, noteId, editorRef])
+  }, [contentMd, isExpanded, noteId, editorRef])
 
   return (
     <div
@@ -78,23 +80,34 @@ function NoteEditor({
       role="textbox"
       aria-multiline
       data-placeholder="Write something…"
+      onKeyDown={onMarkdownEnter}
     />
   )
 }
 
 function NoteCardItem({
   note, isExpanded, onExpand, onCollapse, onNoteChange,
-}: { note: NoteItem; isExpanded: boolean; onExpand: () => void; onCollapse: () => void; onNoteChange: (id: string, html: string) => void }) {
+}: { note: NoteItem; isExpanded: boolean; onExpand: () => void; onCollapse: () => void; onNoteChange: (id: string, md: string) => void }) {
   const cardRef = useRef<HTMLElement>(null)
   const editorRef = useRef<HTMLDivElement>(null)
+  const summaryButtonRef = useRef<HTMLButtonElement>(null)
   const expandId = `note-expand-${note.id}`
-  const title = getTitleFromHtml(note.contentHtml)
+  const title = getTitleFromMd(note.contentMd)
+
+  const collapseWithFocusRestore = useCallback(() => {
+    const active = document.activeElement
+    if (active instanceof HTMLElement && cardRef.current?.contains(active)) {
+      active.blur()
+    }
+    onCollapse()
+    window.requestAnimationFrame(() => summaryButtonRef.current?.focus())
+  }, [onCollapse])
 
   useEffect(() => {
     if (!isExpanded) return
     return () => {
       const el = editorRef.current
-      if (el) onNoteChange(note.id, el.innerHTML)
+      if (el) onNoteChange(note.id, htmlToMarkdown(el.innerHTML))
     }
   }, [isExpanded, note.id, onNoteChange])
 
@@ -102,11 +115,11 @@ function NoteCardItem({
     if (!isExpanded) return
     const onPointerDown = (e: PointerEvent) => {
       if (cardRef.current?.contains(e.target as Node)) return
-      onCollapse()
+      collapseWithFocusRestore()
     }
     document.addEventListener('pointerdown', onPointerDown, true)
     return () => document.removeEventListener('pointerdown', onPointerDown, true)
-  }, [isExpanded, onCollapse])
+  }, [isExpanded, collapseWithFocusRestore])
 
   const applyFormat = (command: string, value?: string) => {
     const el = editorRef.current
@@ -115,26 +128,35 @@ function NoteCardItem({
     document.execCommand(command, false, value)
   }
 
+  const handleMarkdownEnter = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Enter' || e.shiftKey) return
+    const el = editorRef.current
+    if (!el) return
+    const applied = applyMarkdownShortcutOnEnter(el)
+    if (applied) e.preventDefault()
+  }
+
   const handlePopOut = (e: React.MouseEvent) => {
     e.stopPropagation()
     const el = editorRef.current
-    const html = el?.innerHTML ?? note.contentHtml
-    if (el) onNoteChange(note.id, html)
+    const html = el?.innerHTML ?? markdownToHtml(note.contentMd)
+    if (el) onNoteChange(note.id, htmlToMarkdown(html))
     openNotePopoutWindow(note.date, html)
   }
 
   // Pick emoji based on content
-  const emoji = note.contentHtml.includes('<strong>') ? '📋' : note.contentHtml.includes('http') ? '🔗' : '📝'
+  const emoji = note.contentMd.includes('**') ? '📋' : note.contentMd.includes('http') ? '🔗' : '📝'
 
   return (
     <article ref={cardRef} className={`note-card${isExpanded ? ' note-card--expanded' : ''}`}>
       {/* Summary row — always visible */}
       <button
+        ref={summaryButtonRef}
         type="button"
         className="note-card-summary-btn"
         aria-expanded={isExpanded}
         aria-controls={expandId}
-        onClick={isExpanded ? onCollapse : onExpand}
+        onClick={isExpanded ? collapseWithFocusRestore : onExpand}
       >
         <span className="note-icon">{emoji}</span>
         <div className="note-card-info">
@@ -147,7 +169,13 @@ function NoteCardItem({
       <div id={expandId} className="note-expandable" aria-hidden={!isExpanded} inert={!isExpanded}>
         <div className="note-expandable-inner">
           <div className="note-editor-wrap">
-            <NoteEditor noteId={note.id} contentHtml={note.contentHtml} isExpanded={isExpanded} editorRef={editorRef} />
+            <NoteEditor
+              noteId={note.id}
+              contentMd={note.contentMd}
+              isExpanded={isExpanded}
+              editorRef={editorRef}
+              onMarkdownEnter={handleMarkdownEnter}
+            />
             <div
               className="note-toolbar"
               onClick={(e) => e.stopPropagation()}
@@ -169,7 +197,7 @@ function NoteCardItem({
                 <SquareArrowOutUpRight size={13} />
               </button>
               <div className="note-toolbar-spacer" />
-              <button type="button" className="note-done-btn" onClick={onCollapse}>
+              <button type="button" className="note-done-btn" onClick={collapseWithFocusRestore}>
                 <Check size={12} /> Done
               </button>
             </div>
@@ -180,7 +208,7 @@ function NoteCardItem({
   )
 }
 
-export function NoteSidebar({ notes, onNoteChange }: NoteSidebarProps) {
+export function NoteSidebar({ notes, onNoteChange, onCreateNote }: NoteSidebarProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const collapseExpanded = useCallback(() => setExpandedId(null), [])
 
@@ -192,7 +220,7 @@ export function NoteSidebar({ notes, onNoteChange }: NoteSidebarProps) {
           <button type="button" className="sidebar-action-btn" aria-label="Search notes" title="Search">
             <Search size={14} />
           </button>
-          <button type="button" className="sidebar-action-btn" aria-label="New note" title="New note">
+          <button type="button" className="sidebar-action-btn" aria-label="New note" title="New note" onClick={onCreateNote}>
             <Plus size={14} />
           </button>
         </div>
