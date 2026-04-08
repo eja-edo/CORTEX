@@ -1,452 +1,452 @@
 /* ========== APP WORKSPACE SIDEBAR + HOME WORKSPACE ========== */
 .workspace-sidebar {
-  width: 280px;
-  border-right: 1px solid var(--border);
-  background: var(--bg-secondary);
-  display: flex;
-  flex-direction: column;
-  flex-shrink: 0;
-  transition: width 0.2s ease;
+    width: 280px;
+    border-right: 1px solid var(--border);
+    background: var(--bg-secondary);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    transition: width 0.2s ease;
 }
 
 .workspace-sidebar.collapsed {
-  width: 58px;
+    width: 58px;
 }
 
 .workspace-sidebar-toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  margin: 10px 12px 6px;
-  border: none;
-  border-radius: 10px;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    margin: 10px 12px 6px;
+    border: none;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
 }
 
 .workspace-sidebar-toggle:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+    background: var(--bg-hover);
+    color: var(--text-primary);
 }
 
 .workspace-sidebar-body {
-  padding: 4px 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  flex: 1;
-  min-height: 0;
+    padding: 4px 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    flex: 1;
+    min-height: 0;
 }
 
 .workspace-sidebar-main {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  overflow: auto;
-  min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow: auto;
+    min-height: 0;
 }
 
 .workspace-sidebar-footer {
-  margin-top: auto;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-  flex-shrink: 0;
+    margin-top: auto;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
 }
 
 .workspace-nav-item {
-  width: 100%;
-  border: none;
-  background: transparent;
-  border-radius: 10px;
-  padding: 8px 10px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  text-align: left;
+    width: 100%;
+    border: none;
+    background: transparent;
+    border-radius: 10px;
+    padding: 8px 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    text-align: left;
 }
 
 .workspace-nav-item:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+    background: var(--bg-hover);
+    color: var(--text-primary);
 }
 
 .workspace-nav-item.active {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-  font-weight: 600;
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    font-weight: 600;
 }
 
 .workspace-sidebar-section-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--text-tertiary);
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  padding: 2px 6px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--text-tertiary);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 2px 6px;
 }
 
 .workspace-note-links {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
 }
 
 .workspace-note-links .workspace-nav-item span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .workspace-sidebar.collapsed .workspace-sidebar-body {
-  padding-left: 8px;
-  padding-right: 8px;
+    padding-left: 8px;
+    padding-right: 8px;
 }
 
 .workspace-sidebar.collapsed .workspace-sidebar-section-title span,
 .workspace-sidebar.collapsed .workspace-nav-item span {
-  display: none;
+    display: none;
 }
 
 .workspace-sidebar.collapsed .workspace-nav-item,
 .workspace-sidebar.collapsed .workspace-sidebar-section-title {
-  justify-content: center;
+    justify-content: center;
 }
 
 .workspace-area {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  display: flex;
-  min-height: 0;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    display: flex;
+    min-height: 0;
 }
 
 .home-workspace {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  overflow: hidden;
-  min-height: 0;
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    min-height: 0;
 }
 
 .home-schedule-area {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
 }
 
 .home-quick-notes-area {
-  width: min(360px, 35vw);
-  min-width: 280px;
-  border-left: 1px solid var(--border);
-  background: var(--bg-secondary);
+    width: min(360px, 35vw);
+    min-width: 280px;
+    border-left: 1px solid var(--border);
+    background: var(--bg-secondary);
 }
 
 .home-quick-notes-area .note-sidebar {
-  width: 100%;
-  border-right: none;
+    width: 100%;
+    border-right: none;
 }
 
 /* ========== WORKSPACE NOTE PAGE ========== */
 .workspace-note-page {
-  flex: 1;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-secondary);
-  padding: 32px 40px;
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-secondary);
+    padding: 32px 40px;
 }
 
 /* ========== WORKSPACE NOTE (redesigned) ========== */
 .workspace-note {
-  width: min(100%, 760px);
-  margin: 0 auto;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 4px 16px rgba(0, 0, 0, 0.04);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  flex-shrink: 0;
+    width: min(100%, 760px);
+    margin: 0 auto;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 4px 16px rgba(0, 0, 0, 0.04);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    flex-shrink: 0;
 }
 
 .workspace-note-header {
-  padding: 24px 28px 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg);
+    padding: 24px 28px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
 }
 
 .workspace-note-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
 }
 
 .workspace-note-title {
-  font-size: 1.35rem;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  color: var(--text-primary);
-  margin: 0;
-  line-height: 1.3;
+    font-size: 1.35rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--text-primary);
+    margin: 0;
+    line-height: 1.3;
 }
 
 .workspace-note-info {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--text-tertiary);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-tertiary);
 }
 
 .workspace-note-sep {
-  color: var(--border-strong);
+    color: var(--border-strong);
 }
 
 .workspace-note-date,
 .workspace-note-wordcount {
-  font-size: 12px;
-  color: var(--text-tertiary);
+    font-size: 12px;
+    color: var(--text-tertiary);
 }
 
 /* Toolbar */
 .workspace-note-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-secondary);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-secondary);
 }
 
 .workspace-note-toolbar-group {
-  display: flex;
-  align-items: center;
-  gap: 2px;
+    display: flex;
+    align-items: center;
+    gap: 2px;
 }
 
 .workspace-toolbar-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-sm);
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: background 0.1s, color 0.1s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius-sm);
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s;
 }
 
 .workspace-toolbar-btn:hover {
-  background: var(--bg-active);
-  color: var(--text-primary);
+    background: var(--bg-active);
+    color: var(--text-primary);
 }
 
 .workspace-note-toolbar-sep {
-  width: 1px;
-  height: 16px;
-  background: var(--border);
-  margin: 0 4px;
+    width: 1px;
+    height: 16px;
+    background: var(--border);
+    margin: 0 4px;
 }
 
 .workspace-note-toolbar-hint {
-  margin-left: auto;
-  font-size: 11.5px;
-  color: var(--text-disabled);
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  white-space: nowrap;
-  overflow: hidden;
+    margin-left: auto;
+    font-size: 11.5px;
+    color: var(--text-disabled);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+    overflow: hidden;
 }
 
 .workspace-note-toolbar-hint kbd {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1px 5px;
-  background: var(--bg-active);
-  border: 1px solid var(--border-strong);
-  border-radius: 3px;
-  font-size: 10.5px;
-  font-family: var(--font-mono);
-  color: var(--text-secondary);
-  line-height: 1.4;
-  white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1px 5px;
+    background: var(--bg-active);
+    border: 1px solid var(--border-strong);
+    border-radius: 3px;
+    font-size: 10.5px;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+    line-height: 1.4;
+    white-space: nowrap;
 }
 
 /* Editor area */
 .workspace-note-editor {
-  min-height: 480px;
-  padding: 24px 28px 32px;
-  outline: none;
-  font-size: 0.96rem;
-  line-height: 1.75;
-  color: var(--text-primary);
-  font-family: var(--font);
+    min-height: 480px;
+    padding: 24px 28px 32px;
+    outline: none;
+    font-size: 0.96rem;
+    line-height: 1.75;
+    color: var(--text-primary);
+    font-family: var(--font);
 }
 
 .workspace-note-editor:empty::before {
-  content: attr(data-placeholder);
-  color: var(--text-disabled);
-  pointer-events: none;
+    content: attr(data-placeholder);
+    color: var(--text-disabled);
+    pointer-events: none;
 }
 
 .workspace-note-editor p {
-  margin: 0 0 0.5em;
+    margin: 0 0 0.5em;
 }
 
 .workspace-note-editor ul,
 .workspace-note-editor ol {
-  margin: 0.25em 0 0.75em;
-  padding-left: 1.5em;
+    margin: 0.25em 0 0.75em;
+    padding-left: 1.5em;
 }
 
 .workspace-note-editor li {
-  margin: 0.2em 0;
-  line-height: 1.65;
+    margin: 0.2em 0;
+    line-height: 1.65;
 }
 
 .workspace-note-editor strong {
-  font-weight: 700;
-  color: var(--text-primary);
+    font-weight: 700;
+    color: var(--text-primary);
 }
 
 .workspace-note-editor em {
-  font-style: italic;
-  color: var(--text-secondary);
+    font-style: italic;
+    color: var(--text-secondary);
 }
 
 .workspace-note-editor u {
-  text-decoration-color: var(--text-tertiary);
+    text-decoration-color: var(--text-tertiary);
 }
 
 .workspace-note-editor a {
-  color: var(--accent);
-  text-decoration: underline;
-  text-underline-offset: 2px;
+    color: var(--accent);
+    text-decoration: underline;
+    text-underline-offset: 2px;
 }
 
 .workspace-note-editor a:hover {
-  color: var(--accent-hover);
+    color: var(--accent-hover);
 }
 
 .workspace-note-editor pre {
-  background: #f5f4f0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 14px 16px;
-  font-family: var(--font-mono);
-  font-size: 0.87rem;
-  line-height: 1.6;
-  overflow-x: auto;
-  margin: 0.75em 0;
-  color: var(--text-primary);
-  white-space: pre;
+    background: #f5f4f0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 14px 16px;
+    font-family: var(--font-mono);
+    font-size: 0.87rem;
+    line-height: 1.6;
+    overflow-x: auto;
+    margin: 0.75em 0;
+    color: var(--text-primary);
+    white-space: pre;
 }
 
 .workspace-note-editor pre code {
-  background: none;
-  padding: 0;
-  border: none;
-  font-size: inherit;
-  color: inherit;
-  border-radius: 0;
-  white-space: pre;
+    background: none;
+    padding: 0;
+    border: none;
+    font-size: inherit;
+    color: inherit;
+    border-radius: 0;
+    white-space: pre;
 }
 
 .workspace-note-editor code {
-  background: #f0efeb;
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 1px 5px;
-  font-family: var(--font-mono);
-  font-size: 0.85em;
-  color: #c0392b;
+    background: #f0efeb;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    color: #c0392b;
 }
 
 .workspace-note-editor blockquote {
-  border-left: 3px solid var(--border-strong);
-  margin: 0.5em 0 0.75em;
-  padding: 4px 0 4px 16px;
-  color: var(--text-secondary);
+    border-left: 3px solid var(--border-strong);
+    margin: 0.5em 0 0.75em;
+    padding: 4px 0 4px 16px;
+    color: var(--text-secondary);
 }
 
 .workspace-note-editor blockquote p {
-  margin: 0;
+    margin: 0;
 }
 
 .workspace-note-editor hr {
-  border: none;
-  border-top: 1px solid var(--border);
-  margin: 1.25em 0;
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 1.25em 0;
 }
 
 .workspace-note-editor h1,
 .workspace-note-editor h2,
 .workspace-note-editor h3 {
-  margin: 0.2em 0 0.4em;
-  line-height: 1.3;
+    margin: 0.2em 0 0.4em;
+    line-height: 1.3;
 }
 
 /* ========== WORKSPACE EMPTY STATE ========== */
 .workspace-empty-note {
-  width: 100%;
-  display: grid;
-  place-items: center;
-  color: var(--text-tertiary);
+    width: 100%;
+    display: grid;
+    place-items: center;
+    color: var(--text-tertiary);
 }
 
 @media (max-width: 1100px) {
-  .home-quick-notes-area {
-    width: 320px;
-    min-width: 250px;
-  }
+    .home-quick-notes-area {
+        width: 320px;
+        min-width: 250px;
+    }
 }
 
 @media (max-width: 920px) {
-  .home-workspace {
-    flex-direction: column;
-    overflow: auto;
-  }
+    .home-workspace {
+        flex-direction: column;
+        overflow: auto;
+    }
 
-  .home-quick-notes-area {
-    width: 100%;
-    min-width: 0;
-    border-left: none;
-    border-top: 1px solid var(--border);
-  }
+    .home-quick-notes-area {
+        width: 100%;
+        min-width: 0;
+        border-left: none;
+        border-top: 1px solid var(--border);
+    }
 }
 
 @media (max-width: 700px) {
-  .workspace-note-page {
-    padding: 16px;
-  }
+    .workspace-note-page {
+        padding: 16px;
+    }
 
-  .workspace-note-editor {
-    padding: 16px;
-    min-height: 300px;
-  }
+    .workspace-note-editor {
+        padding: 16px;
+        min-height: 300px;
+    }
 
-  .workspace-note-header {
-    padding: 16px;
-  }
+    .workspace-note-header {
+        padding: 16px;
+    }
 
-  .workspace-note-toolbar-hint {
-    display: none;
-  }
+    .workspace-note-toolbar-hint {
+        display: none;
+    }
 }
