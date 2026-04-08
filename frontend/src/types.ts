@@ -46,3 +46,17 @@ export type GoogleCalendarStatus = {
   channel_expiration: string | null
   last_sync_error: string | null
 }
+
+export type SyncUpdateEvent = {
+  event: 'sync.update'
+  source: string
+  trigger: string
+  stats: {
+    created?: number
+    updated?: number
+    deleted?: number
+    skipped?: number
+  }
+  detail?: string | null
+  occurred_at: string
+}

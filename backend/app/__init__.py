@@ -1,5 +1,5 @@
-import logging
 from contextlib import asynccontextmanager
+import signal
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,8 +11,41 @@ from app.api.auth import router as auth_router
 from app.api.google_calendar import router as google_calendar_router
 from app.api.notes import router as notes_router
 from app.api.schedules import router as schedules_router
+from app.api.sse import sync_sse_router
+from app.utils.logger import get_logger
+from app.api.sse.sse_manager import SSEManager
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+
+sse_manager = SSEManager()  # Get singleton instance
+original_sigint = signal.getsignal(signal.SIGINT)
+original_sigterm = signal.getsignal(signal.SIGTERM)
+
+def signal_exit(signum, frame):
+    """
+    Signal handler for SIGINT (Ctrl+C) and SIGTERM.
+    
+    This is called SYNCHRONOUSLY when signal is received.
+    Cannot use 'await' here, so we call synchronous method on sse_manager.
+    """
+    signal_name = "SIGINT" if signum == signal.SIGINT else "SIGTERM"
+    logger.info(f"🛑 Received {signal_name}, initiating graceful shutdown...")
+    
+    # Call synchronous method to notify all SSE connections
+    # This sends shutdown messages to all queues without awaiting
+    sse_manager.signal_shutdown()
+    
+    if callable(original_sigint):
+        original_sigint(signum, frame)
+    # Note: We DON'T call sys.exit() here
+    # Let Uvicorn's signal handler run after this to properly shutdown
+
+
+# Register signal handlers
+signal.signal(signal.SIGINT, signal_exit)
+signal.signal(signal.SIGTERM, signal_exit)
+logger.info("✅ Signal handlers registered for SIGINT and SIGTERM")
 
 
 @asynccontextmanager
@@ -47,6 +80,7 @@ app.include_router(auth_router, prefix=settings.API_STR)
 app.include_router(google_calendar_router, prefix=settings.API_STR)
 app.include_router(schedules_router, prefix=settings.API_STR)
 app.include_router(notes_router, prefix=settings.API_STR)
+app.include_router(sync_sse_router, prefix=settings.API_STR)
 
 @app.get("/")
 def read_root():

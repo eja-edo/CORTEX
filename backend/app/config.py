@@ -15,6 +15,8 @@ class Settings:
         "postgresql+psycopg2://user:password@localhost:5433/cortex_db"
     )
 
+
+
     @property
     def ASYNC_DATABASE_URL(self) -> str:
         explicit = os.getenv("ASYNC_DATABASE_URL")
@@ -63,6 +65,9 @@ class Settings:
     GOOGLE_OAUTH_STATE_TTL_SECONDS: int = int(os.getenv("GOOGLE_OAUTH_STATE_TTL_SECONDS", "600"))
     GOOGLE_POST_CONNECT_REDIRECT_URL: str = os.getenv("GOOGLE_POST_CONNECT_REDIRECT_URL", "http://localhost:5173")
     GOOGLE_CALENDAR_DEFAULT_ID: str = os.getenv("GOOGLE_CALENDAR_DEFAULT_ID", "primary")
+    GOOGLE_CALENDAR_INITIAL_SYNC_PAST_DAYS: int = int(os.getenv("GOOGLE_CALENDAR_INITIAL_SYNC_PAST_DAYS", "90"))
+    GOOGLE_CALENDAR_INITIAL_SYNC_FUTURE_DAYS: int = int(os.getenv("GOOGLE_CALENDAR_INITIAL_SYNC_FUTURE_DAYS", "180"))
+    GOOGLE_CALENDAR_SYNC_MAX_RESULTS: int = int(os.getenv("GOOGLE_CALENDAR_SYNC_MAX_RESULTS", "250"))
     GOOGLE_CALENDAR_SCOPES: list[str] = json.loads(
         os.getenv(
             "GOOGLE_CALENDAR_SCOPES",

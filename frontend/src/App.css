@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap');
+
 /* ========== APP SHELL ========== */
 .app-shell {
   display: flex;
@@ -228,6 +230,7 @@
   display: flex;
   flex: 1;
   overflow: hidden;
+  min-height: 0;
 }
 
 /* ========== SIDEBAR (notes) ========== */
@@ -475,9 +478,11 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
 
 /* ========== CALENDAR PANEL ========== */
+/* FIX: min-height: 0 ensures the flex child can shrink and enable internal scroll */
 .calendar-panel {
   flex: 1;
   display: flex;
@@ -485,6 +490,7 @@
   overflow: hidden;
   padding: 20px 24px;
   gap: 16px;
+  min-height: 0;
 }
 
 .calendar-header {
@@ -697,8 +703,10 @@
 }
 
 /* ========== CALENDAR CONTAINER ========== */
+/* FIX: flex: 1 + min-height: 0 makes it fill remaining space and enables internal scroll */
 .calendar-container {
   flex: 1;
+  min-height: 0;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
@@ -784,12 +792,34 @@
   border-top: 1px solid var(--border) !important;
 }
 
+/* FIX: month view needs to fill height and scroll internally */
+.rbc-month-view {
+  height: 100% !important;
+  overflow-y: auto !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.rbc-month-row {
+  overflow: visible !important;
+  flex: 1 0 120px !important;
+}
+
+.rbc-row-content {
+  overflow: visible !important;
+}
+
+.rbc-time-view {
+  overflow-y: auto !important;
+}
+
 .rbc-time-header.rbc-overflowing {
   border-right: none !important;
 }
 
 .rbc-time-content {
   border-color: var(--border) !important;
+  overflow-y: auto !important;
 }
 
 .rbc-time-header-content {
@@ -840,6 +870,11 @@
 
 .rbc-day-slot .rbc-event {
   min-height: 28px !important;
+}
+
+/* Month view event styling */
+.rbc-month-view .rbc-event {
+  padding: 1px 4px !important;
 }
 
 /* ========== CUSTOM EVENT ========== */
@@ -1501,6 +1536,7 @@
   min-width: 0;
   overflow: hidden;
   display: flex;
+  min-height: 0;
 }
 
 .home-workspace {
@@ -1508,12 +1544,17 @@
   width: 100%;
   min-width: 0;
   overflow: hidden;
+  min-height: 0;
 }
 
+/* FIX: home-schedule-area must be a proper flex column so calendar-panel can fill it */
 .home-schedule-area {
   flex: 1;
   min-width: 0;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .home-quick-notes-area {

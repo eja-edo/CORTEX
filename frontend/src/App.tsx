@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, Bold, CheckCircle2, ChevronDown, ChevronRight, Home, Italic, List, LogOut, PanelLeftClose, PanelLeftOpen, Plus, RefreshCw, Settings, StickyNote, Underline, Video, X } from 'lucide-react'
+import { AlertCircle, Bold, CheckCircle2, ChevronDown, ChevronRight, Home, Italic, List, LogOut, PanelLeftClose, PanelLeftOpen, Plus, Settings, StickyNote, Underline, Video, X } from 'lucide-react'
 import { startOfWeek, endOfWeek } from 'date-fns'
 import 'react-big-calendar/lib/css/react-big-calendar.css'
 import './App.css'
@@ -8,13 +8,24 @@ import { ScheduleForm } from './components/ScheduleForm'
 import { CalendarView } from './components/CalendarView'
 import { NoteSidebar, type NoteItem } from './components/NoteSidebar'
 import { RecordPanel } from './components/RecordPanel'
-import type { Schedule, TokenPair, User, ScheduleListResponse, GoogleCalendarStatus } from './types'
+import type { Schedule, TokenPair, User, ScheduleListResponse, GoogleCalendarStatus, SyncUpdateEvent } from './types'
 import { applyMarkdownShortcutOnEnter, htmlToMarkdown, markdownToHtml, plainTextFromMarkdown } from './utils/noteMarkdown'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api'
 const PKCE_CLIENT_ID = 'cortex-web'
 const PKCE_REDIRECT_URI = window.location.origin + '/auth/callback'
 const TOKEN_STORAGE_KEY = 'cortex_tokens'
+const SSE_TAB_APPID_KEY = 'cortex_sse_appid'
+
+function getOrCreateSseTabAppId(): string {
+  const existing = window.sessionStorage.getItem(SSE_TAB_APPID_KEY)
+  if (existing) return existing
+
+  const rand = Math.random().toString(36).slice(2, 10)
+  const appid = `frontend-${rand}`
+  window.sessionStorage.setItem(SSE_TAB_APPID_KEY, appid)
+  return appid
+}
 
 type ApiNote = {
   id: string
@@ -253,6 +264,7 @@ function App() {
   const [schedules, setSchedules] = useState<Schedule[]>([])
   const [statusMessage, setStatusMessage] = useState<string>('')
   const [errorMessage, setErrorMessage] = useState<string>('')
+  const [syncToastMessage, setSyncToastMessage] = useState<string>('')
   const [isBusy, setIsBusy] = useState<boolean>(false)
   const [isCreateEventOpen, setIsCreateEventOpen] = useState<boolean>(false)
   const [isWorkspaceSidebarCollapsed, setIsWorkspaceSidebarCollapsed] = useState<boolean>(false)
@@ -271,6 +283,7 @@ function App() {
   const [recentNotes, setRecentNotes] = useState<AppNote[]>([])
   const recentNotesRef = useRef<AppNote[]>([])
   const noteSyncTimersRef = useRef<Record<string, number>>({})
+  const syncToastTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
     recentNotesRef.current = recentNotes
@@ -342,9 +355,33 @@ function App() {
     () => () => {
       Object.values(noteSyncTimersRef.current).forEach((timerId) => window.clearTimeout(timerId))
       noteSyncTimersRef.current = {}
+      if (syncToastTimerRef.current) {
+        window.clearTimeout(syncToastTimerRef.current)
+        syncToastTimerRef.current = null
+      }
     },
     [],
   )
+
+  function showSyncToast(message: string): void {
+    setSyncToastMessage(message)
+    if (syncToastTimerRef.current) {
+      window.clearTimeout(syncToastTimerRef.current)
+    }
+    syncToastTimerRef.current = window.setTimeout(() => {
+      setSyncToastMessage('')
+      syncToastTimerRef.current = null
+    }, 5000)
+  }
+
+  function formatSyncSummary(event: SyncUpdateEvent): string {
+    const created = event.stats.created ?? 0
+    const updated = event.stats.updated ?? 0
+    const deleted = event.stats.deleted ?? 0
+    const skipped = event.stats.skipped ?? 0
+    const source = event.source === 'google_calendar' ? 'Google Calendar' : event.source
+    return `${source} sync: +${created} / ~${updated} / -${deleted} (skip ${skipped})`
+  }
 
   async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
     const response = await fetch(url, init)
@@ -441,6 +478,22 @@ function App() {
       setStatusMessage('Note created.')
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Cannot create note')
+    }
+  }
+
+  async function handleDeleteNote(noteId: string): Promise<void> {
+    setErrorMessage('')
+    try {
+      await requestWithAuth<void>(`/notes/${noteId}`, { method: 'DELETE' })
+      setRecentNotes((prev) => prev.filter((n) => n.id !== noteId))
+      if (activeWorkspaceNoteId === noteId) {
+        const remaining = recentNotesRef.current.filter((n) => n.id !== noteId)
+        setActiveWorkspaceNoteId(remaining[0]?.id ?? null)
+        if (activeWorkspaceView === 'note') setActiveWorkspaceView('home')
+      }
+      setStatusMessage('Note deleted.')
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Cannot delete note')
     }
   }
 
@@ -601,6 +654,96 @@ function App() {
     setStatusMessage('You are logged out.')
   }
 
+  useEffect(() => {
+    if (!tokens?.accessToken) return
+
+    const abortController = new AbortController()
+    let isStopped = false
+
+    const sleep = (ms: number) => new Promise((resolve) => {
+      window.setTimeout(resolve, ms)
+    })
+
+    const processSseChunk = (chunk: string): void => {
+      const lines = chunk.split('\n')
+      const dataLines: string[] = []
+      for (const line of lines) {
+        if (line.startsWith('data:')) {
+          dataLines.push(line.slice(5).trimStart())
+        }
+      }
+      if (!dataLines.length) return
+      const rawData = dataLines.join('\n').trim()
+      if (!rawData || rawData === 'ping') return
+
+      try {
+        const payload = JSON.parse(rawData) as SyncUpdateEvent
+        if (payload.event !== 'sync.update') return
+        showSyncToast(formatSyncSummary(payload))
+        void fetchSchedules()
+        void fetchGoogleCalendarStatus()
+      } catch {
+        // Ignore malformed SSE payloads.
+      }
+    }
+
+    const connect = async () => {
+      const tabAppId = getOrCreateSseTabAppId()
+      const sseUrl = `${API_BASE_URL}/sse/sync/events?appid=${encodeURIComponent(tabAppId)}`
+      let retryDelayMs = 3000
+      const maxRetryDelayMs = 30000
+
+      while (!isStopped) {
+        try {
+          const response = await fetch(sseUrl, {
+            method: 'GET',
+            headers: {
+              Authorization: `Bearer ${tokens.accessToken}`,
+              Accept: 'text/event-stream',
+            },
+            signal: abortController.signal,
+          })
+
+          if (!response.ok || !response.body) {
+            throw new Error(`SSE request failed (${response.status})`)
+          }
+
+          // Connected successfully, reset retry delay.
+          retryDelayMs = 3000
+
+          const reader = response.body.getReader()
+          const decoder = new TextDecoder('utf-8')
+          let buffer = ''
+
+          while (!isStopped) {
+            const { value, done } = await reader.read()
+            if (done) break
+
+            buffer += decoder.decode(value, { stream: true })
+            let splitIndex = buffer.indexOf('\n\n')
+            while (splitIndex !== -1) {
+              const chunk = buffer.slice(0, splitIndex)
+              buffer = buffer.slice(splitIndex + 2)
+              processSseChunk(chunk)
+              splitIndex = buffer.indexOf('\n\n')
+            }
+          }
+        } catch {
+          if (isStopped) break
+          await sleep(retryDelayMs)
+          retryDelayMs = Math.min(retryDelayMs * 2, maxRetryDelayMs)
+        }
+      }
+    }
+
+    void connect()
+
+    return () => {
+      isStopped = true
+      abortController.abort()
+    }
+  }, [tokens?.accessToken])
+
   const userInitial = user?.full_name?.[0]?.toUpperCase() ?? user?.email?.[0]?.toUpperCase() ?? '?'
 
   return (
@@ -632,7 +775,6 @@ function App() {
         <div className="topbar-right">
           {tokens && (
             <>
-              {/* <div className="topbar-divider" /> */}
               <div className="user-avatar" title={user?.email}>{userInitial}</div>
               <button type="button" className="topbar-btn" onClick={handleLogout} title="Logout">
                 <LogOut size={13} />
@@ -653,6 +795,12 @@ function App() {
         <div className="status-bar error">
           <AlertCircle size={14} />
           <span>{errorMessage}</span>
+        </div>
+      )}
+      {!errorMessage && syncToastMessage && (
+        <div className="status-bar ok">
+          <CheckCircle2 size={14} />
+          <span>{syncToastMessage}</span>
         </div>
       )}
 
@@ -771,7 +919,12 @@ function App() {
                   />
                 </div>
                 <div className="home-quick-notes-area">
-                  <NoteSidebar notes={recentNotes} onNoteChange={handleNoteChange} onCreateNote={handleCreateNote} />
+                  <NoteSidebar
+                    notes={recentNotes}
+                    onNoteChange={handleNoteChange}
+                    onCreateNote={handleCreateNote}
+                    onDeleteNote={handleDeleteNote}
+                  />
                 </div>
               </section>
             ) : activeWorkspaceView === 'record' ? (

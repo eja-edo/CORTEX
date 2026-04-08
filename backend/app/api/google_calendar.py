@@ -15,6 +15,7 @@ from app.config import settings
 from app.database import get_db
 from app.dependencies import get_current_active_user
 from app.models import CalendarConnection, CalendarProvider, OAuthState, Schedule, User
+from app.api.sse.channels.sync_events import publish_sync_event
 from app.schemas import GoogleCalendarConnectionStatus, GoogleConnectUrlResponse, MessageResponse
 from app.services.google_calendar_sync import GoogleCalendarSyncService
 
@@ -241,6 +242,29 @@ def sync_now(
     return {"message": f"Sync requested for {len(schedules)} schedules"}
 
 
+@router.post("/sync-from-google-now", response_model=MessageResponse)
+def sync_from_google_now(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    service = GoogleCalendarSyncService(db)
+    stats = service.sync_from_google_incremental(current_user.id)
+    publish_sync_event(
+        user_id=str(current_user.id),
+        source="google_calendar",
+        trigger="manual_pull",
+        stats=stats,
+        detail="Manual pull from Google completed",
+    )
+    return {
+        "message": (
+            "Google sync completed "
+            f"(created={stats['created']}, updated={stats['updated']}, "
+            f"deleted={stats['deleted']}, skipped={stats['skipped']})"
+        )
+    }
+
+
 @router.post("/watch/start", response_model=MessageResponse)
 def start_watch(
     current_user: User = Depends(get_current_active_user),
@@ -338,12 +362,22 @@ def receive_push_notification(
     if connection.channel_resource_id and x_goog_resource_id and connection.channel_resource_id != x_goog_resource_id:
         raise HTTPException(status_code=401, detail="Invalid resource id")
 
-    # Push payload has no body; schedule heavy work outside request path.
+    service = GoogleCalendarSyncService(db)
+
+    # Push payload has no body; perform incremental pull for changed items.
     if x_goog_resource_state in {"sync", "exists", "not_exists"}:
-        connection.last_synced_at = datetime.utcnow()
-        connection.last_sync_error = None
-        db.add(connection)
-        db.commit()
+        try:
+            stats = service.sync_from_google_incremental_for_connection(connection)
+            publish_sync_event(
+                user_id=str(connection.user_id),
+                source="google_calendar",
+                trigger="webhook",
+                stats=stats,
+                detail=f"Webhook resource_state={x_goog_resource_state}",
+            )
+        except Exception:
+            # Keep webhook endpoint resilient; detailed error is persisted by sync service.
+            pass
 
     return None
 

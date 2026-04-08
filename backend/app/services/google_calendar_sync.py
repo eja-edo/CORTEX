@@ -3,8 +3,8 @@ from __future__ import annotations
 import base64
 from datetime import datetime, timedelta, timezone
 import hashlib
-import logging
 from urllib.parse import quote
+from uuid import UUID
 
 import httpx
 from cryptography.fernet import Fernet
@@ -16,14 +16,16 @@ from app.models import (
     CalendarProvider,
     Schedule,
     ScheduleExternalMap,
+    ScheduleType,
     SyncSource,
 )
+from app.utils.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class GoogleCalendarSyncService:
-    """One-way sync from internal schedules to Google Calendar events."""
+    """Bidirectional sync helpers for internal schedules and Google Calendar events."""
 
     def __init__(self, db: Session) -> None:
         self.db = db
@@ -32,6 +34,9 @@ class GoogleCalendarSyncService:
         connection = self._get_connection(schedule.user_id)
         if connection is None:
             return
+
+        connection_id = connection.id
+        connection_user_id = connection.user_id
 
         try:
             access_token = self.ensure_access_token(connection)
@@ -83,15 +88,25 @@ class GoogleCalendarSyncService:
             self.db.add(connection)
             self.db.commit()
         except Exception as exc:
+            self.db.rollback()
             logger.exception("Failed to sync schedule %s to Google Calendar", schedule.id)
-            connection.last_sync_error = str(exc)
-            self.db.add(connection)
-            self.db.commit()
+            db_connection = self.db.query(CalendarConnection).filter(
+                CalendarConnection.id == connection_id,
+            ).first()
+            if db_connection is not None:
+                db_connection.last_sync_error = str(exc)
+                self.db.add(db_connection)
+                self.db.commit()
+            else:
+                logger.error("Calendar connection %s for user %s was not found while storing sync error", connection_id, connection_user_id)
 
     def sync_delete_schedule(self, schedule: Schedule) -> None:
         connection = self._get_connection(schedule.user_id)
         if connection is None:
             return
+
+        connection_id = connection.id
+        connection_user_id = connection.user_id
 
         mapping = self.db.query(ScheduleExternalMap).filter(
             ScheduleExternalMap.schedule_id == schedule.id,
@@ -112,12 +127,336 @@ class GoogleCalendarSyncService:
             connection.last_synced_at = datetime.utcnow()
             self.db.add(connection)
         except Exception as exc:
+            self.db.rollback()
             logger.exception("Failed to delete Google Calendar event for schedule %s", schedule.id)
-            connection.last_sync_error = str(exc)
-            self.db.add(connection)
+            db_connection = self.db.query(CalendarConnection).filter(
+                CalendarConnection.id == connection_id,
+            ).first()
+            if db_connection is not None:
+                db_connection.last_sync_error = str(exc)
+                self.db.add(db_connection)
+            else:
+                logger.error("Calendar connection %s for user %s was not found while storing sync error", connection_id, connection_user_id)
         finally:
-            self.db.delete(mapping)
+            db_mapping = self.db.query(ScheduleExternalMap).filter(
+                ScheduleExternalMap.id == mapping.id,
+            ).first()
+            if db_mapping is not None:
+                self.db.delete(db_mapping)
             self.db.commit()
+
+    def sync_from_google_incremental(self, user_id) -> dict[str, int]:
+        connection = self._get_connection(user_id)
+        if connection is None:
+            return {"created": 0, "updated": 0, "deleted": 0, "skipped": 0}
+        return self.sync_from_google_incremental_for_connection(connection)
+
+    def sync_from_google_incremental_for_connection(self, connection: CalendarConnection) -> dict[str, int]:
+        """Pull changed Google Calendar events using sync token and upsert internal schedules."""
+        stats = {"created": 0, "updated": 0, "deleted": 0, "skipped": 0}
+        connection_id = connection.id
+        connection_user_id = connection.user_id
+        try:
+            access_token = self.ensure_access_token(connection)
+
+            if connection.sync_token:
+                params = {
+                    "syncToken": connection.sync_token,
+                    "showDeleted": "true",
+                    "maxResults": str(settings.GOOGLE_CALENDAR_SYNC_MAX_RESULTS),
+                }
+            else:
+                now_utc = datetime.utcnow().replace(tzinfo=timezone.utc)
+                time_min = now_utc - timedelta(days=settings.GOOGLE_CALENDAR_INITIAL_SYNC_PAST_DAYS)
+                time_max = now_utc + timedelta(days=settings.GOOGLE_CALENDAR_INITIAL_SYNC_FUTURE_DAYS)
+                params = {
+                    "timeMin": time_min.isoformat().replace("+00:00", "Z"),
+                    "timeMax": time_max.isoformat().replace("+00:00", "Z"),
+                    "singleEvents": "true",
+                    "showDeleted": "true",
+                    "maxResults": str(settings.GOOGLE_CALENDAR_SYNC_MAX_RESULTS),
+                }
+
+            try:
+                sync_token = self._consume_google_events(connection, access_token, params, stats)
+            except httpx.HTTPStatusError as exc:
+                # Google returns 410 when sync token is invalid/stale. Fall back to full windowed sync.
+                if exc.response.status_code != 410:
+                    raise
+                connection.sync_token = None
+                now_utc = datetime.utcnow().replace(tzinfo=timezone.utc)
+                full_params = {
+                    "timeMin": (now_utc - timedelta(days=settings.GOOGLE_CALENDAR_INITIAL_SYNC_PAST_DAYS)).isoformat().replace("+00:00", "Z"),
+                    "timeMax": (now_utc + timedelta(days=settings.GOOGLE_CALENDAR_INITIAL_SYNC_FUTURE_DAYS)).isoformat().replace("+00:00", "Z"),
+                    "singleEvents": "true",
+                    "showDeleted": "true",
+                    "maxResults": str(settings.GOOGLE_CALENDAR_SYNC_MAX_RESULTS),
+                }
+                sync_token = self._consume_google_events(connection, access_token, full_params, stats)
+
+            connection.sync_token = sync_token
+            connection.last_synced_at = datetime.utcnow()
+            connection.last_sync_error = None
+            self.db.add(connection)
+            self.db.commit()
+            return stats
+        except Exception as exc:
+            self.db.rollback()
+            logger.exception("Failed incremental sync from Google for user %s", connection_user_id)
+            db_connection = self.db.query(CalendarConnection).filter(
+                CalendarConnection.id == connection_id,
+            ).first()
+            if db_connection is not None:
+                db_connection.last_sync_error = str(exc)
+                self.db.add(db_connection)
+                self.db.commit()
+            else:
+                logger.error("Calendar connection %s for user %s was not found while storing sync error", connection_id, connection_user_id)
+            raise
+
+    def _consume_google_events(
+        self,
+        connection: CalendarConnection,
+        access_token: str,
+        params: dict[str, str],
+        stats: dict[str, int],
+    ) -> str | None:
+        encoded_calendar_id = quote(connection.provider_calendar_id, safe="")
+        url = f"{settings.GOOGLE_CALENDAR_API_BASE_URL}/calendars/{encoded_calendar_id}/events"
+        page_token = None
+        next_sync_token = None
+
+        while True:
+            request_params = dict(params)
+            if page_token:
+                request_params["pageToken"] = page_token
+
+            with httpx.Client(timeout=20) as client:
+                response = client.get(url, headers=self._event_headers(access_token), params=request_params)
+                response.raise_for_status()
+
+            payload = response.json()
+            for event in payload.get("items", []):
+                self._apply_google_event(connection, event, stats)
+
+            page_token = payload.get("nextPageToken")
+            if not page_token:
+                next_sync_token = payload.get("nextSyncToken")
+                break
+
+        return next_sync_token
+
+    def _apply_google_event(self, connection: CalendarConnection, event: dict, stats: dict[str, int]) -> None:
+        event_id = event.get("id")
+        if not event_id:
+            stats["skipped"] += 1
+            return
+
+        mapping = self._resolve_mapping_for_event(connection, event_id, event)
+
+        if event.get("status") == "cancelled":
+            self._apply_google_deleted_event(connection, mapping, event, stats)
+            return
+
+        parsed_start = self._parse_google_event_time(event.get("start"))
+        parsed_end = self._parse_google_event_time(event.get("end"))
+        if parsed_start is None or parsed_end is None:
+            stats["skipped"] += 1
+            return
+
+        provider_updated_at = self._parse_google_updated(event.get("updated"))
+        if mapping and mapping.provider_updated_at and provider_updated_at and provider_updated_at <= mapping.provider_updated_at:
+            stats["skipped"] += 1
+            return
+
+        if mapping:
+            schedule = self.db.query(Schedule).filter(
+                Schedule.id == mapping.schedule_id,
+                Schedule.user_id == connection.user_id,
+            ).first()
+            if schedule is None:
+                schedule = self._create_schedule_from_google_event(connection, event, parsed_start, parsed_end)
+                mapping.schedule_id = schedule.id
+                stats["created"] += 1
+            else:
+                self._update_schedule_from_google_event(schedule, event, parsed_start, parsed_end)
+                stats["updated"] += 1
+        else:
+            schedule = self._resolve_schedule_from_event(connection, event)
+            if schedule is None:
+                schedule = self._create_schedule_from_google_event(connection, event, parsed_start, parsed_end)
+                stats["created"] += 1
+            else:
+                self._update_schedule_from_google_event(schedule, event, parsed_start, parsed_end)
+                stats["updated"] += 1
+
+            mapping = ScheduleExternalMap(
+                user_id=connection.user_id,
+                schedule_id=schedule.id,
+                provider=CalendarProvider.GOOGLE,
+                provider_calendar_id=connection.provider_calendar_id,
+                provider_event_id=event_id,
+                last_sync_source=SyncSource.PROVIDER,
+                last_synced_at=datetime.utcnow(),
+                is_deleted_remote=False,
+            )
+            self.db.add(mapping)
+
+        mapping.provider_etag = event.get("etag")
+        mapping.provider_updated_at = provider_updated_at
+        mapping.last_sync_source = SyncSource.PROVIDER
+        mapping.last_synced_at = datetime.utcnow()
+        mapping.is_deleted_remote = False
+        self.db.add(mapping)
+        self.db.flush()
+
+    def _apply_google_deleted_event(
+        self,
+        connection: CalendarConnection,
+        mapping: ScheduleExternalMap | None,
+        event: dict,
+        stats: dict[str, int],
+    ) -> None:
+        schedule = self._resolve_schedule_from_event(connection, event)
+        if schedule is None and mapping is not None:
+            schedule = self.db.query(Schedule).filter(
+                Schedule.id == mapping.schedule_id,
+                Schedule.user_id == mapping.user_id,
+            ).first()
+
+        mappings_to_delete: list[ScheduleExternalMap] = []
+        if mapping is not None:
+            mappings_to_delete.append(mapping)
+        elif schedule is not None:
+            mappings_to_delete = self.db.query(ScheduleExternalMap).filter(
+                ScheduleExternalMap.provider == CalendarProvider.GOOGLE,
+                ScheduleExternalMap.schedule_id == schedule.id,
+            ).all()
+
+        if schedule is None and not mappings_to_delete:
+            stats["skipped"] += 1
+            return
+
+        # Phase 1: delete external mappings and flush first to satisfy FK constraints.
+        for item in mappings_to_delete:
+            self.db.delete(item)
+        self.db.flush()
+
+        # Phase 2: once mappings are gone, schedule deletion is safe.
+        if schedule is not None:
+            self.db.delete(schedule)
+        self.db.flush()
+        stats["deleted"] += 1
+
+    def _resolve_mapping_for_event(
+        self,
+        connection: CalendarConnection,
+        event_id: str,
+        event: dict,
+    ) -> ScheduleExternalMap | None:
+        mapping = self.db.query(ScheduleExternalMap).filter(
+            ScheduleExternalMap.provider == CalendarProvider.GOOGLE,
+            ScheduleExternalMap.provider_calendar_id == connection.provider_calendar_id,
+            ScheduleExternalMap.provider_event_id == event_id,
+        ).first()
+        if mapping is not None:
+            return mapping
+
+        schedule = self._resolve_schedule_from_event(connection, event)
+        if schedule is None:
+            return None
+
+        return self.db.query(ScheduleExternalMap).filter(
+            ScheduleExternalMap.provider == CalendarProvider.GOOGLE,
+            ScheduleExternalMap.schedule_id == schedule.id,
+        ).first()
+
+    def _resolve_schedule_from_event(self, connection: CalendarConnection, event: dict) -> Schedule | None:
+        private = (event.get("extendedProperties") or {}).get("private") or {}
+        raw_schedule_id = private.get("cortexScheduleId")
+        if not raw_schedule_id:
+            return None
+
+        try:
+            schedule_id = UUID(str(raw_schedule_id))
+        except (ValueError, TypeError):
+            return None
+
+        return self.db.query(Schedule).filter(
+            Schedule.id == schedule_id,
+            Schedule.user_id == connection.user_id,
+        ).first()
+
+    def _create_schedule_from_google_event(
+        self,
+        connection: CalendarConnection,
+        event: dict,
+        parsed_start: datetime,
+        parsed_end: datetime,
+    ) -> Schedule:
+        schedule = Schedule(
+            user_id=connection.user_id,
+            title=event.get("summary") or "Untitled",
+            type=self._schedule_type_from_google(event),
+            start_time=parsed_start,
+            end_time=parsed_end,
+            location=event.get("location"),
+            description=event.get("description"),
+            is_completed=False,
+        )
+        self.db.add(schedule)
+        self.db.flush()
+        return schedule
+
+    def _update_schedule_from_google_event(
+        self,
+        schedule: Schedule,
+        event: dict,
+        parsed_start: datetime,
+        parsed_end: datetime,
+    ) -> None:
+        schedule.title = event.get("summary") or "Untitled"
+        schedule.type = self._schedule_type_from_google(event)
+        schedule.start_time = parsed_start
+        schedule.end_time = parsed_end
+        schedule.location = event.get("location")
+        schedule.description = event.get("description")
+        schedule.updated_at = datetime.utcnow()
+        self.db.add(schedule)
+
+    def _schedule_type_from_google(self, event: dict) -> ScheduleType:
+        private = (event.get("extendedProperties") or {}).get("private") or {}
+        raw_type = private.get("cortexType")
+        if not raw_type:
+            return ScheduleType.PERSONAL
+        try:
+            return ScheduleType(raw_type)
+        except Exception:
+            return ScheduleType.PERSONAL
+
+    def _parse_google_event_time(self, payload: dict | None) -> datetime | None:
+        if not payload:
+            return None
+
+        date_time = payload.get("dateTime")
+        if date_time:
+            try:
+                dt = datetime.fromisoformat(date_time.replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    return dt
+                return dt.astimezone(timezone.utc).replace(tzinfo=None)
+            except ValueError:
+                return None
+
+        all_day_date = payload.get("date")
+        if all_day_date:
+            try:
+                dt = datetime.fromisoformat(all_day_date)
+                return datetime(dt.year, dt.month, dt.day)
+            except ValueError:
+                return None
+
+        return None
 
     def _get_connection(self, user_id) -> CalendarConnection | None:
         return self.db.query(CalendarConnection).filter(

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
-import { Bold, Check, Italic, List, Plus, Search, SquareArrowOutUpRight, Strikethrough, Underline } from 'lucide-react'
+import { Bold, Check, Italic, List, Plus, Search, SquareArrowOutUpRight, Strikethrough, Trash2, Underline } from 'lucide-react'
 import { applyMarkdownShortcutOnEnter, htmlToMarkdown, markdownToHtml, plainTextFromMarkdown } from '../utils/noteMarkdown'
 
 export type NoteItem = {
@@ -12,6 +12,7 @@ interface NoteSidebarProps {
   notes: NoteItem[]
   onNoteChange: (id: string, contentMd: string) => void
   onCreateNote: () => void
+  onDeleteNote?: (id: string) => void
 }
 
 function escapeHtml(s: string): string {
@@ -86,8 +87,15 @@ function NoteEditor({
 }
 
 function NoteCardItem({
-  note, isExpanded, onExpand, onCollapse, onNoteChange,
-}: { note: NoteItem; isExpanded: boolean; onExpand: () => void; onCollapse: () => void; onNoteChange: (id: string, md: string) => void }) {
+  note, isExpanded, onExpand, onCollapse, onNoteChange, onDeleteNote,
+}: {
+  note: NoteItem
+  isExpanded: boolean
+  onExpand: () => void
+  onCollapse: () => void
+  onNoteChange: (id: string, md: string) => void
+  onDeleteNote?: (id: string) => void
+}) {
   const cardRef = useRef<HTMLElement>(null)
   const editorRef = useRef<HTMLDivElement>(null)
   const summaryButtonRef = useRef<HTMLButtonElement>(null)
@@ -144,26 +152,49 @@ function NoteCardItem({
     openNotePopoutWindow(note.date, html)
   }
 
+  const handleDelete = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!onDeleteNote) return
+    if (window.confirm(`Xóa note "${title}"?`)) {
+      onDeleteNote(note.id)
+    }
+  }
+
   // Pick emoji based on content
   const emoji = note.contentMd.includes('**') ? '📋' : note.contentMd.includes('http') ? '🔗' : '📝'
 
   return (
     <article ref={cardRef} className={`note-card${isExpanded ? ' note-card--expanded' : ''}`}>
       {/* Summary row — always visible */}
-      <button
-        ref={summaryButtonRef}
-        type="button"
-        className="note-card-summary-btn"
-        aria-expanded={isExpanded}
-        aria-controls={expandId}
-        onClick={isExpanded ? collapseWithFocusRestore : onExpand}
-      >
-        <span className="note-icon">{emoji}</span>
-        <div className="note-card-info">
-          <div className="note-card-title">{title}</div>
-          <div className="note-card-date">{note.date}</div>
-        </div>
-      </button>
+      <div style={{ display: 'flex', alignItems: 'center' }}>
+        <button
+          ref={summaryButtonRef}
+          type="button"
+          className="note-card-summary-btn"
+          style={{ flex: 1 }}
+          aria-expanded={isExpanded}
+          aria-controls={expandId}
+          onClick={isExpanded ? collapseWithFocusRestore : onExpand}
+        >
+          <span className="note-icon">{emoji}</span>
+          <div className="note-card-info">
+            <div className="note-card-title">{title}</div>
+            <div className="note-card-date">{note.date}</div>
+          </div>
+        </button>
+        {onDeleteNote && (
+          <button
+            type="button"
+            className="note-toolbar-btn"
+            title="Xóa note"
+            aria-label="Xóa note"
+            onClick={handleDelete}
+            style={{ marginRight: 6, flexShrink: 0, color: 'var(--text-tertiary)' }}
+          >
+            <Trash2 size={13} />
+          </button>
+        )}
+      </div>
 
       {/* Expandable editor */}
       <div id={expandId} className="note-expandable" aria-hidden={!isExpanded} inert={!isExpanded}>
@@ -196,6 +227,21 @@ function NoteCardItem({
               <button type="button" className="note-toolbar-btn" title="Open in window" aria-label="Pop out" onClick={handlePopOut}>
                 <SquareArrowOutUpRight size={13} />
               </button>
+              {onDeleteNote && (
+                <>
+                  <div className="note-toolbar-sep" />
+                  <button
+                    type="button"
+                    className="note-toolbar-btn"
+                    title="Xóa note"
+                    aria-label="Xóa note"
+                    onClick={handleDelete}
+                    style={{ color: 'var(--red)' }}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </>
+              )}
               <div className="note-toolbar-spacer" />
               <button type="button" className="note-done-btn" onClick={collapseWithFocusRestore}>
                 <Check size={12} /> Done
@@ -208,7 +254,7 @@ function NoteCardItem({
   )
 }
 
-export function NoteSidebar({ notes, onNoteChange, onCreateNote }: NoteSidebarProps) {
+export function NoteSidebar({ notes, onNoteChange, onCreateNote, onDeleteNote }: NoteSidebarProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const collapseExpanded = useCallback(() => setExpandedId(null), [])
 
@@ -235,6 +281,7 @@ export function NoteSidebar({ notes, onNoteChange, onCreateNote }: NoteSidebarPr
             onExpand={() => setExpandedId(note.id)}
             onCollapse={collapseExpanded}
             onNoteChange={onNoteChange}
+            onDeleteNote={onDeleteNote}
           />
         ))}
       </div>

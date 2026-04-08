@@ -60,19 +60,58 @@ export function CalendarView({
     )
 
     const viewConfig = useMemo(() => {
-        if (calendarEvents.length === 0) {
-            return { min: new Date(1970, 0, 1, 7, 0), max: new Date(1970, 0, 1, 22, 0), step: 60 }
+        // Default window: 07:00 – 21:00
+        const DEFAULT_START_HOUR = 7
+        const DEFAULT_END_HOUR = 21
+
+        // Determine the visible time window
+        let windowStartMin = DEFAULT_START_HOUR * 60  // 7:00 in minutes
+        let windowEndMin = DEFAULT_END_HOUR * 60       // 21:00 in minutes
+
+        // Expand window only if events fall outside defaults
+        if (calendarEvents.length > 0) {
+            const earliest = Math.min(
+                ...calendarEvents.map((e) => e.start.getHours() * 60 + e.start.getMinutes())
+            )
+            const latest = Math.max(
+                ...calendarEvents.map((e) => e.end.getHours() * 60 + e.end.getMinutes())
+            )
+
+            // Only expand, never shrink below defaults
+            if (earliest < windowStartMin) {
+                windowStartMin = Math.max(0, earliest - 60) // 1h padding before earliest
+            }
+            if (latest > windowEndMin) {
+                windowEndMin = Math.min(24 * 60, latest + 30) // 30min padding after latest
+            }
         }
-        const totalDuration = calendarEvents.reduce((sum, e) => sum + Math.max(15, Math.round((e.end.getTime() - e.start.getTime()) / 60000)), 0)
-        const avg = totalDuration / calendarEvents.length
-        const step = calendarEvents.length >= 16 || avg <= 45 ? 15 : calendarEvents.length >= 9 || avg <= 90 ? 30 : 60
-        const earliest = Math.min(...calendarEvents.map((e) => e.start.getHours() * 60 + e.start.getMinutes()))
-        const latest = Math.max(...calendarEvents.map((e) => e.end.getHours() * 60 + e.end.getMinutes()))
-        const minMin = Math.max(0, earliest - 60)
-        const maxMin = Math.min(24 * 60 - 1, latest + 60)
+
+        // Determine step: based on shortest event duration, minimum 60 min
+        let step = 60 // default: 1 hour slots
+        if (calendarEvents.length > 0) {
+            const durations = calendarEvents.map((e) =>
+                Math.max(60, Math.round((e.end.getTime() - e.start.getTime()) / 60000))
+            )
+            const minDuration = Math.min(...durations)
+
+            // Step choices: 60 min only (as per requirement: minimum 1 hour gap)
+            // But we can use 30 min if all events are >= 30 min and there are many events
+            // Per requirements: always at least 60 min apart
+            if (minDuration >= 120) {
+                step = 120
+            } else {
+                step = 60
+            }
+        }
+
+        const startHour = Math.floor(windowStartMin / 60)
+        const startMins = windowStartMin % 60
+        const endHour = Math.floor(windowEndMin / 60)
+        const endMins = windowEndMin % 60
+
         return {
-            min: new Date(1970, 0, 1, Math.floor(minMin / 60), minMin % 60),
-            max: new Date(1970, 0, 1, Math.floor(maxMin / 60), maxMin % 60),
+            min: new Date(1970, 0, 1, startHour, startMins),
+            max: new Date(1970, 0, 1, Math.min(endHour, 23), endMins),
             step,
         }
     }, [calendarEvents])
