@@ -4,10 +4,28 @@ from datetime import datetime
 from uuid import UUID
 from app.database import get_db
 from app.dependencies import get_current_active_user
-from app.models import Schedule, User
+from app.models import CalendarProvider, Schedule, ScheduleExternalMap, User
 from app.schemas import ScheduleCreate, ScheduleUpdate, ScheduleResponse, ScheduleListResponse
+from app.services.google_calendar_sync import GoogleCalendarSyncService
 
 router = APIRouter(prefix="/schedules", tags=["schedules"])
+
+
+def _attach_google_sync_flags(schedules: list[Schedule], db: Session) -> None:
+    if not schedules:
+        return
+
+    schedule_ids = [item.id for item in schedules]
+    mapped_ids = {
+        row.schedule_id
+        for row in db.query(ScheduleExternalMap.schedule_id).filter(
+            ScheduleExternalMap.provider == CalendarProvider.GOOGLE,
+            ScheduleExternalMap.schedule_id.in_(schedule_ids),
+        ).all()
+    }
+
+    for item in schedules:
+        setattr(item, "google_synced", item.id in mapped_ids)
 
 @router.post("", response_model=ScheduleResponse, status_code=201)
 def create_schedule(
@@ -29,6 +47,8 @@ def create_schedule(
     db.add(db_schedule)
     db.commit()
     db.refresh(db_schedule)
+    GoogleCalendarSyncService(db).sync_upsert_schedule(db_schedule)
+    _attach_google_sync_flags([db_schedule], db)
     return db_schedule
 
 @router.get("", response_model=ScheduleListResponse)
@@ -56,6 +76,7 @@ def get_schedules(
         Schedule.start_time >= start_date,
         Schedule.start_time <= end_date
     ).order_by(Schedule.start_time).all()
+    _attach_google_sync_flags(schedules, db)
     
     return {
         "items": schedules,
@@ -75,6 +96,7 @@ def get_schedule(
     ).first()
     if not schedule:
         raise HTTPException(status_code=404, detail="Schedule not found")
+    _attach_google_sync_flags([schedule], db)
     return schedule
 
 @router.put("/{schedule_id}", response_model=ScheduleResponse)
@@ -100,6 +122,8 @@ def update_schedule(
     db.add(schedule)
     db.commit()
     db.refresh(schedule)
+    GoogleCalendarSyncService(db).sync_upsert_schedule(schedule)
+    _attach_google_sync_flags([schedule], db)
     return schedule
 
 @router.delete("/{schedule_id}", status_code=204)
@@ -115,7 +139,8 @@ def delete_schedule(
     ).first()
     if not schedule:
         raise HTTPException(status_code=404, detail="Schedule not found")
-    
+
+    GoogleCalendarSyncService(db).sync_delete_schedule(schedule)
     db.delete(schedule)
     db.commit()
     return None

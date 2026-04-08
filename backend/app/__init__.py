@@ -8,6 +8,7 @@ from app.config import settings
 from app.database import engine
 from app.models import Base
 from app.api.auth import router as auth_router
+from app.api.google_calendar import router as google_calendar_router
 from app.api.notes import router as notes_router
 from app.api.schedules import router as schedules_router
 
@@ -43,6 +44,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(auth_router, prefix=settings.API_STR)
+app.include_router(google_calendar_router, prefix=settings.API_STR)
 app.include_router(schedules_router, prefix=settings.API_STR)
 app.include_router(notes_router, prefix=settings.API_STR)
 

@@ -21,6 +21,7 @@ export type Schedule = {
   location: string | null
   description: string | null
   is_completed: boolean
+  google_synced?: boolean
   created_at: string
   updated_at: string
 }
@@ -33,4 +34,15 @@ export type TokenPair = {
 export type ScheduleListResponse = {
   items: Schedule[]
   total: number
+}
+
+export type GoogleCalendarStatus = {
+  connected: boolean
+  provider: 'GOOGLE'
+  calendar_id: string | null
+  granted_scopes: string[]
+  last_synced_at: string | null
+  has_sync_token: boolean
+  channel_expiration: string | null
+  last_sync_error: string | null
 }

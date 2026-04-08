@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Calendar as BigCalendar } from 'react-big-calendar'
-import { CheckCircle2, Clock3, MapPin, Tag, Trash2, X } from 'lucide-react'
+import { CheckCircle2, Clock3, MapPin, Tag, Trash2, X, Plus, RefreshCw, } from 'lucide-react'
 import { format, parseISO } from 'date-fns'
 import { clsx } from 'clsx'
 import type { Schedule } from '../types'
@@ -24,6 +24,7 @@ type CalendarEvent = { title: string; start: Date; end: Date; resource: Schedule
 
 interface CalendarViewProps {
     schedules: Schedule[]
+    isGoogleCalendarConnected?: boolean
     startDate: string
     endDate: string
     onStartDateChange: (date: string) => void
@@ -39,8 +40,10 @@ const TYPE_LABELS: Record<string, string> = {
 }
 
 export function CalendarView({
-    schedules, startDate, endDate, onStartDateChange, onEndDateChange,
-    onFetch, onToggleComplete, onRemove,
+    isGoogleCalendarConnected = false,
+    schedules, startDate,
+    onStartDateChange, onEndDateChange,
+    onFetch, onOpenCreateEvent, onToggleComplete, onRemove,
 }: CalendarViewProps) {
     const [selectedSchedule, setSelectedSchedule] = useState<Schedule | null>(null)
     const [currentDate, setCurrentDate] = useState<Date>(() => new Date(startDate))
@@ -104,23 +107,20 @@ export function CalendarView({
         <div className="calendar-panel">
             {/* Header */}
             <div className="calendar-header">
-                <h1 className="page-title">Schedule</h1>
-                <div className="calendar-controls">
-                    <div className="datetime-filter">
-                        <input
-                            type="datetime-local"
-                            value={startDate}
-                            onChange={(e) => onStartDateChange(e.target.value)}
-                        />
-                        <span className="filter-sep">→</span>
-                        <input
-                            type="datetime-local"
-                            value={endDate}
-                            onChange={(e) => onEndDateChange(e.target.value)}
-                        />
-                    </div>
-                    <button type="button" className="btn btn-ghost" onClick={onFetch}>
-                        Filter
+                <div className="calendar-title-wrap">
+                    <h1 className="page-title">Schedule</h1>
+                    {isGoogleCalendarConnected && (
+                        <div className="google-calendar-connected">
+                            <img src="https://ssl.gstatic.com/calendar/images/dynamiclogo_2020q4/calendar_8_2x.png" alt="Google Calendar" />
+                        </div>
+                    )}
+                </div>
+                <div className="calendar-header-right">
+                    <button type="button" className="topbar-btn" onClick={onFetch}>
+                        <RefreshCw size={13} />
+                    </button>
+                    <button type="button" className="topbar-btn primary" onClick={onOpenCreateEvent}>
+                        <Plus size={14} /> New event
                     </button>
                 </div>
             </div>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, Bold, CheckCircle2, Home, Italic, List, LogOut, PanelLeftClose, PanelLeftOpen, Plus, RefreshCw, StickyNote, Underline, X } from 'lucide-react'
+import { AlertCircle, Bold, CheckCircle2, ChevronDown, ChevronRight, Home, Italic, List, LogOut, PanelLeftClose, PanelLeftOpen, Plus, RefreshCw, Settings, StickyNote, Underline, Video, X } from 'lucide-react'
 import { startOfWeek, endOfWeek } from 'date-fns'
 import 'react-big-calendar/lib/css/react-big-calendar.css'
 import './App.css'
@@ -7,7 +7,8 @@ import { AuthPanel } from './components/AuthPanel'
 import { ScheduleForm } from './components/ScheduleForm'
 import { CalendarView } from './components/CalendarView'
 import { NoteSidebar, type NoteItem } from './components/NoteSidebar'
-import type { Schedule, TokenPair, User, ScheduleListResponse } from './types'
+import { RecordPanel } from './components/RecordPanel'
+import type { Schedule, TokenPair, User, ScheduleListResponse, GoogleCalendarStatus } from './types'
 import { applyMarkdownShortcutOnEnter, htmlToMarkdown, markdownToHtml, plainTextFromMarkdown } from './utils/noteMarkdown'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api'
@@ -107,6 +108,13 @@ function formatNoteDate(isoDateTime: string): string {
   return parsed.toLocaleDateString('vi-VN')
 }
 
+function formatDateTimeVi(isoDateTime: string | null): string {
+  if (!isoDateTime) return 'Never'
+  const parsed = new Date(isoDateTime)
+  if (Number.isNaN(parsed.getTime())) return 'Unknown'
+  return parsed.toLocaleString('vi-VN')
+}
+
 function mapApiNoteToAppNote(note: ApiNote): AppNote {
   return {
     id: note.id,
@@ -197,6 +205,48 @@ function WorkspaceNoteEditor({
   )
 }
 
+// Collapsible sidebar section header
+function SidebarSection({
+  icon,
+  label,
+  isOpen,
+  onToggle,
+  isCollapsed,
+  children,
+}: {
+  icon: React.ReactNode
+  label: string
+  isOpen: boolean
+  onToggle: () => void
+  isCollapsed: boolean
+  children?: React.ReactNode
+}) {
+  return (
+    <div className="sidebar-collapsible-section">
+      <button
+        type="button"
+        className="workspace-sidebar-section-title sidebar-section-toggle"
+        onClick={onToggle}
+        aria-expanded={isOpen}
+        title={label}
+      >
+        <span className="sidebar-section-toggle-icon">{icon}</span>
+        {!isCollapsed && (
+          <>
+            <span className="sidebar-section-toggle-label">{label}</span>
+            <span className="sidebar-section-toggle-chevron">
+              {isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+            </span>
+          </>
+        )}
+      </button>
+      {isOpen && !isCollapsed && (
+        <div className="sidebar-section-body">{children}</div>
+      )}
+    </div>
+  )
+}
+
 function App() {
   const [tokens, setTokens] = useState<TokenPair | null>(() => readStoredTokens())
   const [user, setUser] = useState<User | null>(null)
@@ -206,8 +256,13 @@ function App() {
   const [isBusy, setIsBusy] = useState<boolean>(false)
   const [isCreateEventOpen, setIsCreateEventOpen] = useState<boolean>(false)
   const [isWorkspaceSidebarCollapsed, setIsWorkspaceSidebarCollapsed] = useState<boolean>(false)
-  const [activeWorkspaceView, setActiveWorkspaceView] = useState<'home' | 'note'>('home')
+  const [activeWorkspaceView, setActiveWorkspaceView] = useState<'home' | 'note' | 'record' | 'settings'>('home')
   const [activeWorkspaceNoteId, setActiveWorkspaceNoteId] = useState<string | null>(null)
+  const [googleCalendarStatus, setGoogleCalendarStatus] = useState<GoogleCalendarStatus | null>(null)
+
+  // Collapsible sidebar sections state
+  const [sectionNoteOpen, setSectionNoteOpen] = useState(true)
+  const [sectionRecordOpen, setSectionRecordOpen] = useState(true)
 
   const weekRange = useMemo(() => getRangeForCurrentWeek(), [])
   const [startDate, setStartDate] = useState<string>(weekRange.startDate)
@@ -225,6 +280,7 @@ function App() {
     setRecentNotes((prev) => prev.map((n) => (n.id === id ? { ...n, contentMd } : n)))
     scheduleNotePersist(id)
   }, [])
+
   const noteSummaries = useMemo(
     () => recentNotes.map((note) => ({ id: note.id, date: note.date, title: noteTitleFromMd(note.contentMd) })),
     [recentNotes],
@@ -252,16 +308,35 @@ function App() {
       setSchedules([])
       setRecentNotes([])
       setActiveWorkspaceNoteId(null)
+      setGoogleCalendarStatus(null)
       return
     }
     void fetchCurrentUser(tokens)
     void fetchSchedules(tokens)
+    void fetchGoogleCalendarStatus()
   }, [tokens, startDate, endDate])
 
   useEffect(() => {
     if (!tokens) return
     void fetchNotes(tokens)
   }, [tokens])
+
+  useEffect(() => {
+    const url = new URL(window.location.href)
+    const result = url.searchParams.get('google_calendar')
+    const reason = url.searchParams.get('reason')
+    if (!result) return
+
+    if (result === 'connected') {
+      setStatusMessage('Google Calendar connected successfully.')
+    } else if (result === 'error') {
+      setErrorMessage(reason ? `Google connection failed: ${reason}` : 'Google connection failed')
+    }
+
+    url.searchParams.delete('google_calendar')
+    url.searchParams.delete('reason')
+    window.history.replaceState({}, document.title, `${url.pathname}${url.search}`)
+  }, [])
 
   useEffect(
     () => () => {
@@ -432,6 +507,58 @@ function App() {
     }
   }
 
+  async function fetchGoogleCalendarStatus(): Promise<void> {
+    if (!tokens) return
+    try {
+      const status = await requestWithAuth<GoogleCalendarStatus>('/google-calendar/status')
+      setGoogleCalendarStatus(status)
+    } catch (error) {
+      setGoogleCalendarStatus(null)
+      setErrorMessage(error instanceof Error ? error.message : 'Cannot load Google Calendar status')
+    }
+  }
+
+  async function handleConnectGoogleCalendar(): Promise<void> {
+    setErrorMessage('')
+    try {
+      const payload = await requestWithAuth<{ authorization_url: string }>('/google-calendar/connect-url')
+      window.location.href = payload.authorization_url
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Cannot connect Google Calendar')
+    }
+  }
+
+  async function handleDisconnectGoogleCalendar(): Promise<void> {
+    setErrorMessage('')
+    try {
+      await requestWithAuth<{ message: string }>('/google-calendar/disconnect', { method: 'DELETE' })
+      setGoogleCalendarStatus({
+        connected: false,
+        provider: 'GOOGLE',
+        calendar_id: null,
+        granted_scopes: [],
+        last_synced_at: null,
+        has_sync_token: false,
+        channel_expiration: null,
+        last_sync_error: null,
+      })
+      setStatusMessage('Google Calendar disconnected.')
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Cannot disconnect Google Calendar')
+    }
+  }
+
+  async function handleSyncGoogleCalendarNow(): Promise<void> {
+    setErrorMessage('')
+    try {
+      const resp = await requestWithAuth<{ message: string }>('/google-calendar/sync-now', { method: 'POST' })
+      setStatusMessage(resp.message)
+      await fetchGoogleCalendarStatus()
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Cannot sync Google Calendar')
+    }
+  }
+
   async function handleCreateSchedule(schedule: Omit<Schedule, 'id' | 'user_id' | 'created_at' | 'updated_at' | 'is_completed'>): Promise<void> {
     setErrorMessage(''); setStatusMessage('')
     try {
@@ -492,7 +619,10 @@ function App() {
                 <span className="breadcrumb-item">Workspace</span>
                 <span className="breadcrumb-sep">/</span>
                 <span className="breadcrumb-item" style={{ color: 'var(--text-primary)', fontWeight: 500 }}>
-                  {activeWorkspaceView === 'home' ? 'Home' : (activeWorkspaceNote ? noteTitleFromMd(activeWorkspaceNote.contentMd) : 'Note')}
+                  {activeWorkspaceView === 'home' ? 'Home'
+                    : activeWorkspaceView === 'record' ? 'Record'
+                      : activeWorkspaceView === 'settings' ? 'Settings'
+                        : (activeWorkspaceNote ? noteTitleFromMd(activeWorkspaceNote.contentMd) : 'Note')}
                 </span>
               </nav>
             </>
@@ -502,13 +632,7 @@ function App() {
         <div className="topbar-right">
           {tokens && (
             <>
-              <button type="button" className="topbar-btn primary" onClick={() => setIsCreateEventOpen(true)}>
-                <Plus size={14} /> New event
-              </button>
-              <button type="button" className="topbar-btn" onClick={() => fetchSchedules()}>
-                <RefreshCw size={13} />
-              </button>
-              <div className="topbar-divider" />
+              {/* <div className="topbar-divider" /> */}
               <div className="user-avatar" title={user?.email}>{userInitial}</div>
               <button type="button" className="topbar-btn" onClick={handleLogout} title="Logout">
                 <LogOut size={13} />
@@ -550,32 +674,81 @@ function App() {
             </button>
 
             <div className="workspace-sidebar-body">
-              <button
-                type="button"
-                className={`workspace-nav-item ${activeWorkspaceView === 'home' ? 'active' : ''}`}
-                onClick={() => setActiveWorkspaceView('home')}
-              >
-                <Home size={15} />
-                <span>Home</span>
-              </button>
+              <div className="workspace-sidebar-main">
+                {/* Home nav item */}
+                <button
+                  type="button"
+                  className={`workspace-nav-item ${activeWorkspaceView === 'home' ? 'active' : ''}`}
+                  onClick={() => setActiveWorkspaceView('home')}
+                >
+                  <Home size={15} />
+                  <span>Home</span>
+                </button>
 
-              <div className="workspace-sidebar-section-title">
-                <StickyNote size={14} />
-                <span>Notes</span>
-              </div>
-              <div className="workspace-note-links">
-                {noteSummaries.map((note) => (
+                {/* Notes section — collapsible */}
+                <SidebarSection
+                  icon={<StickyNote size={14} />}
+                  label="Notes"
+                  isOpen={sectionNoteOpen}
+                  onToggle={() => setSectionNoteOpen(v => !v)}
+                  isCollapsed={isWorkspaceSidebarCollapsed}
+                >
+                  <div className="workspace-note-links">
+                    {noteSummaries.map((note) => (
+                      <button
+                        key={note.id}
+                        type="button"
+                        className={`workspace-nav-item workspace-nav-item--sub ${activeWorkspaceView === 'note' && activeWorkspaceNoteId === note.id ? 'active' : ''}`}
+                        onClick={() => openWorkspaceNote(note.id)}
+                        title={note.title}
+                      >
+                        <StickyNote size={13} />
+                        <span>{note.title}</span>
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      className="workspace-nav-item workspace-nav-item--sub workspace-nav-item--add"
+                      onClick={handleCreateNote}
+                      title="New note"
+                    >
+                      <Plus size={13} />
+                      <span>New note</span>
+                    </button>
+                  </div>
+                </SidebarSection>
+
+                {/* Record section — collapsible */}
+                <SidebarSection
+                  icon={<Video size={14} />}
+                  label="Record"
+                  isOpen={sectionRecordOpen}
+                  onToggle={() => {
+                    setSectionRecordOpen(v => !v)
+                    if (!sectionRecordOpen) setActiveWorkspaceView('record')
+                  }}
+                  isCollapsed={isWorkspaceSidebarCollapsed}
+                >
                   <button
-                    key={note.id}
                     type="button"
-                    className={`workspace-nav-item ${activeWorkspaceView === 'note' && activeWorkspaceNoteId === note.id ? 'active' : ''}`}
-                    onClick={() => openWorkspaceNote(note.id)}
-                    title={note.title}
+                    className={`workspace-nav-item workspace-nav-item--sub ${activeWorkspaceView === 'record' ? 'active' : ''}`}
+                    onClick={() => setActiveWorkspaceView('record')}
                   >
-                    <StickyNote size={14} />
-                    <span>{note.title}</span>
+                    <Video size={13} />
+                    <span>Open recorder</span>
                   </button>
-                ))}
+                </SidebarSection>
+              </div>
+
+              <div className="workspace-sidebar-footer">
+                <button
+                  type="button"
+                  className={`workspace-nav-item ${activeWorkspaceView === 'settings' ? 'active' : ''}`}
+                  onClick={() => setActiveWorkspaceView('settings')}
+                >
+                  <Settings size={15} />
+                  <span>Settings</span>
+                </button>
               </div>
             </div>
           </aside>
@@ -586,6 +759,7 @@ function App() {
                 <div className="home-schedule-area">
                   <CalendarView
                     schedules={schedules}
+                    isGoogleCalendarConnected={Boolean(googleCalendarStatus?.connected)}
                     startDate={startDate}
                     endDate={endDate}
                     onStartDateChange={setStartDate}
@@ -598,6 +772,49 @@ function App() {
                 </div>
                 <div className="home-quick-notes-area">
                   <NoteSidebar notes={recentNotes} onNoteChange={handleNoteChange} onCreateNote={handleCreateNote} />
+                </div>
+              </section>
+            ) : activeWorkspaceView === 'record' ? (
+              <div className="record-workspace">
+                <div className="record-workspace-header">
+                  <h1 className="page-title">Record</h1>
+                </div>
+                <RecordPanel />
+              </div>
+            ) : activeWorkspaceView === 'settings' ? (
+              <section className="settings-workspace">
+                <div className="settings-workspace-header">
+                  <h1 className="page-title">Settings</h1>
+                </div>
+                <div className="settings-card">
+                  <div className="settings-card-title">Google Calendar</div>
+                  <div className="settings-card-subtitle">
+                    Manage connection and manual sync for your calendar integration.
+                  </div>
+                  <div className="settings-actions-row">
+                    {!googleCalendarStatus?.connected ? (
+                      <button type="button" className="btn btn-primary" onClick={handleConnectGoogleCalendar}>
+                        Connect Google
+                      </button>
+                    ) : (
+                      <>
+                        <button type="button" className="btn btn-ghost" onClick={handleSyncGoogleCalendarNow}>
+                          Sync Google
+                        </button>
+                        <button type="button" className="btn btn-danger" onClick={handleDisconnectGoogleCalendar}>
+                          Disconnect Google
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  <div className="settings-meta-list">
+                    <div>Status: {googleCalendarStatus?.connected ? 'Connected' : 'Not connected'}</div>
+                    <div>Last sync: {formatDateTimeVi(googleCalendarStatus?.last_synced_at ?? null)}</div>
+                    <div>Channel expires: {formatDateTimeVi(googleCalendarStatus?.channel_expiration ?? null)}</div>
+                    {googleCalendarStatus?.last_sync_error && (
+                      <div className="settings-meta-error">Last error: {googleCalendarStatus.last_sync_error}</div>
+                    )}
+                  </div>
                 </div>
               </section>
             ) : activeWorkspaceNote ? (

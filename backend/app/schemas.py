@@ -43,6 +43,7 @@ class ScheduleResponse(BaseModel):
     location: Optional[str]
     description: Optional[str]
     is_completed: bool
+    google_synced: bool = False
     created_at: datetime
     updated_at: datetime
     
@@ -194,3 +195,20 @@ class NoteResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     rendered_html: str | None = None
+
+
+class GoogleConnectUrlResponse(BaseModel):
+    authorization_url: str
+    state: str
+    expires_in: int
+
+
+class GoogleCalendarConnectionStatus(BaseModel):
+    connected: bool
+    provider: str = "GOOGLE"
+    calendar_id: str | None = None
+    granted_scopes: list[str] = Field(default_factory=list)
+    last_synced_at: datetime | None = None
+    has_sync_token: bool = False
+    channel_expiration: datetime | None = None
+    last_sync_error: str | None = None

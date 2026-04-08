@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import Enum
 import uuid
 
-from sqlalchemy import Boolean, Column, DateTime, Enum as SQLEnum, ForeignKey, Index, Integer, String, Text, text
+from sqlalchemy import Boolean, Column, DateTime, Enum as SQLEnum, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
@@ -14,6 +14,17 @@ class ScheduleType(str, Enum):
     DEADLINE = "DEADLINE"    # Hạn nộp bài
     EXAM = "EXAM"            # Lịch thi
     PERSONAL = "PERSONAL"    # Cá nhân
+
+
+class CalendarProvider(str, Enum):
+    """Supported external calendar providers."""
+    GOOGLE = "GOOGLE"
+
+
+class SyncSource(str, Enum):
+    """Identify which side produced the latest change."""
+    INTERNAL = "INTERNAL"
+    PROVIDER = "PROVIDER"
 
 
 class User(Base):
@@ -73,6 +84,76 @@ class Schedule(Base):
     
     def __repr__(self):
         return f"<Schedule(id={self.id}, title={self.title}, type={self.type})>"
+
+
+class CalendarConnection(Base):
+    """Per-user external calendar connection state and sync cursor."""
+    __tablename__ = "calendar_connections"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    provider = Column(SQLEnum(CalendarProvider), nullable=False, default=CalendarProvider.GOOGLE)
+    provider_calendar_id = Column(String(255), nullable=False, default="primary", server_default=text("'primary'"))
+    refresh_token_encrypted = Column(Text, nullable=False)
+    access_token_encrypted = Column(Text, nullable=True)
+    access_token_expires_at = Column(DateTime, nullable=True)
+    granted_scopes = Column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
+    sync_token = Column(Text, nullable=True)
+    last_synced_at = Column(DateTime, nullable=True)
+    last_sync_error = Column(Text, nullable=True)
+    channel_id = Column(String(64), nullable=True)
+    channel_resource_id = Column(String(255), nullable=True)
+    channel_expiration = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "provider", "provider_calendar_id", name="uq_calendar_connections_user_provider_calendar"),
+        Index("ix_calendar_connections_provider_last_synced_at", "provider", "last_synced_at"),
+    )
+
+
+class ScheduleExternalMap(Base):
+    """Mapping between internal schedules and external provider events."""
+    __tablename__ = "schedule_external_maps"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    schedule_id = Column(UUID(as_uuid=True), ForeignKey("schedules.id", ondelete="CASCADE"), nullable=False, index=True)
+    provider = Column(SQLEnum(CalendarProvider), nullable=False, default=CalendarProvider.GOOGLE)
+    provider_calendar_id = Column(String(255), nullable=False, default="primary", server_default=text("'primary'"))
+    provider_event_id = Column(String(1024), nullable=False)
+    provider_etag = Column(String(255), nullable=True)
+    provider_updated_at = Column(DateTime, nullable=True)
+    last_sync_source = Column(SQLEnum(SyncSource), nullable=False, default=SyncSource.INTERNAL)
+    last_synced_at = Column(DateTime, nullable=True)
+    is_deleted_remote = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("schedule_id", "provider", name="uq_schedule_external_maps_schedule_provider"),
+        UniqueConstraint("provider", "provider_calendar_id", "provider_event_id", name="uq_schedule_external_maps_provider_event"),
+        Index("ix_schedule_external_maps_user_provider", "user_id", "provider"),
+        Index("ix_schedule_external_maps_provider_event_id", "provider_event_id"),
+    )
+
+
+class OAuthState(Base):
+    """One-time state values for external OAuth callbacks."""
+    __tablename__ = "oauth_states"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    provider = Column(SQLEnum(CalendarProvider), nullable=False, default=CalendarProvider.GOOGLE)
+    state_hash = Column(String(128), nullable=False, unique=True, index=True)
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("ix_oauth_states_provider_expires_at", "provider", "expires_at"),
+    )
 
 
 class Note(Base):
