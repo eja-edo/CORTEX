@@ -78,4 +78,21 @@ class Settings:
     # Encryption key for provider tokens (base64 Fernet key preferred)
     EXTERNAL_TOKEN_ENCRYPTION_KEY: str = os.getenv("EXTERNAL_TOKEN_ENCRYPTION_KEY", "")
 
+    # MinIO / S3-compatible multipart upload
+    MINIO_ENDPOINT: str = os.getenv("MINIO_ENDPOINT", "localhost:9000")
+    MINIO_ACCESS_KEY: str = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
+    MINIO_SECRET_KEY: str = os.getenv("MINIO_SECRET_KEY", "minioadmin")
+    MINIO_SECURE: bool = os.getenv("MINIO_SECURE", "false").lower() == "true"
+    MINIO_REGION: str = os.getenv("MINIO_REGION", "us-east-1")
+    MINIO_BUCKET: str = os.getenv("MINIO_BUCKET", "cortex-videos")
+    MINIO_AUTO_CREATE_BUCKET: bool = os.getenv("MINIO_AUTO_CREATE_BUCKET", "false").lower() == "true"
+
+    # Upload guardrails
+    PRESIGNED_URL_EXPIRE_SECONDS: int = int(os.getenv("PRESIGNED_URL_EXPIRE_SECONDS", "180"))
+    MULTIPART_MIN_PART_SIZE_BYTES: int = int(os.getenv("MULTIPART_MIN_PART_SIZE_BYTES", str(5 * 1024 * 1024)))
+    MULTIPART_MAX_PARTS: int = int(os.getenv("MULTIPART_MAX_PARTS", "10000"))
+    UPLOAD_MAX_FILE_SIZE_BYTES: int = int(os.getenv("UPLOAD_MAX_FILE_SIZE_BYTES", str(20 * 1024 * 1024 * 1024)))
+    UPLOAD_STALE_AFTER_HOURS: int = int(os.getenv("UPLOAD_STALE_AFTER_HOURS", "24"))
+    UPLOAD_RATE_LIMIT_PER_MINUTE: int = int(os.getenv("UPLOAD_RATE_LIMIT_PER_MINUTE", "120"))
+
 settings = Settings()

@@ -145,11 +145,14 @@ function WorkspaceNoteEditor({
 }) {
   const editorRef = useRef<HTMLDivElement>(null)
   const timerRef = useRef<number | null>(null)
+  const [wordCount, setWordCount] = useState(0)
 
   useEffect(() => {
     const el = editorRef.current
     if (!el) return
     el.innerHTML = markdownToHtml(note.contentMd)
+    const text = el.textContent ?? ''
+    setWordCount(text.trim().split(/\s+/).filter(Boolean).length)
   }, [note.id, note.contentMd])
 
   useEffect(
@@ -170,6 +173,14 @@ function WorkspaceNoteEditor({
     timerRef.current = window.setTimeout(flush, 220)
   }, [flush])
 
+  const handleInput = useCallback(() => {
+    queueFlush()
+    if (editorRef.current) {
+      const text = editorRef.current.textContent ?? ''
+      setWordCount(text.trim().split(/\s+/).filter(Boolean).length)
+    }
+  }, [queueFlush])
+
   const applyFormat = useCallback(
     (command: string) => {
       const el = editorRef.current
@@ -184,32 +195,48 @@ function WorkspaceNoteEditor({
   return (
     <section className="workspace-note">
       <header className="workspace-note-header">
-        <div>
-          <h2>{noteTitleFromMd(note.contentMd)}</h2>
-          <p>{note.date}</p>
+        <div className="workspace-note-meta">
+          <h2 className="workspace-note-title">{noteTitleFromMd(note.contentMd)}</h2>
+          <div className="workspace-note-info">
+            <span className="workspace-note-date">{note.date}</span>
+            <span className="workspace-note-sep">·</span>
+            <span className="workspace-note-wordcount">{wordCount} từ</span>
+          </div>
         </div>
       </header>
       <div className="workspace-note-toolbar">
-        <button type="button" className="ghost icon-only" onClick={() => applyFormat('bold')} title="Bold" aria-label="Bold"><Bold size={15} /></button>
-        <button type="button" className="ghost icon-only" onClick={() => applyFormat('italic')} title="Italic" aria-label="Italic"><Italic size={15} /></button>
-        <button type="button" className="ghost icon-only" onClick={() => applyFormat('underline')} title="Underline" aria-label="Underline"><Underline size={15} /></button>
-        <button type="button" className="ghost icon-only" onClick={() => applyFormat('insertUnorderedList')} title="List" aria-label="List"><List size={15} /></button>
+        <div className="workspace-note-toolbar-group">
+          <button type="button" className="workspace-toolbar-btn" onClick={() => applyFormat('bold')} title="Bold">
+            <Bold size={14} />
+          </button>
+          <button type="button" className="workspace-toolbar-btn" onClick={() => applyFormat('italic')} title="Italic">
+            <Italic size={14} />
+          </button>
+          <button type="button" className="workspace-toolbar-btn" onClick={() => applyFormat('underline')} title="Underline">
+            <Underline size={14} />
+          </button>
+          <button type="button" className="workspace-toolbar-btn" onClick={() => applyFormat('insertUnorderedList')} title="List">
+            <List size={14} />
+          </button>
+        </div>
       </div>
       <div
         ref={editorRef}
         className="workspace-note-editor"
         contentEditable
         suppressContentEditableWarning
+        data-placeholder="Start writing… use # for headings, ``` for code blocks"
         onKeyDown={(e) => {
-          if (e.key !== 'Enter' || e.shiftKey) return
-          const el = editorRef.current
-          if (!el) return
-          if (applyMarkdownShortcutOnEnter(el)) {
-            e.preventDefault()
-            queueFlush()
+          if (e.key === 'Enter' && !e.shiftKey) {
+            const el = editorRef.current
+            if (!el) return
+            if (applyMarkdownShortcutOnEnter(el)) {
+              e.preventDefault()
+              queueFlush()
+            }
           }
         }}
-        onInput={queueFlush}
+        onInput={handleInput}
         onBlur={flush}
       />
     </section>
@@ -708,7 +735,6 @@ function App() {
             throw new Error(`SSE request failed (${response.status})`)
           }
 
-          // Connected successfully, reset retry delay.
           retryDelayMs = 3000
 
           const reader = response.body.getReader()
@@ -928,11 +954,7 @@ function App() {
                 </div>
               </section>
             ) : activeWorkspaceView === 'record' ? (
-              <div className="record-workspace">
-                <div className="record-workspace-header">
-                  <h1 className="page-title">Record</h1>
-                </div>
-                <RecordPanel />
+              <div >
               </div>
             ) : activeWorkspaceView === 'settings' ? (
               <section className="settings-workspace">
@@ -971,12 +993,16 @@ function App() {
                 </div>
               </section>
             ) : activeWorkspaceNote ? (
-              <WorkspaceNoteEditor note={activeWorkspaceNote} onChange={handleNoteChange} />
+              <div className="workspace-note-page">
+                <WorkspaceNoteEditor note={activeWorkspaceNote} onChange={handleNoteChange} />
+              </div>
             ) : (
               <section className="workspace-empty-note">
                 <p>Chọn một note từ sidebar để mở trong workspace.</p>
               </section>
             )}
+
+            <RecordPanel requestWithAuth={requestWithAuth} isVisible={activeWorkspaceView === 'record'} />
           </div>
         </div>
       )}

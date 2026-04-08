@@ -1,0 +1,310 @@
+/* ========== RECORD PANEL ========== */
+.record-workspace {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow-y: auto;
+}
+
+.record-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin: 16px;
+    width: 80%;
+    align-self: center;
+}
+
+.record-error {
+    padding: 10px 12px;
+    background: var(--red-light);
+    border: 1px solid rgba(235, 87, 87, 0.2);
+    border-radius: var(--radius);
+    font-size: 13px;
+    color: var(--red);
+}
+
+/* ========== CAPTURE CARDS ========== */
+.record-capture-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.record-capture-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 20px 16px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    text-align: center;
+    transition: border-color 0.15s;
+}
+
+.record-capture-card.recording {
+    border-color: var(--red);
+    background: var(--red-light);
+}
+
+.record-capture-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: var(--bg-secondary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+    transition: background 0.15s, color 0.15s;
+}
+
+.record-capture-card.recording .record-capture-icon {
+    background: rgba(235, 87, 87, 0.12);
+    color: var(--red);
+}
+
+.record-capture-info {
+    flex: 1;
+}
+
+.record-capture-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 3px;
+}
+
+.record-capture-sub {
+    font-size: 12px;
+    color: var(--text-tertiary);
+}
+
+/* Live recording badge */
+.record-live-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--red);
+}
+
+.record-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--red);
+    animation: recordPulse 1s ease-in-out infinite;
+    flex-shrink: 0;
+}
+
+@keyframes recordPulse {
+
+    0%,
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+    50% {
+        opacity: 0.5;
+        transform: scale(0.8);
+    }
+}
+
+.record-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 7px 14px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border-strong);
+    background: var(--bg);
+    color: var(--text-primary);
+    font-size: 12.5px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.1s, border-color 0.1s;
+    white-space: nowrap;
+}
+
+.record-btn:hover {
+    background: var(--bg-hover);
+}
+
+.record-btn--stop {
+    border-color: rgba(235, 87, 87, 0.4);
+    background: var(--red-light);
+    color: var(--red);
+}
+
+.record-btn--stop:hover {
+    background: rgba(235, 87, 87, 0.15);
+}
+
+/* ========== VIDEO PREVIEW ========== */
+.record-video-container {
+    border-radius: var(--radius-xl);
+    border: 1px solid var(--border);
+    overflow: hidden;
+}
+
+.record-video-preview {
+    width: auto;
+    height: 100%;
+    max-height: 360px;
+    display: block;
+    object-fit: contain;
+    background: #000;
+}
+
+.record-video-label {
+    padding: 8px 12px;
+    font-size: 12px;
+    color: var(--text-tertiary);
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ========== RECORDINGS LIST ========== */
+.record-list-section {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    overflow: hidden;
+    background: var(--bg);
+}
+
+.record-list-header {
+    padding: 10px 14px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-secondary);
+}
+
+.record-list {
+    display: flex;
+    flex-direction: column;
+}
+
+.record-list-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    transition: background 0.1s;
+    flex-wrap: wrap;
+}
+
+.record-list-item:last-child {
+    border-bottom: none;
+}
+
+.record-list-item:hover {
+    background: var(--bg-secondary);
+}
+
+.record-list-icon {
+    display: flex;
+    align-items: center;
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+}
+
+.record-list-info {
+    flex: 1;
+    min-width: 120px;
+}
+
+.record-list-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.record-list-meta {
+    font-size: 11.5px;
+    color: var(--text-tertiary);
+    margin-top: 1px;
+}
+
+/* Audio player - full width, native controls */
+.record-audio-player {
+    width: 98%;
+    height: 32px;
+    min-width: 180px;
+    margin: 5px;
+    flex: 1;
+    border-radius: var(--radius);
+    accent-color: var(--text-primary);
+    align-items: center;
+}
+
+.record-list-actions {
+    display: flex;
+    gap: 3px;
+    flex-shrink: 0;
+}
+
+.record-action-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+
+.record-action-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.record-action-btn.active {
+    background: var(--bg-active);
+    color: var(--text-primary);
+}
+
+.record-action-btn--danger:hover {
+    background: var(--red-light);
+    color: var(--red);
+    border-color: rgba(235, 87, 87, 0.3);
+}
+
+/* ========== RECORD EMPTY STATE ========== */
+.record-empty {
+    padding: 28px 16px;
+    text-align: center;
+    color: var(--text-tertiary);
+    font-size: 13px;
+    background: var(--bg-secondary);
+    border-radius: var(--radius-xl);
+    border: 1px solid var(--border);
+}
+
+@media (max-width: 600px) {
+    .record-capture-grid {
+        grid-template-columns: 1fr;
+    }
+
+}

@@ -11,6 +11,7 @@ from app.api.auth import router as auth_router
 from app.api.google_calendar import router as google_calendar_router
 from app.api.notes import router as notes_router
 from app.api.schedules import router as schedules_router
+from app.api.upload import router as upload_router
 from app.api.sse import sync_sse_router
 from app.utils.logger import get_logger
 from app.api.sse.sse_manager import SSEManager
@@ -80,6 +81,7 @@ app.include_router(auth_router, prefix=settings.API_STR)
 app.include_router(google_calendar_router, prefix=settings.API_STR)
 app.include_router(schedules_router, prefix=settings.API_STR)
 app.include_router(notes_router, prefix=settings.API_STR)
+app.include_router(upload_router, prefix=settings.API_STR)
 app.include_router(sync_sse_router, prefix=settings.API_STR)
 
 @app.get("/")

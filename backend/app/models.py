@@ -190,3 +190,55 @@ class Note(Base):
         Index("ix_notes_user_id", "user_id"),
         Index("ix_notes_user_id_updated_at", "user_id", "updated_at"),
     )
+
+
+class UploadStatus(str, Enum):
+    """Multipart upload lifecycle status."""
+    INITIATED = "initiated"
+    UPLOADING = "uploading"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class Upload(Base):
+    """Track multipart upload sessions owned by users."""
+    __tablename__ = "uploads"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    status = Column(
+        SQLEnum(UploadStatus),
+        nullable=False,
+        default=UploadStatus.INITIATED,
+    )
+    object_key = Column(String(1024), nullable=False, unique=True, index=True)
+    upload_id = Column(String(255), nullable=False, unique=True, index=True)
+    total_parts = Column(Integer, nullable=False)
+    total_size = Column(Integer, nullable=False)
+    filename = Column(String(255), nullable=True)
+    content_type = Column(String(255), nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, server_default=text("NOW()"))
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, server_default=text("NOW()"))
+
+    __table_args__ = (
+        Index("ix_uploads_user_status_created_at", "user_id", "status", "created_at"),
+    )
+
+
+class UploadPart(Base):
+    """Track confirmed uploaded parts per upload session."""
+    __tablename__ = "upload_parts"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    upload_record_id = Column(UUID(as_uuid=True), ForeignKey("uploads.id", ondelete="CASCADE"), nullable=False, index=True)
+    part_number = Column(Integer, nullable=False)
+    etag = Column(String(255), nullable=False)
+    size = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, server_default=text("NOW()"))
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, server_default=text("NOW()"))
+
+    __table_args__ = (
+        UniqueConstraint("upload_record_id", "part_number", name="uq_upload_parts_upload_part_number"),
+        Index("ix_upload_parts_upload_part_number", "upload_record_id", "part_number"),
+    )

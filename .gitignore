@@ -48,3 +48,6 @@ frontend/.vite/
 
 # Docker
 **/.dockerignore.local
+
+
+minio-data/

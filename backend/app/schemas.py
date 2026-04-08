@@ -4,6 +4,8 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, EmailStr, field_validator
 from enum import Enum
 
+from app.models import UploadStatus
+
 MAX_NOTE_CONTENT_LENGTH = 50000
 
 class ScheduleType(str, Enum):
@@ -212,3 +214,89 @@ class GoogleCalendarConnectionStatus(BaseModel):
     has_sync_token: bool = False
     channel_expiration: datetime | None = None
     last_sync_error: str | None = None
+
+
+class UploadInitRequest(BaseModel):
+    filename: str | None = Field(default=None, max_length=255)
+    content_type: str | None = Field(default="video/webm", max_length=255)
+    # Set 0 for live streaming mode when final size/parts are unknown at init time.
+    total_parts: int = Field(default=0, ge=0)
+    total_size: int = Field(default=0, ge=0)
+
+
+class UploadInitResponse(BaseModel):
+    upload_id: UUID
+    object_key: str
+    total_parts: int
+    expires_in_seconds: int
+
+
+class UploadPresignedResponse(BaseModel):
+    upload_id: UUID
+    part_number: int
+    url: str
+    expires_in_seconds: int
+
+
+class UploadPartConfirmRequest(BaseModel):
+    upload_id: UUID
+    part_number: int = Field(..., ge=1)
+    etag: str = Field(..., min_length=1, max_length=255)
+    size: int = Field(..., ge=1)
+    is_last_part: bool = False
+
+
+class UploadPartConfirmResponse(BaseModel):
+    upload_id: UUID
+    part_number: int
+    status: str
+
+
+class UploadCompleteRequest(BaseModel):
+    upload_id: UUID
+    # Required for live streaming mode where init total_parts == 0.
+    total_parts: int | None = Field(default=None, ge=1)
+    total_size: int | None = Field(default=None, ge=1)
+
+
+class UploadCompleteResponse(BaseModel):
+    upload_id: UUID
+    object_key: str
+    status: UploadStatus
+
+
+class UploadSessionResponse(BaseModel):
+    id: UUID
+    status: UploadStatus
+    object_key: str
+    total_parts: int
+    total_size: int
+    uploaded_parts: list[int]
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None
+
+
+class UploadListItemResponse(BaseModel):
+    id: UUID
+    object_key: str
+    filename: str | None
+    content_type: str | None
+    media_type: str
+    total_size: int
+    created_at: datetime
+    completed_at: datetime | None
+
+
+class UploadListResponse(BaseModel):
+    items: list[UploadListItemResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class UploadAccessUrlResponse(BaseModel):
+    upload_id: UUID
+    object_key: str
+    url: str
+    expires_in_seconds: int
