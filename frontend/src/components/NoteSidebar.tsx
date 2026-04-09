@@ -40,37 +40,84 @@ function openNotePopoutWindow(date: string, contentHtml: string): void {
   if (root) root.innerHTML = contentHtml
 }
 
-/** Gets first non-empty line of plain text from markdown */
 function getTitleFromMd(md: string): string {
   const plain = plainTextFromMarkdown(md)
   return plain.split('\n').find(l => l.trim()) || 'Untitled'
 }
 
 function NoteEditor({
-  noteId, contentMd, isExpanded, editorRef, onMarkdownEnter,
+  noteId, contentMd, isExpanded, editorRef, onFlush,
 }: {
   noteId: string
   contentMd: string
   isExpanded: boolean
   editorRef: RefObject<HTMLDivElement | null>
-  onMarkdownEnter: (e: React.KeyboardEvent<HTMLDivElement>) => void
+  onFlush: (html: string) => void
 }) {
-  const lastExpanded = useRef(false)
+  const lastRenderedNoteId = useRef<string | null>(null)
+  const wasExpanded = useRef(false)
+  const flushTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
     const el = editorRef.current
     if (!el) return
-    const contentHtml = markdownToHtml(contentMd)
-    if (isExpanded && !lastExpanded.current) {
-      el.innerHTML = contentHtml
-      lastExpanded.current = true
+
+    if (!isExpanded) {
+      wasExpanded.current = false
       return
     }
-    if (!isExpanded) { lastExpanded.current = false; return }
-    if (document.activeElement !== el && el.innerHTML !== contentHtml) {
-      el.innerHTML = contentHtml
+
+    const noteChanged = lastRenderedNoteId.current !== noteId
+    const justExpanded = !wasExpanded.current
+
+    // Only write innerHTML when switching notes or first expand.
+    // NEVER re-render due to contentMd changes while expanded —
+    // that would destroy in-progress DOM edits (code blocks, lists, etc.)
+    if (justExpanded || noteChanged) {
+      el.innerHTML = markdownToHtml(contentMd)
+      lastRenderedNoteId.current = noteId
+      wasExpanded.current = true
     }
-  }, [contentMd, isExpanded, noteId, editorRef])
+    // contentMd intentionally excluded from deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [noteId, isExpanded, editorRef])
+
+  useEffect(() => () => {
+    if (flushTimerRef.current) window.clearTimeout(flushTimerRef.current)
+  }, [])
+
+  const queueFlush = useCallback(() => {
+    if (flushTimerRef.current) window.clearTimeout(flushTimerRef.current)
+    flushTimerRef.current = window.setTimeout(() => {
+      const el = editorRef.current
+      if (el) onFlush(el.innerHTML)
+      flushTimerRef.current = null
+    }, 200)
+  }, [editorRef, onFlush])
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Enter' || e.shiftKey) return
+    const el = editorRef.current
+    if (!el) return
+    const applied = applyMarkdownShortcutOnEnter(el)
+    if (applied) {
+      e.preventDefault()
+      queueFlush()
+    }
+  }, [editorRef, queueFlush])
+
+  const handleInput = useCallback(() => {
+    queueFlush()
+  }, [queueFlush])
+
+  const handleBlur = useCallback(() => {
+    if (flushTimerRef.current) {
+      window.clearTimeout(flushTimerRef.current)
+      flushTimerRef.current = null
+    }
+    const el = editorRef.current
+    if (el) onFlush(el.innerHTML)
+  }, [editorRef, onFlush])
 
   return (
     <div
@@ -80,8 +127,10 @@ function NoteEditor({
       suppressContentEditableWarning
       role="textbox"
       aria-multiline
-      data-placeholder="Write something…"
-      onKeyDown={onMarkdownEnter}
+      data-placeholder="Write something..."
+      onKeyDown={handleKeyDown}
+      onInput={handleInput}
+      onBlur={handleBlur}
     />
   )
 }
@@ -113,14 +162,6 @@ function NoteCardItem({
 
   useEffect(() => {
     if (!isExpanded) return
-    return () => {
-      const el = editorRef.current
-      if (el) onNoteChange(note.id, htmlToMarkdown(el.innerHTML))
-    }
-  }, [isExpanded, note.id, onNoteChange])
-
-  useEffect(() => {
-    if (!isExpanded) return
     const onPointerDown = (e: PointerEvent) => {
       if (cardRef.current?.contains(e.target as Node)) return
       collapseWithFocusRestore()
@@ -129,20 +170,17 @@ function NoteCardItem({
     return () => document.removeEventListener('pointerdown', onPointerDown, true)
   }, [isExpanded, collapseWithFocusRestore])
 
-  const applyFormat = (command: string, value?: string) => {
+  const applyFormat = (command: string) => {
     const el = editorRef.current
     if (!el) return
     el.focus()
-    document.execCommand(command, false, value)
+    document.execCommand(command, false)
+    onNoteChange(note.id, htmlToMarkdown(el.innerHTML))
   }
 
-  const handleMarkdownEnter = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== 'Enter' || e.shiftKey) return
-    const el = editorRef.current
-    if (!el) return
-    const applied = applyMarkdownShortcutOnEnter(el)
-    if (applied) e.preventDefault()
-  }
+  const handleFlush = useCallback((html: string) => {
+    onNoteChange(note.id, htmlToMarkdown(html))
+  }, [note.id, onNoteChange])
 
   const handlePopOut = (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -155,17 +193,15 @@ function NoteCardItem({
   const handleDelete = (e: React.MouseEvent) => {
     e.stopPropagation()
     if (!onDeleteNote) return
-    if (window.confirm(`Xóa note "${title}"?`)) {
+    if (window.confirm(`Xoa note "${title}"?`)) {
       onDeleteNote(note.id)
     }
   }
 
-  // Pick emoji based on content
   const emoji = note.contentMd.includes('**') ? '📋' : note.contentMd.includes('http') ? '🔗' : '📝'
 
   return (
     <article ref={cardRef} className={`note-card${isExpanded ? ' note-card--expanded' : ''}`}>
-      {/* Summary row — always visible */}
       <div style={{ display: 'flex', alignItems: 'center' }}>
         <button
           ref={summaryButtonRef}
@@ -186,8 +222,8 @@ function NoteCardItem({
           <button
             type="button"
             className="note-toolbar-btn"
-            title="Xóa note"
-            aria-label="Xóa note"
+            title="Xoa note"
+            aria-label="Xoa note"
             onClick={handleDelete}
             style={{ marginRight: 6, flexShrink: 0, color: 'var(--text-tertiary)' }}
           >
@@ -196,7 +232,6 @@ function NoteCardItem({
         )}
       </div>
 
-      {/* Expandable editor */}
       <div id={expandId} className="note-expandable" aria-hidden={!isExpanded} inert={!isExpanded}>
         <div className="note-expandable-inner">
           <div className="note-editor-wrap">
@@ -205,7 +240,7 @@ function NoteCardItem({
               contentMd={note.contentMd}
               isExpanded={isExpanded}
               editorRef={editorRef}
-              onMarkdownEnter={handleMarkdownEnter}
+              onFlush={handleFlush}
             />
             <div
               className="note-toolbar"
@@ -233,8 +268,8 @@ function NoteCardItem({
                   <button
                     type="button"
                     className="note-toolbar-btn"
-                    title="Xóa note"
-                    aria-label="Xóa note"
+                    title="Xoa note"
+                    aria-label="Xoa note"
                     onClick={handleDelete}
                     style={{ color: 'var(--red)' }}
                   >

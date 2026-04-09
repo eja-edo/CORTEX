@@ -31,6 +31,8 @@ interface CalendarViewProps {
     onEndDateChange: (date: string) => void
     onFetch: () => void
     onOpenCreateEvent: () => void
+    /** Called when user clicks/drags an empty slot — passes the selected start/end time */
+    onSlotSelect?: (start: Date, end: Date) => void
     onToggleComplete: (item: Schedule) => Promise<void>
     onRemove: (id: string) => Promise<void>
 }
@@ -43,7 +45,7 @@ export function CalendarView({
     isGoogleCalendarConnected = false,
     schedules, startDate,
     onStartDateChange, onEndDateChange,
-    onFetch, onOpenCreateEvent, onToggleComplete, onRemove,
+    onFetch, onOpenCreateEvent, onSlotSelect, onToggleComplete, onRemove,
 }: CalendarViewProps) {
     const [selectedSchedule, setSelectedSchedule] = useState<Schedule | null>(null)
     const [currentDate, setCurrentDate] = useState<Date>(() => new Date(startDate))
@@ -60,15 +62,12 @@ export function CalendarView({
     )
 
     const viewConfig = useMemo(() => {
-        // Default window: 07:00 – 21:00
         const DEFAULT_START_HOUR = 7
         const DEFAULT_END_HOUR = 21
 
-        // Determine the visible time window
-        let windowStartMin = DEFAULT_START_HOUR * 60  // 7:00 in minutes
-        let windowEndMin = DEFAULT_END_HOUR * 60       // 21:00 in minutes
+        let windowStartMin = DEFAULT_START_HOUR * 60
+        let windowEndMin = DEFAULT_END_HOUR * 60
 
-        // Expand window only if events fall outside defaults
         if (calendarEvents.length > 0) {
             const earliest = Math.min(
                 ...calendarEvents.map((e) => e.start.getHours() * 60 + e.start.getMinutes())
@@ -77,31 +76,21 @@ export function CalendarView({
                 ...calendarEvents.map((e) => e.end.getHours() * 60 + e.end.getMinutes())
             )
 
-            // Only expand, never shrink below defaults
             if (earliest < windowStartMin) {
-                windowStartMin = Math.max(0, earliest - 60) // 1h padding before earliest
+                windowStartMin = Math.max(0, earliest - 60)
             }
             if (latest > windowEndMin) {
-                windowEndMin = Math.min(24 * 60, latest + 30) // 30min padding after latest
+                windowEndMin = Math.min(24 * 60, latest + 30)
             }
         }
 
-        // Determine step: based on shortest event duration, minimum 60 min
-        let step = 60 // default: 1 hour slots
+        let step = 60
         if (calendarEvents.length > 0) {
             const durations = calendarEvents.map((e) =>
                 Math.max(60, Math.round((e.end.getTime() - e.start.getTime()) / 60000))
             )
             const minDuration = Math.min(...durations)
-
-            // Step choices: 60 min only (as per requirement: minimum 1 hour gap)
-            // But we can use 30 min if all events are >= 30 min and there are many events
-            // Per requirements: always at least 60 min apart
-            if (minDuration >= 120) {
-                step = 120
-            } else {
-                step = 60
-            }
+            step = minDuration >= 120 ? 120 : 60
         }
 
         const startHour = Math.floor(windowStartMin / 60)
@@ -139,6 +128,20 @@ export function CalendarView({
         syncRangeToFilters(start, end)
     }
 
+    const handleSelectSlot = ({ start, end }: { start: Date; end: Date }) => {
+        if (onSlotSelect) {
+            // For day/week views clicking a single slot, end = start + step.
+            // Ensure at least 1h duration for usability.
+            const endTime = new Date(end)
+            if (endTime.getTime() - start.getTime() < 60 * 60 * 1000) {
+                endTime.setTime(start.getTime() + 60 * 60 * 1000)
+            }
+            onSlotSelect(start, endTime)
+        } else {
+            onOpenCreateEvent()
+        }
+    }
+
     const selectedStart = selectedSchedule ? parseServerDateTime(selectedSchedule.start_time) : null
     const selectedEnd = selectedSchedule ? parseServerDateTime(selectedSchedule.end_time) : null
 
@@ -174,9 +177,11 @@ export function CalendarView({
                     date={currentDate}
                     view={currentView}
                     views={['week', 'day', 'month']}
+                    selectable
                     onNavigate={handleNavigate}
                     onView={(v) => { setCurrentView(v as 'week' | 'day' | 'month'); handleNavigate(currentDate) }}
                     onSelectEvent={(event) => setSelectedSchedule((event as CalendarEvent).resource)}
+                    onSelectSlot={handleSelectSlot}
                     step={viewConfig.step}
                     timeslots={1}
                     min={viewConfig.min}

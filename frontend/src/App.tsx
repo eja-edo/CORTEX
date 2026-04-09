@@ -136,6 +136,8 @@ function mapApiNoteToAppNote(note: ApiNote): AppNote {
   }
 }
 
+// Bug 2 Fix: Only re-render innerHTML when switching notes (note.id changes),
+// NOT when contentMd changes from our own typing — that would reset the cursor.
 function WorkspaceNoteEditor({
   note,
   onChange,
@@ -146,10 +148,15 @@ function WorkspaceNoteEditor({
   const editorRef = useRef<HTMLDivElement>(null)
   const timerRef = useRef<number | null>(null)
   const [wordCount, setWordCount] = useState(0)
+  const lastNoteIdRef = useRef<string | null>(null)
 
   useEffect(() => {
     const el = editorRef.current
     if (!el) return
+    // Only re-render HTML when switching to a different note (id changes).
+    // If the same note id, the user is typing — don't touch innerHTML or cursor will jump.
+    if (lastNoteIdRef.current === note.id) return
+    lastNoteIdRef.current = note.id
     el.innerHTML = markdownToHtml(note.contentMd)
     const text = el.textContent ?? ''
     setWordCount(text.trim().split(/\s+/).filter(Boolean).length)
@@ -294,6 +301,8 @@ function App() {
   const [syncToastMessage, setSyncToastMessage] = useState<string>('')
   const [isBusy, setIsBusy] = useState<boolean>(false)
   const [isCreateEventOpen, setIsCreateEventOpen] = useState<boolean>(false)
+  // Tracks the pre-filled start/end for when user clicks on the calendar
+  const [createEventInitialTimes, setCreateEventInitialTimes] = useState<{ startDate: string; endDate: string } | null>(null)
   const [isWorkspaceSidebarCollapsed, setIsWorkspaceSidebarCollapsed] = useState<boolean>(false)
   const [activeWorkspaceView, setActiveWorkspaceView] = useState<'home' | 'note' | 'record' | 'settings'>('home')
   const [activeWorkspaceNoteId, setActiveWorkspaceNoteId] = useState<string | null>(null)
@@ -459,10 +468,15 @@ function App() {
     const target = recentNotesRef.current.find((note) => note.id === noteId)
     if (!target) return
     try {
+      const payload: { version: number; content?: string } = { version: target.version }
+      // Only include content if it's not empty
+      if (target.contentMd.trim()) {
+        payload.content = target.contentMd
+      }
       const updated = await requestWithAuth<ApiNote>(`/notes/${noteId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ version: target.version, content: target.contentMd }),
+        body: JSON.stringify(payload),
       })
       const mapped = mapApiNoteToAppNote(updated)
       setRecentNotes((prev) => prev.map((note) => (note.id === noteId ? { ...note, ...mapped } : note)))
@@ -680,6 +694,25 @@ function App() {
     setTokens(null); setUser(null); setSchedules([])
     setStatusMessage('You are logged out.')
   }
+
+  // New feature: open create event modal with pre-filled times from calendar click
+  const handleCalendarSlotSelect = useCallback((slotStart: Date, slotEnd: Date) => {
+    setCreateEventInitialTimes({
+      startDate: toLocalInputDateTime(slotStart),
+      endDate: toLocalInputDateTime(slotEnd),
+    })
+    setIsCreateEventOpen(true)
+  }, [])
+
+  const handleOpenCreateEvent = useCallback(() => {
+    setCreateEventInitialTimes(null) // will use current time defaults inside ScheduleForm
+    setIsCreateEventOpen(true)
+  }, [])
+
+  const handleCloseCreateEvent = useCallback(() => {
+    setIsCreateEventOpen(false)
+    setCreateEventInitialTimes(null)
+  }, [])
 
   useEffect(() => {
     if (!tokens?.accessToken) return
@@ -939,7 +972,8 @@ function App() {
                     onStartDateChange={setStartDate}
                     onEndDateChange={setEndDate}
                     onFetch={() => fetchSchedules()}
-                    onOpenCreateEvent={() => setIsCreateEventOpen(true)}
+                    onOpenCreateEvent={handleOpenCreateEvent}
+                    onSlotSelect={handleCalendarSlotSelect}
                     onToggleComplete={handleToggleComplete}
                     onRemove={handleRemoveSchedule}
                   />
@@ -1009,18 +1043,23 @@ function App() {
 
       {/* CREATE EVENT MODAL */}
       {tokens && isCreateEventOpen && (
-        <div className="modal-backdrop" onClick={() => setIsCreateEventOpen(false)}>
+        <div className="modal-backdrop" onClick={handleCloseCreateEvent}>
           <div className="modal create-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <div className="modal-title-area">
                 <div className="modal-title">New event</div>
               </div>
-              <button type="button" className="modal-close" onClick={() => setIsCreateEventOpen(false)}>
+              <button type="button" className="modal-close" onClick={handleCloseCreateEvent}>
                 <X size={16} />
               </button>
             </div>
             <div className="modal-body">
-              <ScheduleForm onCreate={handleCreateSchedule} weekRange={weekRange} onClose={() => setIsCreateEventOpen(false)} />
+              <ScheduleForm
+                onCreate={handleCreateSchedule}
+                weekRange={weekRange}
+                initialTimes={createEventInitialTimes}
+                onClose={handleCloseCreateEvent}
+              />
             </div>
           </div>
         </div>

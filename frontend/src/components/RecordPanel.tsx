@@ -652,8 +652,8 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
     }, [requestWithAuth, splitBlobIntoParts, updateRecording, uploadPartWithRetry])
 
     return (
-        <div className='record-workspace'>
-            <div className="record-panel" style={{ display: isVisible ? undefined : 'none' }}>
+        <div className='record-workspace' style={{ display: isVisible ? undefined : 'none' }}>
+            <div className="record-panel">
                 {error && (
                     <div className="record-error">{error}</div>
                 )}

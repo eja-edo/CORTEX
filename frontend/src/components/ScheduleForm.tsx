@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import type { FormEvent } from 'react'
 import { Plus } from 'lucide-react'
 import type { Schedule, ScheduleType } from '../types'
@@ -8,24 +8,49 @@ function toLocalInputDateTime(value: Date): string {
   return local.toISOString().slice(0, 16)
 }
 
+function getNowRounded(): Date {
+  const now = new Date()
+  // Round up to the next 30-min mark for a cleaner default
+  const minutes = now.getMinutes()
+  const roundedMinutes = minutes < 30 ? 30 : 0
+  const hoursAdd = minutes < 30 ? 0 : 1
+  now.setMinutes(roundedMinutes, 0, 0)
+  now.setHours(now.getHours() + hoursAdd)
+  return now
+}
+
 interface ScheduleFormProps {
   onCreate: (schedule: Omit<Schedule, 'id' | 'user_id' | 'created_at' | 'updated_at' | 'is_completed'>) => Promise<void>
   weekRange: { startDate: string; endDate: string }
+  /** If provided (e.g. from a calendar slot click), pre-fills start/end times */
+  initialTimes?: { startDate: string; endDate: string } | null
   onClose?: () => void
 }
 
-export function ScheduleForm({ onCreate, weekRange, onClose }: ScheduleFormProps) {
+export function ScheduleForm({ onCreate, weekRange: _weekRange, initialTimes, onClose }: ScheduleFormProps) {
   const [title, setTitle] = useState('')
   const [type, setType] = useState<ScheduleType>('CLASS')
-  const [startTime, setStartTime] = useState(weekRange.startDate)
-  const [endTime, setEndTime] = useState(() => {
-    const start = new Date(weekRange.startDate)
+  const [startTime, setStartTime] = useState<string>(() => {
+    if (initialTimes) return initialTimes.startDate
+    return toLocalInputDateTime(getNowRounded())
+  })
+  const [endTime, setEndTime] = useState<string>(() => {
+    if (initialTimes) return initialTimes.endDate
+    const start = getNowRounded()
     start.setHours(start.getHours() + 1)
     return toLocalInputDateTime(start)
   })
   const [location, setLocation] = useState('')
   const [description, setDescription] = useState('')
   const [formError, setFormError] = useState('')
+
+  // When initialTimes changes (e.g. user clicks a different slot and re-opens),
+  // update the fields to reflect the new slot.
+  useEffect(() => {
+    if (!initialTimes) return
+    setStartTime(initialTimes.startDate)
+    setEndTime(initialTimes.endDate)
+  }, [initialTimes])
 
   const handleStartTimeChange = (nextStart: string) => {
     setStartTime(nextStart)
