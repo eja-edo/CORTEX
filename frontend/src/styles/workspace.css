@@ -153,11 +153,17 @@
     min-width: 280px;
     border-left: 1px solid var(--border);
     background: var(--bg-secondary);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
 }
 
 .home-quick-notes-area .note-sidebar {
     width: 100%;
     border-right: none;
+    flex: 1;
+    min-height: 0;
 }
 
 /* ========== WORKSPACE NOTE PAGE ========== */

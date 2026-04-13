@@ -20,6 +20,14 @@ function toLocalInputDateTime(value: Date): string {
     return local.toISOString().slice(0, 16)
 }
 
+// Round a date DOWN to the nearest 30-minute mark
+function snapTo30(date: Date): Date {
+    const snapped = new Date(date)
+    const mins = snapped.getMinutes()
+    snapped.setMinutes(mins < 30 ? 0 : 30, 0, 0)
+    return snapped
+}
+
 type CalendarEvent = { title: string; start: Date; end: Date; resource: Schedule }
 
 interface CalendarViewProps {
@@ -31,7 +39,6 @@ interface CalendarViewProps {
     onEndDateChange: (date: string) => void
     onFetch: () => void
     onOpenCreateEvent: () => void
-    /** Called when user clicks/drags an empty slot — passes the selected start/end time */
     onSlotSelect?: (start: Date, end: Date) => void
     onToggleComplete: (item: Schedule) => Promise<void>
     onRemove: (id: string) => Promise<void>
@@ -40,6 +47,7 @@ interface CalendarViewProps {
 const TYPE_LABELS: Record<string, string> = {
     CLASS: 'Class', DEADLINE: 'Deadline', EXAM: 'Exam', PERSONAL: 'Personal',
 }
+
 
 export function CalendarView({
     isGoogleCalendarConnected = false,
@@ -62,11 +70,10 @@ export function CalendarView({
     )
 
     const viewConfig = useMemo(() => {
-        const DEFAULT_START_HOUR = 7
-        const DEFAULT_END_HOUR = 21
-
-        let windowStartMin = DEFAULT_START_HOUR * 60
-        let windowEndMin = DEFAULT_END_HOUR * 60
+        // Default visible window: 07:00 – 22:00
+        // Expands automatically when events fall outside this range
+        let windowStartMin = 7 * 60   // 07:00
+        let windowEndMin = 22 * 60  // 22:00
 
         if (calendarEvents.length > 0) {
             const earliest = Math.min(
@@ -75,33 +82,23 @@ export function CalendarView({
             const latest = Math.max(
                 ...calendarEvents.map((e) => e.end.getHours() * 60 + e.end.getMinutes())
             )
-
+            // Expand start: floor down to the hour (e.g. 6:30 → 6:00, 5:10 → 5:00)
             if (earliest < windowStartMin) {
-                windowStartMin = Math.max(0, earliest - 60)
+                windowStartMin = Math.floor(earliest / 60) * 60
             }
+            // Expand end: ceil up to next full hour (e.g. 22:30 → 23:00)
             if (latest > windowEndMin) {
-                windowEndMin = Math.min(24 * 60, latest + 30)
+                windowEndMin = Math.min(Math.ceil(latest / 60) * 60, 24 * 60)
             }
         }
-
-        let step = 60
-        if (calendarEvents.length > 0) {
-            const durations = calendarEvents.map((e) =>
-                Math.max(60, Math.round((e.end.getTime() - e.start.getTime()) / 60000))
-            )
-            const minDuration = Math.min(...durations)
-            step = minDuration >= 120 ? 120 : 60
-        }
-
-        const startHour = Math.floor(windowStartMin / 60)
-        const startMins = windowStartMin % 60
-        const endHour = Math.floor(windowEndMin / 60)
-        const endMins = windowEndMin % 60
 
         return {
-            min: new Date(1970, 0, 1, startHour, startMins),
-            max: new Date(1970, 0, 1, Math.min(endHour, 23), endMins),
-            step,
+            min: new Date(1970, 0, 1, windowStartMin / 60, 0),
+            max: new Date(1970, 0, 1, Math.min(windowEndMin / 60, 23), windowEndMin % 60),
+            // 30-min slots for precise click-to-create, 2 per hour group
+            // Label gutter shows only whole hours (CSS hides the :30 label)
+            step: 30,
+            timeslots: 2,
         }
     }, [calendarEvents])
 
@@ -110,33 +107,52 @@ export function CalendarView({
         onEndDateChange(toLocalInputDateTime(rangeEnd))
     }
 
-    const handleNavigate = (nextDate: Date) => {
-        setCurrentDate(nextDate)
-        const start = new Date(nextDate)
-        const end = new Date(nextDate)
-        if (currentView === 'month') {
+    // Compute date range for a given view + anchor — view passed explicitly
+    // so it's never stale when called right after setCurrentView()
+    const computeRange = (forView: 'week' | 'day' | 'month', anchor: Date) => {
+        const start = new Date(anchor)
+        const end = new Date(anchor)
+        if (forView === 'month') {
             start.setDate(1); start.setHours(0, 0, 0, 0)
             end.setMonth(end.getMonth() + 1, 0); end.setHours(23, 59, 59, 999)
-        } else if (currentView === 'day') {
+        } else if (forView === 'day') {
             start.setHours(0, 0, 0, 0); end.setHours(23, 59, 59, 999)
         } else {
-            const day = nextDate.getDay()
+            // week — Mon-based
+            const day = anchor.getDay()
             const diff = day === 0 ? -6 : 1 - day
-            start.setDate(nextDate.getDate() + diff); start.setHours(0, 0, 0, 0)
+            start.setDate(anchor.getDate() + diff); start.setHours(0, 0, 0, 0)
             end.setDate(start.getDate() + 6); end.setHours(23, 59, 59, 999)
         }
+        return { start, end }
+    }
+
+    const handleNavigate = (nextDate: Date) => {
+        setCurrentDate(nextDate)
+        const { start, end } = computeRange(currentView, nextDate)
+        syncRangeToFilters(start, end)
+    }
+
+    const handleViewChange = (v: string) => {
+        const nextView = v as 'week' | 'day' | 'month'
+        // When switching to day view, anchor to today — not to the week's Monday
+        const anchor = nextView === 'day' ? new Date() : currentDate
+        setCurrentView(nextView)
+        setCurrentDate(anchor)
+        const { start, end } = computeRange(nextView, anchor)
         syncRangeToFilters(start, end)
     }
 
     const handleSelectSlot = ({ start, end }: { start: Date; end: Date }) => {
         if (onSlotSelect) {
-            // For day/week views clicking a single slot, end = start + step.
-            // Ensure at least 1h duration for usability.
+            // Snap start to the nearest 15-min mark for precision
+            const snappedStart = snapTo30(start)
             const endTime = new Date(end)
-            if (endTime.getTime() - start.getTime() < 60 * 60 * 1000) {
-                endTime.setTime(start.getTime() + 60 * 60 * 1000)
+            // Ensure at least 1h duration
+            if (endTime.getTime() - snappedStart.getTime() < 60 * 60 * 1000) {
+                endTime.setTime(snappedStart.getTime() + 60 * 60 * 1000)
             }
-            onSlotSelect(start, endTime)
+            onSlotSelect(snappedStart, endTime)
         } else {
             onOpenCreateEvent()
         }
@@ -179,11 +195,12 @@ export function CalendarView({
                     views={['week', 'day', 'month']}
                     selectable
                     onNavigate={handleNavigate}
-                    onView={(v) => { setCurrentView(v as 'week' | 'day' | 'month'); handleNavigate(currentDate) }}
+                    onView={handleViewChange}
                     onSelectEvent={(event) => setSelectedSchedule((event as CalendarEvent).resource)}
                     onSelectSlot={handleSelectSlot}
+                    // step=30 → 30-min slots like Google Calendar, timeslots=2 → 2 per hour group
                     step={viewConfig.step}
-                    timeslots={1}
+                    timeslots={viewConfig.timeslots}
                     min={viewConfig.min}
                     max={viewConfig.max}
                     allDayAccessor={() => false}
@@ -203,6 +220,9 @@ export function CalendarView({
                                 </div>
                             )
                         },
+                    }}
+                    formats={{
+                        timeGutterFormat: 'HH:mm',
                     }}
                 />
             </div>
@@ -262,11 +282,7 @@ export function CalendarView({
                                 <Trash2 size={13} /> Delete
                             </button>
                             <div className="modal-footer-right">
-                                <button
-                                    type="button"
-                                    className="btn btn-ghost"
-                                    onClick={() => setSelectedSchedule(null)}
-                                >
+                                <button type="button" className="btn btn-ghost" onClick={() => setSelectedSchedule(null)}>
                                     Close
                                 </button>
                                 <button

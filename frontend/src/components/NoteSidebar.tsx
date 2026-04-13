@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
-import { Bold, Check, Italic, List, Plus, Search, SquareArrowOutUpRight, Strikethrough, Trash2, Underline } from 'lucide-react'
+import { Bold, Check, Italic, List, Plus, Search, SquareArrowOutUpRight, Strikethrough, Trash2, Underline, X } from 'lucide-react'
 import { applyMarkdownShortcutOnEnter, htmlToMarkdown, markdownToHtml, plainTextFromMarkdown } from '../utils/noteMarkdown'
 
 export type NoteItem = {
@@ -45,6 +45,16 @@ function getTitleFromMd(md: string): string {
   return plain.split('\n').find(l => l.trim()) || 'Untitled'
 }
 
+function highlightMatch(text: string, query: string): string {
+  if (!query.trim()) return escapeHtml(text)
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const regex = new RegExp(`(${escaped})`, 'gi')
+  return escapeHtml(text).replace(
+    new RegExp(`(${escapeHtml(query).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'),
+    (_, m) => `<mark class="note-search-highlight">${m}</mark>`
+  ).replace(regex, (_, m) => `<mark class="note-search-highlight">${escapeHtml(m)}</mark>`)
+}
+
 function NoteEditor({
   noteId, contentMd, isExpanded, editorRef, onFlush,
 }: {
@@ -61,30 +71,18 @@ function NoteEditor({
   useEffect(() => {
     const el = editorRef.current
     if (!el) return
-
-    if (!isExpanded) {
-      wasExpanded.current = false
-      return
-    }
-
+    if (!isExpanded) { wasExpanded.current = false; return }
     const noteChanged = lastRenderedNoteId.current !== noteId
     const justExpanded = !wasExpanded.current
-
-    // Only write innerHTML when switching notes or first expand.
-    // NEVER re-render due to contentMd changes while expanded —
-    // that would destroy in-progress DOM edits (code blocks, lists, etc.)
     if (justExpanded || noteChanged) {
       el.innerHTML = markdownToHtml(contentMd)
       lastRenderedNoteId.current = noteId
       wasExpanded.current = true
     }
-    // contentMd intentionally excluded from deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [noteId, isExpanded, editorRef])
 
-  useEffect(() => () => {
-    if (flushTimerRef.current) window.clearTimeout(flushTimerRef.current)
-  }, [])
+  useEffect(() => () => { if (flushTimerRef.current) window.clearTimeout(flushTimerRef.current) }, [])
 
   const queueFlush = useCallback(() => {
     if (flushTimerRef.current) window.clearTimeout(flushTimerRef.current)
@@ -99,25 +97,8 @@ function NoteEditor({
     if (e.key !== 'Enter' || e.shiftKey) return
     const el = editorRef.current
     if (!el) return
-    const applied = applyMarkdownShortcutOnEnter(el)
-    if (applied) {
-      e.preventDefault()
-      queueFlush()
-    }
+    if (applyMarkdownShortcutOnEnter(el)) { e.preventDefault(); queueFlush() }
   }, [editorRef, queueFlush])
-
-  const handleInput = useCallback(() => {
-    queueFlush()
-  }, [queueFlush])
-
-  const handleBlur = useCallback(() => {
-    if (flushTimerRef.current) {
-      window.clearTimeout(flushTimerRef.current)
-      flushTimerRef.current = null
-    }
-    const el = editorRef.current
-    if (el) onFlush(el.innerHTML)
-  }, [editorRef, onFlush])
 
   return (
     <div
@@ -129,14 +110,18 @@ function NoteEditor({
       aria-multiline
       data-placeholder="Write something..."
       onKeyDown={handleKeyDown}
-      onInput={handleInput}
-      onBlur={handleBlur}
+      onInput={queueFlush}
+      onBlur={() => {
+        if (flushTimerRef.current) { window.clearTimeout(flushTimerRef.current); flushTimerRef.current = null }
+        const el = editorRef.current
+        if (el) onFlush(el.innerHTML)
+      }}
     />
   )
 }
 
 function NoteCardItem({
-  note, isExpanded, onExpand, onCollapse, onNoteChange, onDeleteNote,
+  note, isExpanded, onExpand, onCollapse, onNoteChange, onDeleteNote, searchQuery,
 }: {
   note: NoteItem
   isExpanded: boolean
@@ -144,6 +129,7 @@ function NoteCardItem({
   onCollapse: () => void
   onNoteChange: (id: string, md: string) => void
   onDeleteNote?: (id: string) => void
+  searchQuery: string
 }) {
   const cardRef = useRef<HTMLElement>(null)
   const editorRef = useRef<HTMLDivElement>(null)
@@ -153,9 +139,7 @@ function NoteCardItem({
 
   const collapseWithFocusRestore = useCallback(() => {
     const active = document.activeElement
-    if (active instanceof HTMLElement && cardRef.current?.contains(active)) {
-      active.blur()
-    }
+    if (active instanceof HTMLElement && cardRef.current?.contains(active)) active.blur()
     onCollapse()
     window.requestAnimationFrame(() => summaryButtonRef.current?.focus())
   }, [onCollapse])
@@ -193,9 +177,7 @@ function NoteCardItem({
   const handleDelete = (e: React.MouseEvent) => {
     e.stopPropagation()
     if (!onDeleteNote) return
-    if (window.confirm(`Xoa note "${title}"?`)) {
-      onDeleteNote(note.id)
-    }
+    if (window.confirm(`Xoa note "${title}"?`)) onDeleteNote(note.id)
   }
 
   const emoji = note.contentMd.includes('**') ? '📋' : note.contentMd.includes('http') ? '🔗' : '📝'
@@ -214,7 +196,14 @@ function NoteCardItem({
         >
           <span className="note-icon">{emoji}</span>
           <div className="note-card-info">
-            <div className="note-card-title">{title}</div>
+            {searchQuery ? (
+              <div
+                className="note-card-title"
+                dangerouslySetInnerHTML={{ __html: highlightMatch(title, searchQuery) }}
+              />
+            ) : (
+              <div className="note-card-title">{title}</div>
+            )}
             <div className="note-card-date">{note.date}</div>
           </div>
         </button>
@@ -265,14 +254,7 @@ function NoteCardItem({
               {onDeleteNote && (
                 <>
                   <div className="note-toolbar-sep" />
-                  <button
-                    type="button"
-                    className="note-toolbar-btn"
-                    title="Xoa note"
-                    aria-label="Xoa note"
-                    onClick={handleDelete}
-                    style={{ color: 'var(--red)' }}
-                  >
+                  <button type="button" className="note-toolbar-btn" title="Xoa note" aria-label="Xoa note" onClick={handleDelete} style={{ color: 'var(--red)' }}>
                     <Trash2 size={13} />
                   </button>
                 </>
@@ -291,34 +273,119 @@ function NoteCardItem({
 
 export function NoteSidebar({ notes, onNoteChange, onCreateNote, onDeleteNote }: NoteSidebarProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [isSearchOpen, setIsSearchOpen] = useState(false)
+  const searchInputRef = useRef<HTMLInputElement>(null)
   const collapseExpanded = useCallback(() => setExpandedId(null), [])
+
+  const filteredNotes = searchQuery.trim()
+    ? notes.filter((note) => {
+      const q = searchQuery.toLowerCase()
+      const plain = plainTextFromMarkdown(note.contentMd).toLowerCase()
+      return plain.includes(q)
+    })
+    : notes
+
+  const handleSearchToggle = useCallback(() => {
+    setIsSearchOpen((prev) => {
+      if (prev) {
+        setSearchQuery('')
+        return false
+      }
+      return true
+    })
+  }, [])
+
+  // Focus input when search opens
+  useEffect(() => {
+    if (isSearchOpen) {
+      window.requestAnimationFrame(() => searchInputRef.current?.focus())
+    }
+  }, [isSearchOpen])
+
+  const handleClearSearch = useCallback(() => {
+    setSearchQuery('')
+    searchInputRef.current?.focus()
+  }, [])
 
   return (
     <aside className="note-sidebar">
       <div className="sidebar-section-header">
         <span className="sidebar-section-title">Notes</span>
         <div style={{ display: 'flex', gap: 2 }}>
-          <button type="button" className="sidebar-action-btn" aria-label="Search notes" title="Search">
+          <button
+            type="button"
+            className={`sidebar-action-btn ${isSearchOpen ? 'active' : ''}`}
+            aria-label="Search notes"
+            title="Search"
+            onClick={handleSearchToggle}
+          >
             <Search size={14} />
           </button>
-          <button type="button" className="sidebar-action-btn" aria-label="New note" title="New note" onClick={onCreateNote}>
+          <button
+            type="button"
+            className="sidebar-action-btn"
+            aria-label="New note"
+            title="New note"
+            onClick={onCreateNote}
+          >
             <Plus size={14} />
           </button>
         </div>
       </div>
 
-      <div className="note-list">
-        {notes.map((note) => (
-          <NoteCardItem
-            key={note.id}
-            note={note}
-            isExpanded={expandedId === note.id}
-            onExpand={() => setExpandedId(note.id)}
-            onCollapse={collapseExpanded}
-            onNoteChange={onNoteChange}
-            onDeleteNote={onDeleteNote}
+      {/* Search bar — animated expand */}
+      <div className={`note-search-bar-wrap ${isSearchOpen ? 'open' : ''}`}>
+        <div className="note-search-bar">
+          <Search size={12} className="note-search-icon" />
+          <input
+            ref={searchInputRef}
+            type="text"
+            className="note-search-input"
+            placeholder="Tìm kiếm notes…"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                if (searchQuery) { setSearchQuery('') } else { setIsSearchOpen(false) }
+              }
+            }}
           />
-        ))}
+          {searchQuery && (
+            <button type="button" className="note-search-clear" onClick={handleClearSearch} aria-label="Clear search">
+              <X size={11} />
+            </button>
+          )}
+        </div>
+        {searchQuery && (
+          <div className="note-search-results-count">
+            {filteredNotes.length === 0
+              ? 'Không tìm thấy'
+              : `${filteredNotes.length} kết quả`}
+          </div>
+        )}
+      </div>
+
+      <div className="note-list">
+        {filteredNotes.length === 0 && searchQuery ? (
+          <div className="note-search-empty">
+            <Search size={18} strokeWidth={1.5} style={{ color: 'var(--text-disabled)' }} />
+            <span>Không tìm thấy note nào<br />khớp với &ldquo;{searchQuery}&rdquo;</span>
+          </div>
+        ) : (
+          filteredNotes.map((note) => (
+            <NoteCardItem
+              key={note.id}
+              note={note}
+              isExpanded={expandedId === note.id}
+              onExpand={() => setExpandedId(note.id)}
+              onCollapse={collapseExpanded}
+              onNoteChange={onNoteChange}
+              onDeleteNote={onDeleteNote}
+              searchQuery={searchQuery}
+            />
+          ))
+        )}
       </div>
     </aside>
   )

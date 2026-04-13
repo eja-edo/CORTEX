@@ -47,9 +47,11 @@
     flex: 1;
     overflow-y: auto;
     padding: 4px 8px 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
+    display: grid;
+    grid-auto-rows: max-content;
+    row-gap: 2px;
+    align-content: start;
+    min-height: 0;
 }
 
 /* ========== NOTE CARD ========== */

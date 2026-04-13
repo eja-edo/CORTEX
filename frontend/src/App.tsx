@@ -10,6 +10,7 @@ import { NoteSidebar, type NoteItem } from './components/NoteSidebar'
 import { RecordPanel } from './components/RecordPanel'
 import type { Schedule, TokenPair, User, ScheduleListResponse, GoogleCalendarStatus, SyncUpdateEvent } from './types'
 import { applyMarkdownShortcutOnEnter, htmlToMarkdown, markdownToHtml, plainTextFromMarkdown } from './utils/noteMarkdown'
+import { NotificationBell, type AppNotification } from './components/NotificationBell'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api'
 const PKCE_CLIENT_ID = 'cortex-web'
@@ -321,6 +322,8 @@ function App() {
   const noteSyncTimersRef = useRef<Record<string, number>>({})
   const syncToastTimerRef = useRef<number | null>(null)
 
+  const [notifications, setNotifications] = useState<AppNotification[]>([])
+
   useEffect(() => {
     recentNotesRef.current = recentNotes
   }, [recentNotes])
@@ -401,6 +404,16 @@ function App() {
 
   function showSyncToast(message: string): void {
     setSyncToastMessage(message)
+    // Thêm notification
+    const newNotif: AppNotification = {
+      id: Date.now().toString(),
+      kind: 'sync',
+      title: 'Calendar synced',
+      body: message,
+      timestamp: new Date(),
+      read: false,
+    }
+    setNotifications((prev) => [newNotif, ...prev].slice(0, 50))
     if (syncToastTimerRef.current) {
       window.clearTimeout(syncToastTimerRef.current)
     }
@@ -834,6 +847,12 @@ function App() {
         <div className="topbar-right">
           {tokens && (
             <>
+              <NotificationBell
+                notifications={notifications}
+                onMarkRead={(id) => setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n))}
+                onMarkAllRead={() => setNotifications(prev => prev.map(n => ({ ...n, read: true })))}
+                onDismiss={(id) => setNotifications(prev => prev.filter(n => n.id !== id))}
+              />
               <div className="user-avatar" title={user?.email}>{userInitial}</div>
               <button type="button" className="topbar-btn" onClick={handleLogout} title="Logout">
                 <LogOut size={13} />

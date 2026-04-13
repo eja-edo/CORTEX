@@ -399,3 +399,20 @@
         gap: 4px;
     }
 }
+
+/*
+  With step=30 + timeslots=2, react-big-calendar renders 2 slots per hour group.
+  The first slot (on the hour) gets a .rbc-label, the second (:30) also gets one.
+  We hide the :30 label so only clean hour marks (07:00, 08:00…) appear — 
+  matching Google Calendar's look.
+*/
+
+/* Each hour group = .rbc-timeslot-group containing 2 .rbc-time-slot children */
+.rbc-timeslot-group .rbc-time-slot:nth-child(2) .rbc-label {
+    display: none;
+}
+
+/* Also hide the :30 divider line to keep the grid clean */
+.rbc-timeslot-group .rbc-time-slot:nth-child(2) {
+    border-top: 1px dashed var(--border) !important;
+}
