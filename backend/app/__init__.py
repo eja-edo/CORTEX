@@ -3,13 +3,16 @@ import signal
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.exc import SQLAlchemyError
 from app.config import settings
-from app.database import engine
-from app.models import Base
 from app.api.auth import router as auth_router
 from app.api.google_calendar import router as google_calendar_router
+from app.api.assets import router as assets_router
+from app.api.jobs import router as jobs_router
 from app.api.notes import router as notes_router
+from app.api.note_links import router as note_links_router
+from app.api.notifications import router as notifications_router
+from app.api.search import router as search_router
+from app.api.segments import router as segments_router
 from app.api.schedules import router as schedules_router
 from app.api.upload import router as upload_router
 from app.api.sse import sync_sse_router
@@ -52,11 +55,6 @@ logger.info("✅ Signal handlers registered for SIGINT and SIGTERM")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application startup and shutdown lifecycle."""
-    try:
-        Base.metadata.create_all(bind=engine)
-    except SQLAlchemyError:
-        logger.exception("Database is not available during startup; skipping table creation.")
-
     yield
 
 # Initialize FastAPI app
@@ -81,6 +79,12 @@ app.include_router(auth_router, prefix=settings.API_STR)
 app.include_router(google_calendar_router, prefix=settings.API_STR)
 app.include_router(schedules_router, prefix=settings.API_STR)
 app.include_router(notes_router, prefix=settings.API_STR)
+app.include_router(note_links_router, prefix=settings.API_STR)
+app.include_router(assets_router, prefix=settings.API_STR)
+app.include_router(segments_router, prefix=settings.API_STR)
+app.include_router(jobs_router, prefix=settings.API_STR)
+app.include_router(search_router, prefix=settings.API_STR)
+app.include_router(notifications_router, prefix=settings.API_STR)
 app.include_router(upload_router, prefix=settings.API_STR)
 app.include_router(sync_sse_router, prefix=settings.API_STR)
 

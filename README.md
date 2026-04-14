@@ -2,6 +2,8 @@
 
 A FastAPI-based backend for managing student schedules with support for classroom schedules, deadlines, exams, and personal events.
 
+For service startup instructions, see [RUN_SERVICE.md](RUN_SERVICE.md).
+
 ## Project Structure
 
 ```
