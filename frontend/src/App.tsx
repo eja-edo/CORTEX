@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, Bold, CheckCircle2, ChevronDown, ChevronRight, Home, Italic, List, LogOut, PanelLeftClose, PanelLeftOpen, Plus, Settings, StickyNote, Underline, Video, X } from 'lucide-react'
+import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Home, LogOut, PanelLeftClose, PanelLeftOpen, Plus, Settings, StickyNote, Video, X } from 'lucide-react'
 import { startOfWeek, endOfWeek } from 'date-fns'
 import 'react-big-calendar/lib/css/react-big-calendar.css'
 import './App.css'
@@ -9,9 +9,10 @@ import { CalendarView } from './components/CalendarView'
 import { NoteSidebar, type NoteItem } from './components/NoteSidebar'
 import { RecordPanel } from './components/RecordPanel'
 import type { Schedule, TokenPair, User, ScheduleListResponse, GoogleCalendarStatus, SyncUpdateEvent } from './types'
-import { applyMarkdownShortcutOnEnter, htmlToMarkdown, markdownToHtml, plainTextFromMarkdown } from './utils/noteMarkdown'
+import { plainTextFromMarkdown } from './utils/noteMarkdown'
 import { NotificationBell, type AppNotification } from './components/NotificationBell'
 import { buildTextPatch, type NotePatchOp } from './utils/textPatch.ts'
+import { WorkspaceNoteEditor } from './components/WorkspaceNoteEditor'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api'
 const PKCE_CLIENT_ID = 'cortex-web'
@@ -32,6 +33,7 @@ function getOrCreateSseTabAppId(): string {
 type ApiNote = {
   id: string
   user_id: string
+  parent_note_id: string | null
   content: string
   content_type: string
   position: { x: number; y: number }
@@ -47,6 +49,7 @@ type ApiNote = {
 type AppNote = NoteItem & {
   version: number
   updatedAt: string
+  parentNoteId: string | null
 }
 
 type NoteSyncState = {
@@ -142,121 +145,8 @@ function mapApiNoteToAppNote(note: ApiNote): AppNote {
     date: formatNoteDate(note.updated_at),
     version: note.version,
     updatedAt: note.updated_at,
+    parentNoteId: note.parent_note_id,
   }
-}
-
-// Bug 2 Fix: Only re-render innerHTML when switching notes (note.id changes),
-// NOT when contentMd changes from our own typing — that would reset the cursor.
-function WorkspaceNoteEditor({
-  note,
-  onChange,
-}: {
-  note: NoteItem
-  onChange: (id: string, contentMd: string) => void
-}) {
-  const editorRef = useRef<HTMLDivElement>(null)
-  const timerRef = useRef<number | null>(null)
-  const [wordCount, setWordCount] = useState(0)
-  const lastNoteIdRef = useRef<string | null>(null)
-
-  useEffect(() => {
-    const el = editorRef.current
-    if (!el) return
-    // Only re-render HTML when switching to a different note (id changes).
-    // If the same note id, the user is typing — don't touch innerHTML or cursor will jump.
-    if (lastNoteIdRef.current === note.id) return
-    lastNoteIdRef.current = note.id
-    el.innerHTML = markdownToHtml(note.contentMd)
-    const text = el.textContent ?? ''
-    setWordCount(text.trim().split(/\s+/).filter(Boolean).length)
-  }, [note.id, note.contentMd])
-
-  useEffect(
-    () => () => {
-      if (timerRef.current) window.clearTimeout(timerRef.current)
-    },
-    [],
-  )
-
-  const flush = useCallback(() => {
-    const el = editorRef.current
-    if (!el) return
-    onChange(note.id, htmlToMarkdown(el.innerHTML))
-  }, [note.id, onChange])
-
-  const queueFlush = useCallback(() => {
-    if (timerRef.current) window.clearTimeout(timerRef.current)
-    timerRef.current = window.setTimeout(flush, 1000)
-  }, [flush])
-
-  const handleInput = useCallback(() => {
-    queueFlush()
-    if (editorRef.current) {
-      const text = editorRef.current.textContent ?? ''
-      setWordCount(text.trim().split(/\s+/).filter(Boolean).length)
-    }
-  }, [queueFlush])
-
-  const applyFormat = useCallback(
-    (command: string) => {
-      const el = editorRef.current
-      if (!el) return
-      el.focus()
-      document.execCommand(command, false)
-      queueFlush()
-    },
-    [queueFlush],
-  )
-
-  return (
-    <section className="workspace-note">
-      <header className="workspace-note-header">
-        <div className="workspace-note-meta">
-          <h2 className="workspace-note-title">{noteTitleFromMd(note.contentMd)}</h2>
-          <div className="workspace-note-info">
-            <span className="workspace-note-date">{note.date}</span>
-            <span className="workspace-note-sep">·</span>
-            <span className="workspace-note-wordcount">{wordCount} từ</span>
-          </div>
-        </div>
-      </header>
-      <div className="workspace-note-toolbar">
-        <div className="workspace-note-toolbar-group">
-          <button type="button" className="workspace-toolbar-btn" onClick={() => applyFormat('bold')} title="Bold">
-            <Bold size={14} />
-          </button>
-          <button type="button" className="workspace-toolbar-btn" onClick={() => applyFormat('italic')} title="Italic">
-            <Italic size={14} />
-          </button>
-          <button type="button" className="workspace-toolbar-btn" onClick={() => applyFormat('underline')} title="Underline">
-            <Underline size={14} />
-          </button>
-          <button type="button" className="workspace-toolbar-btn" onClick={() => applyFormat('insertUnorderedList')} title="List">
-            <List size={14} />
-          </button>
-        </div>
-      </div>
-      <div
-        ref={editorRef}
-        className="workspace-note-editor"
-        contentEditable
-        suppressContentEditableWarning
-        data-placeholder="Start writing… use # for headings, ``` for code blocks"
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && !e.shiftKey) {
-            const el = editorRef.current
-            if (!el) return
-            if (applyMarkdownShortcutOnEnter(el)) {
-              e.preventDefault()
-              queueFlush()
-            }
-          }
-        }}
-        onInput={handleInput}
-        onBlur={flush}
-      />
-    </section>
-  )
 }
 
 // Collapsible sidebar section header
@@ -359,6 +249,32 @@ function App() {
   const openWorkspaceNote = useCallback((noteId: string) => {
     setActiveWorkspaceNoteId(noteId)
     setActiveWorkspaceView('note')
+  }, [])
+
+  const collectDescendantIds = useCallback((rootNoteId: string): string[] => {
+    const notesByParent = new Map<string | null, AppNote[]>()
+    for (const note of recentNotesRef.current) {
+      const parentKey = note.parentNoteId ?? null
+      const bucket = notesByParent.get(parentKey)
+      if (bucket) {
+        bucket.push(note)
+      } else {
+        notesByParent.set(parentKey, [note])
+      }
+    }
+
+    const collected: string[] = []
+    const stack = [rootNoteId]
+    const seen = new Set<string>()
+    while (stack.length) {
+      const currentId = stack.pop()
+      if (!currentId || seen.has(currentId)) continue
+      seen.add(currentId)
+      collected.push(currentId)
+      const children = notesByParent.get(currentId) ?? []
+      for (const child of children) stack.push(child.id)
+    }
+    return collected
   }, [])
 
   useEffect(() => { writeStoredTokens(tokens) }, [tokens])
@@ -602,7 +518,7 @@ function App() {
     }, 280)
   }
 
-  async function handleCreateNote(): Promise<void> {
+  async function handleCreateNote(parentNoteId?: string): Promise<void> {
     setErrorMessage('')
     try {
       const created = await requestWithAuth<ApiNote>('/notes', {
@@ -611,6 +527,7 @@ function App() {
         body: JSON.stringify({
           content: '# New note',
           content_type: 'markdown',
+          parent_note_id: parentNoteId ?? null,
           position: { x: 0, y: 0 },
           size: { width: 200, height: 200 },
           style: { color: 'yellow' },
@@ -635,16 +552,59 @@ function App() {
     setErrorMessage('')
     try {
       await requestWithAuth<void>(`/notes/${noteId}`, { method: 'DELETE' })
-      setRecentNotes((prev) => prev.filter((n) => n.id !== noteId))
-      delete noteSyncStatesRef.current[noteId]
-      if (activeWorkspaceNoteId === noteId) {
-        const remaining = recentNotesRef.current.filter((n) => n.id !== noteId)
+      const removedIds = new Set(collectDescendantIds(noteId))
+      setRecentNotes((prev) => prev.filter((n) => !removedIds.has(n.id)))
+      for (const removedId of removedIds) {
+        delete noteSyncStatesRef.current[removedId]
+      }
+      if (activeWorkspaceNoteId && removedIds.has(activeWorkspaceNoteId)) {
+        const remaining = recentNotesRef.current.filter((n) => !removedIds.has(n.id))
         setActiveWorkspaceNoteId(remaining[0]?.id ?? null)
         if (activeWorkspaceView === 'note') setActiveWorkspaceView('home')
       }
       setStatusMessage('Note deleted.')
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Cannot delete note')
+    }
+  }
+
+  async function handleMoveNote(noteId: string, parentNoteId: string | null): Promise<void> {
+    setErrorMessage('')
+    const current = recentNotesRef.current.find((note) => note.id === noteId)
+    if (!current) return
+
+    const syncState = noteSyncStatesRef.current[noteId]
+    if (syncState?.inFlight) {
+      setErrorMessage('Note đang được đồng bộ. Vui lòng thử lại sau vài giây.')
+      return
+    }
+
+    try {
+      const updated = await requestWithAuth<ApiNote>(`/notes/${noteId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          version: current.version,
+          parent_note_id: parentNoteId,
+        }),
+      })
+
+      const mapped = mapApiNoteToAppNote(updated)
+      setRecentNotes((prev) => prev.map((note) => (note.id === noteId ? { ...note, ...mapped } : note)))
+
+      const nextSyncState = noteSyncStatesRef.current[noteId]
+      if (nextSyncState) {
+        nextSyncState.baseVersion = mapped.version
+      }
+
+      setStatusMessage(parentNoteId ? 'Đã di chuyển note vào nhánh mới.' : 'Đã chuyển note về root.')
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        setErrorMessage('Note update conflict. Reloaded latest note version.')
+        await fetchNotes()
+        return
+      }
+      setErrorMessage(error instanceof Error ? error.message : 'Cannot move note')
     }
   }
 
@@ -1032,7 +992,7 @@ function App() {
                     <button
                       type="button"
                       className="workspace-nav-item workspace-nav-item--sub workspace-nav-item--add"
-                      onClick={handleCreateNote}
+                      onClick={() => handleCreateNote()}
                       title="New note"
                     >
                       <Plus size={13} />
@@ -1099,6 +1059,7 @@ function App() {
                     notes={recentNotes}
                     onNoteChange={handleNoteChange}
                     onCreateNote={handleCreateNote}
+                    onMoveNote={handleMoveNote}
                     onDeleteNote={handleDeleteNote}
                   />
                 </div>

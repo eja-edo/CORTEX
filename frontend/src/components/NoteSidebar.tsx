@@ -1,43 +1,32 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
-import { Bold, Check, Italic, List, Plus, Search, SquareArrowOutUpRight, Strikethrough, Trash2, Underline, X } from 'lucide-react'
-import { applyMarkdownShortcutOnEnter, htmlToMarkdown, markdownToHtml, plainTextFromMarkdown } from '../utils/noteMarkdown'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Check, ChevronRight, Plus, Search, Trash2, X } from 'lucide-react'
+import MarkdownIt from 'markdown-it'
+import { plainTextFromMarkdown } from '../utils/noteMarkdown'
+
+const md = new MarkdownIt({
+  html: false,
+  linkify: true,
+  typographer: true,
+  breaks: true,
+})
 
 export type NoteItem = {
   id: string
   date: string
   contentMd: string
+  parentNoteId?: string | null
 }
 
 interface NoteSidebarProps {
   notes: NoteItem[]
   onNoteChange: (id: string, contentMd: string) => void
-  onCreateNote: () => void
+  onCreateNote: (parentNoteId?: string) => void
+  onMoveNote?: (noteId: string, parentNoteId: string | null) => Promise<void> | void
   onDeleteNote?: (id: string) => void
 }
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-}
-
-function openNotePopoutWindow(date: string, contentHtml: string): void {
-  const w = window.open('', `cortex-note-${Date.now()}`, 'popup=yes,width=400,height=500,left=120,top=100,resizable=yes,scrollbars=yes')
-  if (!w) { window.alert('Allow pop-ups for this page.'); return }
-  try { w.opener = null } catch { /* ignore */ }
-  w.document.open()
-  w.document.write(`<!DOCTYPE html><html lang="vi"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${escapeHtml(date)}</title>
-<style>
-  * { box-sizing: border-box; }
-  body { margin: 0; min-height: 100vh; padding: 20px 24px;
-    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-    font-size: 14px; line-height: 1.6; color: #37352f; background: #fff; }
-  .date { font-size: 11px; color: #9b9a97; margin-bottom: 14px; }
-  .body p { margin: 0 0 8px; } .body ul { padding-left: 18px; } .body li { margin: 3px 0; }
-</style></head><body><div class="date">${escapeHtml(date)}</div><div id="r" class="body"></div></body></html>`)
-  w.document.close()
-  const root = w.document.getElementById('r')
-  if (root) root.innerHTML = contentHtml
 }
 
 function getTitleFromMd(md: string): string {
@@ -47,144 +36,145 @@ function getTitleFromMd(md: string): string {
 
 function highlightMatch(text: string, query: string): string {
   if (!query.trim()) return escapeHtml(text)
-  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const regex = new RegExp(`(${escaped})`, 'gi')
-  return escapeHtml(text).replace(
-    new RegExp(`(${escapeHtml(query).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'),
-    (_, m) => `<mark class="note-search-highlight">${m}</mark>`
-  ).replace(regex, (_, m) => `<mark class="note-search-highlight">${escapeHtml(m)}</mark>`)
-}
-
-function NoteEditor({
-  noteId, contentMd, isExpanded, editorRef, onFlush,
-}: {
-  noteId: string
-  contentMd: string
-  isExpanded: boolean
-  editorRef: RefObject<HTMLDivElement | null>
-  onFlush: (html: string) => void
-}) {
-  const lastRenderedNoteId = useRef<string | null>(null)
-  const wasExpanded = useRef(false)
-  const flushTimerRef = useRef<number | null>(null)
-
-  useEffect(() => {
-    const el = editorRef.current
-    if (!el) return
-    if (!isExpanded) { wasExpanded.current = false; return }
-    const noteChanged = lastRenderedNoteId.current !== noteId
-    const justExpanded = !wasExpanded.current
-    if (justExpanded || noteChanged) {
-      el.innerHTML = markdownToHtml(contentMd)
-      lastRenderedNoteId.current = noteId
-      wasExpanded.current = true
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [noteId, isExpanded, editorRef])
-
-  useEffect(() => () => { if (flushTimerRef.current) window.clearTimeout(flushTimerRef.current) }, [])
-
-  const queueFlush = useCallback(() => {
-    if (flushTimerRef.current) window.clearTimeout(flushTimerRef.current)
-    flushTimerRef.current = window.setTimeout(() => {
-      const el = editorRef.current
-      if (el) onFlush(el.innerHTML)
-      flushTimerRef.current = null
-    }, 200)
-  }, [editorRef, onFlush])
-
-  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== 'Enter' || e.shiftKey) return
-    const el = editorRef.current
-    if (!el) return
-    if (applyMarkdownShortcutOnEnter(el)) { e.preventDefault(); queueFlush() }
-  }, [editorRef, queueFlush])
-
-  return (
-    <div
-      ref={editorRef}
-      className="note-card-editor"
-      contentEditable
-      suppressContentEditableWarning
-      role="textbox"
-      aria-multiline
-      data-placeholder="Write something..."
-      onKeyDown={handleKeyDown}
-      onInput={queueFlush}
-      onBlur={() => {
-        if (flushTimerRef.current) { window.clearTimeout(flushTimerRef.current); flushTimerRef.current = null }
-        const el = editorRef.current
-        if (el) onFlush(el.innerHTML)
-      }}
-    />
-  )
+  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const regex = new RegExp(`(${escapedQuery})`, 'gi')
+  return escapeHtml(text).replace(regex, '<mark class="note-search-highlight">$1</mark>')
 }
 
 function NoteCardItem({
-  note, isExpanded, onExpand, onCollapse, onNoteChange, onDeleteNote, searchQuery,
+  note,
+  hasChildren,
+  isBranchCollapsed,
+  onToggleBranch,
+  isExpanded,
+  onExpand,
+  onCollapse,
+  onNoteChange,
+  onDeleteNote,
+  onCreateNote,
+  onDragStart,
+  onDragEnd,
+  onDragOver,
+  onDrop,
+  isDragging,
+  isDragTarget,
+  searchQuery,
+  depth,
 }: {
   note: NoteItem
+  hasChildren: boolean
+  isBranchCollapsed: boolean
+  onToggleBranch: () => void
   isExpanded: boolean
   onExpand: () => void
   onCollapse: () => void
   onNoteChange: (id: string, md: string) => void
   onDeleteNote?: (id: string) => void
+  onCreateNote: (parentNoteId: string) => void
+  onDragStart: () => void
+  onDragEnd: () => void
+  onDragOver: (event: React.DragEvent) => void
+  onDrop: (event: React.DragEvent) => void
+  isDragging: boolean
+  isDragTarget: boolean
   searchQuery: string
+  depth: number
 }) {
   const cardRef = useRef<HTMLElement>(null)
-  const editorRef = useRef<HTMLDivElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const summaryButtonRef = useRef<HTMLButtonElement>(null)
+  const [localMd, setLocalMd] = useState(note.contentMd)
   const expandId = `note-expand-${note.id}`
   const title = getTitleFromMd(note.contentMd)
 
-  const collapseWithFocusRestore = useCallback(() => {
+  // Sync localMd when note changes from outside (e.g. initial load)
+  useEffect(() => {
+    if (!isExpanded) {
+      setLocalMd(note.contentMd)
+    }
+  }, [note.contentMd, isExpanded])
+
+  // When expanded, populate textarea with current markdown
+  useEffect(() => {
+    if (isExpanded) {
+      setLocalMd(note.contentMd)
+      window.requestAnimationFrame(() => {
+        if (textareaRef.current) {
+          textareaRef.current.focus()
+          autoResize(textareaRef.current)
+        }
+      })
+    }
+  }, [isExpanded])
+
+  const autoResize = (el: HTMLTextAreaElement) => {
+    el.style.height = 'auto'
+    el.style.height = Math.min(el.scrollHeight, 280) + 'px'
+  }
+
+  const collapseAndSave = useCallback(() => {
+    onNoteChange(note.id, localMd)
     const active = document.activeElement
     if (active instanceof HTMLElement && cardRef.current?.contains(active)) active.blur()
     onCollapse()
     window.requestAnimationFrame(() => summaryButtonRef.current?.focus())
-  }, [onCollapse])
+  }, [localMd, note.id, onNoteChange, onCollapse])
 
+  // Click outside to collapse & save
   useEffect(() => {
     if (!isExpanded) return
     const onPointerDown = (e: PointerEvent) => {
       if (cardRef.current?.contains(e.target as Node)) return
-      collapseWithFocusRestore()
+      collapseAndSave()
     }
     document.addEventListener('pointerdown', onPointerDown, true)
     return () => document.removeEventListener('pointerdown', onPointerDown, true)
-  }, [isExpanded, collapseWithFocusRestore])
-
-  const applyFormat = (command: string) => {
-    const el = editorRef.current
-    if (!el) return
-    el.focus()
-    document.execCommand(command, false)
-    onNoteChange(note.id, htmlToMarkdown(el.innerHTML))
-  }
-
-  const handleFlush = useCallback((html: string) => {
-    onNoteChange(note.id, htmlToMarkdown(html))
-  }, [note.id, onNoteChange])
-
-  const handlePopOut = (e: React.MouseEvent) => {
-    e.stopPropagation()
-    const el = editorRef.current
-    const html = el?.innerHTML ?? markdownToHtml(note.contentMd)
-    if (el) onNoteChange(note.id, htmlToMarkdown(html))
-    openNotePopoutWindow(note.date, html)
-  }
+  }, [isExpanded, collapseAndSave])
 
   const handleDelete = (e: React.MouseEvent) => {
     e.stopPropagation()
     if (!onDeleteNote) return
-    if (window.confirm(`Xoa note "${title}"?`)) onDeleteNote(note.id)
+    if (window.confirm(`Xóa note "${title}"?`)) onDeleteNote(note.id)
   }
+
+  const renderedHtml = md.render(note.contentMd || '_Chưa có nội dung_')
 
   const emoji = note.contentMd.includes('**') ? '📋' : note.contentMd.includes('http') ? '🔗' : '📝'
 
+  const handleDragStart = (event: React.DragEvent) => {
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', note.id)
+    onDragStart()
+  }
+
   return (
-    <article ref={cardRef} className={`note-card${isExpanded ? ' note-card--expanded' : ''}`}>
+    <article
+      ref={cardRef}
+      className={`note-card${isExpanded ? ' note-card--expanded' : ''}${depth > 0 ? ' note-card--child' : ''}${isDragging ? ' note-card--dragging' : ''}${isDragTarget ? ' note-card--drop-target' : ''}`}
+      style={{ marginLeft: depth * 12 }}
+      draggable
+      onDragStart={handleDragStart}
+      onDragEnd={onDragEnd}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+    >
       <div style={{ display: 'flex', alignItems: 'center' }}>
+        {hasChildren ? (
+          <button
+            type="button"
+            className="note-branch-toggle"
+            aria-label={isBranchCollapsed ? 'Expand branch' : 'Collapse branch'}
+            title={isBranchCollapsed ? 'Expand branch' : 'Collapse branch'}
+            onClick={(event) => {
+              event.stopPropagation()
+              onToggleBranch()
+            }}
+          >
+            <ChevronRight size={12} className={isBranchCollapsed ? '' : 'expanded'} />
+          </button>
+        ) : (
+          <span className="note-branch-toggle-spacer" />
+        )}
         <button
           ref={summaryButtonRef}
           type="button"
@@ -192,7 +182,7 @@ function NoteCardItem({
           style={{ flex: 1 }}
           aria-expanded={isExpanded}
           aria-controls={expandId}
-          onClick={isExpanded ? collapseWithFocusRestore : onExpand}
+          onClick={isExpanded ? collapseAndSave : onExpand}
         >
           <span className="note-icon">{emoji}</span>
           <div className="note-card-info">
@@ -211,8 +201,8 @@ function NoteCardItem({
           <button
             type="button"
             className="note-toolbar-btn"
-            title="Xoa note"
-            aria-label="Xoa note"
+            title="Xóa note"
+            aria-label="Xóa note"
             onClick={handleDelete}
             style={{ marginRight: 6, flexShrink: 0, color: 'var(--text-tertiary)' }}
           >
@@ -224,43 +214,76 @@ function NoteCardItem({
       <div id={expandId} className="note-expandable" aria-hidden={!isExpanded} inert={!isExpanded}>
         <div className="note-expandable-inner">
           <div className="note-editor-wrap">
-            <NoteEditor
-              noteId={note.id}
-              contentMd={note.contentMd}
-              isExpanded={isExpanded}
-              editorRef={editorRef}
-              onFlush={handleFlush}
-            />
-            <div
-              className="note-toolbar"
-              onClick={(e) => e.stopPropagation()}
-              onKeyDown={(e) => e.stopPropagation()}
-            >
-              {[
-                { cmd: 'bold', icon: <Bold size={13} />, label: 'Bold' },
-                { cmd: 'italic', icon: <Italic size={13} />, label: 'Italic' },
-                { cmd: 'underline', icon: <Underline size={13} />, label: 'Underline' },
-                { cmd: 'strikeThrough', icon: <Strikethrough size={13} />, label: 'Strike' },
-                { cmd: 'insertUnorderedList', icon: <List size={13} />, label: 'List' },
-              ].map(({ cmd, icon, label }) => (
-                <button key={cmd} type="button" className="note-toolbar-btn" title={label} aria-label={label} onClick={() => applyFormat(cmd)}>
-                  {icon}
-                </button>
-              ))}
-              <div className="note-toolbar-sep" />
-              <button type="button" className="note-toolbar-btn" title="Open in window" aria-label="Pop out" onClick={handlePopOut}>
-                <SquareArrowOutUpRight size={13} />
+            {isExpanded ? (
+              /* ── EDIT MODE: raw markdown textarea ── */
+              <div className="note-md-edit-area">
+                <textarea
+                  ref={textareaRef}
+                  className="note-md-textarea"
+                  value={localMd}
+                  placeholder="Write markdown here… e.g. # Title, **bold**, - list"
+                  onChange={(e) => {
+                    setLocalMd(e.target.value)
+                    autoResize(e.target)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Tab') {
+                      e.preventDefault()
+                      const el = e.currentTarget
+                      const start = el.selectionStart
+                      const end = el.selectionEnd
+                      const newVal = localMd.slice(0, start) + '  ' + localMd.slice(end)
+                      setLocalMd(newVal)
+                      window.requestAnimationFrame(() => {
+                        el.selectionStart = el.selectionEnd = start + 2
+                      })
+                    }
+                    if (e.key === 'Escape') collapseAndSave()
+                  }}
+                  spellCheck={false}
+                />
+                <div className="note-md-edit-hint">
+                  Markdown · Tab = 2 spaces · Esc để lưu
+                </div>
+              </div>
+            ) : (
+              /* ── VIEW MODE: rendered markdown preview ── */
+              <div
+                className="note-md-preview"
+                dangerouslySetInnerHTML={{ __html: renderedHtml }}
+              />
+            )}
+
+            <div className="note-toolbar" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+              <button
+                type="button"
+                className="note-toolbar-btn"
+                title="Add sub-note"
+                aria-label="Add sub-note"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onCreateNote(note.id)
+                }}
+              >
+                <Plus size={13} />
               </button>
               {onDeleteNote && (
                 <>
-                  <div className="note-toolbar-sep" />
-                  <button type="button" className="note-toolbar-btn" title="Xoa note" aria-label="Xoa note" onClick={handleDelete} style={{ color: 'var(--red)' }}>
+                  <button
+                    type="button"
+                    className="note-toolbar-btn"
+                    title="Xóa note"
+                    aria-label="Xóa note"
+                    onClick={handleDelete}
+                    style={{ color: 'var(--red)' }}
+                  >
                     <Trash2 size={13} />
                   </button>
+                  <div className="note-toolbar-sep" />
                 </>
               )}
               <div className="note-toolbar-spacer" />
-              <button type="button" className="note-done-btn" onClick={collapseWithFocusRestore}>
+              <button type="button" className="note-done-btn" onClick={collapseAndSave}>
                 <Check size={12} /> Done
               </button>
             </div>
@@ -271,36 +294,210 @@ function NoteCardItem({
   )
 }
 
-export function NoteSidebar({ notes, onNoteChange, onCreateNote, onDeleteNote }: NoteSidebarProps) {
+export function NoteSidebar({ notes, onNoteChange, onCreateNote, onMoveNote, onDeleteNote }: NoteSidebarProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [isSearchOpen, setIsSearchOpen] = useState(false)
+  const [collapsedBranchIds, setCollapsedBranchIds] = useState<Set<string>>(new Set())
+  const [draggingNoteId, setDraggingNoteId] = useState<string | null>(null)
+  const [dropTargetParentId, setDropTargetParentId] = useState<string | null>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const collapseExpanded = useCallback(() => setExpandedId(null), [])
+  const disableBranchCollapse = searchQuery.trim().length > 0
 
-  const filteredNotes = searchQuery.trim()
-    ? notes.filter((note) => {
-      const q = searchQuery.toLowerCase()
+  const noteMap = useMemo(
+    () => new Map(notes.map((note) => [note.id, note] as const)),
+    [notes],
+  )
+
+  const visibleNoteIds = useMemo(() => {
+    if (!searchQuery.trim()) return new Set(notes.map((note) => note.id))
+
+    const query = searchQuery.toLowerCase()
+    const visible = new Set<string>()
+
+    for (const note of notes) {
       const plain = plainTextFromMarkdown(note.contentMd).toLowerCase()
-      return plain.includes(q)
+      if (!plain.includes(query)) continue
+
+      let current: NoteItem | undefined = note
+      while (current) {
+        if (visible.has(current.id)) break
+        visible.add(current.id)
+        current = current.parentNoteId ? noteMap.get(current.parentNoteId) : undefined
+      }
+    }
+
+    return visible
+  }, [notes, searchQuery])
+
+  const visibleNotesByParent = useMemo(() => {
+    const map = new Map<string | null, NoteItem[]>()
+    for (const note of notes) {
+      if (!visibleNoteIds.has(note.id)) continue
+      const parentKey = (note.parentNoteId ?? null)
+      const bucket = map.get(parentKey)
+      if (bucket) {
+        bucket.push(note)
+      } else {
+        map.set(parentKey, [note])
+      }
+    }
+    return map
+  }, [notes, visibleNoteIds])
+
+  const descendantIdsByNote = useMemo(() => {
+    const childrenByParent = new Map<string | null, string[]>()
+    for (const note of notes) {
+      const parentKey = note.parentNoteId ?? null
+      const bucket = childrenByParent.get(parentKey)
+      if (bucket) {
+        bucket.push(note.id)
+      } else {
+        childrenByParent.set(parentKey, [note.id])
+      }
+    }
+
+    const descendants = new Map<string, Set<string>>()
+    for (const note of notes) {
+      const seen = new Set<string>()
+      const stack = [...(childrenByParent.get(note.id) ?? [])]
+      while (stack.length) {
+        const currentId = stack.pop()
+        if (!currentId || seen.has(currentId)) continue
+        seen.add(currentId)
+        for (const childId of childrenByParent.get(currentId) ?? []) {
+          stack.push(childId)
+        }
+      }
+      descendants.set(note.id, seen)
+    }
+    return descendants
+  }, [notes])
+
+  const canMoveNote = useCallback(
+    (sourceNoteId: string, targetParentId: string | null): boolean => {
+      const sourceNote = noteMap.get(sourceNoteId)
+      if (!sourceNote) return false
+      if ((sourceNote.parentNoteId ?? null) === targetParentId) return false
+      if (targetParentId === sourceNoteId) return false
+      if (targetParentId && descendantIdsByNote.get(sourceNoteId)?.has(targetParentId)) return false
+      return true
+    },
+    [descendantIdsByNote, noteMap],
+  )
+
+  const handleMoveDrop = useCallback(
+    async (targetParentId: string | null) => {
+      if (!onMoveNote || !draggingNoteId) return
+      if (!canMoveNote(draggingNoteId, targetParentId)) return
+      await onMoveNote(draggingNoteId, targetParentId)
+      setCollapsedBranchIds((prev) => {
+        if (!targetParentId) return prev
+        if (!prev.has(targetParentId)) return prev
+        const next = new Set(prev)
+        next.delete(targetParentId)
+        return next
+      })
+    },
+    [canMoveNote, draggingNoteId, onMoveNote],
+  )
+
+  const renderChildren = useCallback(
+    (parentId: string | null, depth: number): ReactNode => {
+      const children = visibleNotesByParent.get(parentId) ?? []
+      if (!children.length) return null
+
+      return children.map((note) => {
+        const hasChildren = (visibleNotesByParent.get(note.id)?.length ?? 0) > 0
+        const isBranchCollapsed = !disableBranchCollapse && collapsedBranchIds.has(note.id)
+
+        return (
+          <div key={note.id}>
+            <NoteCardItem
+              note={note}
+              hasChildren={hasChildren}
+              isBranchCollapsed={isBranchCollapsed}
+              onToggleBranch={() => {
+                setCollapsedBranchIds((prev) => {
+                  const next = new Set(prev)
+                  if (next.has(note.id)) {
+                    next.delete(note.id)
+                  } else {
+                    next.add(note.id)
+                  }
+                  return next
+                })
+              }}
+              isExpanded={expandedId === note.id}
+              onExpand={() => setExpandedId(note.id)}
+              onCollapse={collapseExpanded}
+              onNoteChange={onNoteChange}
+              onDeleteNote={onDeleteNote}
+              onCreateNote={onCreateNote}
+              onDragStart={() => {
+                setDraggingNoteId(note.id)
+                setDropTargetParentId(null)
+              }}
+              onDragEnd={() => {
+                setDraggingNoteId(null)
+                setDropTargetParentId(null)
+              }}
+              onDragOver={(event) => {
+                if (!draggingNoteId || !canMoveNote(draggingNoteId, note.id)) return
+                event.preventDefault()
+                setDropTargetParentId(note.id)
+              }}
+              onDrop={(event) => {
+                event.preventDefault()
+                void handleMoveDrop(note.id)
+                setDraggingNoteId(null)
+                setDropTargetParentId(null)
+              }}
+              isDragging={draggingNoteId === note.id}
+              isDragTarget={dropTargetParentId === note.id}
+              searchQuery={searchQuery}
+              depth={depth}
+            />
+            {!isBranchCollapsed ? renderChildren(note.id, depth + 1) : null}
+          </div>
+        )
+      })
+    },
+    [
+      visibleNotesByParent,
+      disableBranchCollapse,
+      collapsedBranchIds,
+      expandedId,
+      collapseExpanded,
+      onNoteChange,
+      onDeleteNote,
+      onCreateNote,
+      draggingNoteId,
+      dropTargetParentId,
+      canMoveNote,
+      handleMoveDrop,
+      searchQuery,
+    ],
+  )
+
+  const rootNotes = useMemo(() => {
+    return notes.filter((note) => {
+      if (!visibleNoteIds.has(note.id)) return false
+      if (!note.parentNoteId) return true
+      return !visibleNoteIds.has(note.parentNoteId)
     })
-    : notes
+  }, [notes, visibleNoteIds])
 
   const handleSearchToggle = useCallback(() => {
     setIsSearchOpen((prev) => {
-      if (prev) {
-        setSearchQuery('')
-        return false
-      }
+      if (prev) { setSearchQuery(''); return false }
       return true
     })
   }, [])
 
-  // Focus input when search opens
   useEffect(() => {
-    if (isSearchOpen) {
-      window.requestAnimationFrame(() => searchInputRef.current?.focus())
-    }
+    if (isSearchOpen) window.requestAnimationFrame(() => searchInputRef.current?.focus())
   }, [isSearchOpen])
 
   const handleClearSearch = useCallback(() => {
@@ -327,14 +524,13 @@ export function NoteSidebar({ notes, onNoteChange, onCreateNote, onDeleteNote }:
             className="sidebar-action-btn"
             aria-label="New note"
             title="New note"
-            onClick={onCreateNote}
+            onClick={() => onCreateNote()}
           >
             <Plus size={14} />
           </button>
         </div>
       </div>
 
-      {/* Search bar — animated expand */}
       <div className={`note-search-bar-wrap ${isSearchOpen ? 'open' : ''}`}>
         <div className="note-search-bar">
           <Search size={12} className="note-search-icon" />
@@ -359,31 +555,85 @@ export function NoteSidebar({ notes, onNoteChange, onCreateNote, onDeleteNote }:
         </div>
         {searchQuery && (
           <div className="note-search-results-count">
-            {filteredNotes.length === 0
-              ? 'Không tìm thấy'
-              : `${filteredNotes.length} kết quả`}
+            {visibleNoteIds.size === 0 ? 'Không tìm thấy' : `${visibleNoteIds.size} kết quả`}
           </div>
         )}
       </div>
 
       <div className="note-list">
-        {filteredNotes.length === 0 && searchQuery ? (
+        {draggingNoteId && onMoveNote ? (
+          <div
+            className={`note-root-drop-zone${dropTargetParentId === null ? ' active' : ''}`}
+            onDragOver={(event) => {
+              if (!draggingNoteId || !canMoveNote(draggingNoteId, null)) return
+              event.preventDefault()
+              setDropTargetParentId(null)
+            }}
+            onDrop={(event) => {
+              event.preventDefault()
+              void handleMoveDrop(null)
+              setDraggingNoteId(null)
+              setDropTargetParentId(null)
+            }}
+          >
+            Drop here để đưa note về root
+          </div>
+        ) : null}
+        {visibleNoteIds.size === 0 && searchQuery ? (
           <div className="note-search-empty">
             <Search size={18} strokeWidth={1.5} style={{ color: 'var(--text-disabled)' }} />
             <span>Không tìm thấy note nào<br />khớp với &ldquo;{searchQuery}&rdquo;</span>
           </div>
         ) : (
-          filteredNotes.map((note) => (
-            <NoteCardItem
-              key={note.id}
-              note={note}
-              isExpanded={expandedId === note.id}
-              onExpand={() => setExpandedId(note.id)}
-              onCollapse={collapseExpanded}
-              onNoteChange={onNoteChange}
-              onDeleteNote={onDeleteNote}
-              searchQuery={searchQuery}
-            />
+          rootNotes.map((note) => (
+            <div key={note.id}>
+              <NoteCardItem
+                note={note}
+                hasChildren={(visibleNotesByParent.get(note.id)?.length ?? 0) > 0}
+                isBranchCollapsed={!disableBranchCollapse && collapsedBranchIds.has(note.id)}
+                onToggleBranch={() => {
+                  setCollapsedBranchIds((prev) => {
+                    const next = new Set(prev)
+                    if (next.has(note.id)) {
+                      next.delete(note.id)
+                    } else {
+                      next.add(note.id)
+                    }
+                    return next
+                  })
+                }}
+                isExpanded={expandedId === note.id}
+                onExpand={() => setExpandedId(note.id)}
+                onCollapse={collapseExpanded}
+                onNoteChange={onNoteChange}
+                onDeleteNote={onDeleteNote}
+                onCreateNote={onCreateNote}
+                onDragStart={() => {
+                  setDraggingNoteId(note.id)
+                  setDropTargetParentId(null)
+                }}
+                onDragEnd={() => {
+                  setDraggingNoteId(null)
+                  setDropTargetParentId(null)
+                }}
+                onDragOver={(event) => {
+                  if (!draggingNoteId || !canMoveNote(draggingNoteId, note.id)) return
+                  event.preventDefault()
+                  setDropTargetParentId(note.id)
+                }}
+                onDrop={(event) => {
+                  event.preventDefault()
+                  void handleMoveDrop(note.id)
+                  setDraggingNoteId(null)
+                  setDropTargetParentId(null)
+                }}
+                isDragging={draggingNoteId === note.id}
+                isDragTarget={dropTargetParentId === note.id}
+                searchQuery={searchQuery}
+                depth={0}
+              />
+              {!(!disableBranchCollapse && collapsedBranchIds.has(note.id)) ? renderChildren(note.id, 1) : null}
+            </div>
           ))
         )}
       </div>

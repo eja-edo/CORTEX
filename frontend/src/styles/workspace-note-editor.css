@@ -1,0 +1,412 @@
+/* ========== WORKSPACE NOTE EDITOR (split view) ========== */
+
+/* Root */
+.wne-root {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    background: var(--bg);
+    border-radius: 16px;
+    border: 1px solid var(--border);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 4px 16px rgba(0, 0, 0, 0.04);
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+/* Header */
+.wne-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 20px 24px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+    flex-shrink: 0;
+}
+
+.wne-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.wne-title {
+    font-size: 1.25rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--text-primary);
+    margin: 0;
+    line-height: 1.3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 480px;
+}
+
+.wne-info {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-tertiary);
+}
+
+.wne-sep {
+    color: var(--border-strong);
+}
+
+/* View switcher */
+.wne-view-switcher {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 3px;
+    flex-shrink: 0;
+}
+
+.wne-view-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 10px;
+    border: none;
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--text-tertiary);
+    font-size: 12.5px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+    white-space: nowrap;
+}
+
+.wne-view-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-secondary);
+}
+
+.wne-view-btn.active {
+    background: var(--bg);
+    color: var(--text-primary);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.04);
+}
+
+/* Body */
+.wne-body {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+    min-height: 0;
+}
+
+.wne-body--edit .wne-pane--editor,
+.wne-body--preview .wne-pane--preview {
+    flex: 1;
+}
+
+.wne-body--split .wne-pane--editor,
+.wne-body--split .wne-pane--preview {
+    flex: 1;
+    width: 50%;
+}
+
+/* Pane */
+.wne-pane {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
+}
+
+.wne-pane-label {
+    padding: 6px 16px 4px;
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-disabled);
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-secondary);
+    flex-shrink: 0;
+}
+
+/* Divider */
+.wne-divider {
+    width: 1px;
+    background: var(--border);
+    flex-shrink: 0;
+}
+
+/* Markdown textarea */
+.wne-textarea {
+    flex: 1;
+    width: 100%;
+    height: 100%;
+    resize: none;
+    border: none;
+    outline: none;
+    padding: 24px 28px;
+    font-family: var(--font-mono);
+    font-size: 14px;
+    line-height: 1.8;
+    color: var(--text-primary);
+    background: var(--bg);
+    tab-size: 2;
+    overflow-y: auto;
+}
+
+.wne-textarea::placeholder {
+    color: var(--text-disabled);
+    font-family: var(--font);
+    font-size: 13.5px;
+    line-height: 1.7;
+}
+
+/* Preview pane content */
+.wne-preview-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px 28px 40px;
+    font-size: 15px;
+    line-height: 1.75;
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+}
+
+/* ── Markdown rendered content styles ── */
+
+.wne-preview-content h1 {
+    font-size: 1.6rem;
+    font-weight: 700;
+    letter-spacing: -0.025em;
+    margin: 0 0 0.5em;
+    line-height: 1.25;
+    color: var(--text-primary);
+    padding-bottom: 0.4em;
+    border-bottom: 1px solid var(--border);
+}
+
+.wne-preview-content h2 {
+    font-size: 1.25rem;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+    margin: 1.4em 0 0.5em;
+    line-height: 1.3;
+    color: var(--text-primary);
+}
+
+.wne-preview-content h3 {
+    font-size: 1.05rem;
+    font-weight: 600;
+    margin: 1.2em 0 0.4em;
+    line-height: 1.35;
+    color: var(--text-primary);
+}
+
+.wne-preview-content h4,
+.wne-preview-content h5,
+.wne-preview-content h6 {
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin: 1em 0 0.35em;
+    color: var(--text-secondary);
+}
+
+.wne-preview-content p {
+    margin: 0 0 0.75em;
+}
+
+.wne-preview-content p:last-child {
+    margin-bottom: 0;
+}
+
+.wne-preview-content ul,
+.wne-preview-content ol {
+    margin: 0.4em 0 0.8em;
+    padding-left: 1.6em;
+}
+
+.wne-preview-content li {
+    margin: 0.25em 0;
+    line-height: 1.65;
+}
+
+.wne-preview-content li>ul,
+.wne-preview-content li>ol {
+    margin: 0.2em 0;
+}
+
+.wne-preview-content strong {
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.wne-preview-content em {
+    font-style: italic;
+    color: var(--text-secondary);
+}
+
+.wne-preview-content s {
+    text-decoration: line-through;
+    color: var(--text-tertiary);
+}
+
+.wne-preview-content a {
+    color: var(--accent);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    transition: color 0.1s;
+}
+
+.wne-preview-content a:hover {
+    color: var(--accent-hover);
+}
+
+.wne-preview-content code {
+    background: rgba(135, 131, 120, 0.12);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-family: var(--font-mono);
+    font-size: 0.86em;
+    color: #c0392b;
+}
+
+.wne-preview-content pre {
+    background: #f5f4f0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 16px 18px;
+    font-family: var(--font-mono);
+    font-size: 0.875rem;
+    line-height: 1.65;
+    overflow-x: auto;
+    margin: 0.6em 0 1em;
+    position: relative;
+}
+
+.wne-preview-content pre code {
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: inherit;
+    color: var(--text-primary);
+    border-radius: 0;
+}
+
+.wne-preview-content blockquote {
+    border-left: 3px solid var(--border-strong);
+    margin: 0.5em 0 0.8em;
+    padding: 6px 0 6px 16px;
+    color: var(--text-secondary);
+}
+
+.wne-preview-content blockquote p {
+    margin: 0;
+}
+
+.wne-preview-content hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 1.5em 0;
+}
+
+.wne-preview-content table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+    margin: 0.5em 0 1em;
+    overflow-x: auto;
+    display: block;
+}
+
+.wne-preview-content th,
+.wne-preview-content td {
+    border: 1px solid var(--border);
+    padding: 7px 12px;
+    text-align: left;
+}
+
+.wne-preview-content th {
+    background: var(--bg-secondary);
+    font-weight: 600;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    color: var(--text-secondary);
+}
+
+.wne-preview-content tr:nth-child(even) td {
+    background: rgba(0, 0, 0, 0.015);
+}
+
+.wne-preview-content img {
+    max-width: 100%;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+}
+
+/* ── Syntax hint in editor ── */
+.wne-pane--editor {
+    position: relative;
+}
+
+/* ========== WORKSPACE LAYOUT ADJUSTMENTS ========== */
+.workspace-note-page {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-secondary);
+    padding: 24px 32px;
+}
+
+/* Override old .workspace-note to use new .wne-root */
+.workspace-note-page .wne-root {
+    width: 100%;
+    max-width: 1200px;
+    margin: 0 auto;
+    flex: 1;
+    min-height: 0;
+    height: auto;
+}
+
+/* In split mode, make the page not overflow-y */
+.workspace-note-page:has(.wne-body--split),
+.workspace-note-page:has(.wne-body--edit),
+.workspace-note-page:has(.wne-body--preview) {
+    overflow: hidden;
+    padding: 16px 20px;
+}
+
+@media (max-width: 800px) {
+    .wne-body--split {
+        flex-direction: column;
+    }
+
+    .wne-body--split .wne-pane--editor,
+    .wne-body--split .wne-pane--preview {
+        width: 100%;
+        flex: none;
+        height: 50%;
+    }
+
+    .wne-divider {
+        width: 100%;
+        height: 1px;
+    }
+
+    .workspace-note-page {
+        padding: 12px;
+    }
+
+    .wne-view-btn span {
+        display: none;
+    }
+}
