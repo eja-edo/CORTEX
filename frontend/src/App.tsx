@@ -11,6 +11,7 @@ import { RecordPanel } from './components/RecordPanel'
 import type { Schedule, TokenPair, User, ScheduleListResponse, GoogleCalendarStatus, SyncUpdateEvent } from './types'
 import { applyMarkdownShortcutOnEnter, htmlToMarkdown, markdownToHtml, plainTextFromMarkdown } from './utils/noteMarkdown'
 import { NotificationBell, type AppNotification } from './components/NotificationBell'
+import { buildTextPatch, type NotePatchOp } from './utils/textPatch.ts'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api'
 const PKCE_CLIENT_ID = 'cortex-web'
@@ -46,6 +47,13 @@ type ApiNote = {
 type AppNote = NoteItem & {
   version: number
   updatedAt: string
+}
+
+type NoteSyncState = {
+  baseContent: string
+  baseVersion: number
+  inFlight: boolean
+  queued: boolean
 }
 
 class ApiError extends Error {
@@ -178,7 +186,7 @@ function WorkspaceNoteEditor({
 
   const queueFlush = useCallback(() => {
     if (timerRef.current) window.clearTimeout(timerRef.current)
-    timerRef.current = window.setTimeout(flush, 220)
+    timerRef.current = window.setTimeout(flush, 1000)
   }, [flush])
 
   const handleInput = useCallback(() => {
@@ -319,7 +327,9 @@ function App() {
 
   const [recentNotes, setRecentNotes] = useState<AppNote[]>([])
   const recentNotesRef = useRef<AppNote[]>([])
+  const tokensRef = useRef<TokenPair | null>(tokens)
   const noteSyncTimersRef = useRef<Record<string, number>>({})
+  const noteSyncStatesRef = useRef<Record<string, NoteSyncState>>({})
   const syncToastTimerRef = useRef<number | null>(null)
 
   const [notifications, setNotifications] = useState<AppNotification[]>([])
@@ -327,6 +337,10 @@ function App() {
   useEffect(() => {
     recentNotesRef.current = recentNotes
   }, [recentNotes])
+
+  useEffect(() => {
+    tokensRef.current = tokens
+  }, [tokens])
 
   const handleNoteChange = useCallback((id: string, contentMd: string) => {
     setRecentNotes((prev) => prev.map((n) => (n.id === id ? { ...n, contentMd } : n)))
@@ -440,22 +454,25 @@ function App() {
     return body as T
   }
 
-  async function refreshToken(currentRefreshToken: string): Promise<TokenPair> {
+  const refreshToken = useCallback(async (currentRefreshToken: string): Promise<TokenPair> => {
     const payload = await requestJson<{ access_token: string; refresh_token: string; token_type: string }>(
       `${API_BASE_URL}/auth/refresh`,
       { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: currentRefreshToken }) },
     )
     return { accessToken: payload.access_token, refreshToken: payload.refresh_token }
-  }
+  }, [])
 
-  async function requestWithAuth<T>(path: string, init?: RequestInit): Promise<T> {
-    if (!tokens) throw new Error('Please login first')
+  const requestWithAuth = useCallback(async <T,>(path: string, init?: RequestInit): Promise<T> => {
+    const currentTokens = tokensRef.current
+    if (!currentTokens) throw new Error('Please login first')
+
     const headers = new Headers(init?.headers ?? {})
-    headers.set('Authorization', `Bearer ${tokens.accessToken}`)
+    headers.set('Authorization', `Bearer ${currentTokens.accessToken}`)
     let response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers })
     if (response.status === 401) {
-      const newTokens = await refreshToken(tokens.refreshToken)
+      const newTokens = await refreshToken(currentTokens.refreshToken)
       setTokens(newTokens)
+      tokensRef.current = newTokens
       const retryHeaders = new Headers(init?.headers ?? {})
       retryHeaders.set('Authorization', `Bearer ${newTokens.accessToken}`)
       response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers: retryHeaders })
@@ -464,14 +481,25 @@ function App() {
     const body = text ? JSON.parse(text) : null
     if (!response.ok) throw new ApiError(body?.detail ?? `Request failed (${response.status})`, response.status)
     return body as T
-  }
+  }, [refreshToken])
 
   async function fetchNotes(activeTokens?: TokenPair): Promise<void> {
     const sessionTokens = activeTokens ?? tokens
     if (!sessionTokens) return
     try {
       const data = await requestWithAuth<ApiNote[]>('/notes')
-      setRecentNotes(data.map(mapApiNoteToAppNote))
+      const mappedNotes = data.map(mapApiNoteToAppNote)
+      setRecentNotes(mappedNotes)
+      const nextSyncStates: Record<string, NoteSyncState> = {}
+      for (const note of mappedNotes) {
+        nextSyncStates[note.id] = {
+          baseContent: note.contentMd,
+          baseVersion: note.version,
+          inFlight: false,
+          queued: false,
+        }
+      }
+      noteSyncStatesRef.current = nextSyncStates
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Cannot load notes')
     }
@@ -480,22 +508,84 @@ function App() {
   async function persistNoteContent(noteId: string): Promise<void> {
     const target = recentNotesRef.current.find((note) => note.id === noteId)
     if (!target) return
-    try {
-      const payload: { version: number; content?: string } = { version: target.version }
-      // Only include content if it's not empty
-      if (target.contentMd.trim()) {
-        payload.content = target.contentMd
+
+    let syncState = noteSyncStatesRef.current[noteId]
+    if (!syncState) {
+      syncState = {
+        baseContent: target.contentMd,
+        baseVersion: target.version,
+        inFlight: false,
+        queued: false,
       }
-      const updated = await requestWithAuth<ApiNote>(`/notes/${noteId}`, {
-        method: 'PATCH',
+      noteSyncStatesRef.current[noteId] = syncState
+    }
+
+    if (syncState.inFlight) {
+      syncState.queued = true
+      return
+    }
+
+    const nextContent = target.contentMd
+    if (nextContent === syncState.baseContent) {
+      return
+    }
+
+    const patch = buildTextPatch(syncState.baseContent, nextContent)
+    if (!patch.length) {
+      syncState.baseContent = nextContent
+      return
+    }
+
+    const requestVersion = syncState.baseVersion
+    const requestContent = nextContent
+    syncState.inFlight = true
+    syncState.queued = false
+
+    try {
+      const payload: { version: number; patch: NotePatchOp[] } = { version: requestVersion, patch }
+      const updated = await requestWithAuth<ApiNote>(`/notes/${noteId}/patch`, {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       })
       const mapped = mapApiNoteToAppNote(updated)
-      setRecentNotes((prev) => prev.map((note) => (note.id === noteId ? { ...note, ...mapped } : note)))
+      syncState.baseContent = mapped.contentMd
+      syncState.baseVersion = mapped.version
+      syncState.inFlight = false
+
+      setRecentNotes((prev) =>
+        prev.map((note) => {
+          if (note.id !== noteId) return note
+
+          // Keep unsaved local typing if user changed content while request was in-flight.
+          if (note.contentMd !== requestContent) {
+            return {
+              ...note,
+              version: mapped.version,
+              updatedAt: mapped.updatedAt,
+              date: mapped.date,
+            }
+          }
+
+          return { ...note, ...mapped }
+        }),
+      )
+
+      const latest = recentNotesRef.current.find((note) => note.id === noteId)
+      if (latest && latest.contentMd !== syncState.baseContent) {
+        syncState.queued = true
+      }
+      if (syncState.queued) {
+        syncState.queued = false
+        window.setTimeout(() => {
+          void persistNoteContent(noteId)
+        }, 0)
+      }
     } catch (error) {
+      syncState.inFlight = false
       if (error instanceof ApiError && error.status === 409) {
         setErrorMessage('Note update conflict. Reloaded latest note version.')
+        delete noteSyncStatesRef.current[noteId]
         await fetchNotes()
         return
       }
@@ -528,6 +618,12 @@ function App() {
       })
       const mapped = mapApiNoteToAppNote(created)
       setRecentNotes((prev) => [mapped, ...prev])
+      noteSyncStatesRef.current[mapped.id] = {
+        baseContent: mapped.contentMd,
+        baseVersion: mapped.version,
+        inFlight: false,
+        queued: false,
+      }
       openWorkspaceNote(mapped.id)
       setStatusMessage('Note created.')
     } catch (error) {
@@ -540,6 +636,7 @@ function App() {
     try {
       await requestWithAuth<void>(`/notes/${noteId}`, { method: 'DELETE' })
       setRecentNotes((prev) => prev.filter((n) => n.id !== noteId))
+      delete noteSyncStatesRef.current[noteId]
       if (activeWorkspaceNoteId === noteId) {
         const remaining = recentNotesRef.current.filter((n) => n.id !== noteId)
         setActiveWorkspaceNoteId(remaining[0]?.id ?? null)
@@ -1007,8 +1104,7 @@ function App() {
                 </div>
               </section>
             ) : activeWorkspaceView === 'record' ? (
-              <div >
-              </div>
+              <RecordPanel requestWithAuth={requestWithAuth} isVisible />
             ) : activeWorkspaceView === 'settings' ? (
               <section className="settings-workspace">
                 <div className="settings-workspace-header">
@@ -1055,7 +1151,6 @@ function App() {
               </section>
             )}
 
-            <RecordPanel requestWithAuth={requestWithAuth} isVisible={activeWorkspaceView === 'record'} />
           </div>
         </div>
       )}
