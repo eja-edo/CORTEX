@@ -533,6 +533,7 @@ class Note(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), nullable=False)
+    parent_note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="SET NULL"), nullable=True, index=True)
     content = Column(Text, nullable=False)
     content_type = Column(String(20), nullable=False, default="markdown", server_default=text("'markdown'"))
     position = Column(
@@ -554,6 +555,7 @@ class Note(Base):
         server_default=text("jsonb_build_object('color', 'yellow')"),
     )
     version = Column(Integer, nullable=False, default=1, server_default=text("1"))
+    checkpoint_version = Column(Integer, nullable=False, default=1, server_default=text("1"))
     is_deleted = Column(Boolean, nullable=False, default=False, server_default=text("false"))
     created_at = Column(DateTime, default=datetime.utcnow, server_default=text("NOW()"))
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=text("NOW()"))
@@ -561,6 +563,27 @@ class Note(Base):
     __table_args__ = (
         Index("ix_notes_user_id", "user_id"),
         Index("ix_notes_user_id_updated_at", "user_id", "updated_at"),
+        Index("ix_notes_user_parent_updated_at", "user_id", "parent_note_id", "updated_at"),
+    )
+
+
+class NoteRevision(Base):
+    """Incremental delta record for note content edits."""
+    __tablename__ = "note_revisions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    version = Column(Integer, nullable=False)
+    base_version = Column(Integer, nullable=False)
+    patch = Column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
+    patch_format = Column(String(32), nullable=False, default="text_diff", server_default=text("'text_diff'"))
+    content_length = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("note_id", "version", name="uq_note_revisions_note_version"),
+        Index("ix_note_revisions_note_id_version", "note_id", "version"),
     )
 
 

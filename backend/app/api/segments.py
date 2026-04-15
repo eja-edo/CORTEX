@@ -14,6 +14,7 @@ from app.schemas import (
     SegmentNoteLinkView,
     SegmentResponse,
 )
+from app.services.embeddings import build_segment_embedding_content, upsert_segment_embedding_sync
 
 router = APIRouter(tags=["segments"])
 
@@ -117,6 +118,12 @@ def create_segment(
             meta=item.metadata,
         ))
 
+    upsert_segment_embedding_sync(
+        db,
+        segment_id=segment.id,
+        content=build_segment_embedding_content([item.content for item in payload.contents]),
+    )
+
     db.commit()
     db.refresh(segment)
     return _serialize_segment(segment, db)
@@ -163,6 +170,12 @@ def batch_upsert_segments(
                     confidence=content_item.confidence,
                     meta=content_item.metadata,
                 ))
+
+            upsert_segment_embedding_sync(
+                db,
+                segment_id=existing.id,
+                content=build_segment_embedding_content([content_item.content for content_item in item.contents]),
+            )
             updated += 1
             continue
 
@@ -194,6 +207,12 @@ def batch_upsert_segments(
                 confidence=content_item.confidence,
                 meta=content_item.metadata,
             ))
+
+        upsert_segment_embedding_sync(
+            db,
+            segment_id=segment.id,
+            content=build_segment_embedding_content([content_item.content for content_item in item.contents]),
+        )
 
         created += 1
 

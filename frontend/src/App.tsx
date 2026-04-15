@@ -156,6 +156,7 @@ function SidebarSection({
   isOpen,
   onToggle,
   isCollapsed,
+  sectionBodyProps,
   children,
 }: {
   icon: React.ReactNode
@@ -163,8 +164,11 @@ function SidebarSection({
   isOpen: boolean
   onToggle: () => void
   isCollapsed: boolean
+  sectionBodyProps?: React.HTMLAttributes<HTMLDivElement>
   children?: React.ReactNode
 }) {
+  const { className: sectionBodyClassName, ...sectionBodyRestProps } = sectionBodyProps ?? {}
+
   return (
     <div className="sidebar-collapsible-section">
       <button
@@ -185,7 +189,15 @@ function SidebarSection({
         )}
       </button>
       {isOpen && !isCollapsed && (
-        <div className="sidebar-section-body">{children}</div>
+        <div
+          className={[
+            'sidebar-section-body',
+            sectionBodyClassName ?? '',
+          ].filter(Boolean).join(' ')}
+          {...sectionBodyRestProps}
+        >
+          {children}
+        </div>
       )}
     </div>
   )
@@ -223,6 +235,8 @@ function App() {
   const syncToastTimerRef = useRef<number | null>(null)
 
   const [notifications, setNotifications] = useState<AppNotification[]>([])
+  const [workspaceDraggingNoteId, setWorkspaceDraggingNoteId] = useState<string | null>(null)
+  const [workspaceDropTargetParentId, setWorkspaceDropTargetParentId] = useState<string | null>(null)
 
   useEffect(() => {
     recentNotesRef.current = recentNotes
@@ -238,9 +252,28 @@ function App() {
   }, [])
 
   const noteSummaries = useMemo(
-    () => recentNotes.map((note) => ({ id: note.id, date: note.date, title: noteTitleFromMd(note.contentMd) })),
+    () => recentNotes.map((note) => ({
+      id: note.id,
+      date: note.date,
+      title: noteTitleFromMd(note.contentMd),
+      parentNoteId: note.parentNoteId ?? null,
+    })),
     [recentNotes],
   )
+  const workspaceNotesByParent = useMemo(() => {
+    const byParent = new Map<string | null, typeof noteSummaries>()
+    for (const note of noteSummaries) {
+      const parentId = note.parentNoteId ?? null
+      const bucket = byParent.get(parentId)
+      if (bucket) bucket.push(note)
+      else byParent.set(parentId, [note])
+    }
+    return byParent
+  }, [noteSummaries])
+  const workspaceRootNotes = useMemo(() => {
+    const existingIds = new Set(noteSummaries.map((note) => note.id))
+    return noteSummaries.filter((note) => note.parentNoteId == null || !existingIds.has(note.parentNoteId))
+  }, [noteSummaries])
   const activeWorkspaceNote = useMemo(
     () => recentNotes.find((note) => note.id === activeWorkspaceNoteId) ?? null,
     [recentNotes, activeWorkspaceNoteId],
@@ -250,6 +283,96 @@ function App() {
     setActiveWorkspaceNoteId(noteId)
     setActiveWorkspaceView('note')
   }, [])
+
+  const canMoveWorkspaceNote = useCallback((sourceId: string, targetParentId: string | null): boolean => {
+    if (sourceId === targetParentId) return false
+
+    const childrenByParent = new Map<string | null, string[]>()
+    for (const note of recentNotesRef.current) {
+      const parentId = note.parentNoteId ?? null
+      const bucket = childrenByParent.get(parentId)
+      if (bucket) bucket.push(note.id)
+      else childrenByParent.set(parentId, [note.id])
+    }
+
+    if (targetParentId === null) return true
+
+    const stack = [sourceId]
+    const visited = new Set<string>()
+    while (stack.length > 0) {
+      const currentId = stack.pop()
+      if (!currentId || visited.has(currentId)) continue
+      if (currentId === targetParentId) return false
+      visited.add(currentId)
+      stack.push(...(childrenByParent.get(currentId) ?? []))
+    }
+
+    return true
+  }, [])
+
+  const handleWorkspaceSidebarDrop = useCallback(async (targetParentId: string | null): Promise<void> => {
+    if (!workspaceDraggingNoteId) return
+    if (!canMoveWorkspaceNote(workspaceDraggingNoteId, targetParentId)) return
+    await handleMoveNote(workspaceDraggingNoteId, targetParentId)
+  }, [workspaceDraggingNoteId, canMoveWorkspaceNote, handleMoveNote])
+
+  const renderWorkspaceSidebarNoteTree = useCallback((parentId: string | null, depth: number): React.ReactNode => {
+    const childNotes = workspaceNotesByParent.get(parentId) ?? []
+    if (!childNotes.length) return null
+
+    return childNotes.map((note) => (
+      <div key={note.id}>
+        <button
+          type="button"
+          className={[
+            'workspace-nav-item',
+            'workspace-nav-item--sub',
+            activeWorkspaceView === 'note' && activeWorkspaceNoteId === note.id ? 'active' : '',
+            workspaceDropTargetParentId === note.id ? 'workspace-nav-item--drop-target' : '',
+          ].filter(Boolean).join(' ')}
+          style={{ paddingLeft: `${10 + (depth * 14)}px` }}
+          onClick={() => openWorkspaceNote(note.id)}
+          title={note.title}
+          draggable
+          onDragStart={(e) => {
+            e.dataTransfer.effectAllowed = 'move'
+            e.dataTransfer.setData('text/plain', note.id)
+            setWorkspaceDraggingNoteId(note.id)
+            setWorkspaceDropTargetParentId(null)
+          }}
+          onDragEnd={() => {
+            setWorkspaceDraggingNoteId(null)
+            setWorkspaceDropTargetParentId(null)
+          }}
+          onDragOver={(e) => {
+            if (!workspaceDraggingNoteId || !canMoveWorkspaceNote(workspaceDraggingNoteId, note.id)) return
+            e.preventDefault()
+            e.dataTransfer.dropEffect = 'move'
+            setWorkspaceDropTargetParentId(note.id)
+          }}
+          onDrop={(e) => {
+            e.preventDefault()
+            void handleWorkspaceSidebarDrop(note.id)
+            setWorkspaceDraggingNoteId(null)
+            setWorkspaceDropTargetParentId(null)
+          }}
+        >
+          <StickyNote size={13} />
+          <span>{note.title}</span>
+        </button>
+        {renderWorkspaceSidebarNoteTree(note.id, depth + 1)}
+      </div>
+    ))
+  }, [
+    workspaceNotesByParent,
+    activeWorkspaceView,
+    activeWorkspaceNoteId,
+    workspaceDropTargetParentId,
+    openWorkspaceNote,
+    workspaceDraggingNoteId,
+    canMoveWorkspaceNote,
+    handleWorkspaceSidebarDrop,
+  ])
 
   const collectDescendantIds = useCallback((rootNoteId: string): string[] => {
     const notesByParent = new Map<string | null, AppNote[]>()
@@ -590,7 +713,11 @@ function App() {
       })
 
       const mapped = mapApiNoteToAppNote(updated)
-      setRecentNotes((prev) => prev.map((note) => (note.id === noteId ? { ...note, ...mapped } : note)))
+      setRecentNotes((prev) => {
+        const nextNotes = prev.map((note) => (note.id === noteId ? { ...note, ...mapped } : note))
+        recentNotesRef.current = nextNotes
+        return nextNotes
+      })
 
       const nextSyncState = noteSyncStatesRef.current[noteId]
       if (nextSyncState) {
@@ -975,19 +1102,70 @@ function App() {
                   isOpen={sectionNoteOpen}
                   onToggle={() => setSectionNoteOpen(v => !v)}
                   isCollapsed={isWorkspaceSidebarCollapsed}
+                  sectionBodyProps={{
+                    className: workspaceDropTargetParentId === null ? 'sidebar-section-body--drop-target' : '',
+                    onDragOver: (e) => {
+                      if (!workspaceDraggingNoteId || !canMoveWorkspaceNote(workspaceDraggingNoteId, null)) return
+                      e.preventDefault()
+                      e.dataTransfer.dropEffect = 'move'
+                      setWorkspaceDropTargetParentId(null)
+                    },
+                    onDrop: (e) => {
+                      e.preventDefault()
+                      void handleWorkspaceSidebarDrop(null)
+                      setWorkspaceDraggingNoteId(null)
+                      setWorkspaceDropTargetParentId(null)
+                    },
+                    onDragLeave: (e) => {
+                      if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) {
+                        setWorkspaceDropTargetParentId(null)
+                      }
+                    },
+                  }}
                 >
                   <div className="workspace-note-links">
-                    {noteSummaries.map((note) => (
-                      <button
-                        key={note.id}
-                        type="button"
-                        className={`workspace-nav-item workspace-nav-item--sub ${activeWorkspaceView === 'note' && activeWorkspaceNoteId === note.id ? 'active' : ''}`}
-                        onClick={() => openWorkspaceNote(note.id)}
-                        title={note.title}
-                      >
-                        <StickyNote size={13} />
-                        <span>{note.title}</span>
-                      </button>
+                    {workspaceRootNotes.map((note) => (
+                      <div key={note.id}>
+                        <button
+                          type="button"
+                          className={[
+                            'workspace-nav-item',
+                            'workspace-nav-item--sub',
+                            activeWorkspaceView === 'note' && activeWorkspaceNoteId === note.id ? 'active' : '',
+                            workspaceDropTargetParentId === note.id ? 'workspace-nav-item--drop-target' : '',
+                          ].filter(Boolean).join(' ')}
+                          style={{ paddingLeft: '10px' }}
+                          onClick={() => openWorkspaceNote(note.id)}
+                          title={note.title}
+                          draggable
+                          onDragStart={(e) => {
+                            e.dataTransfer.effectAllowed = 'move'
+                            e.dataTransfer.setData('text/plain', note.id)
+                            setWorkspaceDraggingNoteId(note.id)
+                            setWorkspaceDropTargetParentId(null)
+                          }}
+                          onDragEnd={() => {
+                            setWorkspaceDraggingNoteId(null)
+                            setWorkspaceDropTargetParentId(null)
+                          }}
+                          onDragOver={(e) => {
+                            if (!workspaceDraggingNoteId || !canMoveWorkspaceNote(workspaceDraggingNoteId, note.id)) return
+                            e.preventDefault()
+                            e.dataTransfer.dropEffect = 'move'
+                            setWorkspaceDropTargetParentId(note.id)
+                          }}
+                          onDrop={(e) => {
+                            e.preventDefault()
+                            void handleWorkspaceSidebarDrop(note.id)
+                            setWorkspaceDraggingNoteId(null)
+                            setWorkspaceDropTargetParentId(null)
+                          }}
+                        >
+                          <StickyNote size={13} />
+                          <span>{note.title}</span>
+                        </button>
+                        {renderWorkspaceSidebarNoteTree(note.id, 1)}
+                      </div>
                     ))}
                     <button
                       type="button"

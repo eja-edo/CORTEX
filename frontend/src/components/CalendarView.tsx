@@ -74,6 +74,8 @@ export function CalendarView({
         // Expands automatically when events fall outside this range
         let windowStartMin = 7 * 60   // 07:00
         let windowEndMin = 22 * 60  // 22:00
+        const now = new Date()
+        const nowMin = now.getHours() * 60 + now.getMinutes()
 
         if (calendarEvents.length > 0) {
             const earliest = Math.min(
@@ -92,9 +94,24 @@ export function CalendarView({
             }
         }
 
+        // react-big-calendar only shows the current-time indicator when now is inside [min, max].
+        // Keep the visible window covering the current hour to avoid intermittent missing indicator.
+        windowStartMin = Math.min(windowStartMin, Math.floor(nowMin / 60) * 60)
+        windowEndMin = Math.max(windowEndMin, Math.min(Math.ceil((nowMin + 1) / 60) * 60, 24 * 60))
+
+        const toClockDate = (totalMinutes: number, isEnd = false): Date => {
+            const bounded = Math.max(0, Math.min(totalMinutes, 24 * 60))
+            if (isEnd && bounded >= 24 * 60) {
+                return new Date(1970, 0, 1, 23, 59, 59, 999)
+            }
+            const hours = Math.floor(bounded / 60)
+            const minutes = bounded % 60
+            return new Date(1970, 0, 1, Math.min(hours, 23), minutes)
+        }
+
         return {
-            min: new Date(1970, 0, 1, windowStartMin / 60, 0),
-            max: new Date(1970, 0, 1, Math.min(windowEndMin / 60, 23), windowEndMin % 60),
+            min: toClockDate(windowStartMin),
+            max: toClockDate(windowEndMin, true),
             // 30-min slots for precise click-to-create, 2 per hour group
             // Label gutter shows only whole hours (CSS hides the :30 label)
             step: 30,

@@ -1,0 +1,124 @@
+/* ========== MINI TOOLBAR (Quick Notes) ========== */
+.note-mini-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 1px;
+    padding: 3px 4px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius) var(--radius) 0 0;
+    border-bottom: none;
+    flex-wrap: wrap;
+}
+
+.note-mini-toolbar-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s;
+    flex-shrink: 0;
+}
+
+.note-mini-toolbar-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+/* When mini toolbar is present, remove top radius from textarea */
+.note-md-edit-area .note-mini-toolbar+.note-md-textarea {
+    border-radius: 0 0 var(--radius) var(--radius);
+}
+
+/* ========== FULL TOOLBAR (Workspace Note Editor) ========== */
+.wne-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 1px;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-secondary);
+    flex-shrink: 0;
+    flex-wrap: wrap;
+    min-height: 36px;
+}
+
+.wne-toolbar-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+    flex-shrink: 0;
+}
+
+.wne-toolbar-btn:hover {
+    background: var(--bg-active);
+    color: var(--text-primary);
+}
+
+.wne-toolbar-sep {
+    width: 1px;
+    height: 18px;
+    background: var(--border-strong);
+    margin: 0 3px;
+    flex-shrink: 0;
+}
+
+/* ========== DRAG & DROP IMPROVEMENTS ========== */
+
+/* Ghost image when dragging */
+.note-card--dragging {
+    opacity: 0.35;
+    pointer-events: none;
+}
+
+/* Drop target highlight — more visible */
+.note-card--drop-target>div:first-child {
+    border-radius: var(--radius);
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+    background: var(--accent-light);
+}
+
+.note-card--drop-target>div:first-child .note-card-summary-btn {
+    background: var(--accent-light);
+}
+
+/* Root drop zone */
+.note-root-drop-zone {
+    border: 1.5px dashed var(--border-strong);
+    border-radius: var(--radius);
+    padding: 7px 10px;
+    margin-bottom: 6px;
+    font-size: 11.5px;
+    color: var(--text-tertiary);
+    background: var(--bg);
+    transition: all 0.15s;
+    text-align: center;
+}
+
+.note-root-drop-zone.active {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-light);
+}
+
+/* Note list as drop target for root level */
+.note-list--drag-over-root {
+    outline: 2px dashed var(--accent);
+    outline-offset: 2px;
+    border-radius: var(--radius);
+}

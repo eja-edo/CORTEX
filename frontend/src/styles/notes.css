@@ -159,6 +159,8 @@
     overflow: hidden;
     text-overflow: ellipsis;
     line-height: 1.4;
+    max-width: 20ch;
+    /* ~20 ký tự */
 }
 
 .note-card-date {
@@ -188,6 +190,11 @@
     border-top: 1px solid transparent;
     transition: border-color 0.2s;
 }
+
+.sidebar-section-body .sidebar-section-body--drop-target {
+    transition: border-color 0.5s;
+}
+
 
 .note-card--expanded .note-editor-wrap {
     border-color: var(--border);

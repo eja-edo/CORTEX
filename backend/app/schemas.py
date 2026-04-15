@@ -124,6 +124,7 @@ class TokenExchangeRequest(BaseModel):
 class NoteCreate(BaseModel):
     content: str = Field(..., min_length=1, max_length=MAX_NOTE_CONTENT_LENGTH)
     content_type: str = Field(default="markdown", max_length=20)
+    parent_note_id: UUID | None = None
     position: dict[str, Any] = Field(default_factory=lambda: {"x": 0, "y": 0})
     size: dict[str, Any] = Field(default_factory=lambda: {"width": 200, "height": 200})
     style: dict[str, Any] = Field(default_factory=lambda: {"color": "yellow"})
@@ -140,6 +141,7 @@ class NoteUpdate(BaseModel):
     version: int = Field(..., ge=1)
     content: str | None = Field(default=None, min_length=1, max_length=MAX_NOTE_CONTENT_LENGTH)
     content_type: str | None = Field(default=None, max_length=20)
+    parent_note_id: UUID | None = None
     position: dict[str, Any] | None = None
     size: dict[str, Any] | None = None
     style: dict[str, Any] | None = None
@@ -152,6 +154,35 @@ class NoteUpdate(BaseModel):
         if value.lower() != "markdown":
             raise ValueError("Only markdown content_type is supported")
         return "markdown"
+
+
+class NotePatchOp(BaseModel):
+    op: str = Field(..., pattern="^(insert|delete|replace)$")
+    pos: int = Field(..., ge=0)
+    length: int | None = Field(default=None, ge=0)
+    text: str | None = None
+
+
+class NotePatchRequest(BaseModel):
+    version: int = Field(..., ge=1)
+    patch: list[NotePatchOp]
+    position: dict[str, Any] | None = None
+    size: dict[str, Any] | None = None
+    style: dict[str, Any] | None = None
+
+
+class NoteRevisionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    note_id: UUID
+    user_id: UUID
+    version: int
+    base_version: int
+    patch: list[dict[str, Any]]
+    patch_format: str
+    content_length: int
+    created_at: datetime
 
 
 class NotePartialUpdate(BaseModel):
@@ -187,6 +218,7 @@ class NoteResponse(BaseModel):
 
     id: UUID
     user_id: UUID
+    parent_note_id: UUID | None
     content: str
     content_type: str
     position: dict[str, Any]
