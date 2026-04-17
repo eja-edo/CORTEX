@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Home, LogOut, PanelLeftClose, PanelLeftOpen, Plus, Settings, StickyNote, Video, X } from 'lucide-react'
+import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Home, LogOut, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings, StickyNote, Video, X } from 'lucide-react'
 import { startOfWeek, endOfWeek } from 'date-fns'
 import 'react-big-calendar/lib/css/react-big-calendar.css'
 import './App.css'
@@ -13,6 +13,8 @@ import { plainTextFromMarkdown } from './utils/noteMarkdown'
 import { NotificationBell, type AppNotification } from './components/NotificationBell'
 import { buildTextPatch, type NotePatchOp } from './utils/textPatch.ts'
 import { WorkspaceNoteEditor } from './components/WorkspaceNoteEditor'
+import { WorkspaceSearch } from './components/WorkspaceSearch'
+import { AskAI } from './components/AskAI'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api'
 const PKCE_CLIENT_ID = 'cortex-web'
@@ -212,6 +214,8 @@ function App() {
   const [syncToastMessage, setSyncToastMessage] = useState<string>('')
   const [isBusy, setIsBusy] = useState<boolean>(false)
   const [isCreateEventOpen, setIsCreateEventOpen] = useState<boolean>(false)
+  const [isSearchOpen, setIsSearchOpen] = useState(false)
+  const [isAskAIOpen, setIsAskAIOpen] = useState(false)
   // Tracks the pre-filled start/end for when user clicks on the calendar
   const [createEventInitialTimes, setCreateEventInitialTimes] = useState<{ startDate: string; endDate: string } | null>(null)
   const [isWorkspaceSidebarCollapsed, setIsWorkspaceSidebarCollapsed] = useState<boolean>(false)
@@ -245,6 +249,17 @@ function App() {
   useEffect(() => {
     tokensRef.current = tokens
   }, [tokens])
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setIsSearchOpen(prev => !prev)
+      }
+    }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [])
 
   const handleNoteChange = useCallback((id: string, contentMd: string) => {
     setRecentNotes((prev) => prev.map((n) => (n.id === id ? { ...n, contentMd } : n)))
@@ -850,6 +865,28 @@ function App() {
     }
   }
 
+  async function handleStartGoogleCalendarWatch(): Promise<void> {
+    setErrorMessage('')
+    try {
+      const resp = await requestWithAuth<{ message: string }>('/google-calendar/watch/start', { method: 'POST' })
+      setStatusMessage(resp.message)
+      await fetchGoogleCalendarStatus()
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Cannot start Google Calendar watch')
+    }
+  }
+
+  async function handleRenewGoogleCalendarWatch(): Promise<void> {
+    setErrorMessage('')
+    try {
+      const resp = await requestWithAuth<{ message: string }>('/google-calendar/watch/renew', { method: 'POST' })
+      setStatusMessage(resp.message)
+      await fetchGoogleCalendarStatus()
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Cannot renew Google Calendar watch')
+    }
+  }
+
   async function handleCreateSchedule(schedule: Omit<Schedule, 'id' | 'user_id' | 'created_at' | 'updated_at' | 'is_completed'>): Promise<void> {
     setErrorMessage(''); setStatusMessage('')
     try {
@@ -1024,6 +1061,18 @@ function App() {
                         : (activeWorkspaceNote ? noteTitleFromMd(activeWorkspaceNote.contentMd) : 'Note')}
                 </span>
               </nav>
+              {tokens && (
+                <button
+                  type="button"
+                  className="topbar-btn topbar-search-btn"
+                  onClick={() => setIsSearchOpen(true)}
+                  title="Search (Ctrl+K)"
+                >
+                  <Search size={13} />
+                  <span>Search</span>
+                  <kbd>⌘ + K</kbd>
+                </button>
+              )}
             </>
           )}
         </div>
@@ -1031,6 +1080,15 @@ function App() {
         <div className="topbar-right">
           {tokens && (
             <>
+              <button
+                type="button"
+                className="topbar-btn ask-ai-topbar-btn"
+                onClick={() => setIsAskAIOpen(true)}
+                title="Ask AI"
+              >
+                <span style={{ fontSize: 13 }}>✦</span>
+                <span>Ask AI</span>
+              </button>
               <NotificationBell
                 notifications={notifications}
                 onMarkRead={(id) => setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n))}
@@ -1264,6 +1322,12 @@ function App() {
                         <button type="button" className="btn btn-ghost" onClick={handleSyncGoogleCalendarNow}>
                           Sync Google
                         </button>
+                        <button type="button" className="btn btn-ghost" onClick={handleStartGoogleCalendarWatch}>
+                          Start Watch
+                        </button>
+                        <button type="button" className="btn btn-ghost" onClick={handleRenewGoogleCalendarWatch}>
+                          Renew Watch
+                        </button>
                         <button type="button" className="btn btn-danger" onClick={handleDisconnectGoogleCalendar}>
                           Disconnect Google
                         </button>
@@ -1282,7 +1346,11 @@ function App() {
               </section>
             ) : activeWorkspaceNote ? (
               <div className="workspace-note-page">
-                <WorkspaceNoteEditor note={activeWorkspaceNote} onChange={handleNoteChange} />
+                <WorkspaceNoteEditor
+                  note={activeWorkspaceNote}
+                  onChange={handleNoteChange}
+                  onAskAI={() => setIsAskAIOpen(true)}
+                />
               </div>
             ) : (
               <section className="workspace-empty-note">
@@ -1316,6 +1384,29 @@ function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {tokens && isSearchOpen && (
+        <WorkspaceSearch
+          notes={recentNotes}
+          onOpenNote={(noteId) => {
+            openWorkspaceNote(noteId)
+          }}
+          onClose={() => setIsSearchOpen(false)}
+        />
+      )}
+
+      {tokens && isAskAIOpen && (
+        <AskAI
+          noteContent={activeWorkspaceNote?.contentMd}
+          noteTitle={activeWorkspaceNote ? noteTitleFromMd(activeWorkspaceNote.contentMd) : undefined}
+          onClose={() => setIsAskAIOpen(false)}
+          onInsert={(text) => {
+            if (!activeWorkspaceNote) return
+            const newContent = activeWorkspaceNote.contentMd + '\n\n' + text
+            handleNoteChange(activeWorkspaceNote.id, newContent)
+          }}
+        />
       )}
     </div>
   )

@@ -36,39 +36,95 @@ function noteTitleFromMd(content: string): string {
 
 type ViewMode = 'split' | 'edit' | 'preview'
 
-// ── Toolbar helpers ────────────────────────────────────────────
+// ── Toolbar action types ───────────────────────────────────────
 
-function wrapSel(ta: HTMLTextAreaElement, before: string, after: string, placeholder: string): string {
-    const s = ta.selectionStart
-    const e = ta.selectionEnd
-    const selected = ta.value.slice(s, e) || placeholder
-    return ta.value.slice(0, s) + before + selected + after + ta.value.slice(e)
+type ApplyResult = {
+    value: string
+    // After applying, where should the selection be?
+    selStart: number
+    selEnd: number
 }
 
-function linePrefix(ta: HTMLTextAreaElement, prefix: string): string {
-    const s = ta.selectionStart
-    const lineStart = ta.value.lastIndexOf('\n', s - 1) + 1
-    return ta.value.slice(0, lineStart) + prefix + ta.value.slice(lineStart)
+// Helper: wrap selected text (or insert placeholder) with before/after markers
+function wrapSelection(
+    ta: HTMLTextAreaElement,
+    before: string,
+    after: string,
+    placeholder: string,
+): ApplyResult {
+    const start = ta.selectionStart
+    const end = ta.selectionEnd
+    const selected = ta.value.slice(start, end)
+    const text = selected || placeholder
+    const newVal = ta.value.slice(0, start) + before + text + after + ta.value.slice(end)
+
+    // If there was a selection, keep it selected inside markers
+    // If we used placeholder, select just the placeholder text
+    const selStart = start + before.length
+    const selEnd = selStart + text.length
+    return { value: newVal, selStart, selEnd }
 }
 
-function insertLinkMd(ta: HTMLTextAreaElement): string {
-    const s = ta.selectionStart
-    const e = ta.selectionEnd
-    const selected = ta.value.slice(s, e) || 'link text'
-    return ta.value.slice(0, s) + `[${selected}](url)` + ta.value.slice(e)
+// Helper: prefix current line
+function prefixLine(ta: HTMLTextAreaElement, prefix: string): ApplyResult {
+    const start = ta.selectionStart
+    const end = ta.selectionEnd
+    const lineStart = ta.value.lastIndexOf('\n', start - 1) + 1
+    const newVal = ta.value.slice(0, lineStart) + prefix + ta.value.slice(lineStart)
+    return {
+        value: newVal,
+        selStart: start + prefix.length,
+        selEnd: end + prefix.length,
+    }
 }
 
-function insertCodeBlock(ta: HTMLTextAreaElement): string {
-    const s = ta.selectionStart
-    const selected = ta.value.slice(s, ta.selectionEnd) || ''
-    const block = `\`\`\`\n${selected}\n\`\`\``
-    return ta.value.slice(0, s) + block + ta.value.slice(ta.selectionEnd)
+// Helper: insert link markdown
+function insertLink(ta: HTMLTextAreaElement): ApplyResult {
+    const start = ta.selectionStart
+    const end = ta.selectionEnd
+    const selected = ta.value.slice(start, end)
+    const linkText = selected || 'link text'
+    const insertion = `[${linkText}](url)`
+    const newVal = ta.value.slice(0, start) + insertion + ta.value.slice(end)
+    // Select "url" for easy replacement
+    const urlStart = start + linkText.length + 3 // after "[linkText]("
+    return {
+        value: newVal,
+        selStart: urlStart,
+        selEnd: urlStart + 3, // "url"
+    }
+}
+
+// Helper: insert code block
+function insertCodeBlock(ta: HTMLTextAreaElement): ApplyResult {
+    const start = ta.selectionStart
+    const end = ta.selectionEnd
+    const selected = ta.value.slice(start, end)
+    const inner = selected || 'code here'
+    const block = `\`\`\`\n${inner}\n\`\`\``
+    const newVal = ta.value.slice(0, start) + block + ta.value.slice(end)
+    // Select inner content
+    return {
+        value: newVal,
+        selStart: start + 4, // after "```\n"
+        selEnd: start + 4 + inner.length,
+    }
+}
+
+// Helper: insert horizontal rule
+function insertHr(ta: HTMLTextAreaElement): ApplyResult {
+    const start = ta.selectionStart
+    const insertion = '\n---\n'
+    const newVal = ta.value.slice(0, start) + insertion + ta.value.slice(start)
+    // Place cursor after the rule
+    const newPos = start + insertion.length
+    return { value: newVal, selStart: newPos, selEnd: newPos }
 }
 
 type ToolbarAction = {
     icon: React.ReactNode
     label: string
-    apply: (ta: HTMLTextAreaElement) => { value: string; selStart?: number; selEnd?: number }
+    apply: (ta: HTMLTextAreaElement) => ApplyResult
     group?: number
 }
 
@@ -77,86 +133,79 @@ const TOOLBAR_ACTIONS: ToolbarAction[] = [
         group: 1,
         icon: <Heading1 size={14} />,
         label: 'Heading 1',
-        apply: ta => ({ value: linePrefix(ta, '# ') }),
+        apply: ta => prefixLine(ta, '# '),
     },
     {
         group: 1,
         icon: <Heading2 size={14} />,
         label: 'Heading 2',
-        apply: ta => ({ value: linePrefix(ta, '## ') }),
+        apply: ta => prefixLine(ta, '## '),
     },
     {
         group: 2,
         icon: <Bold size={14} />,
         label: 'Bold (Ctrl+B)',
-        apply: ta => {
-            const v = wrapSel(ta, '**', '**', 'bold text')
-            return { value: v, selStart: ta.selectionStart + 2, selEnd: ta.selectionStart + 2 + (ta.value.slice(ta.selectionStart, ta.selectionEnd) || 'bold text').length }
-        },
+        apply: ta => wrapSelection(ta, '**', '**', 'bold text'),
     },
     {
         group: 2,
         icon: <Italic size={14} />,
         label: 'Italic (Ctrl+I)',
-        apply: ta => ({ value: wrapSel(ta, '*', '*', 'italic') }),
+        apply: ta => wrapSelection(ta, '*', '*', 'italic'),
     },
     {
         group: 2,
         icon: <Underline size={14} />,
         label: 'Underline',
-        apply: ta => ({ value: wrapSel(ta, '<u>', '</u>', 'underline') }),
+        apply: ta => wrapSelection(ta, '<u>', '</u>', 'underline'),
     },
     {
         group: 2,
         icon: <Strikethrough size={14} />,
         label: 'Strikethrough',
-        apply: ta => ({ value: wrapSel(ta, '~~', '~~', 'strikethrough') }),
+        apply: ta => wrapSelection(ta, '~~', '~~', 'strikethrough'),
     },
     {
         group: 3,
         icon: <List size={14} />,
         label: 'Bullet list',
-        apply: ta => ({ value: linePrefix(ta, '- ') }),
+        apply: ta => prefixLine(ta, '- '),
     },
     {
         group: 3,
         icon: <ListOrdered size={14} />,
         label: 'Numbered list',
-        apply: ta => ({ value: linePrefix(ta, '1. ') }),
+        apply: ta => prefixLine(ta, '1. '),
     },
     {
         group: 3,
         icon: <Quote size={14} />,
         label: 'Blockquote',
-        apply: ta => ({ value: linePrefix(ta, '> ') }),
+        apply: ta => prefixLine(ta, '> '),
     },
     {
         group: 4,
         icon: <Code size={14} />,
         label: 'Inline code',
-        apply: ta => ({ value: wrapSel(ta, '`', '`', 'code') }),
+        apply: ta => wrapSelection(ta, '`', '`', 'code'),
     },
     {
         group: 4,
         icon: <Terminal size={14} />,
         label: 'Code block',
-        apply: ta => ({ value: insertCodeBlock(ta) }),
+        apply: ta => insertCodeBlock(ta),
     },
     {
         group: 4,
         icon: <Link size={14} />,
-        label: 'Link',
-        apply: ta => ({ value: insertLinkMd(ta) }),
+        label: 'Link (Ctrl+K)',
+        apply: ta => insertLink(ta),
     },
     {
         group: 5,
         icon: <Minus size={14} />,
         label: 'Horizontal rule',
-        apply: ta => {
-            const s = ta.selectionStart
-            const insertion = '\n---\n'
-            return { value: ta.value.slice(0, s) + insertion + ta.value.slice(s) }
-        },
+        apply: ta => insertHr(ta),
     },
 ]
 
@@ -165,16 +214,13 @@ function MarkdownToolbar({
     onApply,
 }: {
     textareaRef: React.RefObject<HTMLTextAreaElement | null>
-    onApply: (newValue: string) => void
+    onApply: (newValue: string, selStart: number, selEnd: number) => void
 }) {
     const runAction = (action: ToolbarAction) => {
         const ta = textareaRef.current
         if (!ta) return
         const result = action.apply(ta)
-        onApply(result.value)
-        window.requestAnimationFrame(() => {
-            ta.focus()
-        })
+        onApply(result.value, result.selStart, result.selEnd)
     }
 
     let lastGroup = -1
@@ -191,6 +237,7 @@ function MarkdownToolbar({
                             className="wne-toolbar-btn"
                             title={action.label}
                             onMouseDown={e => {
+                                // Prevent textarea from losing focus
                                 e.preventDefault()
                                 runAction(action)
                             }}
@@ -206,13 +253,17 @@ function MarkdownToolbar({
 
 // ── WorkspaceNoteEditor ───────────────────────────────────────
 
+interface WorkspaceNoteEditorProps {
+    note: NoteItem
+    onChange: (id: string, contentMd: string) => void
+    onAskAI?: () => void
+}
+
 export function WorkspaceNoteEditor({
     note,
     onChange,
-}: {
-    note: NoteItem
-    onChange: (id: string, contentMd: string) => void
-}) {
+    onAskAI,
+}: WorkspaceNoteEditorProps) {
     const [localMd, setLocalMd] = useState(note.contentMd)
     const [viewMode, setViewMode] = useState<ViewMode>('split')
     const [wordCount, setWordCount] = useState(0)
@@ -221,6 +272,8 @@ export function WorkspaceNoteEditor({
     const textareaRef = useRef<HTMLTextAreaElement>(null)
     const previewRef = useRef<HTMLDivElement>(null)
     const isSyncScrollingRef = useRef(false)
+    // Track pending cursor position to apply after React re-render
+    const pendingSelectionRef = useRef<{ start: number; end: number } | null>(null)
 
     // Sync when switching notes
     useEffect(() => {
@@ -237,6 +290,20 @@ export function WorkspaceNoteEditor({
 
     useEffect(() => () => { if (timerRef.current) window.clearTimeout(timerRef.current) }, [])
 
+    // Apply pending cursor selection after state update + DOM paint
+    useEffect(() => {
+        if (!pendingSelectionRef.current) return
+        const { start, end } = pendingSelectionRef.current
+        pendingSelectionRef.current = null
+        const ta = textareaRef.current
+        if (!ta) return
+        // Use rAF to ensure DOM has updated
+        window.requestAnimationFrame(() => {
+            ta.focus()
+            ta.setSelectionRange(start, end)
+        })
+    })
+
     const flush = useCallback((value: string) => {
         onChange(note.id, value)
     }, [note.id, onChange])
@@ -251,6 +318,12 @@ export function WorkspaceNoteEditor({
         queueFlush(value)
     }, [queueFlush])
 
+    // Called by toolbar: update value AND schedule cursor placement
+    const applyToolbarAction = useCallback((newValue: string, selStart: number, selEnd: number) => {
+        pendingSelectionRef.current = { start: selStart, end: selEnd }
+        applyValue(newValue)
+    }, [applyValue])
+
     const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
         applyValue(e.target.value)
     }
@@ -264,27 +337,30 @@ export function WorkspaceNoteEditor({
             const start = ta.selectionStart
             const end = ta.selectionEnd
             const newVal = localMd.slice(0, start) + '  ' + localMd.slice(end)
+            pendingSelectionRef.current = { start: start + 2, end: start + 2 }
             applyValue(newVal)
-            window.requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = start + 2 })
             return
         }
 
         // Ctrl+B
         if (e.key === 'b' && (e.ctrlKey || e.metaKey)) {
             e.preventDefault()
-            applyValue(wrapSel(ta, '**', '**', 'bold'))
+            const result = wrapSelection(ta, '**', '**', 'bold text')
+            applyToolbarAction(result.value, result.selStart, result.selEnd)
             return
         }
         // Ctrl+I
         if (e.key === 'i' && (e.ctrlKey || e.metaKey)) {
             e.preventDefault()
-            applyValue(wrapSel(ta, '*', '*', 'italic'))
+            const result = wrapSelection(ta, '*', '*', 'italic')
+            applyToolbarAction(result.value, result.selStart, result.selEnd)
             return
         }
         // Ctrl+K
         if (e.key === 'k' && (e.ctrlKey || e.metaKey)) {
             e.preventDefault()
-            applyValue(insertLinkMd(ta))
+            const result = insertLink(ta)
+            applyToolbarAction(result.value, result.selStart, result.selEnd)
             return
         }
     }
@@ -329,22 +405,35 @@ export function WorkspaceNoteEditor({
                         <span className="wne-wordcount">{wordCount} từ</span>
                     </div>
                 </div>
-                <div className="wne-view-switcher">
-                    <button type="button" className={`wne-view-btn ${viewMode === 'edit' ? 'active' : ''}`} onClick={() => setViewMode('edit')} title="Editor only">
-                        <FileText size={14} /><span>Edit</span>
-                    </button>
-                    <button type="button" className={`wne-view-btn ${viewMode === 'split' ? 'active' : ''}`} onClick={() => setViewMode('split')} title="Split view">
-                        <Columns2 size={14} /><span>Split</span>
-                    </button>
-                    <button type="button" className={`wne-view-btn ${viewMode === 'preview' ? 'active' : ''}`} onClick={() => setViewMode('preview')} title="Preview only">
-                        <Eye size={14} /><span>Preview</span>
-                    </button>
+                <div className="wne-header-right">
+                    {onAskAI && (
+                        <button
+                            type="button"
+                            className="wne-ai-btn"
+                            onClick={onAskAI}
+                            title="Ask AI about this note"
+                        >
+                            <span className="wne-ai-btn-icon">✦</span>
+                            Ask AI
+                        </button>
+                    )}
+                    <div className="wne-view-switcher">
+                        <button type="button" className={`wne-view-btn ${viewMode === 'edit' ? 'active' : ''}`} onClick={() => setViewMode('edit')} title="Editor only">
+                            <FileText size={14} /><span>Edit</span>
+                        </button>
+                        <button type="button" className={`wne-view-btn ${viewMode === 'split' ? 'active' : ''}`} onClick={() => setViewMode('split')} title="Split view">
+                            <Columns2 size={14} /><span>Split</span>
+                        </button>
+                        <button type="button" className={`wne-view-btn ${viewMode === 'preview' ? 'active' : ''}`} onClick={() => setViewMode('preview')} title="Preview only">
+                            <Eye size={14} /><span>Preview</span>
+                        </button>
+                    </div>
                 </div>
             </header>
 
             {/* Markdown toolbar (editor/split only) */}
             {viewMode !== 'preview' && (
-                <MarkdownToolbar textareaRef={textareaRef} onApply={applyValue} />
+                <MarkdownToolbar textareaRef={textareaRef} onApply={applyToolbarAction} />
             )}
 
             {/* Body */}

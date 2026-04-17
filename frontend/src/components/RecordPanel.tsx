@@ -32,6 +32,7 @@ type UploadSessionResponse = {
 
 type UploadCompleteResponse = {
     upload_id: string
+    asset_id: string
     object_key: string
     status: 'initiated' | 'uploading' | 'completed' | 'failed'
 }
@@ -150,6 +151,7 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
                     uploadState: finalize.status,
                     uploadProgress: finalize.status === 'uploaded' ? 100 : 0,
                     uploadedObjectKey: finalize.objectKey,
+                    uploadedAssetId: finalize.assetId,
                     uploadError: finalize.error,
                 }
                 setRecordings(prev => [newRec, ...prev])
@@ -208,6 +210,7 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
                     uploadState: finalize.status,
                     uploadProgress: finalize.status === 'uploaded' ? 100 : 0,
                     uploadedObjectKey: finalize.objectKey,
+                    uploadedAssetId: finalize.assetId,
                     uploadError: finalize.error,
                 }
                 setRecordings(prev => [newRec, ...prev])
@@ -512,7 +515,7 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
 
     const finalizeLiveUpload = useCallback(async (ctx: LiveUploadContext | null, totalSize: number) => {
         if (!ctx) {
-            return { status: 'failed' as const, objectKey: undefined, error: 'Missing upload context' }
+            return { status: 'failed' as const, objectKey: undefined, assetId: undefined, error: 'Missing upload context' }
         }
 
         try {
@@ -520,7 +523,7 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
             const uploadedParts = ctx.nextPartNumber - 1
 
             if (uploadedParts <= 0) {
-                return { status: 'failed' as const, objectKey: undefined, error: 'No data uploaded' }
+                return { status: 'failed' as const, objectKey: undefined, assetId: undefined, error: 'No data uploaded' }
             }
 
             const complete = await requestWithAuth<UploadCompleteResponse>('/upload/complete', {
@@ -533,10 +536,15 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
                 }),
             })
 
-            return { status: 'uploaded' as const, objectKey: complete.object_key, error: undefined }
+            return {
+                status: 'uploaded' as const,
+                objectKey: complete.object_key,
+                assetId: complete.asset_id,
+                error: undefined,
+            }
         } catch (err) {
             const message = err instanceof Error ? err.message : 'Live upload failed'
-            return { status: 'failed' as const, objectKey: undefined, error: message }
+            return { status: 'failed' as const, objectKey: undefined, assetId: undefined, error: message }
         }
     }, [enqueueBufferedUpload, requestWithAuth])
 
@@ -570,6 +578,7 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
                         uploadState: 'uploaded',
                         uploadProgress: 100,
                         uploadedObjectKey: session.object_key,
+                        uploadedAssetId: rec.uploadedAssetId,
                     }))
                     return
                 }
@@ -639,6 +648,7 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
                 uploadState: 'uploaded',
                 uploadProgress: 100,
                 uploadedObjectKey: complete.object_key,
+                uploadedAssetId: complete.asset_id,
                 uploadError: undefined,
             }))
         } catch (err) {

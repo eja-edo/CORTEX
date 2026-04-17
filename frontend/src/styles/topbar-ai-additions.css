@@ -1,0 +1,89 @@
+/* Add these to frontend/src/styles/base.css OR App.css */
+
+/* Topbar search button */
+.topbar-search-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--bg-secondary);
+    color: var(--text-tertiary);
+    font-size: 12.5px;
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s, border-color 0.1s;
+    min-width: 200px;
+}
+
+.topbar-search-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    border-color: var(--border-strong);
+}
+
+.topbar-search-btn kbd {
+    margin-left: auto;
+    padding: 1px 5px;
+    background: var(--bg);
+    border: 1px solid var(--border-strong);
+    border-radius: 3px;
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: var(--text-disabled);
+}
+
+/* Ask AI topbar button */
+.ask-ai-topbar-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: var(--radius);
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    background: rgba(99, 102, 241, 0.06);
+    color: #6366f1;
+    font-size: 12.5px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.1s, border-color 0.1s;
+}
+
+.ask-ai-topbar-btn:hover {
+    background: rgba(99, 102, 241, 0.12);
+    border-color: rgba(99, 102, 241, 0.5);
+}
+
+/* WNE Ask AI button (inside note editor header) */
+.wne-header-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.wne-ai-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 12px;
+    border-radius: var(--radius);
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    background: rgba(99, 102, 241, 0.06);
+    color: #6366f1;
+    font-size: 12.5px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    white-space: nowrap;
+}
+
+.wne-ai-btn:hover {
+    background: rgba(99, 102, 241, 0.12);
+    border-color: rgba(99, 102, 241, 0.5);
+}
+
+.wne-ai-btn-icon {
+    font-size: 14px;
+    line-height: 1;
+}

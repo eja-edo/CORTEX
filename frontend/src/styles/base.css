@@ -88,6 +88,12 @@
   cursor: pointer;
   transition: background 0.1s;
   color: var(--text-secondary);
+  max-width: 20ch;
+  max-width: 10ch;
+  overflow: hidden;
+
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .breadcrumb-item:hover {

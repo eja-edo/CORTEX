@@ -12,6 +12,7 @@ export type Recording = {
     uploadProgress: number
     uploadSessionId?: string
     uploadedObjectKey?: string
+    uploadedAssetId?: string
     uploadError?: string
 }
 

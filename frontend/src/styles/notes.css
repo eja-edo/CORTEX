@@ -160,7 +160,6 @@
     text-overflow: ellipsis;
     line-height: 1.4;
     max-width: 20ch;
-    /* ~20 ký tự */
 }
 
 .note-card-date {
