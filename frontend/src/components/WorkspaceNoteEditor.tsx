@@ -224,7 +224,7 @@ function MarkdownToolbar({
     }
 
     const actionsWithSeparators = useMemo(() => {
-        return TOOLBAR_ACTIONS.reduce<Array<{action: typeof TOOLBAR_ACTIONS[0], showSep: boolean, i: number}>>((acc, action, i) => {
+        return TOOLBAR_ACTIONS.reduce<Array<{ action: typeof TOOLBAR_ACTIONS[0], showSep: boolean, i: number }>>((acc, action, i) => {
             const lastAction = acc.length > 0 ? acc[acc.length - 1].action : null
             const showSep = lastAction !== null && lastAction.group !== action.group
             acc.push({ action, showSep, i })
