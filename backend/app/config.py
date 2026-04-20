@@ -15,6 +15,16 @@ class Settings:
         "postgresql+psycopg2://user:password@localhost:5433/cortex_db"
     )
 
+    # Redis (pub/sub, distributed locks, cross-service signals)
+    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
+    REDIS_CHANNEL_PREFIX: str = os.getenv("REDIS_CHANNEL_PREFIX", "cortex")
+    REDIS_SAVE_STREAM_KEY: str = os.getenv("REDIS_SAVE_STREAM_KEY", "save_transcription:stream")
+    REDIS_SAVE_CONSUMER_GROUP: str = os.getenv("REDIS_SAVE_CONSUMER_GROUP", "backend-save-consumers")
+    REDIS_SAVE_READ_BLOCK_MS: int = int(os.getenv("REDIS_SAVE_READ_BLOCK_MS", "5000"))
+
+    # MongoDB for transcription results
+    MONGODB_URL: str = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
+    MONGODB_DB_NAME: str = os.getenv("MONGODB_DB_NAME", "cortex")
 
 
     @property

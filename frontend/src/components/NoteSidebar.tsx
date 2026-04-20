@@ -191,12 +191,19 @@ function NoteCardItem({
 
   useEffect(() => {
     if (!isExpanded) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setLocalMd(note.contentMd)
     }
   }, [note.contentMd, isExpanded])
 
+  const autoResize = (el: HTMLTextAreaElement) => {
+    el.style.height = 'auto'
+    el.style.height = Math.min(el.scrollHeight, 300) + 'px'
+  }
+
   useEffect(() => {
     if (isExpanded) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setLocalMd(note.contentMd)
       window.requestAnimationFrame(() => {
         if (textareaRef.current) {
@@ -219,11 +226,6 @@ function NoteCardItem({
       }
     }
   }, [])
-
-  const autoResize = (el: HTMLTextAreaElement) => {
-    el.style.height = 'auto'
-    el.style.height = Math.min(el.scrollHeight, 300) + 'px'
-  }
 
   const queueAutosave = useCallback((value: string) => {
     if (autosaveTimerRef.current) {
@@ -546,7 +548,11 @@ export function NoteSidebar({ notes, onNoteChange, onCreateNote, onMoveNote, onD
               onToggleBranch={() => {
                 setCollapsedBranchIds(prev => {
                   const next = new Set(prev)
-                  next.has(note.id) ? next.delete(note.id) : next.add(note.id)
+                  if (next.has(note.id)) {
+                    next.delete(note.id)
+                  } else {
+                    next.add(note.id)
+                  }
                   return next
                 })
               }}
@@ -577,6 +583,7 @@ export function NoteSidebar({ notes, onNoteChange, onCreateNote, onMoveNote, onD
               searchQuery={searchQuery}
               depth={depth}
             />
+            {/* eslint-disable-next-line react-hooks/immutability */}
             {!isBranchCollapsed ? renderChildren(note.id, depth + 1) : null}
           </div>
         )
@@ -694,7 +701,11 @@ export function NoteSidebar({ notes, onNoteChange, onCreateNote, onMoveNote, onD
                 onToggleBranch={() => {
                   setCollapsedBranchIds(prev => {
                     const next = new Set(prev)
-                    next.has(note.id) ? next.delete(note.id) : next.add(note.id)
+                    if (next.has(note.id)) {
+                      next.delete(note.id)
+                    } else {
+                      next.add(note.id)
+                    }
                     return next
                   })
                 }}

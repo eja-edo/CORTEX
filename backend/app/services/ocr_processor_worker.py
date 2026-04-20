@@ -1,0 +1,361 @@
+"""
+OCR Processor Worker - Consumer for Video Processing Tasks
+
+Consumes OCR/video processing tasks from Redis Stream and executes them.
+Integrates with video_pipeline_v6 and process_ocr_layout logic.
+"""
+
+import asyncio
+import json
+from pathlib import Path
+from typing import Any, Optional
+from uuid import uuid4
+
+import redis.asyncio as redis
+
+from app.config import settings
+from app.services.ocr.layout_processor import process_metadata_file
+from app.services.ocr.video_pipeline_service import Config as OCRPipelineConfig, run_pipeline
+from app.services.multipart_upload import MinIOMultipartService
+from app.utils.decorator import singleton
+from app.utils.logger import get_logger
+from app.services.redis.ocr_processor_task import (
+    OCRProcessorTask,
+    OCR_PROCESSOR_STREAM_KEY,
+)
+
+logger = get_logger(__name__)
+
+
+@singleton
+class OCRProcessorWorker:
+    """Worker that consumes OCR processing tasks from Redis and executes them."""
+
+    def __init__(self):
+        self._redis: Optional[redis.Redis] = None
+        self._consumer_id = f"ocr-worker-{__name__}"
+        self._group_name = "ocr-processor-workers"
+        self._stream_key = OCR_PROCESSOR_STREAM_KEY
+        self._running = False
+        self._storage = MinIOMultipartService()
+        self._temp_dir = Path(__file__).resolve().parents[2] / "logs" / "ocr_temp"
+        self._temp_dir.mkdir(parents=True, exist_ok=True)
+
+    async def connect(self) -> None:
+        """Connect to Redis."""
+        if self._redis is not None:
+            return
+
+        try:
+            redis_url = settings.REDIS_URL
+            self._redis = redis.from_url(redis_url, decode_responses=False)
+            await self._redis.ping()
+            logger.info(f"✅ Connected to Redis OCR worker at {redis_url}")
+
+            # Create consumer group
+            try:
+                await self._redis.xgroup_create(
+                    self._stream_key,
+                    self._group_name,
+                    id="0",
+                    mkstream=True,
+                )
+                logger.info(f"Created consumer group '{self._group_name}'")
+            except redis.ResponseError as e:
+                if "BUSYGROUP" in str(e):
+                    logger.debug(f"Consumer group already exists")
+                else:
+                    raise
+
+        except Exception as e:
+            logger.error(f"Failed to connect to Redis: {e}")
+            raise ConnectionError(f"Redis connection failed: {e}")
+
+    async def disconnect(self) -> None:
+        """Disconnect from Redis."""
+        if self._redis:
+            await self._redis.close()
+            self._redis = None
+            logger.info("Redis connection closed")
+
+    async def start(self) -> None:
+        """Start consuming tasks."""
+        if self._running:
+            return
+
+        await self.connect()
+        self._running = True
+
+        logger.info(
+            f"🔄 OCR Processor Worker started\n"
+            f"   Stream: {self._stream_key}\n"
+            f"   Group: {self._group_name}"
+        )
+
+        try:
+            await self._consume_loop()
+        except KeyboardInterrupt:
+            logger.info("Worker interrupted by user")
+        finally:
+            await self.disconnect()
+
+    async def stop(self) -> None:
+        """Stop consuming tasks."""
+        self._running = False
+        await self.disconnect()
+
+    async def _consume_loop(self) -> None:
+        """Main consumer loop."""
+        logger.info("Starting consumer loop...")
+
+        while self._running:
+            try:
+                # Read tasks from stream
+                result = await self._redis.xreadgroup(
+                    groupname=self._group_name,
+                    consumername=self._consumer_id,
+                    streams={self._stream_key: ">"},
+                    count=1,
+                    block=5000,  # Block for 5 seconds
+                )
+
+                if not result:
+                    continue
+
+                for stream_name, messages in result:
+                    for message_id, data in messages:
+                        message_id_str = message_id.decode() if isinstance(message_id, bytes) else str(message_id)
+
+                        try:
+                            # Parse task
+                            task = self._parse_task(message_id_str, data)
+                            logger.info(f"📥 Received task: {task.task_id}")
+
+                            # Process task
+                            await self._process_task(task)
+
+                            # Acknowledge task
+                            await self._redis.xack(self._stream_key, self._group_name, message_id)
+                            logger.info(f"✅ Task {task.task_id} acknowledged")
+
+                        except Exception as e:
+                            logger.error(f"❌ Failed to process task: {e}", exc_info=True)
+                            # Acknowledge anyway to avoid blocking
+                            await self._redis.xack(self._stream_key, self._group_name, message_id)
+
+            except Exception as e:
+                logger.error(f"Consumer loop error: {e}", exc_info=True)
+                await asyncio.sleep(1)
+
+    def _parse_task(self, message_id: str, data: dict[bytes, bytes]) -> OCRProcessorTask:
+        """Parse Redis message into OCRProcessorTask."""
+        decoded = {k.decode(): v.decode() for k, v in data.items()}
+
+        job_context_raw = decoded.get("job_context", "{}")
+        try:
+            job_context = json.loads(job_context_raw) if job_context_raw else {}
+        except json.JSONDecodeError:
+            job_context = {}
+
+        return OCRProcessorTask(
+            task_id=decoded.get("task_id", ""),
+            priority=int(decoded.get("priority", 5)),
+            retry_count=int(decoded.get("retry_count", 0)),
+            created_at=float(decoded.get("created_at", 0)),
+            video_id=decoded.get("video_id") or None,
+            video_path=decoded.get("video_path", ""),
+            output_dir=decoded.get("output_dir", ""),
+            workspace_id=decoded.get("workspace_id") or None,
+            user_id=decoded.get("user_id") or None,
+            ocr_engine=decoded.get("ocr_engine", "easyocr"),
+            target_fps=float(decoded.get("target_fps", 1.0)),
+            enable_ui_detect=decoded.get("enable_ui_detect", "True").lower() == "true",
+            enable_ocr=decoded.get("enable_ocr", "True").lower() == "true",
+            easyocr_langs=decoded.get("easyocr_langs", "en,vi"),
+            easyocr_confidence=float(decoded.get("easyocr_confidence", 0.3)),
+            use_gpu=decoded.get("use_gpu", "True").lower() == "true",
+            ui_canny_low=int(decoded.get("ui_canny_low", 30)),
+            ui_canny_high=int(decoded.get("ui_canny_high", 100)),
+            debug_mode=decoded.get("debug_mode", "False").lower() == "true",
+            save_masks=decoded.get("save_masks", "False").lower() == "true",
+            job_context=job_context,
+        )
+
+    @staticmethod
+    def _build_pipeline_config(task: OCRProcessorTask):
+        cfg = OCRPipelineConfig()
+
+        # Keep the same processing order/logic as video_pipeline_v6,
+        # and enforce EasyOCR model as requested.
+        cfg.target_fps = task.target_fps
+        cfg.ui_detect_enabled = task.enable_ui_detect
+        cfg.ocr_engine = "easyocr"
+        cfg.ocr_use_gpu = task.use_gpu
+        cfg.easyocr_languages = tuple(
+            lang.strip() for lang in task.easyocr_langs.split(",") if lang.strip()
+        ) or ("en",)
+        cfg.easyocr_confidence_threshold = task.easyocr_confidence
+        cfg.ui_canny_low = task.ui_canny_low
+        cfg.ui_canny_high = task.ui_canny_high
+        cfg.save_mask = task.save_masks
+        cfg.debug = task.debug_mode
+
+        return cfg
+
+    @staticmethod
+    def _resolve_output_dir(task: OCRProcessorTask) -> Path:
+        backend_root = Path(__file__).resolve().parents[2]
+        default_base = backend_root / "logs" / "ocr_processing"
+
+        if not task.output_dir:
+            return default_base / task.task_id
+
+        raw_output_dir = task.output_dir.strip()
+
+        # If caller passes "/..." or "\\...", treat it as backend-root relative
+        # to avoid writing into drive root on Windows.
+        if raw_output_dir.startswith(("/", "\\")):
+            return backend_root / raw_output_dir.lstrip("/\\")
+
+        output_path = Path(raw_output_dir)
+        if output_path.is_absolute():
+            return output_path
+
+        # Relative paths are resolved from backend root for deterministic output.
+        return backend_root / output_path
+
+    @staticmethod
+    def _resolve_video_path(task: OCRProcessorTask) -> Path:
+        return Path(task.video_path)
+
+    def _download_from_minio(self, object_key: str, task_id: str) -> Path:
+        if not object_key or object_key.strip() == "":
+            raise ValueError("video_path/object_key cannot be empty")
+
+        suffix = Path(object_key).suffix or ".webm"
+        local_path = self._temp_dir / f"{task_id}_{uuid4().hex[:8]}{suffix}"
+
+        logger.info(f"⬇️ Downloading from MinIO: bucket={self._storage.bucket}, key={object_key}")
+        self._storage.client.download_file(
+            self._storage.bucket,
+            object_key,
+            str(local_path),
+        )
+
+        if not local_path.exists():
+            raise FileNotFoundError(f"Downloaded file missing: {local_path}")
+
+        size_mb = local_path.stat().st_size / (1024 * 1024)
+        logger.info(f"✅ Downloaded {size_mb:.2f} MB to {local_path}")
+        return local_path
+
+    @staticmethod
+    def _cleanup_temp_file(local_path: Optional[Path]) -> None:
+        if not local_path:
+            return
+        try:
+            if local_path.exists():
+                local_path.unlink()
+                logger.debug(f"Removed temp file: {local_path}")
+        except Exception as exc:
+            logger.warning(f"Failed to remove temp file {local_path}: {exc}")
+
+    def _run_pipeline_and_layout(self, task: OCRProcessorTask) -> dict[str, Any]:
+        video_path = self._resolve_video_path(task)
+        local_video_path: Optional[Path] = None
+        downloaded_from_minio = False
+
+        if video_path.exists():
+            local_video_path = video_path
+            logger.info(f"Using local video path: {local_video_path}")
+        else:
+            # If local file is absent, treat video_path as MinIO object key.
+            local_video_path = self._download_from_minio(task.video_path, task.task_id)
+            downloaded_from_minio = True
+
+        output_dir = self._resolve_output_dir(task)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        cfg = self._build_pipeline_config(task)
+
+        try:
+            # Step 1: Run v6 pipeline logic from backend service module.
+            run_pipeline(str(local_video_path), str(output_dir), cfg)
+
+            metadata_path = output_dir / "metadata.json"
+            if not metadata_path.exists():
+                raise FileNotFoundError(f"Pipeline metadata not found: {metadata_path}")
+
+            # Step 2: Process metadata file via layout service API.
+            cleaned_metadata_path = output_dir / "cleaned_metadata.json"
+            processed_data = process_metadata_file(
+                input_path=metadata_path,
+                output_path=cleaned_metadata_path,
+                verbose=True,
+            )
+            non_empty_count = sum(
+                1 for item in processed_data if (item.get("processed_text") or "").strip()
+            )
+
+            # "Only process, no persistence": keep results in-memory and log summary.
+            return {
+                "output_dir": str(output_dir),
+                "metadata_frames": len(processed_data),
+                "layout_frames": len(processed_data),
+                "non_empty_layout_frames": non_empty_count,
+                "cleaned_metadata_path": str(cleaned_metadata_path),
+            }
+        finally:
+            if downloaded_from_minio:
+                self._cleanup_temp_file(local_video_path)
+
+    async def _process_task(self, task: OCRProcessorTask) -> None:
+        """
+        Process a single OCR/video task.
+
+        Processing order is fixed:
+        1) video_pipeline_v6
+        2) process_ocr_layout
+
+        OCR model is fixed to EasyOCR.
+        """
+        logger.info(
+            f"🎬 Processing video task:\n"
+            f"   video_id: {task.video_id}\n"
+            f"   video_path: {task.video_path}\n"
+            f"   output_dir: {task.output_dir}\n"
+            f"   ocr_engine: {task.ocr_engine}\n"
+            f"   target_fps: {task.target_fps}\n"
+            f"   ui_detect: {task.enable_ui_detect}\n"
+            f"   ocr: {task.enable_ocr}\n"
+            f"   debug: {task.debug_mode}"
+        )
+
+        if not task.enable_ocr:
+            logger.info(f"Skipping task {task.task_id} because enable_ocr is False")
+            return
+
+        summary = await asyncio.to_thread(self._run_pipeline_and_layout, task)
+        logger.info(
+            f"✅ OCR task complete: task_id={task.task_id}, "
+            f"frames={summary['layout_frames']}, "
+            f"non_empty={summary['non_empty_layout_frames']}, "
+            f"output_dir={summary['output_dir']}"
+        )
+
+
+def get_ocr_processor_worker() -> OCRProcessorWorker:
+    """Get singleton OCR processor worker."""
+    return OCRProcessorWorker()
+
+
+async def start_ocr_processor_worker() -> None:
+    """Start the OCR processor worker."""
+    worker = get_ocr_processor_worker()
+    await worker.start()
+
+
+async def stop_ocr_processor_worker() -> None:
+    """Stop the OCR processor worker."""
+    worker = get_ocr_processor_worker()
+    await worker.stop()

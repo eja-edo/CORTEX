@@ -293,6 +293,7 @@ class UploadCompleteRequest(BaseModel):
 
 class UploadCompleteResponse(BaseModel):
     upload_id: UUID
+    asset_id: UUID
     object_key: str
     status: UploadStatus
 

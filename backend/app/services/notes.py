@@ -62,14 +62,18 @@ class NoteService:
             style=payload.style,
             checkpoint_version=1,
         )
-        async with self.session.begin():
+        try:
             created = await self.repository.create(note)
             await upsert_note_embedding_async(
                 self.session,
                 note_id=created.id,
                 content=created.content,
             )
+            await self.session.commit()
             return created
+        except Exception:
+            await self.session.rollback()
+            raise
 
     async def get_notes(self, user_id: UUID) -> list[Note]:
         notes = await self.repository.list_active_by_user(user_id)

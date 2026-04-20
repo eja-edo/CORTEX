@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta
 from math import ceil
+from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -10,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.dependencies import get_current_active_user
-from app.models import Upload, UploadPart, UploadStatus, User
+from app.models import Asset, AssetStatus, AssetType, Upload, UploadPart, UploadStatus, User
 from app.schemas import (
     UploadAccessUrlResponse,
     UploadCompleteRequest,
@@ -24,6 +26,8 @@ from app.schemas import (
     UploadPresignedResponse,
     UploadSessionResponse,
 )
+from app.services.redis.stt_producer import enqueue_transcription_job
+from app.services.redis.ocr_processor_task import enqueue_video_processing
 from app.services.multipart_upload import MinIOMultipartService, MultipartStorageError
 from app.utils.logger import get_logger
 from app.utils.rate_limit import InMemorySlidingWindowRateLimiter
@@ -86,6 +90,50 @@ def _detect_media_type(upload: Upload) -> str:
         return "audio"
 
     return "unknown"
+
+
+def _resolve_asset_type(media_type: str) -> AssetType:
+    if media_type == "audio":
+        return AssetType.LIVE_SESSION
+    if media_type == "video":
+        return AssetType.SCREEN_RECORDING
+    return AssetType.UPLOADED_VIDEO
+
+
+def _get_or_create_asset_for_upload(
+    db: Session,
+    upload: Upload,
+    current_user: User,
+    media_type: str,
+    total_size: int,
+) -> tuple[Asset, bool]:
+    existing_asset = (
+        db.query(Asset)
+        .filter(
+            Asset.source_upload_id == upload.id,
+            Asset.user_id == current_user.id,
+            Asset.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if existing_asset:
+        return existing_asset, False
+
+    asset = Asset(
+        user_id=current_user.id,
+        workspace_id=None,
+        type=_resolve_asset_type(media_type),
+        status=AssetStatus.PENDING,
+        title=upload.filename or Path(upload.object_key).name,
+        description=None,
+        source_upload_id=upload.id,
+        source_object_key=upload.object_key,
+        size_bytes=total_size,
+    )
+    db.add(asset)
+    db.commit()
+    db.refresh(asset)
+    return asset, True
 
 
 def _cleanup_stale_uploads(db: Session, user_id: UUID) -> int:
@@ -280,7 +328,7 @@ def confirm_upload_part(
 
 
 @router.post("/complete", response_model=UploadCompleteResponse)
-def complete_upload(
+async def complete_upload(
     payload: UploadCompleteRequest,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
@@ -289,9 +337,73 @@ def complete_upload(
 
     upload = _get_upload_or_404(db, payload.upload_id, current_user.id)
 
+    media_type = _detect_media_type(upload)
+    should_enqueue_stt = False
+
     if upload.status == UploadStatus.COMPLETED:
+        asset, asset_created = _get_or_create_asset_for_upload(
+            db=db,
+            upload=upload,
+            current_user=current_user,
+            media_type=media_type,
+            total_size=upload.total_size,
+        )
+        should_enqueue_stt = asset_created and media_type in {"video", "audio"}
+
+        if should_enqueue_stt:
+            try:
+                await enqueue_transcription_job(
+                    asset_id=asset.id,
+                    egress_id=asset.id,
+                    workspace_id=asset.workspace_id,
+                    user_id=asset.user_id,
+                    source_upload_id=upload.id,
+                    source_object_key=upload.object_key,
+                    media_type=media_type,
+                    source_type=asset.type.value,
+                    filename=upload.filename or Path(upload.object_key).name,
+                    content_type=upload.content_type,
+                    job_context={
+                        "upload_id": str(upload.id),
+                        "upload_type": media_type,
+                        "total_size": upload.total_size,
+                    },
+                )
+                logger.info(
+                    f"📤 STT job enqueued for existing completed upload: upload_id={upload.id}, asset_id={asset.id}"
+                )
+            except Exception as exc:
+                logger.warning(f"Failed to enqueue STT job for existing upload {upload.id}: {exc}")
+
+            # Enqueue OCR/video processing job for video content
+            if media_type == "video":
+                try:
+                    output_dir = f"logs/ocr_processing/{asset.workspace_id or 'default'}/{asset.id}"
+                    await enqueue_video_processing(
+                        video_path=upload.object_key,
+                        output_dir=output_dir,
+                        video_id=asset.id,
+                        workspace_id=asset.workspace_id,
+                        user_id=asset.user_id,
+                        ocr_engine="easyocr",
+                        target_fps=1.0,
+                        enable_ui_detect=True,
+                        enable_ocr=True,
+                        debug_mode=False,
+                        job_context={
+                            "asset_id": str(asset.id),
+                            "upload_id": str(upload.id),
+                        },
+                    )
+                    logger.info(
+                        f"🎬 OCR processing job enqueued for existing completed upload: upload_id={upload.id}, asset_id={asset.id}"
+                    )
+                except Exception as exc:
+                    logger.warning(f"Failed to enqueue OCR processing job for existing upload {upload.id}: {exc}")
+
         return UploadCompleteResponse(
             upload_id=upload.id,
+            asset_id=asset.id,
             object_key=upload.object_key,
             status=upload.status,
         )
@@ -353,8 +465,68 @@ def complete_upload(
     upload.completed_at = datetime.utcnow()
     db.commit()
 
+    asset, _ = _get_or_create_asset_for_upload(
+        db=db,
+        upload=upload,
+        current_user=current_user,
+        media_type=media_type,
+        total_size=final_total_size,
+    )
+
+    if media_type in {"video", "audio"}:
+        try:
+            await enqueue_transcription_job(
+                asset_id=asset.id,
+                egress_id=asset.id,
+                workspace_id=asset.workspace_id,
+                user_id=asset.user_id,
+                source_upload_id=upload.id,
+                source_object_key=upload.object_key,
+                media_type=media_type,
+                source_type=asset.type.value,
+                filename=upload.filename or Path(upload.object_key).name,
+                content_type=upload.content_type,
+                job_context={
+                    "upload_id": str(upload.id),
+                    "upload_type": media_type,
+                    "total_size": final_total_size,
+                },
+            )
+            logger.info(
+                f"📤 STT job enqueued after upload complete: upload_id={upload.id}, asset_id={asset.id}, object_key={upload.object_key}"
+            )
+        except Exception as exc:
+            logger.warning(f"Failed to enqueue STT job for upload {upload.id}: {exc}")
+
+        # Enqueue OCR/video processing job for video content
+        if media_type == "video":
+            try:
+                output_dir = f"logs/ocr_processing/{asset.workspace_id or 'default'}/{asset.id}"
+                await enqueue_video_processing(
+                    video_path=upload.object_key,
+                    output_dir=output_dir,
+                    video_id=asset.id,
+                    workspace_id=asset.workspace_id,
+                    user_id=asset.user_id,
+                    ocr_engine="easyocr",
+                    target_fps=1.0,
+                    enable_ui_detect=True,
+                    enable_ocr=True,
+                    debug_mode=False,
+                    job_context={
+                        "asset_id": str(asset.id),
+                        "upload_id": str(upload.id),
+                    },
+                )
+                logger.info(
+                    f"🎬 OCR processing job enqueued after upload complete: upload_id={upload.id}, asset_id={asset.id}"
+                )
+            except Exception as exc:
+                logger.warning(f"Failed to enqueue OCR processing job for upload {upload.id}: {exc}")
+
     return UploadCompleteResponse(
         upload_id=upload.id,
+        asset_id=asset.id,
         object_key=upload.object_key,
         status=upload.status,
     )

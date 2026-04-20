@@ -16,6 +16,8 @@ from app.api.segments import router as segments_router
 from app.api.schedules import router as schedules_router
 from app.api.upload import router as upload_router
 from app.api.sse import sync_sse_router
+from app.services.transcription_results_consumer import transcription_results_consumer
+from app.services.ocr_processor_worker import get_ocr_processor_worker
 from app.utils.logger import get_logger
 from app.api.sse.sse_manager import SSEManager
 
@@ -55,7 +57,30 @@ logger.info("✅ Signal handlers registered for SIGINT and SIGTERM")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application startup and shutdown lifecycle."""
-    yield
+    # Start transcription results consumer
+    try:
+        await transcription_results_consumer.start()
+    except Exception as exc:
+        logger.warning(f"Transcription results consumer disabled: {exc}")
+
+    # Start OCR processor worker in background
+    import asyncio
+    ocr_worker = get_ocr_processor_worker()
+    ocr_worker_task = asyncio.create_task(ocr_worker.start())
+
+    try:
+        yield
+    finally:
+        await transcription_results_consumer.stop()
+        # Stop OCR worker
+        await ocr_worker.stop()
+        # Cancel the worker task
+        if not ocr_worker_task.done():
+            ocr_worker_task.cancel()
+            try:
+                await ocr_worker_task
+            except asyncio.CancelledError:
+                pass
 
 # Initialize FastAPI app
 app = FastAPI(

@@ -100,6 +100,7 @@ export function WorkspaceSearch({ notes, onOpenNote, onClose }: WorkspaceSearchP
     }, [results, selectedIndex, onOpenNote, onClose])
 
     useEffect(() => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setSelectedIndex(0)
     }, [query])
 

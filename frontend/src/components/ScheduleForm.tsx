@@ -21,13 +21,12 @@ function getNowRounded(): Date {
 
 interface ScheduleFormProps {
   onCreate: (schedule: Omit<Schedule, 'id' | 'user_id' | 'created_at' | 'updated_at' | 'is_completed'>) => Promise<void>
-  weekRange: { startDate: string; endDate: string }
   /** If provided (e.g. from a calendar slot click), pre-fills start/end times */
   initialTimes?: { startDate: string; endDate: string } | null
   onClose?: () => void
 }
 
-export function ScheduleForm({ onCreate, weekRange: _weekRange, initialTimes, onClose }: ScheduleFormProps) {
+export function ScheduleForm({ onCreate, initialTimes, onClose }: ScheduleFormProps) {
   const [title, setTitle] = useState('')
   const [type, setType] = useState<ScheduleType>('CLASS')
   const [startTime, setStartTime] = useState<string>(() => {
@@ -48,7 +47,9 @@ export function ScheduleForm({ onCreate, weekRange: _weekRange, initialTimes, on
   // update the fields to reflect the new slot.
   useEffect(() => {
     if (!initialTimes) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setStartTime(initialTimes.startDate)
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setEndTime(initialTimes.endDate)
   }, [initialTimes])
 

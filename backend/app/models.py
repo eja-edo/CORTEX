@@ -8,6 +8,11 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 Base = declarative_base()
 
+
+def _enum_values(enum_cls: type[Enum]) -> list[str]:
+    """Persist enum .value labels to match existing PostgreSQL enum types."""
+    return [member.value for member in enum_cls]
+
 class ScheduleType(str, Enum):
     """Schedule type enumeration"""
     CLASS = "CLASS"          # Lịch học
@@ -114,8 +119,8 @@ class Asset(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id"), nullable=True, index=True)
-    type = Column(SQLEnum(AssetType), nullable=False)
-    status = Column(SQLEnum(AssetStatus), nullable=False, default=AssetStatus.PENDING, server_default=text("'pending'"))
+    type = Column(SQLEnum(AssetType, values_callable=_enum_values, name="assettype"), nullable=False)
+    status = Column(SQLEnum(AssetStatus, values_callable=_enum_values, name="assetstatus"), nullable=False, default=AssetStatus.PENDING, server_default=text("'pending'"))
     title = Column(String(255), nullable=True)
     description = Column(Text, nullable=True)
     source_upload_id = Column(UUID(as_uuid=True), ForeignKey("uploads.id"), nullable=True, index=True)
@@ -147,7 +152,7 @@ class AssetDerivative(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     asset_id = Column(UUID(as_uuid=True), ForeignKey("assets.id", ondelete="CASCADE"), nullable=False, index=True)
-    derivative_type = Column(SQLEnum(DerivativeType), nullable=False)
+    derivative_type = Column(SQLEnum(DerivativeType, values_callable=_enum_values, name="derivativetype"), nullable=False)
     storage_key = Column(String(1024), nullable=False)
     format = Column(String(32), nullable=True)
     size_bytes = Column(BigInteger, nullable=True)
@@ -169,7 +174,7 @@ class Segment(Base):
     asset_id = Column(UUID(as_uuid=True), ForeignKey("assets.id", ondelete="CASCADE"), nullable=False, index=True)
     start_ms = Column(BigInteger, nullable=False)
     end_ms = Column(BigInteger, nullable=False)
-    source = Column(SQLEnum(SegmentSource), nullable=False)
+    source = Column(SQLEnum(SegmentSource, values_callable=_enum_values, name="segmentsource"), nullable=False)
     confidence = Column(Numeric(5, 4), nullable=True)
     keyframe_url = Column(Text, nullable=True)
     language = Column(String(16), nullable=True)
@@ -216,7 +221,7 @@ class NoteSegmentLink(Base):
     linked_asset_id = Column(UUID(as_uuid=True), ForeignKey("assets.id"), nullable=False, index=True)
     linked_start_ms = Column(BigInteger, nullable=False)
     linked_end_ms = Column(BigInteger, nullable=False)
-    link_type = Column(SQLEnum(LinkType), nullable=False, default=LinkType.REFERENCE, server_default=text("'reference'"))
+    link_type = Column(SQLEnum(LinkType, values_callable=_enum_values, name="linktype"), nullable=False, default=LinkType.REFERENCE, server_default=text("'reference'"))
     weight = Column(Numeric(5, 4), nullable=False, default=1.0, server_default=text("1.0"))
     anchor_text = Column(Text, nullable=True)
     start_offset = Column(Integer, nullable=True)
@@ -323,10 +328,10 @@ class IngestJob(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     asset_id = Column(UUID(as_uuid=True), ForeignKey("assets.id", ondelete="CASCADE"), nullable=False, index=True)
-    job_type = Column(SQLEnum(IngestJobType), nullable=False)
+    job_type = Column(SQLEnum(IngestJobType, values_callable=_enum_values, name="ingestjobtype"), nullable=False)
     stage = Column(String(32), nullable=True)
     parent_job_id = Column(UUID(as_uuid=True), ForeignKey("ingest_jobs.id"), nullable=True, index=True)
-    status = Column(SQLEnum(IngestJobStatus), nullable=False, default=IngestJobStatus.QUEUED, server_default=text("'queued'"))
+    status = Column(SQLEnum(IngestJobStatus, values_callable=_enum_values, name="ingestjobstatus"), nullable=False, default=IngestJobStatus.QUEUED, server_default=text("'queued'"))
     attempt = Column(Integer, nullable=False, default=0, server_default=text("0"))
     max_attempts = Column(Integer, nullable=False, default=3, server_default=text("3"))
     progress = Column(Numeric(5, 2), nullable=False, default=0, server_default=text("0"))
@@ -602,7 +607,7 @@ class Upload(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     status = Column(
-        SQLEnum(UploadStatus),
+        SQLEnum(UploadStatus, values_callable=_enum_values, name="uploadstatus"),
         nullable=False,
         default=UploadStatus.INITIATED,
     )

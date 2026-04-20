@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Home, LogOut, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings, StickyNote, Video, X } from 'lucide-react'
 import { startOfWeek, endOfWeek } from 'date-fns'
+import { matchPath, useLocation, useNavigate } from 'react-router-dom'
 import 'react-big-calendar/lib/css/react-big-calendar.css'
 import './App.css'
 import { AuthPanel } from './components/AuthPanel'
@@ -60,6 +61,8 @@ type NoteSyncState = {
   inFlight: boolean
   queued: boolean
 }
+
+type WorkspaceView = 'home' | 'note' | 'record' | 'settings'
 
 class ApiError extends Error {
   status: number
@@ -151,6 +154,26 @@ function mapApiNoteToAppNote(note: ApiNote): AppNote {
   }
 }
 
+function getRouteWorkspaceState(pathname: string): { view: WorkspaceView; noteId: string | null } {
+  if (pathname === '/record') return { view: 'record', noteId: null }
+  if (pathname === '/settings') return { view: 'settings', noteId: null }
+
+  const noteMatch = matchPath('/notes/:noteId', pathname)
+  if (noteMatch?.params.noteId) {
+    return { view: 'note', noteId: noteMatch.params.noteId }
+  }
+
+  return { view: 'home', noteId: null }
+}
+
+function isKnownWorkspacePath(pathname: string): boolean {
+  return pathname === '/'
+    || pathname === '/record'
+    || pathname === '/settings'
+    || pathname === '/auth/callback'
+    || Boolean(matchPath('/notes/:noteId', pathname))
+}
+
 // Collapsible sidebar section header
 function SidebarSection({
   icon,
@@ -206,6 +229,10 @@ function SidebarSection({
 }
 
 function App() {
+  const navigate = useNavigate()
+  const location = useLocation()
+  const routeWorkspaceState = useMemo(() => getRouteWorkspaceState(location.pathname), [location.pathname])
+
   const [tokens, setTokens] = useState<TokenPair | null>(() => readStoredTokens())
   const [user, setUser] = useState<User | null>(null)
   const [schedules, setSchedules] = useState<Schedule[]>([])
@@ -219,8 +246,8 @@ function App() {
   // Tracks the pre-filled start/end for when user clicks on the calendar
   const [createEventInitialTimes, setCreateEventInitialTimes] = useState<{ startDate: string; endDate: string } | null>(null)
   const [isWorkspaceSidebarCollapsed, setIsWorkspaceSidebarCollapsed] = useState<boolean>(false)
-  const [activeWorkspaceView, setActiveWorkspaceView] = useState<'home' | 'note' | 'record' | 'settings'>('home')
-  const [activeWorkspaceNoteId, setActiveWorkspaceNoteId] = useState<string | null>(null)
+  const activeWorkspaceView = routeWorkspaceState.view
+  const [activeWorkspaceNoteId, setActiveWorkspaceNoteId] = useState<string | null>(routeWorkspaceState.noteId)
   const [googleCalendarStatus, setGoogleCalendarStatus] = useState<GoogleCalendarStatus | null>(null)
 
   // Collapsible sidebar sections state
@@ -249,6 +276,15 @@ function App() {
   useEffect(() => {
     tokensRef.current = tokens
   }, [tokens])
+
+  useEffect(() => {
+    setActiveWorkspaceNoteId(routeWorkspaceState.noteId)
+  }, [routeWorkspaceState.noteId])
+
+  useEffect(() => {
+    if (isKnownWorkspacePath(location.pathname)) return
+    navigate('/', { replace: true })
+  }, [location.pathname, navigate])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -296,8 +332,8 @@ function App() {
 
   const openWorkspaceNote = useCallback((noteId: string) => {
     setActiveWorkspaceNoteId(noteId)
-    setActiveWorkspaceView('note')
-  }, [])
+    navigate(`/notes/${encodeURIComponent(noteId)}`)
+  }, [navigate])
 
   const canMoveWorkspaceNote = useCallback((sourceId: string, targetParentId: string | null): boolean => {
     if (sourceId === targetParentId) return false
@@ -698,7 +734,7 @@ function App() {
       if (activeWorkspaceNoteId && removedIds.has(activeWorkspaceNoteId)) {
         const remaining = recentNotesRef.current.filter((n) => !removedIds.has(n.id))
         setActiveWorkspaceNoteId(remaining[0]?.id ?? null)
-        if (activeWorkspaceView === 'note') setActiveWorkspaceView('home')
+        if (activeWorkspaceView === 'note') navigate('/')
       }
       setStatusMessage('Note deleted.')
     } catch (error) {
@@ -926,6 +962,7 @@ function App() {
       })
     } catch { /* continue */ }
     setTokens(null); setUser(null); setSchedules([])
+    navigate('/')
     setStatusMessage('You are logged out.')
   }
 
@@ -936,7 +973,7 @@ function App() {
       endDate: toLocalInputDateTime(slotEnd),
     })
     setIsCreateEventOpen(true)
-  }, [])
+  }, [navigate])
 
   const handleOpenCreateEvent = useCallback(() => {
     setCreateEventInitialTimes(null) // will use current time defaults inside ScheduleForm
@@ -1147,7 +1184,7 @@ function App() {
                 <button
                   type="button"
                   className={`workspace-nav-item ${activeWorkspaceView === 'home' ? 'active' : ''}`}
-                  onClick={() => setActiveWorkspaceView('home')}
+                  onClick={() => navigate('/')}
                 >
                   <Home size={15} />
                   <span>Home</span>
@@ -1244,14 +1281,14 @@ function App() {
                   isOpen={sectionRecordOpen}
                   onToggle={() => {
                     setSectionRecordOpen(v => !v)
-                    if (!sectionRecordOpen) setActiveWorkspaceView('record')
+                    if (!sectionRecordOpen) navigate('/record')
                   }}
                   isCollapsed={isWorkspaceSidebarCollapsed}
                 >
                   <button
                     type="button"
                     className={`workspace-nav-item workspace-nav-item--sub ${activeWorkspaceView === 'record' ? 'active' : ''}`}
-                    onClick={() => setActiveWorkspaceView('record')}
+                    onClick={() => navigate('/record')}
                   >
                     <Video size={13} />
                     <span>Open recorder</span>
@@ -1263,7 +1300,7 @@ function App() {
                 <button
                   type="button"
                   className={`workspace-nav-item ${activeWorkspaceView === 'settings' ? 'active' : ''}`}
-                  onClick={() => setActiveWorkspaceView('settings')}
+                  onClick={() => navigate('/settings')}
                 >
                   <Settings size={15} />
                   <span>Settings</span>
@@ -1377,7 +1414,6 @@ function App() {
             <div className="modal-body">
               <ScheduleForm
                 onCreate={handleCreateSchedule}
-                weekRange={weekRange}
                 initialTimes={createEventInitialTimes}
                 onClose={handleCloseCreateEvent}
               />

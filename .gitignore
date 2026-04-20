@@ -53,3 +53,5 @@ frontend/.vite/
 minio-data/
 
 lab/**
+
+logs/

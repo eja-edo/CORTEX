@@ -1,4 +1,5 @@
 from datetime import datetime
+from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -6,14 +7,24 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies import get_current_active_user
-from app.models import Asset, AssetStatus, User
+from app.models import Asset, AssetStatus, AssetType, User
 from app.schemas import AssetCreate, AssetResponse, AssetUpdate
+from app.services.redis.stt_producer import enqueue_transcription_job
+from app.utils.logger import get_logger
 
 router = APIRouter(prefix="/assets", tags=["assets"])
+logger = get_logger(__name__)
+
+
+def _detect_media_type(source_object_key: str) -> str:
+    filename = source_object_key.lower()
+    if filename.endswith((".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac", ".webm")):
+        return "audio"
+    return "video"
 
 
 @router.post("", response_model=AssetResponse, status_code=status.HTTP_201_CREATED)
-def create_asset(
+async def create_asset(
     payload: AssetCreate,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
@@ -31,6 +42,29 @@ def create_asset(
     db.add(asset)
     db.commit()
     db.refresh(asset)
+
+    if asset.type in {AssetType.UPLOADED_VIDEO, AssetType.SCREEN_RECORDING, AssetType.LIVE_SESSION}:
+        try:
+            await enqueue_transcription_job(
+                asset_id=asset.id,
+                egress_id=asset.id,
+                workspace_id=asset.workspace_id,
+                user_id=asset.user_id,
+                source_upload_id=asset.source_upload_id,
+                source_object_key=asset.source_object_key,
+                media_type=_detect_media_type(asset.source_object_key),
+                source_type=asset.type.value,
+                filename=payload.title or Path(asset.source_object_key).name,
+                content_type=None,
+                job_context={
+                    "asset_type": asset.type.value,
+                    "title": asset.title,
+                    "description": asset.description,
+                },
+            )
+        except Exception as exc:
+            logger.warning(f"Failed to enqueue STT job for asset {asset.id}: {exc}")
+
     return asset
 
 

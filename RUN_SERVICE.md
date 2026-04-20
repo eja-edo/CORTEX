@@ -6,6 +6,31 @@
 - Backend virtual environment at `backend/venv`
 - Database credentials configured in `backend/.env`
 
+## 0) Start Infrastructure (Postgres, MinIO, Redis, MongoDB)
+
+From the repository root:
+
+```powershell
+Set-Location e:/Cortex/infrastructure
+docker compose up -d db pgadmin minio-cortex minio-cortex-init redis mongo
+```
+
+If backend runs on host machine, use in `backend/.env`:
+
+```env
+REDIS_URL=redis://localhost:6379/0
+MONGODB_URL=mongodb://localhost:27017
+MONGODB_DB_NAME=cortex
+```
+
+If backend is containerized in the same Docker network, use:
+
+```env
+REDIS_URL=redis://redis:6379/0
+MONGODB_URL=mongodb://mongo:27017
+MONGODB_DB_NAME=cortex
+```
+
 ## 1) Update Database Schema
 
 From the repository root:

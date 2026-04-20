@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
     Bold,
     Code,
@@ -223,30 +223,34 @@ function MarkdownToolbar({
         onApply(result.value, result.selStart, result.selEnd)
     }
 
-    let lastGroup = -1
+    const actionsWithSeparators = useMemo(() => {
+        return TOOLBAR_ACTIONS.reduce<Array<{action: typeof TOOLBAR_ACTIONS[0], showSep: boolean, i: number}>>((acc, action, i) => {
+            const lastAction = acc.length > 0 ? acc[acc.length - 1].action : null
+            const showSep = lastAction !== null && lastAction.group !== action.group
+            acc.push({ action, showSep, i })
+            return acc
+        }, [])
+    }, [])
+
     return (
         <div className="wne-toolbar">
-            {TOOLBAR_ACTIONS.map((action, i) => {
-                const showSep = lastGroup !== -1 && action.group !== lastGroup
-                lastGroup = action.group ?? 0
-                return (
-                    <div key={i} style={{ display: 'contents' }}>
-                        {showSep && <div className="wne-toolbar-sep" />}
-                        <button
-                            type="button"
-                            className="wne-toolbar-btn"
-                            title={action.label}
-                            onMouseDown={e => {
-                                // Prevent textarea from losing focus
-                                e.preventDefault()
-                                runAction(action)
-                            }}
-                        >
-                            {action.icon}
-                        </button>
-                    </div>
-                )
-            })}
+            {actionsWithSeparators.map(({ action, showSep, i }) => (
+                <div key={i} style={{ display: 'contents' }}>
+                    {showSep && <div className="wne-toolbar-sep" />}
+                    <button
+                        type="button"
+                        className="wne-toolbar-btn"
+                        title={action.label}
+                        onMouseDown={e => {
+                            // Prevent textarea from losing focus
+                            e.preventDefault()
+                            runAction(action)
+                        }}
+                    >
+                        {action.icon}
+                    </button>
+                </div>
+            ))}
         </div>
     )
 }
@@ -266,7 +270,6 @@ export function WorkspaceNoteEditor({
 }: WorkspaceNoteEditorProps) {
     const [localMd, setLocalMd] = useState(note.contentMd)
     const [viewMode, setViewMode] = useState<ViewMode>('split')
-    const [wordCount, setWordCount] = useState(0)
     const timerRef = useRef<number | null>(null)
     const lastNoteIdRef = useRef<string | null>(null)
     const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -275,18 +278,18 @@ export function WorkspaceNoteEditor({
     // Track pending cursor position to apply after React re-render
     const pendingSelectionRef = useRef<{ start: number; end: number } | null>(null)
 
+    const wordCount = useMemo(() => {
+        const text = plainTextFromMarkdown(localMd)
+        return text.trim().split(/\s+/).filter(Boolean).length
+    }, [localMd])
+
     // Sync when switching notes
     useEffect(() => {
         if (lastNoteIdRef.current === note.id) return
         lastNoteIdRef.current = note.id
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setLocalMd(note.contentMd)
     }, [note.id, note.contentMd])
-
-    // Word count
-    useEffect(() => {
-        const text = plainTextFromMarkdown(localMd)
-        setWordCount(text.trim().split(/\s+/).filter(Boolean).length)
-    }, [localMd])
 
     useEffect(() => () => { if (timerRef.current) window.clearTimeout(timerRef.current) }, [])
 
