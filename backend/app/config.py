@@ -16,7 +16,18 @@ class Settings:
     )
 
     # Redis (pub/sub, distributed locks, cross-service signals)
-    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
+    REDIS_HOST: str = os.getenv("REDIS_HOST", "localhost")
+    REDIS_PORT: int = int(os.getenv("REDIS_PORT", "6379"))
+    REDIS_DB: int = int(os.getenv("REDIS_DB", "0"))
+    
+    @property
+    def REDIS_URL(self) -> str:
+        """Construct Redis URL from individual settings or env variable"""
+        explicit = os.getenv("REDIS_URL")
+        if explicit:
+            return explicit
+        return f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
+    
     REDIS_CHANNEL_PREFIX: str = os.getenv("REDIS_CHANNEL_PREFIX", "cortex")
     REDIS_SAVE_STREAM_KEY: str = os.getenv("REDIS_SAVE_STREAM_KEY", "save_transcription:stream")
     REDIS_SAVE_CONSUMER_GROUP: str = os.getenv("REDIS_SAVE_CONSUMER_GROUP", "backend-save-consumers")
@@ -104,5 +115,12 @@ class Settings:
     UPLOAD_MAX_FILE_SIZE_BYTES: int = int(os.getenv("UPLOAD_MAX_FILE_SIZE_BYTES", str(20 * 1024 * 1024 * 1024)))
     UPLOAD_STALE_AFTER_HOURS: int = int(os.getenv("UPLOAD_STALE_AFTER_HOURS", "24"))
     UPLOAD_RATE_LIMIT_PER_MINUTE: int = int(os.getenv("UPLOAD_RATE_LIMIT_PER_MINUTE", "120"))
+
+    # Gemini API Configuration
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+    GEMINI_DEFAULT_MODEL: str = os.getenv("GEMINI_DEFAULT_MODEL", "gemini-1.5-flash")
+    GEMINI_SYNTHESIS_MODEL: str = os.getenv("GEMINI_SYNTHESIS_MODEL", "gemini-1.5-pro")
+    LLM_WINDOW_SECONDS: float = float(os.getenv("LLM_WINDOW_SECONDS", "30.0"))
+    LLM_MIN_KNOWLEDGE_VALUE: float = float(os.getenv("LLM_MIN_KNOWLEDGE_VALUE", "0.3"))
 
 settings = Settings()

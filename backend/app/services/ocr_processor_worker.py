@@ -17,6 +17,8 @@ from app.config import settings
 from app.services.ocr.layout_processor import process_metadata_file
 from app.services.ocr.video_pipeline_service import Config as OCRPipelineConfig, run_pipeline
 from app.services.multipart_upload import MinIOMultipartService
+from app.services.mongo_service import mongo_ocr_service
+from app.services.redis.llm_processor_task import enqueue_llm_processing
 from app.utils.decorator import singleton
 from app.utils.logger import get_logger
 from app.services.redis.ocr_processor_task import (
@@ -105,8 +107,11 @@ class OCRProcessorWorker:
         await self.disconnect()
 
     async def _consume_loop(self) -> None:
-        """Main consumer loop."""
+        """Main consumer loop with reconnection logic."""
         logger.info("Starting consumer loop...")
+        retry_count = 0
+        max_retries = 10
+        base_backoff = 1  # seconds
 
         while self._running:
             try:
@@ -120,8 +125,10 @@ class OCRProcessorWorker:
                 )
 
                 if not result:
+                    retry_count = 0  # Reset on successful read
                     continue
 
+                retry_count = 0  # Reset on successful read
                 for stream_name, messages in result:
                     for message_id, data in messages:
                         message_id_str = message_id.decode() if isinstance(message_id, bytes) else str(message_id)
@@ -141,8 +148,34 @@ class OCRProcessorWorker:
                         except Exception as e:
                             logger.error(f"❌ Failed to process task: {e}", exc_info=True)
                             # Acknowledge anyway to avoid blocking
-                            await self._redis.xack(self._stream_key, self._group_name, message_id)
+                            try:
+                                await self._redis.xack(self._stream_key, self._group_name, message_id)
+                            except Exception:
+                                pass
 
+            except redis.exceptions.ConnectionError as e:
+                retry_count += 1
+                backoff = min(base_backoff * (2 ** retry_count), 60)  # Exponential backoff, max 60s
+                logger.warning(
+                    f"Redis connection error (attempt {retry_count}/{max_retries}): {e}. "
+                    f"Reconnecting in {backoff}s..."
+                )
+                
+                if retry_count >= max_retries:
+                    logger.error(f"Max reconnection attempts ({max_retries}) exceeded. Stopping worker.")
+                    self._running = False
+                    break
+                
+                await self.disconnect()
+                await asyncio.sleep(backoff)
+                
+                try:
+                    await self.connect()
+                    logger.info("✅ Reconnected to Redis")
+                    retry_count = 0
+                except Exception as e:
+                    logger.error(f"Failed to reconnect: {e}")
+                    
             except Exception as e:
                 logger.error(f"Consumer loop error: {e}", exc_info=True)
                 await asyncio.sleep(1)
@@ -316,6 +349,8 @@ class OCRProcessorWorker:
         Processing order is fixed:
         1) video_pipeline_v6
         2) process_ocr_layout
+        3) Persist OCR frames to MongoDB
+        4) Enqueue LLM processing
 
         OCR model is fixed to EasyOCR.
         """
@@ -335,13 +370,107 @@ class OCRProcessorWorker:
             logger.info(f"Skipping task {task.task_id} because enable_ocr is False")
             return
 
-        summary = await asyncio.to_thread(self._run_pipeline_and_layout, task)
-        logger.info(
-            f"✅ OCR task complete: task_id={task.task_id}, "
-            f"frames={summary['layout_frames']}, "
-            f"non_empty={summary['non_empty_layout_frames']}, "
-            f"output_dir={summary['output_dir']}"
+        # ── Step 1: Upsert OCR job record in MongoDB ─────────────────────────
+        if not mongo_ocr_service.is_connected:
+            await mongo_ocr_service.connect()
+
+        ocr_job_id = await mongo_ocr_service.upsert_ocr_job(
+            asset_id=str(task.video_id) if task.video_id else task.task_id,
+            user_id=task.user_id or "",
+            task_id=task.task_id,
+            workspace_id=task.workspace_id,
+            status="processing",
         )
+        logger.info(f"📝 Created OCR job: {ocr_job_id}")
+
+        # ── Step 2: Run pipeline in thread pool ───────────────────────────────
+        try:
+            summary = await asyncio.to_thread(self._run_pipeline_and_layout, task)
+        except Exception as exc:
+            await mongo_ocr_service.update_ocr_job_stats(
+                job_id=ocr_job_id,
+                total_frames=0,
+                non_empty_frames=0,
+                status="failed",
+            )
+            logger.exception(f"Pipeline failed for task {task.task_id}: {exc}")
+            return
+
+        # ── Step 3: Read cleaned_metadata.json and persist frames ────────────
+        try:
+            cleaned_path = Path(summary["cleaned_metadata_path"])
+            with open(cleaned_path, "r", encoding="utf-8") as f:
+                cleaned_frames: list[dict] = json.load(f)
+
+            # Merge with raw metadata.json to get ssim_score, changed, regions, ui_regions
+            metadata_path = Path(summary["output_dir"]) / "metadata.json"
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                raw_metadata: list[dict] = json.load(f)
+
+            # Build frame index from raw_metadata
+            raw_by_frame_id = {item["frame_id"]: item for item in raw_metadata}
+
+            # Merge cleaned text into raw metadata
+            merged_frames = []
+            for item in cleaned_frames:
+                raw = raw_by_frame_id.get(item["frame_id"], {})
+                merged_frames.append(
+                    {
+                        "frame_id": item["frame_id"],
+                        "timestamp": item["timestamp"],
+                        "processed_text": item.get("processed_text", ""),
+                        "ssim_score": raw.get("ssim_score"),
+                        "changed": raw.get("changed", True),
+                        "theme": raw.get("theme"),
+                        "regions": raw.get("regions", []),
+                        "ui_regions": raw.get("ui_regions", []),
+                    }
+                )
+
+            asset_id = str(task.video_id) if task.video_id else task.task_id
+
+            # Persist to MongoDB
+            saved_count = await mongo_ocr_service.save_ocr_frames(
+                asset_id=asset_id,
+                user_id=task.user_id or "",
+                frames=merged_frames,
+            )
+
+            non_empty = sum(
+                1 for f in merged_frames if (f.get("processed_text") or "").strip()
+            )
+
+            await mongo_ocr_service.update_ocr_job_stats(
+                job_id=ocr_job_id,
+                total_frames=len(merged_frames),
+                non_empty_frames=non_empty,
+                status="completed",
+                output_dir=summary["output_dir"],
+            )
+
+            logger.info(
+                f"✅ OCR frames persisted: task={task.task_id}, "
+                f"total={len(merged_frames)}, non_empty={non_empty}, saved={saved_count}"
+            )
+
+            # ── Step 4: Enqueue LLM processing if there are frames ────────────
+            if non_empty > 0:
+                await enqueue_llm_processing(
+                    asset_id=asset_id,
+                    user_id=task.user_id or "",
+                    ocr_job_id=ocr_job_id,
+                    job_context=task.job_context or {},
+                )
+                logger.info(f"📤 LLM processing enqueued for asset={asset_id}")
+
+        except Exception as exc:
+            await mongo_ocr_service.update_ocr_job_stats(
+                job_id=ocr_job_id,
+                total_frames=0,
+                non_empty_frames=0,
+                status="failed",
+            )
+            logger.exception(f"Frame persistence failed for task {task.task_id}: {exc}")
 
 
 def get_ocr_processor_worker() -> OCRProcessorWorker:

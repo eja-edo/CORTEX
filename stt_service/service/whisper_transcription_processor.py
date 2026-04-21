@@ -15,11 +15,14 @@ FIXES APPLIED:
 - Fix 5: hf_token validation is strict (strips whitespace, rejects empty string)
 - Fix 6: align result always passed through assign_word_speakers when diarization is active
 - Fix 7: Thread exception is re-raised properly (not swallowed)
+- Fix 8: Added audio stream detection - skip transcription if file has no audio
 """
 
 import asyncio
 import importlib
 import inspect
+import json
+import subprocess
 import tempfile
 import shutil
 import math
@@ -86,6 +89,63 @@ def _extract_speaker_from_segment(seg: dict) -> str:
 
     # Return the speaker who appears most often in this segment
     return max(speaker_counts, key=lambda s: speaker_counts[s])
+
+
+def _check_audio_stream(file_path: Path) -> bool:
+    """
+    FIX 8: Check if media file has an audio stream using FFprobe.
+    
+    This prevents FFmpeg errors when trying to extract audio from
+    video-only files (e.g., screen recordings without audio).
+    
+    Args:
+        file_path: Path to media file
+        
+    Returns:
+        True if file has audio stream, False otherwise
+    """
+    try:
+        # Use ffprobe to check streams without decoding
+        cmd = [
+            "ffprobe",
+            "-v", "error",
+            "-select_streams", "a:0",
+            "-show_entries", "stream=codec_type",
+            "-of", "json",
+            str(file_path)
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        
+        if result.returncode != 0:
+            logger.warning(f"ffprobe failed to analyze {file_path.name}: {result.stderr}")
+            return True  # Assume it has audio if we can't check
+        
+        try:
+            data = json.loads(result.stdout)
+            streams = data.get("streams", [])
+            has_audio = any(s.get("codec_type") == "audio" for s in streams)
+            
+            if not has_audio:
+                logger.warning(
+                    f"⚠️  Media file has no audio stream: {file_path.name}. "
+                    f"File contains: {[s.get('codec_type') for s in streams]}"
+                )
+            return has_audio
+            
+        except json.JSONDecodeError:
+            logger.warning(f"Failed to parse ffprobe output for {file_path.name}")
+            return True  # Assume it has audio if we can't parse
+            
+    except FileNotFoundError:
+        logger.warning("ffprobe not found; skipping audio stream check")
+        return True  # Assume it has audio if ffprobe is not available
+    except subprocess.TimeoutExpired:
+        logger.warning(f"ffprobe timeout for {file_path.name}")
+        return True  # Assume it has audio if check times out
+    except Exception as e:
+        logger.warning(f"Error checking audio stream: {e}")
+        return True  # Assume it has audio on any error
 
 
 @singleton
@@ -346,11 +406,34 @@ class WhisperTranscriptionProcessor:
         if not self._redis_producer:
             raise RuntimeError("Redis producer not initialized")
 
+        # FIX 8: Check if file has audio stream before attempting transcription
+        loop = asyncio.get_event_loop()
+        has_audio = await loop.run_in_executor(None, _check_audio_stream, audio_path)
+        
+        if not has_audio:
+            logger.warning(
+                f"❌ Skipping transcription: media file has no audio track. "
+                f"This is likely a screen recording without audio."
+            )
+            # Send empty completion to mark job as done
+            final_task = SaveTranscriptionTask(
+                track_ref_id=track_ref_id,
+                segments=[],
+                chunk_index=0,
+                start_time=0.0,
+                end_time=0.0,
+                item_count=0,
+                is_final=True,
+                status="completed",
+            )
+            await self._redis_producer.enqueue(final_task)
+            logger.info("📤 Sent empty transcription completion (no audio track)")
+            return 0
+
         whisper_config = self._config.whisper
         logger.info(f"🎤 Starting transcription for {audio_path.name}...")
 
         batch_queue: asyncio.Queue = asyncio.Queue()
-        loop = asyncio.get_event_loop()
 
         def transcribe_in_thread():
             """Transcribe audio and push batches to the async queue."""

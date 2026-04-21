@@ -631,6 +631,32 @@ def get_upload_access_url(
         expires_in_seconds=expires_in,
     )
 
+@router.delete("/{upload_id:uuid}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_upload(
+    upload_id: UUID,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """Cancel or delete an upload session.
+    
+    This endpoint allows users to cancel an incomplete upload session or delete a completed upload.
+    Incomplete uploads will have their multipart upload aborted in MinIO.
+    """
+    _enforce_rate_limit(current_user.id, "delete")
+    upload = _get_upload_or_404(db, upload_id, current_user.id)
+
+    if upload.status in [UploadStatus.INITIATED, UploadStatus.UPLOADING]:
+        try:
+            storage.abort_multipart_upload(object_key=upload.object_key, upload_id=upload.upload_id)
+        except MultipartStorageError as exc:
+            logger.warning(f"Failed to abort multipart upload {upload.id} in storage: {exc}")
+
+    upload.status = UploadStatus.FAILED
+    db.commit()
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.post("/cleanup-stale", status_code=status.HTTP_204_NO_CONTENT)
 def cleanup_stale_uploads(
     current_user: User = Depends(get_current_active_user),

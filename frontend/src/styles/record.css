@@ -261,7 +261,6 @@
     gap: 0;
     border: 1.5px solid var(--border);
     border-radius: 16px;
-    overflow: hidden;
     background: var(--bg);
 }
 
@@ -272,6 +271,7 @@
     padding: 11px 16px 11px 14px;
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border);
+    border-radius: 16px 16px 0 0;
 }
 
 .rl2-header-title {

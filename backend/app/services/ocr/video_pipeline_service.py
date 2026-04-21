@@ -141,7 +141,7 @@ class Config:
 
     # ── OCR ──────────────────────────────────────────────────────────────────
     ocr_engine: Optional[str] = None
-    ocr_use_gpu: bool = True
+    ocr_use_gpu: bool = False
     easyocr_languages: tuple = ("en","vi")
     easyocr_confidence_threshold: float = 0.3
 

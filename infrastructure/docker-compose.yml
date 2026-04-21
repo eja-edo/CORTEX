@@ -24,7 +24,7 @@ services:
     container_name: cortex-mongo
     restart: unless-stopped
     ports:
-      - "27017:27017"
+      - "27016:27017"
     command: mongod --wiredTigerCacheSizeGB 0.5
     volumes:
       - mongo_data:/data/db
@@ -44,7 +44,7 @@ services:
     container_name: cortex-redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "6377:6379"
     command: redis-server --appendonly yes --maxmemory 200mb --maxmemory-policy allkeys-lru
     volumes:
       - redis_data:/data

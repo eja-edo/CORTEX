@@ -1,5 +1,8 @@
 from contextlib import asynccontextmanager
 import signal
+import threading
+import asyncio
+from typing import Optional
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,18 +18,88 @@ from app.api.search import router as search_router
 from app.api.segments import router as segments_router
 from app.api.schedules import router as schedules_router
 from app.api.upload import router as upload_router
+from app.api.knowledge import router as knowledge_router
 from app.api.sse import sync_sse_router
 from app.services.transcription_results_consumer import transcription_results_consumer
 from app.services.ocr_processor_worker import get_ocr_processor_worker
+from app.services.llm_processor_worker import get_llm_processor_worker
 from app.utils.logger import get_logger
 from app.api.sse.sse_manager import SSEManager
 
 logger = get_logger(__name__)
 
 
+class WorkerThread:
+    """Run an async worker in a separate thread with its own event loop."""
+    
+    def __init__(self, name: str, worker):
+        self.name = name
+        self.worker = worker
+        self.thread: Optional[threading.Thread] = None
+        self._running = False
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+    
+    def start(self):
+        """Start worker in background thread."""
+        if self._running:
+            return
+        
+        self._running = True
+        self.thread = threading.Thread(
+            target=self._run,
+            name=f"Worker-{self.name}",
+            daemon=False
+        )
+        self.thread.start()
+        logger.info(f"✅ Started {self.name} worker in separate thread")
+    
+    def _run(self):
+        """Run worker in separate event loop."""
+        try:
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+            self._loop.run_until_complete(self.worker.start())
+        except KeyboardInterrupt:
+            logger.info(f"{self.name} worker interrupted")
+        except Exception as exc:
+            logger.error(f"{self.name} worker crashed: {exc}", exc_info=True)
+        finally:
+            self._running = False
+            if self._loop:
+                self._loop.close()
+    
+    def stop(self):
+        """Stop worker and wait for thread."""
+        if not self._running or not self._loop:
+            return
+        
+        self._running = False
+        
+        # Signal worker to stop via its event loop
+        if self._loop and self._loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(
+                self.worker.stop(),
+                self._loop
+            )
+            try:
+                future.result(timeout=5)
+            except Exception as exc:
+                logger.warning(f"Error stopping {self.name}: {exc}")
+        
+        # Wait for thread to finish
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=10)
+            if self.thread.is_alive():
+                logger.warning(f"{self.name} thread did not stop gracefully")
+
+
 sse_manager = SSEManager()  # Get singleton instance
 original_sigint = signal.getsignal(signal.SIGINT)
 original_sigterm = signal.getsignal(signal.SIGTERM)
+
+# Global worker threads
+_ocr_worker_thread: Optional[WorkerThread] = None
+_llm_worker_thread: Optional[WorkerThread] = None
 
 def signal_exit(signum, frame):
     """
@@ -57,30 +130,33 @@ logger.info("✅ Signal handlers registered for SIGINT and SIGTERM")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application startup and shutdown lifecycle."""
+    global _ocr_worker_thread, _llm_worker_thread
+    
     # Start transcription results consumer
     try:
         await transcription_results_consumer.start()
     except Exception as exc:
         logger.warning(f"Transcription results consumer disabled: {exc}")
 
-    # Start OCR processor worker in background
-    import asyncio
+    # Start OCR processor worker in separate thread
     ocr_worker = get_ocr_processor_worker()
-    ocr_worker_task = asyncio.create_task(ocr_worker.start())
+    _ocr_worker_thread = WorkerThread("OCR", ocr_worker)
+    _ocr_worker_thread.start()
+
+    # Start LLM processor worker in separate thread
+    llm_worker = get_llm_processor_worker()
+    _llm_worker_thread = WorkerThread("LLM", llm_worker)
+    _llm_worker_thread.start()
 
     try:
         yield
     finally:
         await transcription_results_consumer.stop()
-        # Stop OCR worker
-        await ocr_worker.stop()
-        # Cancel the worker task
-        if not ocr_worker_task.done():
-            ocr_worker_task.cancel()
-            try:
-                await ocr_worker_task
-            except asyncio.CancelledError:
-                pass
+        # Stop workers in separate threads
+        if _ocr_worker_thread:
+            _ocr_worker_thread.stop()
+        if _llm_worker_thread:
+            _llm_worker_thread.stop()
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -111,6 +187,7 @@ app.include_router(jobs_router, prefix=settings.API_STR)
 app.include_router(search_router, prefix=settings.API_STR)
 app.include_router(notifications_router, prefix=settings.API_STR)
 app.include_router(upload_router, prefix=settings.API_STR)
+app.include_router(knowledge_router, prefix=settings.API_STR)
 app.include_router(sync_sse_router, prefix=settings.API_STR)
 
 @app.get("/")
