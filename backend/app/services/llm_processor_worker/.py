@@ -185,8 +185,7 @@ class LLMProcessorWorker:
         total_cost = 0.0
 
         for window in windows:
-            result = await asyncio.to_thread(
-                gemini_service.process_screen_segments,
+            result = await gemini_service.process_screen_segments(
                 raw_text=window["combined_text"],
                 start_ms=int(window["start_timestamp_sec"] * 1000),
                 end_ms=int(window["end_timestamp_sec"] * 1000),
@@ -243,7 +242,7 @@ class LLMProcessorWorker:
             )
 
         # ── Session synthesis ─────────────────────────────────────────────
-        if len(processed_summaries) >= 2:
+        if len(processed_summaries) >= 1:
             await self._synthesize_and_save(
                 task, processed_summaries, total_tokens, total_cost
             )
@@ -297,9 +296,7 @@ class LLMProcessorWorker:
         user_id: str,
     ) -> int:
         """Extract and save knowledge units from text."""
-        result = await asyncio.to_thread(
-            gemini_service.extract_knowledge, text, context
-        )
+        result = await gemini_service.extract_knowledge(text, context)
         if not result.success:
             return 0
 
@@ -356,11 +353,10 @@ class LLMProcessorWorker:
         duration_ms = (
             summaries[-1]["end_ms"] - summaries[0]["start_ms"] if summaries else 0
         )
-        result = await asyncio.to_thread(
-            gemini_service.synthesize_session,
+        result = await gemini_service.synthesize_session(
             processed_segments=summaries[:50],
             asset_title=f"asset_{task.asset_id}",
-            duration_ms=duration_ms,
+            duration_ms=duration_ms
         )
 
         summary_doc = {
@@ -386,3 +382,4 @@ class LLMProcessorWorker:
 def get_llm_processor_worker() -> LLMProcessorWorker:
     """Get singleton LLM processor worker."""
     return LLMProcessorWorker()
+

@@ -12,6 +12,7 @@ from typing import Any, Optional
 from uuid import uuid4
 
 import redis.asyncio as redis
+from redis.exceptions import ConnectionError
 
 from app.config import settings
 from app.services.ocr.layout_processor import process_metadata_file
@@ -153,7 +154,7 @@ class OCRProcessorWorker:
                             except Exception:
                                 pass
 
-            except redis.exceptions.ConnectionError as e:
+            except ConnectionError as e:
                 retry_count += 1
                 backoff = min(base_backoff * (2 ** retry_count), 60)  # Exponential backoff, max 60s
                 logger.warning(
