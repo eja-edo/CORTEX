@@ -125,9 +125,8 @@ async function createCodeChallenge(verifier: string): Promise<string> {
 }
 
 function noteTitleFromMd(md: string): string {
-  if (!md) return 'Untitled note'
-  const text = plainTextFromMarkdown(md).replace(/\s+/g, ' ').trim()
-  return text.slice(0, 64) || 'Untitled note'
+  const text = plainTextFromMarkdown(md)
+  return text.split('\n').find(l => l.trim()) || 'Untitled'
 }
 
 function formatNoteDate(isoDateTime: string): string {
@@ -301,6 +300,9 @@ function App() {
     setRecentNotes((prev) => prev.map((n) => (n.id === id ? { ...n, contentMd } : n)))
     scheduleNotePersist(id)
   }, [])
+
+
+
 
   const noteSummaries = useMemo(
     () => recentNotes.map((note) => ({

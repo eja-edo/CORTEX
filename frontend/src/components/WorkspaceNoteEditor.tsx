@@ -29,9 +29,8 @@ const md = new MarkdownIt({
 })
 
 function noteTitleFromMd(content: string): string {
-    if (!content) return 'Untitled note'
-    const text = plainTextFromMarkdown(content).replace(/\s+/g, ' ').trim()
-    return text.slice(0, 64) || 'Untitled note'
+    const text = plainTextFromMarkdown(content)
+    return text.split('\n').find(l => l.trim()) || 'Untitled'
 }
 
 type ViewMode = 'split' | 'edit' | 'preview'

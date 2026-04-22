@@ -1,8 +1,8 @@
 """
-MongoDB Service for Transcription Results
+MongoDB Service for Transcription Results and OCR Knowledge
 
-Handles all MongoDB operations for storing transcription segments and job metadata.
-Encapsulates collection names and indexes within the service.
+Handles all MongoDB operations for storing transcription segments, OCR frames,
+and knowledge derived from combined transcript + OCR analysis.
 """
 
 from datetime import datetime
@@ -31,73 +31,49 @@ logger = get_logger(__name__)
 class MongoTranscriptionService:
     """
     Service for MongoDB operations on transcription data.
-    
-    Manages:
-    - Connection to MongoDB
-    - Collection names (hardcoded, not in settings)
-    - Index management
-    - Document persistence (segments and jobs)
     """
-    
-    # Collection names hardcoded in service
+
     SEGMENTS_COLLECTION = "transcription_segments"
     JOBS_COLLECTION = "transcription_jobs"
-    
+
     def __init__(self) -> None:
         self._client: Optional[AsyncIOMotorClient] = None
         self._db: Optional[AsyncIOMotorDatabase] = None
         self._connected = False
-    
+
     async def connect(self) -> None:
-        """
-        Establish connection to MongoDB and initialize indexes.
-        
-        Raises:
-            ConnectionError: If unable to connect to MongoDB
-        """
         if self._connected:
             logger.debug("Already connected to MongoDB")
             return
-        
+
         try:
             self._client = AsyncIOMotorClient(settings.MONGODB_URL)
-            
-            # Test connection
             await self._client.admin.command("ping")
-            
-            # Get database
             self._db = self._client[settings.MONGODB_DB_NAME]
-            
-            # Create indexes
             await self._create_indexes()
-            
             self._connected = True
             logger.info(
                 f"✅ Connected to MongoDB: {settings.MONGODB_URL} / {settings.MONGODB_DB_NAME}"
             )
-            
         except Exception as e:
             logger.error(f"Failed to connect to MongoDB: {e}")
             self._client = None
             self._db = None
             raise ConnectionError(f"MongoDB connection failed: {e}")
-    
+
     async def disconnect(self) -> None:
-        """Close MongoDB connection."""
         if self._client:
             self._client.close()
             self._client = None
             self._db = None
             self._connected = False
             logger.info("MongoDB connection closed")
-    
+
     async def _create_indexes(self) -> None:
-        """Create necessary indexes for efficient queries."""
         if self._db is None:
             raise RuntimeError("Not connected to MongoDB")
-        
+
         try:
-            # Backfill transcription_job_id from track_ref_id for existing data.
             jobs_cursor = self._db[self.JOBS_COLLECTION].find(
                 {"track_ref_id": {"$exists": True, "$ne": ""}},
                 {"_id": 1, "track_ref_id": 1},
@@ -111,7 +87,6 @@ class MongoTranscriptionService:
                     {"$set": {"transcription_job_id": str(job["_id"])}},
                 )
 
-            # Remove deprecated segment fields.
             await self._db[self.SEGMENTS_COLLECTION].update_many(
                 {},
                 {
@@ -124,59 +99,38 @@ class MongoTranscriptionService:
                 },
             )
 
-            # Drop old unique index based on legacy keys.
             try:
                 await self._db[self.SEGMENTS_COLLECTION].drop_index("uq_track_chunk_segment")
             except Exception:
                 pass
 
-            # Segments index: query by owning transcription job.
             await self._db[self.SEGMENTS_COLLECTION].create_index(
                 [("transcription_job_id", 1)],
                 name="ix_segments_transcription_job_id",
             )
-            logger.debug(f"✓ Index created on {self.SEGMENTS_COLLECTION}")
-            
-            # Jobs index: unique constraint on track_ref_id
             await self._db[self.JOBS_COLLECTION].create_index(
                 [("track_ref_id", 1)],
                 unique=True,
                 name="uq_track_ref_id",
             )
-            logger.debug(f"✓ Index created on {self.JOBS_COLLECTION}")
-            
         except Exception as e:
             logger.warning(f"Error creating indexes: {e}")
-    
+
     async def save_segments(
         self,
         transcription_job_id: str,
         chunk_index: int,
         segments: list[TranscriptionSegmentInput],
     ) -> int:
-        """
-        Save transcription segments to MongoDB.
-        
-        Args:
-            transcription_job_id: _id of transcription_jobs document
-            chunk_index: Batch index number (used for idempotent segment IDs)
-            segments: List of TranscriptionSegmentInput models with start, end, text, confidence, speaker_label
-        
-        Returns:
-            Number of segments inserted/updated
-        
-        Raises:
-            RuntimeError: If not connected to MongoDB
-        """
         if self._db is None:
             raise RuntimeError("Not connected to MongoDB")
-        
+
         if not segments:
             return 0
-        
+
         now = datetime.utcnow()
         ops = []
-        
+
         for idx, seg in enumerate(segments):
             doc = MongoSegmentDocument(
                 transcription_job_id=transcription_job_id,
@@ -198,15 +152,14 @@ class MongoTranscriptionService:
                     upsert=True,
                 )
             )
-        
+
         if ops:
-            result = await self._db[self.SEGMENTS_COLLECTION].bulk_write(ops, ordered=False)
+            await self._db[self.SEGMENTS_COLLECTION].bulk_write(ops, ordered=False)
             return len(ops)
-        
+
         return 0
-    
+
     async def upsert_job(self, track_ref_id: str, status: str) -> str:
-        """Create/update job by track_ref_id and return the Mongo _id as string."""
         if self._db is None:
             raise RuntimeError("Not connected to MongoDB")
 
@@ -232,18 +185,6 @@ class MongoTranscriptionService:
         return str(result["_id"])
 
     async def update_job(self, job_id: str, status: str) -> None:
-        """
-        Update transcription job metadata.
-        
-        Counts total segments in MongoDB to get accurate total.
-        
-        Args:
-            job_id: _id of transcription_jobs document
-            status: Job status (pending, processing, completed, failed)
-        
-        Raises:
-            RuntimeError: If not connected to MongoDB
-        """
         if self._db is None:
             raise RuntimeError("Not connected to MongoDB")
 
@@ -267,28 +208,29 @@ class MongoTranscriptionService:
             {"_id": ObjectId(job_id), **job_doc.model_dump()},
             upsert=False,
         )
-    
+
     @property
     def is_connected(self) -> bool:
-        """Check if connected to MongoDB."""
         return self._connected
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# OCR Service
+# OCR + KNOWLEDGE Service
 # ══════════════════════════════════════════════════════════════════════════════
 
 
 class MongoOCRService:
     """
-    Service for OCR and LLM knowledge data in MongoDB.
+    Service for OCR, transcript, and LLM knowledge data in MongoDB.
 
     Collections:
       ocr_jobs           — one doc per asset/task
-      ocr_frames         — raw frames after layout reconstruction
-      ocr_processed      — windowed frames after Gemini processing
-      knowledge_units    — atomic knowledge facts
-      asset_knowledge    — session-level summaries
+      ocr_frames         — raw OCR frames after layout reconstruction
+      ocr_processed      — windowed frames after Gemini processing (OCR + transcript)
+      knowledge_units    — atomic knowledge facts with time anchors
+      asset_knowledge    — session-level summaries with full timeline
+      transcription_jobs — STT job metadata (read-only in this service)
+      transcription_segments — STT segment text (read-only in this service)
     """
 
     OCR_JOBS_COLLECTION = "ocr_jobs"
@@ -296,6 +238,9 @@ class MongoOCRService:
     OCR_PROCESSED_COLLECTION = "ocr_processed"
     KNOWLEDGE_UNITS_COLLECTION = "knowledge_units"
     ASSET_KNOWLEDGE_COLLECTION = "asset_knowledge"
+    # STT collections (read-only references)
+    STT_JOBS_COLLECTION = "transcription_jobs"
+    STT_SEGMENTS_COLLECTION = "transcription_segments"
 
     def __init__(self) -> None:
         self._client: Optional[AsyncIOMotorClient] = None
@@ -322,7 +267,6 @@ class MongoOCRService:
     async def _create_indexes(self) -> None:
         db = self._db
 
-        # ocr_jobs: unique per asset_id
         await db[self.OCR_JOBS_COLLECTION].create_index(
             [("asset_id", 1)], unique=True, name="uq_ocr_jobs_asset_id"
         )
@@ -333,7 +277,6 @@ class MongoOCRService:
             [("llm_status", 1)], name="ix_ocr_jobs_llm_status"
         )
 
-        # ocr_frames: query by asset + timestamp
         await db[self.OCR_FRAMES_COLLECTION].create_index(
             [("asset_id", 1), ("timestamp_sec", 1)],
             name="ix_ocr_frames_asset_timestamp",
@@ -344,7 +287,6 @@ class MongoOCRService:
             name="uq_ocr_frames_asset_frame",
         )
 
-        # ocr_processed: query by asset
         await db[self.OCR_PROCESSED_COLLECTION].create_index(
             [("asset_id", 1), ("start_timestamp_sec", 1)],
             name="ix_ocr_processed_asset_time",
@@ -354,7 +296,6 @@ class MongoOCRService:
             name="ix_ocr_processed_user_status",
         )
 
-        # knowledge_units: dedup + search
         await db[self.KNOWLEDGE_UNITS_COLLECTION].create_index(
             [("content_hash", 1)], name="ix_knowledge_units_hash"
         )
@@ -365,8 +306,12 @@ class MongoOCRService:
         await db[self.KNOWLEDGE_UNITS_COLLECTION].create_index(
             [("asset_id", 1)], name="ix_knowledge_units_asset"
         )
+        # NEW: time-range index for timeline queries
+        await db[self.KNOWLEDGE_UNITS_COLLECTION].create_index(
+            [("asset_id", 1), ("start_sec", 1)],
+            name="ix_knowledge_units_asset_time",
+        )
 
-        # asset_knowledge: unique per asset
         await db[self.ASSET_KNOWLEDGE_COLLECTION].create_index(
             [("asset_id", 1)], unique=True, name="uq_asset_knowledge_asset"
         )
@@ -381,7 +326,6 @@ class MongoOCRService:
         workspace_id: Optional[str] = None,
         status: str = "processing",
     ) -> str:
-        """Create or update OCR job. Returns _id as string."""
         now = datetime.utcnow()
         result = await self._db[self.OCR_JOBS_COLLECTION].find_one_and_update(
             {"asset_id": asset_id},
@@ -448,17 +392,8 @@ class MongoOCRService:
         self,
         asset_id: str,
         user_id: str,
-        frames: list[dict],  # list of dicts from cleaned_metadata.json
+        frames: list[dict],
     ) -> int:
-        """
-        Bulk upsert OCR frames. Idempotent based on (asset_id, frame_id).
-
-        Args:
-            frames: List of dicts with keys: frame_id, timestamp, processed_text,
-                    ssim_score, changed, theme, regions, ui_regions
-        Returns:
-            Number of frames upserted
-        """
         if not frames:
             return 0
 
@@ -495,7 +430,6 @@ class MongoOCRService:
     async def get_ocr_frames(
         self, asset_id: str, skip_empty: bool = True
     ) -> list[dict]:
-        """Get all frames of an asset, sorted by timestamp."""
         query: dict = {"asset_id": asset_id}
         if skip_empty:
             query["processed_text"] = {"$ne": ""}
@@ -506,6 +440,68 @@ class MongoOCRService:
         )
         return await cursor.to_list(length=None)
 
+    # ── Transcript Access (read-only) ─────────────────────────────────────────
+
+    async def get_transcript_segments_for_asset(
+        self,
+        asset_id: str,
+        start_sec: Optional[float] = None,
+        end_sec: Optional[float] = None,
+    ) -> list[dict]:
+        """
+        Fetch transcript segments for a given asset from the STT pipeline.
+
+        The STT pipeline stores jobs with track_ref_id == asset_id (set by the
+        backend when enqueueing the transcription job). We look up the job by
+        track_ref_id then load all its segments.
+
+        Args:
+            asset_id: Asset UUID string
+            start_sec: Optional lower bound (inclusive) for segment start time
+            end_sec: Optional upper bound (inclusive) for segment start time
+
+        Returns:
+            List of segment dicts sorted by start_time_sec, each containing:
+              start_time_sec, end_time_sec, text, confidence, speaker_label
+        """
+        # Find the transcription job for this asset
+        job = await self._db[self.STT_JOBS_COLLECTION].find_one(
+            {"track_ref_id": asset_id}
+        )
+        if job is None:
+            logger.debug(f"No transcription job found for asset_id={asset_id}")
+            return []
+
+        job_id = str(job["_id"])
+
+        query: dict = {"transcription_job_id": job_id}
+        if start_sec is not None:
+            query["start_time_sec"] = {"$gte": start_sec}
+        if end_sec is not None:
+            query.setdefault("start_time_sec", {})
+            if isinstance(query["start_time_sec"], dict):
+                query["start_time_sec"]["$lte"] = end_sec
+            else:
+                query["start_time_sec"] = {"$gte": query["start_time_sec"], "$lte": end_sec}
+
+        cursor = self._db[self.STT_SEGMENTS_COLLECTION].find(
+            query,
+            sort=[("start_time_sec", 1)],
+        )
+        segments = await cursor.to_list(length=None)
+        logger.debug(
+            f"Fetched {len(segments)} transcript segments for asset_id={asset_id}"
+        )
+        return segments
+
+    async def has_transcript(self, asset_id: str) -> bool:
+        """Check whether any transcript data exists for this asset."""
+        job = await self._db[self.STT_JOBS_COLLECTION].find_one(
+            {"track_ref_id": asset_id},
+            {"_id": 1},
+        )
+        return job is not None
+
     # ── OCR Processed (Gemini windows) ───────────────────────────────────────
 
     async def save_ocr_processed(
@@ -515,7 +511,6 @@ class MongoOCRService:
         ocr_job_id: str,
         window: dict,
     ) -> str:
-        """Save a processed window. Returns _id."""
         now = datetime.utcnow()
         doc = {
             "asset_id": asset_id,
@@ -525,6 +520,7 @@ class MongoOCRService:
             "end_timestamp_sec": window["end_timestamp_sec"],
             "frame_ids": window.get("frame_ids", []),
             "combined_text": window.get("combined_text", ""),
+            "transcript_text": window.get("transcript_text", ""),
             "analysis": window.get("analysis"),
             "llm_model": window.get("llm_model"),
             "tokens_used": window.get("tokens_used", 0),
@@ -538,7 +534,6 @@ class MongoOCRService:
         return str(result.inserted_id)
 
     async def get_ocr_processed(self, asset_id: str) -> list[dict]:
-        """Get all processed windows of an asset."""
         cursor = self._db[self.OCR_PROCESSED_COLLECTION].find(
             {"asset_id": asset_id, "status": "completed"},
             sort=[("start_timestamp_sec", 1)],
@@ -582,7 +577,7 @@ class MongoOCRService:
 
         cursor = self._db[self.KNOWLEDGE_UNITS_COLLECTION].find(
             query,
-            sort=[("created_at", -1)],
+            sort=[("start_sec", 1), ("created_at", -1)],
             limit=limit,
         )
         return await cursor.to_list(length=limit)

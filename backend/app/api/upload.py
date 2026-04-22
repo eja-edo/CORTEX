@@ -377,29 +377,12 @@ async def complete_upload(
 
             # Enqueue OCR/video processing job for video content
             if media_type == "video":
-                try:
-                    output_dir = f"logs/ocr_processing/{asset.workspace_id or 'default'}/{asset.id}"
-                    await enqueue_video_processing(
-                        video_path=upload.object_key,
-                        output_dir=output_dir,
-                        video_id=asset.id,
-                        workspace_id=asset.workspace_id,
-                        user_id=asset.user_id,
-                        ocr_engine="easyocr",
-                        target_fps=1.0,
-                        enable_ui_detect=True,
-                        enable_ocr=True,
-                        debug_mode=False,
-                        job_context={
-                            "asset_id": str(asset.id),
-                            "upload_id": str(upload.id),
-                        },
-                    )
-                    logger.info(
-                        f"🎬 OCR processing job enqueued for existing completed upload: upload_id={upload.id}, asset_id={asset.id}"
-                    )
-                except Exception as exc:
-                    logger.warning(f"Failed to enqueue OCR processing job for existing upload {upload.id}: {exc}")
+                # Auto-enqueue removed - user must manually trigger via /assets/{id}/process
+                pass
+
+        # Mark asset as ready for processing
+        asset.status = AssetStatus.READY
+        db.commit()
 
         return UploadCompleteResponse(
             upload_id=upload.id,
@@ -498,31 +481,11 @@ async def complete_upload(
         except Exception as exc:
             logger.warning(f"Failed to enqueue STT job for upload {upload.id}: {exc}")
 
-        # Enqueue OCR/video processing job for video content
-        if media_type == "video":
-            try:
-                output_dir = f"logs/ocr_processing/{asset.workspace_id or 'default'}/{asset.id}"
-                await enqueue_video_processing(
-                    video_path=upload.object_key,
-                    output_dir=output_dir,
-                    video_id=asset.id,
-                    workspace_id=asset.workspace_id,
-                    user_id=asset.user_id,
-                    ocr_engine="easyocr",
-                    target_fps=1.0,
-                    enable_ui_detect=True,
-                    enable_ocr=True,
-                    debug_mode=False,
-                    job_context={
-                        "asset_id": str(asset.id),
-                        "upload_id": str(upload.id),
-                    },
-                )
-                logger.info(
-                    f"🎬 OCR processing job enqueued after upload complete: upload_id={upload.id}, asset_id={asset.id}"
-                )
-            except Exception as exc:
-                logger.warning(f"Failed to enqueue OCR processing job for upload {upload.id}: {exc}")
+        # Auto-enqueue removed - user must manually trigger via /assets/{id}/process
+
+    # Mark asset as ready for processing
+    asset.status = AssetStatus.READY
+    db.commit()
 
     return UploadCompleteResponse(
         upload_id=upload.id,

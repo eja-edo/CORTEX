@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Download, Edit2, Monitor, MoreHorizontal, Pause, Play, RefreshCw, Trash2, Upload, X, Check, Clock, HardDrive, FileVideo, FileAudio, AlertCircle } from 'lucide-react'
+import { Download, Edit2, Monitor, MoreHorizontal, Pause, Play, RefreshCw, Trash2, Upload, X, Check, Clock, HardDrive, FileVideo, FileAudio, AlertCircle, Zap } from 'lucide-react'
 
 import type { AuthRequest, Recording } from './recordingTypes'
+import { ProcessAssetDialog } from './ProcessAssetDialog'
 
 type MediaType = 'video' | 'audio' | 'unknown'
 
@@ -228,19 +229,22 @@ function LocalRecordingRow({ rec, isPlaying, onPlay, onUpload, onDownload, onDel
     )
 }
 
-function ServerRecordingRow({ item, asset, isPlaying, isActionLoading, onPlay, onDownload, onDelete, onRename }: {
+function ServerRecordingRow({ item, asset, isPlaying, isActionLoading, onPlay, onDownload, onDelete, onRename, onProcess }: {
     item: UploadListItem; asset: AssetResponse | undefined
     isPlaying: boolean; isActionLoading: boolean
-    onPlay: () => void; onDownload: () => void; onDelete: () => void; onRename: (name: string) => void
+    onPlay: () => void; onDownload: () => void; onDelete: () => void; onRename: (name: string) => void; onProcess: () => void
 }) {
     const [isEditing, setIsEditing] = useState(false)
     const [menuOpen, setMenuOpen] = useState(false)
     const [confirmDelete, setConfirmDelete] = useState(false)
     const displayName = asset?.title || fallbackName(item)
+    const assetStatus = asset?.status || 'unknown'
+    const canProcess = assetStatus === 'READY'
 
     const menuItems = [
         { label: 'Rename', icon: <Edit2 size={12} />, onClick: () => setIsEditing(true) },
         { label: 'Download', icon: <Download size={12} />, onClick: onDownload },
+        { label: 'Process', icon: <Zap size={12} />, disabled: !canProcess, onClick: onProcess },
         { label: 'Delete', icon: <Trash2 size={12} />, danger: true, onClick: () => setConfirmDelete(true) },
     ]
 
@@ -267,6 +271,11 @@ function ServerRecordingRow({ item, asset, isPlaying, isActionLoading, onPlay, o
                     <button type="button" className={`rl2-action-btn ${isPlaying ? 'active' : ''}`} onClick={onPlay} disabled={isActionLoading}>
                         {isPlaying ? <Pause size={12} /> : <Play size={12} />}
                     </button>
+                    {canProcess && (
+                        <button type="button" className="rl2-action-btn" onClick={onProcess} disabled={isActionLoading} title="Process with AI">
+                            <Zap size={12} />
+                        </button>
+                    )}
                     <button type="button" className="rl2-action-btn" onClick={onDownload} disabled={isActionLoading} title="Download"><Download size={12} /></button>
                     <div className="rl2-menu-wrap">
                         <button type="button" className={`rl2-action-btn ${menuOpen ? 'active' : ''}`} onClick={() => setMenuOpen(v => !v)}>
@@ -293,6 +302,8 @@ export function RecordingsList({
     const [serverError, setServerError] = useState<string>('')
     const [serverActionLoadingId, setServerActionLoadingId] = useState<string | null>(null)
     const [localNames, setLocalNames] = useState<Record<string, string>>({})
+    const [pendingProcessAssetId, setPendingProcessAssetId] = useState<string | null>(null)
+    const [isProcessing, setIsProcessing] = useState(false)
 
     const getServerAccessUrl = useCallback(async (item: UploadListItem, disposition: 'inline' | 'attachment') => {
         const resp = await requestWithAuth<UploadAccessUrlResponse>(
@@ -353,8 +364,12 @@ export function RecordingsList({
                 const alreadyLoaded = Object.values(assetByUploadId).some(a => a.id === rec.uploadedAssetId)
                 if (!alreadyLoaded) void upsertAssetById(rec.uploadedAssetId)
             }
+            // Show process dialog when upload just completed (state = 'uploaded')
+            if (rec.uploadState === 'uploaded' && rec.uploadedAssetId && !pendingProcessAssetId) {
+                setPendingProcessAssetId(rec.uploadedAssetId)
+            }
         }
-    }, [recordings, assetByUploadId, upsertAssetById])
+    }, [recordings, assetByUploadId, upsertAssetById, pendingProcessAssetId])
 
     const localUploadedKeys = useMemo(
         () => new Set(recordings.map(r => r.uploadedObjectKey).filter((k): k is string => Boolean(k))),
@@ -453,9 +468,53 @@ export function RecordingsList({
         }
     }, [requestWithAuth, assetByUploadId])
 
+    const handleServerProcess = useCallback((item: UploadListItem) => {
+        setServerError('')
+        const asset = assetByUploadId[item.id]
+
+        if (!asset) {
+            setServerError('Asset information not available')
+            return
+        }
+
+        // Show process dialog instead of directly processing
+        setPendingProcessAssetId(asset.id)
+    }, [assetByUploadId])
+
     const handleLocalRename = useCallback((id: string, name: string) => {
         setLocalNames(prev => ({ ...prev, [id]: name }))
     }, [])
+
+    const handleProcessPendingAsset = useCallback(async () => {
+        if (!pendingProcessAssetId) return
+
+        setIsProcessing(true)
+        try {
+            const result = await requestWithAuth<{ success: boolean; message?: string; error?: string }>(
+                `/assets/${pendingProcessAssetId}/process`,
+                { method: 'POST' }
+            )
+            if (result.success) {
+                setPendingProcessAssetId(null)
+                // Reload assets to get updated status
+                setTimeout(() => {
+                    void loadAssets()
+                }, 1000)
+            } else {
+                setServerError(result.error || 'Failed to start processing')
+            }
+        } catch (err) {
+            setServerError(err instanceof Error ? err.message : 'Cannot start processing')
+        } finally {
+            setIsProcessing(false)
+        }
+    }, [pendingProcessAssetId, requestWithAuth, loadAssets])
+
+    const getPendingAssetTitle = () => {
+        if (!pendingProcessAssetId) return ''
+        const asset = Object.values(assetByUploadId).find(a => a.id === pendingProcessAssetId)
+        return asset?.title || 'Recording'
+    }
 
     if (totalCount === 0 && !isLoadingServer) {
         return (
@@ -530,10 +589,20 @@ export function RecordingsList({
                                 onDownload={() => void handleServerDownload(item)}
                                 onDelete={() => void handleServerDelete(item)}
                                 onRename={name => void handleServerRename(item, name)}
+                                onProcess={() => void handleServerProcess(item)}
                             />
                         ))}
                     </div>
                 </div>
+            )}
+
+            {pendingProcessAssetId && (
+                <ProcessAssetDialog
+                    assetTitle={getPendingAssetTitle()}
+                    isLoading={isProcessing}
+                    onProcess={handleProcessPendingAsset}
+                    onSkip={() => setPendingProcessAssetId(null)}
+                />
             )}
         </div>
     )

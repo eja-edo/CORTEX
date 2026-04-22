@@ -62,19 +62,18 @@ class OCRFrameDocument(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    asset_id: StrictStr  # UUID of asset in PostgreSQL
+    asset_id: StrictStr
     user_id: StrictStr
     workspace_id: StrictStr | None = None
 
-    frame_id: StrictInt  # frame sequence number
-    timestamp_sec: StrictFloat  # timestamp in video (seconds)
-    processed_text: StrictStr  # output of layout_processor
-    ssim_score: StrictFloat | None = None  # from raw metadata.json
-    changed: bool = True  # whether frame has changed from previous
-    theme: StrictStr | None = None  # "dark" | "light"
+    frame_id: StrictInt
+    timestamp_sec: StrictFloat
+    processed_text: StrictStr
+    ssim_score: StrictFloat | None = None
+    changed: bool = True
+    theme: StrictStr | None = None
 
-    # Raw regions from pipeline (keep for debug/reprocess)
-    raw_regions: list[dict] = Field(default_factory=list)  # [{bbox, text}]
+    raw_regions: list[dict] = Field(default_factory=list)
     ui_regions: list[list[int]] = Field(default_factory=list)
 
     created_at: datetime
@@ -88,14 +87,13 @@ class OCRJobDocument(BaseModel):
     asset_id: StrictStr
     user_id: StrictStr
     workspace_id: StrictStr | None = None
-    task_id: StrictStr  # OCRProcessorTask.task_id
+    task_id: StrictStr
 
     status: Literal["pending", "processing", "completed", "failed"]
     total_frames: int = 0
     non_empty_frames: int = 0
     output_dir: StrictStr | None = None
 
-    # LLM processing state
     llm_status: Literal[
         "pending", "processing", "completed", "failed", "skipped"
     ] = "pending"
@@ -105,11 +103,70 @@ class OCRJobDocument(BaseModel):
     updated_at: datetime
 
 
-class LLMFrameAnalysis(BaseModel):
-    """Gemini result for a frame/batch."""
+# ══════════════════════════════════════════════════════════════════════════════
+# TIMELINE-BASED KNOWLEDGE SCHEMAS
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+class TimelineEventEntity(BaseModel):
+    """A named entity extracted within a timeline event."""
 
     model_config = ConfigDict(extra="allow")
 
+    type: str  # "url", "code", "error", "person", "tool", "file"
+    value: str
+    confidence: float = 1.0
+
+
+class TimelineEvent(BaseModel):
+    """
+    Atomic knowledge event anchored to a specific time range.
+
+    This is the core unit stored in the knowledge timeline — every piece
+    of information is pinned to start_sec/end_sec so the UI can link
+    back to the exact moment in the recording.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    # Time anchor (seconds)
+    start_sec: float
+    end_sec: float
+
+    # Content source flags
+    has_ocr: bool = False       # was OCR text available for this window
+    has_transcript: bool = False  # was speech transcript available
+
+    # Screen context (from OCR, None for audio-only)
+    screen_type: str | None = None   # "browser", "editor", "terminal", "settings", "other"
+    application: str | None = None
+
+    # What the user was doing / saying
+    activity_summary: str        # concise description of this moment
+    spoken_content: str | None = None   # verbatim or near-verbatim transcript excerpt
+    screen_content: str | None = None   # key text visible on screen
+
+    # Semantic tags
+    topics: list[str] = Field(default_factory=list)
+    entities: list[TimelineEventEntity] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
+
+    # Signal strength
+    knowledge_value: float = 0.0  # 0.0 = trivial, 1.0 = critical learning moment
+    event_type: str = "activity"  # "activity", "error", "solution", "decision", "explanation"
+
+
+class LLMFrameAnalysis(BaseModel):
+    """
+    Gemini result for a combined OCR+transcript window.
+
+    Replaces the old flat structure with a timeline_events list so every
+    insight is anchored to a timestamp.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    # Legacy flat fields kept for backward compatibility
     screen_type: str | None = None
     application: str | None = None
     user_intent: str | None = None
@@ -119,28 +176,29 @@ class LLMFrameAnalysis(BaseModel):
     entities: list[dict] = Field(default_factory=list)
     searchable_keywords: list[str] = Field(default_factory=list)
 
+    # New: fine-grained timeline events for this window
+    timeline_events: list[TimelineEvent] = Field(default_factory=list)
+
 
 class OCRProcessedDocument(BaseModel):
     """
-    A window (batch frames ~30s) after Gemini processing.
-    This is the main unit for search and query.
+    A window (batch ~30s) after Gemini processing.
+    Now stores both legacy flat fields AND timeline_events.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     asset_id: StrictStr
     user_id: StrictStr
-    ocr_job_id: StrictStr  # _id of OCRJobDocument
+    ocr_job_id: StrictStr
 
-    # Time range of this window
     start_timestamp_sec: float
     end_timestamp_sec: float
     frame_ids: list[int] = Field(default_factory=list)
 
-    # Raw text (concatenation of frames in window)
-    combined_text: StrictStr
+    combined_text: StrictStr          # raw OCR text
+    transcript_text: StrictStr = ""   # raw transcript text for this window
 
-    # Gemini output
     analysis: LLMFrameAnalysis | None = None
     llm_model: StrictStr | None = None
     tokens_used: int = 0
@@ -155,30 +213,28 @@ class OCRProcessedDocument(BaseModel):
 
 class KnowledgeUnitDocument(BaseModel):
     """
-    Atomic knowledge fact — extracted from OCR content by Gemini.
-    Cross-asset searchable.
+    Atomic knowledge fact — anchored to a specific time range so the UI
+    can jump to the exact moment in the recording.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     asset_id: StrictStr
-    user_id: StrictStr
-    ocr_processed_id: StrictStr  # reference to OCRProcessedDocument
 
-    unit_type: Literal["fact", "error", "code_pattern", "command", "reference"]
+    unit_type: Literal["fact", "error", "code_pattern", "command", "reference", "explanation", "decision"]
     content: StrictStr
-    context: StrictStr | None = None
     confidence: float = 1.0
 
+    # Time anchor
+    start_sec: float = 0.0
+    end_sec: float = 0.0
+
     # Type-specific fields
-    error_type: StrictStr | None = None
-    resolution: StrictStr | None = None
     language: StrictStr | None = None
     url: StrictStr | None = None
     platform: StrictStr | None = None
-    reusability: float = 0.5
 
-    content_hash: StrictStr  # sha256(user_id + content) for deduplication
+    content_hash: StrictStr
 
     is_verified: bool = False
     deleted_at: datetime | None = None
@@ -186,13 +242,20 @@ class KnowledgeUnitDocument(BaseModel):
 
 
 class AssetKnowledgeSummary(BaseModel):
-    """Session-level synthesis of entire asset."""
+    """
+    Session-level synthesis of entire asset.
+    Now includes a full knowledge_timeline list ordered by time.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     asset_id: StrictStr
     user_id: StrictStr
     ocr_job_id: StrictStr
+
+    # Asset type context
+    has_video: bool = False
+    has_audio: bool = False
 
     session_title: StrictStr | None = None
     primary_technology: StrictStr | None = None
@@ -204,6 +267,8 @@ class AssetKnowledgeSummary(BaseModel):
     problems_encountered: list[dict] = Field(default_factory=list)
     solutions_found: list[dict] = Field(default_factory=list)
     knowledge_gained: list[str] = Field(default_factory=list)
+
+    knowledge_timeline: list[TimelineEvent] = Field(default_factory=list)
 
     llm_model: StrictStr | None = None
     tokens_used: int = 0
