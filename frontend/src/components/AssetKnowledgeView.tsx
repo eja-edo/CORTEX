@@ -11,7 +11,7 @@ import type { AuthRequest } from './recordingTypes'
 type KeyQuote = {
     quote: string
     start_sec: number
-    context: string
+    context?: string
 }
 
 type KnowledgeTimelineEntry = {
@@ -20,12 +20,12 @@ type KnowledgeTimelineEntry = {
     activity_summary: string
     event_type: string
     knowledge_value: number
-    application: string
-    keywords: string[]
-    screen_content: string
-    screen_type: string
-    spoken_content: string
-    topics: string[]
+    application?: string
+    keywords?: string[]
+    screen_content?: string
+    screen_type?: string
+    spoken_content?: string
+    topics?: string[]
 }
 
 type WorkflowStep = {
@@ -33,6 +33,24 @@ type WorkflowStep = {
     description: string
     start_sec: number
     end_sec: number
+}
+
+// Matches backend _session_synthesis_schema output
+type ProblemItem = {
+    problem: string
+    context?: string
+    resolution?: string
+    time_to_resolve_sec?: number
+    start_sec?: number
+    end_sec?: number
+}
+
+type SolutionItem = {
+    problem: string
+    solution: string
+    generalizability?: number
+    start_sec?: number
+    end_sec?: number
 }
 
 type AssetKnowledgeSummary = {
@@ -49,11 +67,11 @@ type AssetKnowledgeSummary = {
     llm_model: string
     ocr_job_id: string
     overall_summary: string
-    primary_technology: string
-    problems_encountered: string[]
-    secondary_technologies: string[]
+    primary_technology?: string
+    secondary_technologies?: string[]
+    problems_encountered: ProblemItem[]
+    solutions_found: SolutionItem[]
     session_title: string
-    solutions_found: string[]
     status: string
     synthesized_at: string
     tags: string[]
@@ -75,7 +93,7 @@ type AssetKnowledgeViewProps = {
 
 function formatSeconds(sec: number): string {
     const m = Math.floor(sec / 60)
-    const s = sec % 60
+    const s = Math.floor(sec % 60)
     return `${m}:${s.toString().padStart(2, '0')}`
 }
 
@@ -87,7 +105,7 @@ function formatDate(iso: string): string {
 }
 
 function difficultyColor(level: string): string {
-    switch (level.toLowerCase()) {
+    switch (level?.toLowerCase()) {
         case 'beginner': return 'akv-badge--green'
         case 'intermediate': return 'akv-badge--yellow'
         case 'advanced': return 'akv-badge--red'
@@ -101,7 +119,7 @@ function difficultyLabel(level: string): string {
         intermediate: 'Intermediate',
         advanced: 'Advanced',
     }
-    return map[level.toLowerCase()] ?? level
+    return map[level?.toLowerCase()] ?? level
 }
 
 function KnowledgeBar({ value }: { value: number }) {
@@ -175,6 +193,15 @@ export function AssetKnowledgeView({ assetId, assetTitle, requestWithAuth, onClo
 
     if (!data) return null
 
+    // Normalize arrays — backend may return string[] or object[] depending on the LLM run
+    const problems: ProblemItem[] = (data.problems_encountered ?? []).map((p) =>
+        typeof p === 'string' ? { problem: p } : p
+    )
+
+    const solutions: SolutionItem[] = (data.solutions_found ?? []).map((s) =>
+        typeof s === 'string' ? { problem: '', solution: s } : s
+    )
+
     return (
         <div className="akv-root">
             {/* ── Top bar ── */}
@@ -209,22 +236,24 @@ export function AssetKnowledgeView({ assetId, assetTitle, requestWithAuth, onClo
                             {data.has_audio && (
                                 <span className="akv-badge akv-badge--gray"><Mic size={10} />Audio</span>
                             )}
-                            <span className="akv-badge akv-badge--gray">
-                                <Zap size={10} />{data.primary_technology}
-                            </span>
+                            {data.primary_technology && (
+                                <span className="akv-badge akv-badge--gray">
+                                    <Zap size={10} />{data.primary_technology}
+                                </span>
+                            )}
                         </div>
                     </div>
                     <div className="akv-hero-stats">
                         <div className="akv-stat">
-                            <span className="akv-stat-val">{data.knowledge_gained.length}</span>
+                            <span className="akv-stat-val">{data.knowledge_gained?.length ?? 0}</span>
                             <span className="akv-stat-label">Insights</span>
                         </div>
                         <div className="akv-stat">
-                            <span className="akv-stat-val">{data.knowledge_timeline.length}</span>
+                            <span className="akv-stat-val">{data.knowledge_timeline?.length ?? 0}</span>
                             <span className="akv-stat-label">Segments</span>
                         </div>
                         <div className="akv-stat">
-                            <span className="akv-stat-val">{data.tokens_used.toLocaleString()}</span>
+                            <span className="akv-stat-val">{(data.tokens_used ?? 0).toLocaleString()}</span>
                             <span className="akv-stat-label">Tokens</span>
                         </div>
                     </div>
@@ -256,7 +285,7 @@ export function AssetKnowledgeView({ assetId, assetTitle, requestWithAuth, onClo
                         </div>
 
                         {/* Knowledge gained */}
-                        {data.knowledge_gained.length > 0 && (
+                        {(data.knowledge_gained?.length ?? 0) > 0 && (
                             <div className="akv-card">
                                 <div className="akv-card-header">
                                     <Lightbulb size={14} />
@@ -267,7 +296,7 @@ export function AssetKnowledgeView({ assetId, assetTitle, requestWithAuth, onClo
                                     {data.knowledge_gained.map((item, i) => (
                                         <li key={i} className="akv-insight-item">
                                             <span className="akv-insight-dot" />
-                                            <span>{item}</span>
+                                            <span>{typeof item === 'string' ? item : JSON.stringify(item)}</span>
                                         </li>
                                     ))}
                                 </ul>
@@ -275,7 +304,7 @@ export function AssetKnowledgeView({ assetId, assetTitle, requestWithAuth, onClo
                         )}
 
                         {/* Key quotes */}
-                        {data.key_quotes.length > 0 && (
+                        {(data.key_quotes?.length ?? 0) > 0 && (
                             <div className="akv-card">
                                 <div className="akv-card-header">
                                     <MessageSquare size={14} />
@@ -286,7 +315,9 @@ export function AssetKnowledgeView({ assetId, assetTitle, requestWithAuth, onClo
                                         <div key={i} className="akv-quote">
                                             <div className="akv-quote-text">"{q.quote}"</div>
                                             <div className="akv-quote-meta">
-                                                <span className="akv-quote-context">{q.context}</span>
+                                                {q.context && (
+                                                    <span className="akv-quote-context">{q.context}</span>
+                                                )}
                                                 <button
                                                     type="button"
                                                     className="akv-time-chip"
@@ -308,15 +339,32 @@ export function AssetKnowledgeView({ assetId, assetTitle, requestWithAuth, onClo
                                 <div className="akv-card-header">
                                     <AlertCircle size={14} />
                                     <span>Problems</span>
-                                    <span className="akv-card-count">{data.problems_encountered.length}</span>
+                                    <span className="akv-card-count">{problems.length}</span>
                                 </div>
-                                {data.problems_encountered.length === 0
+                                {problems.length === 0
                                     ? <div className="akv-empty-mini">None encountered</div>
                                     : <ul className="akv-insight-list">
-                                        {data.problems_encountered.map((p, i) => (
+                                        {problems.map((p, i) => (
                                             <li key={i} className="akv-insight-item akv-insight-item--red">
                                                 <span className="akv-insight-dot" />
-                                                <span>{p}</span>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
+                                                    <span>{p.problem}</span>
+                                                    {p.resolution && (
+                                                        <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                                                            → {p.resolution}
+                                                        </span>
+                                                    )}
+                                                    {(p.start_sec !== undefined) && (
+                                                        <button
+                                                            type="button"
+                                                            className="akv-time-chip"
+                                                            style={{ alignSelf: 'flex-start', marginTop: 2 }}
+                                                            onClick={() => onSeek?.(p.start_sec!)}
+                                                        >
+                                                            <Clock size={9} />{formatSeconds(p.start_sec)}
+                                                        </button>
+                                                    )}
+                                                </div>
                                             </li>
                                         ))}
                                     </ul>
@@ -326,15 +374,32 @@ export function AssetKnowledgeView({ assetId, assetTitle, requestWithAuth, onClo
                                 <div className="akv-card-header">
                                     <Star size={14} />
                                     <span>Solutions</span>
-                                    <span className="akv-card-count">{data.solutions_found.length}</span>
+                                    <span className="akv-card-count">{solutions.length}</span>
                                 </div>
-                                {data.solutions_found.length === 0
+                                {solutions.length === 0
                                     ? <div className="akv-empty-mini">None recorded</div>
                                     : <ul className="akv-insight-list">
-                                        {data.solutions_found.map((s, i) => (
+                                        {solutions.map((s, i) => (
                                             <li key={i} className="akv-insight-item akv-insight-item--green">
                                                 <span className="akv-insight-dot" />
-                                                <span>{s}</span>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
+                                                    <span>{s.solution}</span>
+                                                    {s.problem && (
+                                                        <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                                                            For: {s.problem}
+                                                        </span>
+                                                    )}
+                                                    {(s.start_sec !== undefined) && (
+                                                        <button
+                                                            type="button"
+                                                            className="akv-time-chip"
+                                                            style={{ alignSelf: 'flex-start', marginTop: 2 }}
+                                                            onClick={() => onSeek?.(s.start_sec!)}
+                                                        >
+                                                            <Clock size={9} />{formatSeconds(s.start_sec)}
+                                                        </button>
+                                                    )}
+                                                </div>
                                             </li>
                                         ))}
                                     </ul>
@@ -344,36 +409,42 @@ export function AssetKnowledgeView({ assetId, assetTitle, requestWithAuth, onClo
 
                         {/* Tags & technologies */}
                         <div className="akv-two-col">
-                            <div className="akv-card">
-                                <div className="akv-card-header">
-                                    <Hash size={14} />
-                                    <span>Technologies</span>
+                            {(data.primary_technology || (data.secondary_technologies?.length ?? 0) > 0) && (
+                                <div className="akv-card">
+                                    <div className="akv-card-header">
+                                        <Hash size={14} />
+                                        <span>Technologies</span>
+                                    </div>
+                                    <div className="akv-tag-cloud">
+                                        {data.primary_technology && (
+                                            <span className="akv-tech-chip akv-tech-chip--primary">{data.primary_technology}</span>
+                                        )}
+                                        {(data.secondary_technologies ?? []).map((t, i) => (
+                                            <span key={i} className="akv-tech-chip">{t}</span>
+                                        ))}
+                                    </div>
                                 </div>
-                                <div className="akv-tag-cloud">
-                                    <span className="akv-tech-chip akv-tech-chip--primary">{data.primary_technology}</span>
-                                    {data.secondary_technologies.map((t, i) => (
-                                        <span key={i} className="akv-tech-chip">{t}</span>
-                                    ))}
+                            )}
+                            {(data.tags?.length ?? 0) > 0 && (
+                                <div className="akv-card">
+                                    <div className="akv-card-header">
+                                        <Tag size={14} />
+                                        <span>Tags</span>
+                                    </div>
+                                    <div className="akv-tag-cloud">
+                                        {data.tags.map((tag, i) => (
+                                            <span key={i} className="akv-tag-chip">{tag}</span>
+                                        ))}
+                                    </div>
                                 </div>
-                            </div>
-                            <div className="akv-card">
-                                <div className="akv-card-header">
-                                    <Tag size={14} />
-                                    <span>Tags</span>
-                                </div>
-                                <div className="akv-tag-cloud">
-                                    {data.tags.map((tag, i) => (
-                                        <span key={i} className="akv-tag-chip">{tag}</span>
-                                    ))}
-                                </div>
-                            </div>
+                            )}
                         </div>
 
                         {/* Meta */}
                         <div className="akv-meta-row">
-                            <span>Model: <strong>{data.llm_model}</strong></span>
-                            <span>Cost: <strong>${data.cost_usd.toFixed(6)}</strong></span>
-                            <span>Synthesized: <strong>{formatDate(data.synthesized_at)}</strong></span>
+                            {data.llm_model && <span>Model: <strong>{data.llm_model}</strong></span>}
+                            {data.cost_usd !== undefined && <span>Cost: <strong>${data.cost_usd.toFixed(6)}</strong></span>}
+                            {data.synthesized_at && <span>Synthesized: <strong>{formatDate(data.synthesized_at)}</strong></span>}
                         </div>
                     </div>
                 )}
@@ -381,7 +452,7 @@ export function AssetKnowledgeView({ assetId, assetTitle, requestWithAuth, onClo
                 {/* ── Timeline tab ── */}
                 {activeTab === 'timeline' && (
                     <div className="akv-tab-content">
-                        {data.knowledge_timeline.length === 0 ? (
+                        {(data.knowledge_timeline?.length ?? 0) === 0 ? (
                             <div className="akv-empty-state">No timeline data available.</div>
                         ) : (
                             <div className="akv-timeline">
@@ -412,7 +483,9 @@ export function AssetKnowledgeView({ assetId, assetTitle, requestWithAuth, onClo
                                         <div className="akv-tl-content">
                                             <div className="akv-tl-header">
                                                 <div className="akv-tl-badges">
-                                                    <span className="akv-badge akv-badge--gray">{entry.screen_type}</span>
+                                                    {entry.screen_type && (
+                                                        <span className="akv-badge akv-badge--gray">{entry.screen_type}</span>
+                                                    )}
                                                     <span className="akv-badge akv-badge--gray">{entry.event_type}</span>
                                                 </div>
                                                 <KnowledgeBar value={entry.knowledge_value} />
@@ -434,19 +507,23 @@ export function AssetKnowledgeView({ assetId, assetTitle, requestWithAuth, onClo
                                                 </div>
                                             )}
 
-                                            <div className="akv-tl-application">
-                                                <TrendingUp size={10} />
-                                                <span>{entry.application}</span>
-                                            </div>
+                                            {entry.application && (
+                                                <div className="akv-tl-application">
+                                                    <TrendingUp size={10} />
+                                                    <span>{entry.application}</span>
+                                                </div>
+                                            )}
 
-                                            <div className="akv-tl-tags">
-                                                {entry.topics.map((t, j) => (
-                                                    <span key={j} className="akv-tag-chip akv-tag-chip--sm">{t}</span>
-                                                ))}
-                                                {entry.keywords.map((k, j) => (
-                                                    <span key={j} className="akv-kw-chip">{k}</span>
-                                                ))}
-                                            </div>
+                                            {((entry.topics?.length ?? 0) > 0 || (entry.keywords?.length ?? 0) > 0) && (
+                                                <div className="akv-tl-tags">
+                                                    {(entry.topics ?? []).map((t, j) => (
+                                                        <span key={j} className="akv-tag-chip akv-tag-chip--sm">{t}</span>
+                                                    ))}
+                                                    {(entry.keywords ?? []).map((k, j) => (
+                                                        <span key={j} className="akv-kw-chip">{k}</span>
+                                                    ))}
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 ))}
@@ -458,7 +535,7 @@ export function AssetKnowledgeView({ assetId, assetTitle, requestWithAuth, onClo
                 {/* ── Workflow tab ── */}
                 {activeTab === 'workflow' && (
                     <div className="akv-tab-content">
-                        {data.workflow.length === 0 ? (
+                        {(data.workflow?.length ?? 0) === 0 ? (
                             <div className="akv-empty-state">No workflow steps recorded.</div>
                         ) : (
                             <div className="akv-workflow">

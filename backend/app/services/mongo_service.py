@@ -3,8 +3,14 @@ MongoDB Service for Transcription Results and OCR Knowledge
 
 Handles all MongoDB operations for storing transcription segments, OCR frames,
 and knowledge derived from combined transcript + OCR analysis.
+
+FIX: MongoOCRService now detects event-loop changes (which happen when the
+     singleton is shared between the FastAPI event loop and worker threads)
+     and reconnects automatically. This resolves:
+       RuntimeError: Task … got Future … attached to a different loop
 """
 
+import asyncio
 from datetime import datetime
 from typing import Optional
 
@@ -29,9 +35,7 @@ logger = get_logger(__name__)
 
 
 class MongoTranscriptionService:
-    """
-    Service for MongoDB operations on transcription data.
-    """
+    """Service for MongoDB operations on transcription data."""
 
     SEGMENTS_COLLECTION = "transcription_segments"
     JOBS_COLLECTION = "transcription_jobs"
@@ -223,20 +227,22 @@ class MongoOCRService:
     """
     Service for OCR, transcript, and LLM knowledge data in MongoDB.
 
-    Collections:
-      ocr_jobs           — one doc per asset/task
-      ocr_frames         — raw OCR frames after layout reconstruction
-      knowledge_units    — atomic knowledge facts with time anchors
-      asset_knowledge    — session-level summaries with full timeline
-      transcription_jobs — STT job metadata (read-only in this service)
-      transcription_segments — STT segment text (read-only in this service)
+    KEY FIX: Motor's AsyncIOMotorClient binds to the event loop at creation
+    time. Because this singleton is shared between:
+      - The FastAPI/uvicorn event loop  (API requests)
+      - Worker threads with their own event loops  (OCR / LLM workers)
+    …the client can end up being used on the "wrong" loop, causing:
+      RuntimeError: Future attached to a different loop
+
+    Solution: track the loop id at connect() time; on every async entry-point
+    check whether the current loop matches. If not, close the old client and
+    open a fresh one bound to the current loop.
     """
 
     OCR_JOBS_COLLECTION = "ocr_jobs"
     OCR_FRAMES_COLLECTION = "ocr_frames"
     KNOWLEDGE_UNITS_COLLECTION = "knowledge_units"
     ASSET_KNOWLEDGE_COLLECTION = "asset_knowledge"
-    # STT collections (read-only references)
     STT_JOBS_COLLECTION = "transcription_jobs"
     STT_SEGMENTS_COLLECTION = "transcription_segments"
 
@@ -244,16 +250,51 @@ class MongoOCRService:
         self._client: Optional[AsyncIOMotorClient] = None
         self._db: Optional[AsyncIOMotorDatabase] = None
         self._connected = False
+        self._loop_id: Optional[int] = None  # id() of the loop we connected on
+
+    # ── Connection management ─────────────────────────────────────────────────
+
+    def _current_loop_id(self) -> int:
+        try:
+            return id(asyncio.get_event_loop())
+        except RuntimeError:
+            return -1
+
+    def _needs_reconnect(self) -> bool:
+        """Return True if we are not connected or the event loop has changed."""
+        if not self._connected or self._client is None:
+            return True
+        return self._loop_id != self._current_loop_id()
 
     async def connect(self) -> None:
-        if self._connected:
+        if not self._needs_reconnect():
             return
+
+        # Close the stale client safely (may belong to a different loop)
+        if self._client is not None:
+            try:
+                self._client.close()
+            except Exception:
+                pass
+            self._client = None
+            self._db = None
+            self._connected = False
+
         self._client = AsyncIOMotorClient(settings.MONGODB_URL)
         await self._client.admin.command("ping")
         self._db = self._client[settings.MONGODB_DB_NAME]
         await self._create_indexes()
         self._connected = True
-        logger.info("✅ MongoOCRService connected")
+        self._loop_id = self._current_loop_id()
+        logger.info(
+            f"✅ MongoOCRService connected (loop_id={self._loop_id}, "
+            f"db={settings.MONGODB_DB_NAME})"
+        )
+
+    async def _ensure_connected(self) -> None:
+        """Call at the top of every public async method."""
+        if self._needs_reconnect():
+            await self.connect()
 
     async def disconnect(self) -> None:
         if self._client:
@@ -261,6 +302,7 @@ class MongoOCRService:
             self._client = None
             self._db = None
             self._connected = False
+            self._loop_id = None
 
     async def _create_indexes(self) -> None:
         db = self._db
@@ -285,7 +327,6 @@ class MongoOCRService:
             name="uq_ocr_frames_asset_frame",
         )
 
-
         await db[self.KNOWLEDGE_UNITS_COLLECTION].create_index(
             [("content_hash", 1)], name="ix_knowledge_units_hash"
         )
@@ -296,7 +337,6 @@ class MongoOCRService:
         await db[self.KNOWLEDGE_UNITS_COLLECTION].create_index(
             [("asset_id", 1)], name="ix_knowledge_units_asset"
         )
-        # NEW: time-range index for timeline queries
         await db[self.KNOWLEDGE_UNITS_COLLECTION].create_index(
             [("asset_id", 1), ("start_sec", 1)],
             name="ix_knowledge_units_asset_time",
@@ -315,6 +355,7 @@ class MongoOCRService:
         task_id: str,
         status: str = "processing",
     ) -> str:
+        await self._ensure_connected()
         now = datetime.utcnow()
         result = await self._db[self.OCR_JOBS_COLLECTION].find_one_and_update(
             {"asset_id": asset_id},
@@ -346,6 +387,7 @@ class MongoOCRService:
         status: str,
         output_dir: Optional[str] = None,
     ) -> None:
+        await self._ensure_connected()
         update = {
             "$set": {
                 "status": status,
@@ -360,7 +402,6 @@ class MongoOCRService:
             {"_id": ObjectId(job_id)}, update
         )
 
-
     # ── OCR Frames ───────────────────────────────────────────────────────────
 
     async def save_ocr_frames(
@@ -369,6 +410,7 @@ class MongoOCRService:
         user_id: str,
         frames: list[dict],
     ) -> int:
+        await self._ensure_connected()
         if not frames:
             return 0
 
@@ -405,6 +447,7 @@ class MongoOCRService:
     async def get_ocr_frames(
         self, asset_id: str, skip_empty: bool = True
     ) -> list[dict]:
+        await self._ensure_connected()
         query: dict = {"asset_id": asset_id}
         if skip_empty:
             query["processed_text"] = {"$ne": ""}
@@ -423,23 +466,7 @@ class MongoOCRService:
         start_sec: Optional[float] = None,
         end_sec: Optional[float] = None,
     ) -> list[dict]:
-        """
-        Fetch transcript segments for a given asset from the STT pipeline.
-
-        The STT pipeline stores jobs with track_ref_id == asset_id (set by the
-        backend when enqueueing the transcription job). We look up the job by
-        track_ref_id then load all its segments.
-
-        Args:
-            asset_id: Asset UUID string
-            start_sec: Optional lower bound (inclusive) for segment start time
-            end_sec: Optional upper bound (inclusive) for segment start time
-
-        Returns:
-            List of segment dicts sorted by start_time_sec, each containing:
-              start_time_sec, end_time_sec, text, confidence, speaker_label
-        """
-        # Find the transcription job for this asset
+        await self._ensure_connected()
         job = await self._db[self.STT_JOBS_COLLECTION].find_one(
             {"track_ref_id": asset_id}
         )
@@ -470,15 +497,12 @@ class MongoOCRService:
         return segments
 
     async def has_transcript(self, asset_id: str) -> bool:
-        """Check whether any transcript data exists for this asset."""
+        await self._ensure_connected()
         job = await self._db[self.STT_JOBS_COLLECTION].find_one(
             {"track_ref_id": asset_id},
             {"_id": 1},
         )
         return job is not None
-
-    # ── OCR Processed (Gemini windows) ───────────────────────────────────────
-
 
     # ── Knowledge Units ──────────────────────────────────────────────────────
 
@@ -487,6 +511,7 @@ class MongoOCRService:
         Save a knowledge unit. Deduplicates based on content_hash.
         Returns True if inserted (new), False if already exists.
         """
+        await self._ensure_connected()
         existing = await self._db[self.KNOWLEDGE_UNITS_COLLECTION].find_one(
             {"content_hash": unit["content_hash"], "deleted_at": None}
         )
@@ -509,6 +534,7 @@ class MongoOCRService:
         unit_type: Optional[str] = None,
         limit: int = 100,
     ) -> list[dict]:
+        await self._ensure_connected()
         query: dict = {"user_id": user_id, "deleted_at": None}
         if asset_id:
             query["asset_id"] = asset_id
@@ -525,6 +551,7 @@ class MongoOCRService:
     # ── Asset Knowledge Summary ───────────────────────────────────────────────
 
     async def upsert_asset_knowledge(self, asset_id: str, summary: dict) -> str:
+        await self._ensure_connected()
         now = datetime.utcnow()
         result = await self._db[self.ASSET_KNOWLEDGE_COLLECTION].find_one_and_update(
             {"asset_id": asset_id},
@@ -541,13 +568,14 @@ class MongoOCRService:
         return str(result["_id"])
 
     async def get_asset_knowledge(self, asset_id: str) -> Optional[dict]:
+        await self._ensure_connected()
         return await self._db[self.ASSET_KNOWLEDGE_COLLECTION].find_one(
             {"asset_id": asset_id}
         )
 
     @property
     def is_connected(self) -> bool:
-        return self._connected
+        return self._connected and not self._needs_reconnect()
 
 
 # Singleton instances
