@@ -26,8 +26,6 @@ from app.schemas import (
     UploadPresignedResponse,
     UploadSessionResponse,
 )
-from app.services.redis.stt_producer import enqueue_transcription_job
-from app.services.redis.ocr_processor_task import enqueue_video_processing
 from app.services.multipart_upload import MinIOMultipartService, MultipartStorageError
 from app.utils.logger import get_logger
 from app.utils.rate_limit import InMemorySlidingWindowRateLimiter
@@ -333,56 +331,24 @@ async def complete_upload(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
+
     _enforce_rate_limit(current_user.id, "complete")
 
     upload = _get_upload_or_404(db, payload.upload_id, current_user.id)
-
     media_type = _detect_media_type(upload)
-    should_enqueue_stt = False
 
     if upload.status == UploadStatus.COMPLETED:
-        asset, asset_created = _get_or_create_asset_for_upload(
+        asset, _ = _get_or_create_asset_for_upload(
             db=db,
             upload=upload,
             current_user=current_user,
             media_type=media_type,
             total_size=upload.total_size,
         )
-        should_enqueue_stt = asset_created and media_type in {"video", "audio"}
-
-        if should_enqueue_stt:
-            try:
-                await enqueue_transcription_job(
-                    asset_id=asset.id,
-                    egress_id=asset.id,
-                    workspace_id=asset.workspace_id,
-                    user_id=asset.user_id,
-                    source_upload_id=upload.id,
-                    source_object_key=upload.object_key,
-                    media_type=media_type,
-                    source_type=asset.type.value,
-                    filename=upload.filename or Path(upload.object_key).name,
-                    content_type=upload.content_type,
-                    job_context={
-                        "upload_id": str(upload.id),
-                        "upload_type": media_type,
-                        "total_size": upload.total_size,
-                    },
-                )
-                logger.info(
-                    f"📤 STT job enqueued for existing completed upload: upload_id={upload.id}, asset_id={asset.id}"
-                )
-            except Exception as exc:
-                logger.warning(f"Failed to enqueue STT job for existing upload {upload.id}: {exc}")
-
-            # Enqueue OCR/video processing job for video content
-            if media_type == "video":
-                # Auto-enqueue removed - user must manually trigger via /assets/{id}/process
-                pass
-
-        # Mark asset as ready for processing
-        asset.status = AssetStatus.READY
-        db.commit()
+        # Đảm bảo status READY để người dùng có thể trigger process
+        if asset.status == AssetStatus.PENDING:
+            asset.status = AssetStatus.READY
+            db.commit()
 
         return UploadCompleteResponse(
             upload_id=upload.id,
@@ -394,6 +360,7 @@ async def complete_upload(
     if upload.status == UploadStatus.FAILED:
         raise HTTPException(status_code=409, detail="Upload session has failed")
 
+    # ── Validate parts ────────────────────────────────────────────────────────
     parts = (
         db.query(UploadPart)
         .filter(UploadPart.upload_record_id == upload.id)
@@ -429,6 +396,7 @@ async def complete_upload(
     if final_total_size > settings.UPLOAD_MAX_FILE_SIZE_BYTES:
         raise HTTPException(status_code=400, detail="File exceeds upload size limit")
 
+    # ── Complete multipart upload trong MinIO ─────────────────────────────────
     completion_parts = _build_completion_parts(parts)
 
     try:
@@ -455,37 +423,14 @@ async def complete_upload(
         media_type=media_type,
         total_size=final_total_size,
     )
-
-    if media_type in {"video", "audio"}:
-        try:
-            await enqueue_transcription_job(
-                asset_id=asset.id,
-                egress_id=asset.id,
-                workspace_id=asset.workspace_id,
-                user_id=asset.user_id,
-                source_upload_id=upload.id,
-                source_object_key=upload.object_key,
-                media_type=media_type,
-                source_type=asset.type.value,
-                filename=upload.filename or Path(upload.object_key).name,
-                content_type=upload.content_type,
-                job_context={
-                    "upload_id": str(upload.id),
-                    "upload_type": media_type,
-                    "total_size": final_total_size,
-                },
-            )
-            logger.info(
-                f"📤 STT job enqueued after upload complete: upload_id={upload.id}, asset_id={asset.id}, object_key={upload.object_key}"
-            )
-        except Exception as exc:
-            logger.warning(f"Failed to enqueue STT job for upload {upload.id}: {exc}")
-
-        # Auto-enqueue removed - user must manually trigger via /assets/{id}/process
-
-    # Mark asset as ready for processing
     asset.status = AssetStatus.READY
     db.commit()
+
+    logger.info(
+        f"✅ Upload completed: upload_id={upload.id}, asset_id={asset.id}, "
+        f"media_type={media_type}, size={final_total_size}. "
+        f"Asset is READY — call POST /assets/{asset.id}/process to start processing."
+    )
 
     return UploadCompleteResponse(
         upload_id=upload.id,
@@ -594,17 +539,14 @@ def get_upload_access_url(
         expires_in_seconds=expires_in,
     )
 
+
 @router.delete("/{upload_id:uuid}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_upload(
     upload_id: UUID,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
-    """Cancel or delete an upload session.
-    
-    This endpoint allows users to cancel an incomplete upload session or delete a completed upload.
-    Incomplete uploads will have their multipart upload aborted in MinIO.
-    """
+    """Cancel or delete an upload session."""
     _enforce_rate_limit(current_user.id, "delete")
     upload = _get_upload_or_404(db, upload_id, current_user.id)
 

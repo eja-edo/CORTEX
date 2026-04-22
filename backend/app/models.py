@@ -165,79 +165,6 @@ class AssetDerivative(Base):
     )
 
 
-class Segment(Base):
-    """Atomic timeline chunk extracted from an asset."""
-    __tablename__ = "segments"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
-    asset_id = Column(UUID(as_uuid=True), ForeignKey("assets.id", ondelete="CASCADE"), nullable=False, index=True)
-    start_ms = Column(BigInteger, nullable=False)
-    end_ms = Column(BigInteger, nullable=False)
-    source = Column(SQLEnum(SegmentSource, values_callable=_enum_values, name="segmentsource"), nullable=False)
-    confidence = Column(Numeric(5, 4), nullable=True)
-    keyframe_url = Column(Text, nullable=True)
-    language = Column(String(16), nullable=True)
-    external_id = Column(String(255), nullable=True)
-    meta = Column("metadata", JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
-    deleted_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-
-    __table_args__ = (
-        UniqueConstraint("asset_id", "external_id", name="uq_segments_asset_external_id"),
-        Index("ix_segments_asset_start", "asset_id", "start_ms"),
-        Index("ix_segments_user_created", "user_id", "created_at"),
-    )
-
-
-class SegmentContent(Base):
-    """Normalized extracted content per segment and modality."""
-    __tablename__ = "segment_contents"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    segment_id = Column(UUID(as_uuid=True), ForeignKey("segments.id", ondelete="CASCADE"), nullable=False, index=True)
-    content_type = Column(String(16), nullable=False)
-    content = Column(Text, nullable=False)
-    language = Column(String(16), nullable=True)
-    confidence = Column(Numeric(5, 4), nullable=True)
-    meta = Column("metadata", JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-
-    __table_args__ = (
-        UniqueConstraint("segment_id", "content_type", "language", name="uq_segment_contents_triplet"),
-        Index("ix_segment_contents_segment_type", "segment_id", "content_type"),
-    )
-
-
-class NoteSegmentLink(Base):
-    """Many-to-many mapping between knowledge notes and timeline segments."""
-    __tablename__ = "note_segment_links"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
-    note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="CASCADE"), nullable=False, index=True)
-    segment_id = Column(UUID(as_uuid=True), ForeignKey("segments.id", ondelete="CASCADE"), nullable=False, index=True)
-    linked_asset_id = Column(UUID(as_uuid=True), ForeignKey("assets.id"), nullable=False, index=True)
-    linked_start_ms = Column(BigInteger, nullable=False)
-    linked_end_ms = Column(BigInteger, nullable=False)
-    link_type = Column(SQLEnum(LinkType, values_callable=_enum_values, name="linktype"), nullable=False, default=LinkType.REFERENCE, server_default=text("'reference'"))
-    weight = Column(Numeric(5, 4), nullable=False, default=1.0, server_default=text("1.0"))
-    anchor_text = Column(Text, nullable=True)
-    start_offset = Column(Integer, nullable=True)
-    end_offset = Column(Integer, nullable=True)
-    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
-    meta = Column("metadata", JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
-    deleted_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-
-    __table_args__ = (
-        UniqueConstraint("note_id", "segment_id", "link_type", name="uq_note_segment_links_unique"),
-        Index("ix_note_segment_links_note_type", "note_id", "link_type"),
-        Index("ix_note_segment_links_segment_type", "segment_id", "link_type"),
-        Index("ix_note_segment_links_asset_time", "linked_asset_id", "linked_start_ms"),
-    )
 
 
 class Bookmark(Base):
@@ -321,35 +248,6 @@ class IngestJobType(str, Enum):
     CACHE = "cache"
 
 
-class IngestJob(Base):
-    """Worker-dispatched job with cost and progress tracking."""
-    __tablename__ = "ingest_jobs"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
-    asset_id = Column(UUID(as_uuid=True), ForeignKey("assets.id", ondelete="CASCADE"), nullable=False, index=True)
-    job_type = Column(SQLEnum(IngestJobType, values_callable=_enum_values, name="ingestjobtype"), nullable=False)
-    stage = Column(String(32), nullable=True)
-    parent_job_id = Column(UUID(as_uuid=True), ForeignKey("ingest_jobs.id"), nullable=True, index=True)
-    status = Column(SQLEnum(IngestJobStatus, values_callable=_enum_values, name="ingestjobstatus"), nullable=False, default=IngestJobStatus.QUEUED, server_default=text("'queued'"))
-    attempt = Column(Integer, nullable=False, default=0, server_default=text("0"))
-    max_attempts = Column(Integer, nullable=False, default=3, server_default=text("3"))
-    progress = Column(Numeric(5, 2), nullable=False, default=0, server_default=text("0"))
-    error_message = Column(Text, nullable=True)
-    provider = Column(String(32), nullable=True)
-    tokens_used = Column(Integer, nullable=True)
-    cost_usd = Column(Numeric(10, 6), nullable=True)
-    idempotency_key = Column(String(255), nullable=True, unique=True, index=True)
-    payload = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
-    started_at = Column(DateTime, nullable=True)
-    finished_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-
-    __table_args__ = (
-        Index("ix_ingest_jobs_asset_job_stage", "asset_id", "job_type", "stage"),
-        Index("ix_ingest_jobs_status_created_at", "status", "created_at"),
-    )
 
 
 class Notification(Base):

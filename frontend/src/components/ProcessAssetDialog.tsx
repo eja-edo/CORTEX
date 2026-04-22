@@ -8,11 +8,15 @@ type ProcessAssetDialogProps = {
 }
 
 export function ProcessAssetDialog({ assetTitle, isLoading, onProcess, onSkip }: ProcessAssetDialogProps) {
+    // Overlay chỉ gọi onSkip khi không loading
+    const handleOverlayClick = () => {
+        if (!isLoading) onSkip();
+    };
     return (
-        <div className="pad-overlay" onClick={onSkip}>
+        <div className="pad-overlay" onClick={handleOverlayClick}>
             <div className="pad-box" onClick={e => e.stopPropagation()}>
                 <div className="pad-close">
-                    <button type="button" className="pad-close-btn" onClick={onSkip}>
+                    <button type="button" className="pad-close-btn" onClick={onSkip} disabled={isLoading}>
                         <X size={16} />
                     </button>
                 </div>

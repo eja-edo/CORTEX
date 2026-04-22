@@ -1,42 +1,21 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Download, Edit2, Monitor, MoreHorizontal, Pause, Play, RefreshCw, Trash2, Upload, X, Check, Clock, HardDrive, FileVideo, FileAudio, AlertCircle, Zap } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+    Check, Clock, Download, Edit2, FileAudio, FileVideo,
+    HardDrive, Monitor, MoreHorizontal, Pause, Play, RefreshCw,
+    Trash2, Upload, X, AlertCircle, Zap, Radio
+} from 'lucide-react'
 
 import type { AuthRequest, Recording } from './recordingTypes'
 import { ProcessAssetDialog } from './ProcessAssetDialog'
 
-type MediaType = 'video' | 'audio' | 'unknown'
-
-type UploadListItem = {
-    id: string
-    object_key: string
-    filename: string | null
-    content_type: string | null
-    media_type: MediaType
-    total_size: number
-    created_at: string
-    completed_at: string | null
-}
-
-type UploadListResponse = {
-    items: UploadListItem[]
-    total: number
-    limit: number
-    offset: number
-}
-
-type UploadAccessUrlResponse = {
-    upload_id: string
-    object_key: string
-    url: string
-    expires_in_seconds: number
-}
+/* ─────────────────────────── Types ─────────────────────────── */
 
 type AssetResponse = {
     id: string
     user_id: string
     workspace_id: string | null
     type: string
-    status: string
+    status: string          // 'READY' | 'PROCESSING' | 'PENDING' | 'ERROR' | …
     title: string | null
     description: string | null
     source_upload_id: string | null
@@ -46,9 +25,16 @@ type AssetResponse = {
     updated_at: string
 }
 
+type UploadAccessUrlResponse = {
+    upload_id: string
+    object_key: string
+    url: string
+    expires_in_seconds: number
+}
+
 type RecordingsListProps = {
     requestWithAuth: AuthRequest
-    recordings: Recording[]
+    recordings: Recording[]          // local / in-session recordings
     playingId: string | null
     onPlay: (recording: Recording) => void
     onPlayServerVideo: (params: { id: string; name: string; url: string }) => void
@@ -56,13 +42,13 @@ type RecordingsListProps = {
     onUpload: (recordingId: string) => void
     onDownload: (recording: Recording) => void
     onDelete: (recordingId: string) => void
+    /** Stream from an active screen / audio capture, used for the live preview panel */
+    activeStream?: MediaStream | null
+    /** Which card is actively recording – 'screen' | 'audio' | null */
+    recordingType?: 'screen' | 'audio' | null
 }
 
-function formatDuration(seconds: number): string {
-    const m = Math.floor(seconds / 60)
-    const s = seconds % 60
-    return `${m}:${s.toString().padStart(2, '0')}`
-}
+/* ─────────────────────────── Helpers ─────────────────────────── */
 
 function formatFileSize(bytes: number): string {
     if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
@@ -83,25 +69,30 @@ function formatRelativeTime(isoString: string): string {
     return date.toLocaleDateString('vi-VN')
 }
 
-function fallbackName(item: UploadListItem): string {
-    if (item.filename && item.filename.trim().length > 0) return item.filename
-    const parts = item.object_key.split('/')
-    return parts[parts.length - 1] || item.object_key
+function formatDuration(seconds: number): string {
+    const m = Math.floor(seconds / 60)
+    const s = seconds % 60
+    return `${m}:${s.toString().padStart(2, '0')}`
 }
 
-function ProgressRing({ progress, size = 28 }: { progress: number; size?: number }) {
-    const r = (size - 4) / 2
-    const circ = 2 * Math.PI * r
-    const offset = circ - (progress / 100) * circ
-    return (
-        <svg width={size} height={size} style={{ transform: 'rotate(-90deg)', flexShrink: 0 }}>
-            <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--border)" strokeWidth="2" />
-            <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--accent)" strokeWidth="2"
-                strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round"
-                style={{ transition: 'stroke-dashoffset 0.3s ease' }} />
-        </svg>
-    )
+/* ─────────────────────── Status badge ──────────────────────── */
+
+function AssetStatusBadge({ status }: { status: string }) {
+    switch (status.toUpperCase()) {
+        case 'READY':
+            return <span className="rl2-badge rl2-badge--ok"><Check size={10} />Ready</span>
+        case 'PROCESSING':
+            return <span className="rl2-badge rl2-badge--uploading"><RefreshCw size={10} className="rl2-spin" />Processing</span>
+        case 'PENDING':
+            return <span className="rl2-badge rl2-badge--local"><Clock size={10} />Pending</span>
+        case 'ERROR':
+            return <span className="rl2-badge rl2-badge--err"><AlertCircle size={10} />Error</span>
+        default:
+            return <span className="rl2-badge rl2-badge--local">{status}</span>
+    }
 }
+
+/* ─────────────────────── Inline edit ───────────────────────── */
 
 function InlineEdit({ value, onSave, onCancel }: { value: string; onSave: (v: string) => void; onCancel: () => void }) {
     const [draft, setDraft] = useState(value)
@@ -122,6 +113,8 @@ function InlineEdit({ value, onSave, onCancel }: { value: string; onSave: (v: st
     )
 }
 
+/* ─────────────────────── Confirm delete ────────────────────── */
+
 function ConfirmDelete({ name, onConfirm, onCancel }: { name: string; onConfirm: () => void; onCancel: () => void }) {
     return (
         <div className="rl2-confirm-overlay" onClick={onCancel}>
@@ -137,6 +130,8 @@ function ConfirmDelete({ name, onConfirm, onCancel }: { name: string; onConfirm:
         </div>
     )
 }
+
+/* ─────────────────────── Context menu ──────────────────────── */
 
 function ContextMenu({ items, onClose }: {
     items: { label: string; icon: React.ReactNode; danger?: boolean; disabled?: boolean; onClick: () => void }[]
@@ -160,6 +155,112 @@ function ContextMenu({ items, onClose }: {
     )
 }
 
+/* ──────────────────── Live Recording Preview Panel ─────────────────────
+   Shows the live MediaStream while a capture is in progress.
+   For screen captures → shows the video feed.
+   For audio captures → shows an animated waveform visualiser.
+──────────────────────────────────────────────────────────────────────── */
+
+function AudioVisualiser({ stream }: { stream: MediaStream }) {
+    const canvasRef = useRef<HTMLCanvasElement>(null)
+    const rafRef = useRef<number>(0)
+
+    useEffect(() => {
+        const ctx = new AudioContext()
+        const source = ctx.createMediaStreamSource(stream)
+        const analyser = ctx.createAnalyser()
+        analyser.fftSize = 64
+        source.connect(analyser)
+
+        const buf = new Uint8Array(analyser.frequencyBinCount)
+        const canvas = canvasRef.current!
+        const c = canvas.getContext('2d')!
+
+        const draw = () => {
+            rafRef.current = requestAnimationFrame(draw)
+            analyser.getByteFrequencyData(buf)
+            c.clearRect(0, 0, canvas.width, canvas.height)
+
+            const barW = canvas.width / buf.length
+            buf.forEach((v, i) => {
+                const h = (v / 255) * canvas.height * 0.85
+                const x = i * barW
+                // gradient bar
+                const grad = c.createLinearGradient(0, canvas.height, 0, canvas.height - h)
+                grad.addColorStop(0, 'rgba(35,131,226,0.9)')
+                grad.addColorStop(1, 'rgba(35,131,226,0.3)')
+                c.fillStyle = grad
+                c.beginPath()
+                c.roundRect(x + 1, canvas.height - h, barW - 2, h, 2)
+                c.fill()
+            })
+        }
+        draw()
+        return () => {
+            cancelAnimationFrame(rafRef.current)
+            void ctx.close()
+        }
+    }, [stream])
+
+    return <canvas ref={canvasRef} className="rp-audio-canvas" width={480} height={80} />
+}
+
+function RecordingPreviewPanel({ stream, recordingType, elapsedSeconds }: {
+    stream: MediaStream
+    recordingType: 'screen' | 'audio'
+    elapsedSeconds: number
+}) {
+    const isVideo = recordingType === 'screen'
+
+    // Callback ref: fires the instant <video> mounts into the DOM.
+    // A useEffect would run after paint and could miss the window where
+    // autoPlay needs srcObject already set.
+    const videoCallbackRef = useCallback((el: HTMLVideoElement | null) => {
+        if (el) el.srcObject = stream
+    }, [stream])
+
+    const elapsed = formatDuration(elapsedSeconds)
+
+    return (
+        <div className="rp-panel">
+            {/* Header bar */}
+            <div className="rp-header">
+                <span className="rp-live-dot" />
+                <span className="rp-live-label">LIVE</span>
+                <span className="rp-type-label">{isVideo ? 'Screen capture' : 'Audio capture'}</span>
+                <span className="rp-elapsed">{elapsed}</span>
+            </div>
+
+            {/* Preview area */}
+            <div className="rp-preview-area">
+                {isVideo ? (
+                    <video
+                        ref={videoCallbackRef}
+                        className="rp-video"
+                        autoPlay
+                        muted
+                        playsInline
+                    />
+                ) : (
+                    <div className="rp-audio-wrap">
+                        <Radio size={22} className="rp-audio-icon" />
+                        <AudioVisualiser stream={stream} />
+                        <span className="rp-audio-hint">Listening…</span>
+                    </div>
+                )}
+
+                {/* Corner overlay badge */}
+                <div className="rp-corner-badge">
+                    <span className="rp-corner-dot" />
+                    REC {elapsed}
+                </div>
+            </div>
+        </div>
+    )
+}
+
+/* ──────────────────── Local recording row ──────────────────── */
+
 function LocalRecordingRow({ rec, isPlaying, onPlay, onUpload, onDownload, onDelete, onRename }: {
     rec: Recording; isPlaying: boolean
     onPlay: () => void; onUpload: () => void; onDownload: () => void
@@ -182,7 +283,7 @@ function LocalRecordingRow({ rec, isPlaying, onPlay, onUpload, onDownload, onDel
     ]
 
     const statusBadge = () => {
-        if (rec.uploadState === 'uploading') return <span className="rl2-badge rl2-badge--uploading"><ProgressRing progress={rec.uploadProgress ?? 0} size={14} />{rec.uploadProgress}%</span>
+        if (rec.uploadState === 'uploading') return <span className="rl2-badge rl2-badge--uploading"><RefreshCw size={10} className="rl2-spin" />{rec.uploadProgress}%</span>
         if (rec.uploadState === 'uploaded') return <span className="rl2-badge rl2-badge--ok"><Check size={10} />Synced</span>
         if (rec.uploadState === 'failed') return <span className="rl2-badge rl2-badge--err"><AlertCircle size={10} />Failed</span>
         return <span className="rl2-badge rl2-badge--local">Local</span>
@@ -192,8 +293,7 @@ function LocalRecordingRow({ rec, isPlaying, onPlay, onUpload, onDownload, onDel
         <>
             <div className={`rl2-row ${isPlaying ? 'rl2-row--playing' : ''}`}>
                 <button type="button" className={`rl2-play-btn ${isPlaying ? 'rl2-play-btn--active' : ''}`} onClick={onPlay}>
-                    {rec.uploadState === 'uploading' ? <ProgressRing progress={rec.uploadProgress ?? 0} />
-                        : isPlaying ? <Pause size={14} /> : rec.type === 'audio' ? <FileAudio size={14} /> : <FileVideo size={14} />}
+                    {isPlaying ? <Pause size={14} /> : rec.type === 'audio' ? <FileAudio size={14} /> : <FileVideo size={14} />}
                 </button>
                 <div className="rl2-info">
                     {isEditing
@@ -229,22 +329,30 @@ function LocalRecordingRow({ rec, isPlaying, onPlay, onUpload, onDownload, onDel
     )
 }
 
-function ServerRecordingRow({ item, asset, isPlaying, isActionLoading, onPlay, onDownload, onDelete, onRename, onProcess }: {
-    item: UploadListItem; asset: AssetResponse | undefined
-    isPlaying: boolean; isActionLoading: boolean
-    onPlay: () => void; onDownload: () => void; onDelete: () => void; onRename: (name: string) => void; onProcess: () => void
+/* ──────────────────── Asset (cloud) row ───────────────────── */
+
+function AssetRow({ asset, isPlaying, isActionLoading, onPlay, onDownload, onDelete, onRename, onProcess }: {
+    asset: AssetResponse
+    isPlaying: boolean
+    isActionLoading: boolean
+    onPlay: () => void
+    onDownload: () => void
+    onDelete: () => void
+    onRename: (name: string) => void
+    onProcess: () => void
 }) {
     const [isEditing, setIsEditing] = useState(false)
     const [menuOpen, setMenuOpen] = useState(false)
     const [confirmDelete, setConfirmDelete] = useState(false)
-    const displayName = asset?.title || fallbackName(item)
-    const assetStatus = asset?.status || 'unknown'
-    const canProcess = assetStatus === 'READY'
+
+    const displayName = asset.title || asset.source_object_key.split('/').pop() || asset.id
+    const canProcess = asset.status.toUpperCase() === 'READY'
+    const isAudio = asset.type?.toLowerCase().includes('audio')
 
     const menuItems = [
         { label: 'Rename', icon: <Edit2 size={12} />, onClick: () => setIsEditing(true) },
         { label: 'Download', icon: <Download size={12} />, onClick: onDownload },
-        { label: 'Process', icon: <Zap size={12} />, disabled: !canProcess, onClick: onProcess },
+        { label: 'Process with AI', icon: <Zap size={12} />, disabled: !canProcess, onClick: onProcess },
         { label: 'Delete', icon: <Trash2 size={12} />, danger: true, onClick: () => setConfirmDelete(true) },
     ]
 
@@ -252,21 +360,32 @@ function ServerRecordingRow({ item, asset, isPlaying, isActionLoading, onPlay, o
         <>
             <div className={`rl2-row ${isPlaying ? 'rl2-row--playing' : ''} ${isActionLoading ? 'rl2-row--loading' : ''}`}>
                 <button type="button" className={`rl2-play-btn ${isPlaying ? 'rl2-play-btn--active' : ''}`} onClick={onPlay} disabled={isActionLoading}>
-                    {isActionLoading ? <RefreshCw size={14} className="rl2-spin" />
-                        : isPlaying ? <Pause size={14} /> : item.media_type === 'audio' ? <FileAudio size={14} /> : <FileVideo size={14} />}
+                    {isActionLoading
+                        ? <RefreshCw size={14} className="rl2-spin" />
+                        : isPlaying
+                            ? <Pause size={14} />
+                            : isAudio ? <FileAudio size={14} /> : <FileVideo size={14} />}
                 </button>
+
                 <div className="rl2-info">
                     {isEditing
                         ? <InlineEdit value={displayName} onSave={v => { onRename(v); setIsEditing(false) }} onCancel={() => setIsEditing(false)} />
                         : <div className="rl2-name" onDoubleClick={() => setIsEditing(true)}>{displayName}</div>}
+
                     <div className="rl2-meta">
-                        {item.total_size > 0 && <span><HardDrive size={9} />{formatFileSize(item.total_size)}</span>}
-                        <span>{item.media_type === 'audio' ? 'Audio' : 'Video'}</span>
-                        <span className="rl2-badge rl2-badge--ok"><Check size={10} />Synced</span>
-                        {item.completed_at && <span><Clock size={9} />{formatRelativeTime(item.completed_at)}</span>}
+                        {/* status */}
+                        <AssetStatusBadge status={asset.status} />
+                        {/* size from metadata if available */}
+                        {(asset.metadata as any)?.size && (
+                            <span><HardDrive size={9} />{formatFileSize((asset.metadata as any).size)}</span>
+                        )}
+                        {/* created_at */}
+                        <span><Clock size={9} />{formatRelativeTime(asset.created_at)}</span>
                     </div>
-                    {asset?.description && <div className="rl2-asset-desc">{asset.description}</div>}
+
+                    {asset.description && <div className="rl2-asset-desc">{asset.description}</div>}
                 </div>
+
                 <div className="rl2-actions">
                     <button type="button" className={`rl2-action-btn ${isPlaying ? 'active' : ''}`} onClick={onPlay} disabled={isActionLoading}>
                         {isPlaying ? <Pause size={12} /> : <Play size={12} />}
@@ -276,7 +395,9 @@ function ServerRecordingRow({ item, asset, isPlaying, isActionLoading, onPlay, o
                             <Zap size={12} />
                         </button>
                     )}
-                    <button type="button" className="rl2-action-btn" onClick={onDownload} disabled={isActionLoading} title="Download"><Download size={12} /></button>
+                    <button type="button" className="rl2-action-btn" onClick={onDownload} disabled={isActionLoading} title="Download">
+                        <Download size={12} />
+                    </button>
                     <div className="rl2-menu-wrap">
                         <button type="button" className={`rl2-action-btn ${menuOpen ? 'active' : ''}`} onClick={() => setMenuOpen(v => !v)}>
                             <MoreHorizontal size={12} />
@@ -285,238 +406,193 @@ function ServerRecordingRow({ item, asset, isPlaying, isActionLoading, onPlay, o
                     </div>
                 </div>
             </div>
-            {confirmDelete && <ConfirmDelete name={displayName} onConfirm={() => { setConfirmDelete(false); onDelete() }} onCancel={() => setConfirmDelete(false)} />}
+
+            {confirmDelete && (
+                <ConfirmDelete
+                    name={displayName}
+                    onConfirm={() => { setConfirmDelete(false); onDelete() }}
+                    onCancel={() => setConfirmDelete(false)}
+                />
+            )}
         </>
     )
 }
+
+/* ──────────────────── Main component ──────────────────────── */
 
 export function RecordingsList({
     requestWithAuth, recordings, playingId,
     onPlay, onPlayServerVideo, onPlayServerAudio,
     onUpload, onDownload, onDelete,
+    activeStream, recordingType,
 }: RecordingsListProps) {
-    const [serverItems, setServerItems] = useState<UploadListItem[]>([])
-    // Keyed by source_upload_id (= UploadListItem.id) for O(1) lookup
-    const [assetByUploadId, setAssetByUploadId] = useState<Record<string, AssetResponse>>({})
-    const [isLoadingServer, setIsLoadingServer] = useState(false)
-    const [serverError, setServerError] = useState<string>('')
-    const [serverActionLoadingId, setServerActionLoadingId] = useState<string | null>(null)
+    const [assets, setAssets] = useState<AssetResponse[]>([])
+    const [isLoadingAssets, setIsLoadingAssets] = useState(false)
+    const [assetError, setAssetError] = useState('')
+    const [actionLoadingId, setActionLoadingId] = useState<string | null>(null)
     const [localNames, setLocalNames] = useState<Record<string, string>>({})
     const [pendingProcessAssetId, setPendingProcessAssetId] = useState<string | null>(null)
     const [isProcessing, setIsProcessing] = useState(false)
+    // Track asset IDs that have already triggered the process dialog so we never re-open after dismiss
+    const promptedAssetIds = useRef<Set<string>>(new Set())
 
-    const getServerAccessUrl = useCallback(async (item: UploadListItem, disposition: 'inline' | 'attachment') => {
+    // elapsed timer for preview panel
+    const [elapsedSeconds, setElapsedSeconds] = useState(0)
+    const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+    const isRecording = Boolean(activeStream && recordingType)
+
+    // start / stop elapsed timer with recording state
+    useEffect(() => {
+        if (isRecording) {
+            setElapsedSeconds(0)
+            timerRef.current = setInterval(() => setElapsedSeconds(s => s + 1), 1000)
+        } else {
+            if (timerRef.current) clearInterval(timerRef.current)
+            setElapsedSeconds(0)
+        }
+        return () => { if (timerRef.current) clearInterval(timerRef.current) }
+    }, [isRecording])
+
+    /* ── fetch assets ── */
+    const loadAssets = useCallback(async () => {
+        setIsLoadingAssets(true)
+        setAssetError('')
+        try {
+            const list = await requestWithAuth<AssetResponse[]>('/assets?limit=200&offset=0')
+            // sort newest first
+            list.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+            setAssets(list)
+        } catch (err) {
+            setAssetError(err instanceof Error ? err.message : 'Cannot load recordings from server')
+        } finally {
+            setIsLoadingAssets(false)
+        }
+    }, [requestWithAuth])
+
+    useEffect(() => { void loadAssets() }, [loadAssets])
+
+    // Reload after a local recording finishes uploading
+    useEffect(() => {
+        const hasNewUpload = recordings.some(r => r.uploadState === 'uploaded')
+        if (hasNewUpload) void loadAssets()
+    }, [recordings, loadAssets])
+
+    // Auto-open process dialog when an upload completes — only once per asset ID
+    useEffect(() => {
+        for (const rec of recordings) {
+            if (
+                rec.uploadState === 'uploaded' &&
+                rec.uploadedAssetId &&
+                !promptedAssetIds.current.has(rec.uploadedAssetId)
+            ) {
+                promptedAssetIds.current.add(rec.uploadedAssetId)
+                setPendingProcessAssetId(rec.uploadedAssetId)
+                break // only open one dialog at a time
+            }
+        }
+    }, [recordings])
+
+    /* ── get playback URL from upload id ── */
+    const getAccessUrl = useCallback(async (asset: AssetResponse, disposition: 'inline' | 'attachment') => {
+        if (!asset.source_upload_id) throw new Error('No upload ID on asset')
         const resp = await requestWithAuth<UploadAccessUrlResponse>(
-            `/upload/access?upload_id=${item.id}&disposition=${disposition}`, { method: 'GET' })
+            `/upload/access?upload_id=${asset.source_upload_id}&disposition=${disposition}`,
+            { method: 'GET' }
+        )
         return resp.url
     }, [requestWithAuth])
 
-    // Load all assets and build a map: source_upload_id → asset
-    const loadAssets = useCallback(async () => {
+    /* ── play ── */
+    const handlePlay = useCallback(async (asset: AssetResponse) => {
+        setActionLoadingId(asset.id)
+        setAssetError('')
         try {
-            const assets = await requestWithAuth<AssetResponse[]>('/assets?limit=200&offset=0')
-            const map: Record<string, AssetResponse> = {}
-            for (const a of assets) {
-                if (a.source_upload_id) map[a.source_upload_id] = a
-            }
-            setAssetByUploadId(map)
-        } catch { /* non-critical */ }
-    }, [requestWithAuth])
-
-    // Fetch a single asset by asset_id and index it by source_upload_id
-    const upsertAssetById = useCallback(async (assetId: string) => {
-        try {
-            const asset = await requestWithAuth<AssetResponse>(`/assets/${assetId}`)
-            if (asset.source_upload_id) {
-                setAssetByUploadId(prev => ({ ...prev, [asset.source_upload_id!]: asset }))
-            }
-        } catch { /* non-critical */ }
-    }, [requestWithAuth])
-
-    const loadServerItems = useCallback(async () => {
-        setIsLoadingServer(true)
-        setServerError('')
-        try {
-            const response = await requestWithAuth<UploadListResponse>('/upload/list?limit=100&offset=0', { method: 'GET' })
-            setServerItems(response.items)
+            const url = await getAccessUrl(asset, 'inline')
+            const name = asset.title || asset.id
+            const isAudio = asset.type?.toLowerCase().includes('audio')
+            if (isAudio) onPlayServerAudio({ id: asset.id, name, url })
+            else onPlayServerVideo({ id: asset.id, name, url })
         } catch (err) {
-            setServerError(err instanceof Error ? err.message : 'Cannot load recordings from server')
+            setAssetError(err instanceof Error ? err.message : 'Cannot play media')
         } finally {
-            setIsLoadingServer(false)
+            setActionLoadingId(null)
         }
-    }, [requestWithAuth])
+    }, [getAccessUrl, onPlayServerVideo, onPlayServerAudio])
 
-    useEffect(() => {
-        void loadServerItems()
-        void loadAssets()
-    }, [loadServerItems, loadAssets])
-
-    useEffect(() => {
-        if (recordings.length === 0) return
-        void loadServerItems()
-    }, [recordings, loadServerItems])
-
-    // When upload completes and we get an asset_id, fetch that asset
-    useEffect(() => {
-        for (const rec of recordings) {
-            if (rec.uploadedAssetId) {
-                // uploadedAssetId = asset UUID; check if we already have it indexed
-                const alreadyLoaded = Object.values(assetByUploadId).some(a => a.id === rec.uploadedAssetId)
-                if (!alreadyLoaded) void upsertAssetById(rec.uploadedAssetId)
-            }
-            // Show process dialog when upload just completed (state = 'uploaded')
-            if (rec.uploadState === 'uploaded' && rec.uploadedAssetId && !pendingProcessAssetId) {
-                setPendingProcessAssetId(rec.uploadedAssetId)
-            }
-        }
-    }, [recordings, assetByUploadId, upsertAssetById, pendingProcessAssetId])
-
-    const localUploadedKeys = useMemo(
-        () => new Set(recordings.map(r => r.uploadedObjectKey).filter((k): k is string => Boolean(k))),
-        [recordings],
-    )
-    const dedupedServerItems = useMemo(
-        () => serverItems.filter(item => !localUploadedKeys.has(item.object_key)),
-        [localUploadedKeys, serverItems],
-    )
-    const totalCount = recordings.length + dedupedServerItems.length
-
-    const handleServerPlay = useCallback(async (item: UploadListItem) => {
-        setServerActionLoadingId(item.id)
-        setServerError('')
+    /* ── download ── */
+    const handleDownload = useCallback(async (asset: AssetResponse) => {
+        setActionLoadingId(asset.id)
+        setAssetError('')
         try {
-            const url = await getServerAccessUrl(item, 'inline')
-            const name = assetByUploadId[item.id]?.title || fallbackName(item)
-            if (item.media_type === 'video') onPlayServerVideo({ id: item.id, name, url })
-            else onPlayServerAudio({ id: item.id, name, url })
-        } catch (err) {
-            setServerError(err instanceof Error ? err.message : 'Cannot play media')
-        } finally {
-            setServerActionLoadingId(null)
-        }
-    }, [getServerAccessUrl, assetByUploadId, onPlayServerVideo, onPlayServerAudio])
-
-    const handleServerDownload = useCallback(async (item: UploadListItem) => {
-        setServerActionLoadingId(item.id)
-        setServerError('')
-        try {
-            const url = await getServerAccessUrl(item, 'attachment')
-            const name = assetByUploadId[item.id]?.title || fallbackName(item)
+            const url = await getAccessUrl(asset, 'attachment')
+            const name = asset.title || asset.id
             const a = document.createElement('a')
             a.href = url; a.download = name; a.target = '_blank'; a.rel = 'noreferrer noopener'; a.click()
         } catch (err) {
-            setServerError(err instanceof Error ? err.message : 'Cannot download media')
+            setAssetError(err instanceof Error ? err.message : 'Cannot download media')
         } finally {
-            setServerActionLoadingId(null)
+            setActionLoadingId(null)
         }
-    }, [getServerAccessUrl, assetByUploadId])
+    }, [getAccessUrl])
 
-    const handleServerDelete = useCallback(async (item: UploadListItem) => {
-        setServerError('')
-        // asset keyed by upload_id
-        const asset = assetByUploadId[item.id]
+    /* ── delete ── */
+    const handleDelete = useCallback(async (asset: AssetResponse) => {
+        setAssetError('')
         try {
-            if (asset) {
-                // PATCH /api/assets/{id} sets status=ARCHIVED (soft delete per doc)
-                await requestWithAuth(`/assets/${asset.id}`, { method: 'DELETE' })
-                setAssetByUploadId(prev => { const n = { ...prev }; delete n[item.id]; return n })
-            } else {
-                await requestWithAuth(`/upload/${item.id}`, { method: 'DELETE' })
-            }
-            setServerItems(prev => prev.filter(s => s.id !== item.id))
+            await requestWithAuth(`/assets/${asset.id}`, { method: 'DELETE' })
+            setAssets(prev => prev.filter(a => a.id !== asset.id))
         } catch (err) {
-            setServerError(err instanceof Error ? err.message : 'Cannot delete recording')
+            setAssetError(err instanceof Error ? err.message : 'Cannot delete recording')
         }
-    }, [requestWithAuth, assetByUploadId])
+    }, [requestWithAuth])
 
-    const handleServerRename = useCallback(async (item: UploadListItem, newTitle: string) => {
-        setServerError('')
-        const asset = assetByUploadId[item.id]
-
-        if (asset) {
-            // Happy path: asset already loaded → PATCH /api/assets/{asset.id}
-            try {
-                const updated = await requestWithAuth<AssetResponse>(`/assets/${asset.id}`, {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ title: newTitle }),
-                })
-                setAssetByUploadId(prev => ({ ...prev, [item.id]: updated }))
-            } catch (err) {
-                setServerError(err instanceof Error ? err.message : 'Cannot rename recording')
-            }
-            return
-        }
-
-        // Asset not in map yet — reload assets list and retry
+    /* ── rename ── */
+    const handleRename = useCallback(async (asset: AssetResponse, newTitle: string) => {
+        setAssetError('')
         try {
-            const assets = await requestWithAuth<AssetResponse[]>('/assets?limit=200&offset=0')
-            const found = assets.find(a => a.source_upload_id === item.id)
-            if (found) {
-                const updated = await requestWithAuth<AssetResponse>(`/assets/${found.id}`, {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ title: newTitle }),
-                })
-                setAssetByUploadId(prev => ({ ...prev, [item.id]: updated }))
-            } else {
-                // No asset exists yet — update filename in local server item list optimistically
-                setServerItems(prev => prev.map(s => s.id === item.id ? { ...s, filename: newTitle } : s))
-            }
+            const updated = await requestWithAuth<AssetResponse>(`/assets/${asset.id}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title: newTitle }),
+            })
+            setAssets(prev => prev.map(a => a.id === asset.id ? updated : a))
         } catch (err) {
-            setServerError(err instanceof Error ? err.message : 'Cannot rename recording')
+            setAssetError(err instanceof Error ? err.message : 'Cannot rename recording')
         }
-    }, [requestWithAuth, assetByUploadId])
+    }, [requestWithAuth])
 
-    const handleServerProcess = useCallback((item: UploadListItem) => {
-        setServerError('')
-        const asset = assetByUploadId[item.id]
-
-        if (!asset) {
-            setServerError('Asset information not available')
-            return
-        }
-
-        // Show process dialog instead of directly processing
+    /* ── process ── */
+    const handleProcess = useCallback((asset: AssetResponse) => {
         setPendingProcessAssetId(asset.id)
-    }, [assetByUploadId])
-
-    const handleLocalRename = useCallback((id: string, name: string) => {
-        setLocalNames(prev => ({ ...prev, [id]: name }))
     }, [])
 
-    const handleProcessPendingAsset = useCallback(async () => {
+    const handleProcessConfirm = useCallback(async () => {
         if (!pendingProcessAssetId) return
-
         setIsProcessing(true)
         try {
-            const result = await requestWithAuth<{ success: boolean; message?: string; error?: string }>(
-                `/assets/${pendingProcessAssetId}/process`,
-                { method: 'POST' }
-            )
-            if (result.success) {
-                setPendingProcessAssetId(null)
-                // Reload assets to get updated status
-                setTimeout(() => {
-                    void loadAssets()
-                }, 1000)
-            } else {
-                setServerError(result.error || 'Failed to start processing')
-            }
+            await requestWithAuth(`/assets/${pendingProcessAssetId}/process`, { method: 'POST' })
+            setPendingProcessAssetId(null)
+            setTimeout(() => void loadAssets(), 1000)
         } catch (err) {
-            setServerError(err instanceof Error ? err.message : 'Cannot start processing')
+            setAssetError(err instanceof Error ? err.message : 'Cannot start processing')
         } finally {
             setIsProcessing(false)
         }
     }, [pendingProcessAssetId, requestWithAuth, loadAssets])
 
-    const getPendingAssetTitle = () => {
-        if (!pendingProcessAssetId) return ''
-        const asset = Object.values(assetByUploadId).find(a => a.id === pendingProcessAssetId)
-        return asset?.title || 'Recording'
-    }
+    const handleLocalRename = useCallback((id: string, name: string) => {
+        setLocalNames(prev => ({ ...prev, [id]: name }))
+    }, [])
 
-    if (totalCount === 0 && !isLoadingServer) {
+    const pendingAssetTitle = pendingProcessAssetId
+        ? (assets.find(a => a.id === pendingProcessAssetId)?.title ?? 'Recording')
+        : ''
+
+    const totalCount = recordings.length + assets.length
+
+    /* ── empty state ── */
+    if (totalCount === 0 && !isLoadingAssets && !isRecording) {
         return (
             <div className="rl2-empty">
                 <div className="rl2-empty-icon"><Monitor size={28} /></div>
@@ -527,83 +603,97 @@ export function RecordingsList({
     }
 
     return (
-        <div className="rl2-section">
-            <div className="rl2-header">
-                <span className="rl2-header-title">
-                    Recordings
-                    <span className="rl2-header-count">{totalCount}</span>
-                </span>
-                <button type="button" className="rl2-refresh-btn"
-                    onClick={() => { void loadServerItems(); void loadAssets() }}
-                    disabled={isLoadingServer} title="Refresh">
-                    <RefreshCw size={12} className={isLoadingServer ? 'rl2-spin' : ''} />
-                </button>
+        <>
+            {/* ── Live preview panel (shown while recording) ── */}
+            {isRecording && activeStream && recordingType && (
+                <RecordingPreviewPanel
+                    stream={activeStream}
+                    recordingType={recordingType}
+                    elapsedSeconds={elapsedSeconds}
+                />
+            )}
+
+            <div className="rl2-section">
+                <div className="rl2-header">
+                    <span className="rl2-header-title">
+                        Recordings
+                        <span className="rl2-header-count">{totalCount}</span>
+                    </span>
+                    <button type="button" className="rl2-refresh-btn"
+                        onClick={() => void loadAssets()}
+                        disabled={isLoadingAssets} title="Refresh">
+                        <RefreshCw size={12} className={isLoadingAssets ? 'rl2-spin' : ''} />
+                    </button>
+                </div>
+
+                {assetError && (
+                    <div className="rl2-server-error">
+                        <AlertCircle size={12} />{assetError}
+                        <button type="button" onClick={() => setAssetError('')}><X size={10} /></button>
+                    </div>
+                )}
+
+                {/* This-session recordings (local, not yet uploaded / being uploaded) */}
+                {recordings.length > 0 && (
+                    <div className="rl2-group">
+                        <div className="rl2-group-label">
+                            <span>This session</span>
+                            <span className="rl2-group-count">{recordings.length}</span>
+                        </div>
+                        <div className="rl2-list">
+                            {recordings.map(rec => (
+                                <LocalRecordingRow key={rec.id}
+                                    rec={{ ...rec, name: localNames[rec.id] ?? rec.name }}
+                                    isPlaying={playingId === rec.id}
+                                    onPlay={() => onPlay(rec)}
+                                    onUpload={() => onUpload(rec.id)}
+                                    onDownload={() => onDownload(rec)}
+                                    onDelete={() => onDelete(rec.id)}
+                                    onRename={name => handleLocalRename(rec.id, name)}
+                                />
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                {/* Cloud assets */}
+                {(assets.length > 0 || isLoadingAssets) && (
+                    <div className="rl2-group">
+                        <div className="rl2-group-label">
+                            <span>Cloud storage</span>
+                            {!isLoadingAssets && <span className="rl2-group-count">{assets.length}</span>}
+                        </div>
+                        <div className="rl2-list">
+                            {isLoadingAssets && (
+                                <div className="rl2-loading">
+                                    <RefreshCw size={13} className="rl2-spin" />Loading…
+                                </div>
+                            )}
+                            {assets.map(asset => (
+                                <AssetRow key={asset.id}
+                                    asset={asset}
+                                    isPlaying={playingId === asset.id}
+                                    isActionLoading={actionLoadingId === asset.id}
+                                    onPlay={() => void handlePlay(asset)}
+                                    onDownload={() => void handleDownload(asset)}
+                                    onDelete={() => void handleDelete(asset)}
+                                    onRename={name => void handleRename(asset, name)}
+                                    onProcess={() => handleProcess(asset)}
+                                />
+                            ))}
+                        </div>
+                    </div>
+                )}
             </div>
-
-            {serverError && (
-                <div className="rl2-server-error">
-                    <AlertCircle size={12} />{serverError}
-                    <button type="button" onClick={() => setServerError('')}><X size={10} /></button>
-                </div>
-            )}
-
-            {recordings.length > 0 && (
-                <div className="rl2-group">
-                    <div className="rl2-group-label">
-                        <span>This session</span>
-                        <span className="rl2-group-count">{recordings.length}</span>
-                    </div>
-                    <div className="rl2-list">
-                        {recordings.map(rec => (
-                            <LocalRecordingRow key={rec.id}
-                                rec={{ ...rec, name: localNames[rec.id] ?? rec.name }}
-                                isPlaying={playingId === rec.id}
-                                onPlay={() => onPlay(rec)}
-                                onUpload={() => onUpload(rec.id)}
-                                onDownload={() => onDownload(rec)}
-                                onDelete={() => onDelete(rec.id)}
-                                onRename={name => handleLocalRename(rec.id, name)}
-                            />
-                        ))}
-                    </div>
-                </div>
-            )}
-
-            {(dedupedServerItems.length > 0 || isLoadingServer) && (
-                <div className="rl2-group">
-                    <div className="rl2-group-label">
-                        <span>Cloud storage</span>
-                        {!isLoadingServer && <span className="rl2-group-count">{dedupedServerItems.length}</span>}
-                    </div>
-                    <div className="rl2-list">
-                        {isLoadingServer && recordings.length === 0 && (
-                            <div className="rl2-loading"><RefreshCw size={13} className="rl2-spin" />Loading…</div>
-                        )}
-                        {dedupedServerItems.map(item => (
-                            <ServerRecordingRow key={item.id}
-                                item={item}
-                                asset={assetByUploadId[item.id]}
-                                isPlaying={playingId === item.id}
-                                isActionLoading={serverActionLoadingId === item.id}
-                                onPlay={() => void handleServerPlay(item)}
-                                onDownload={() => void handleServerDownload(item)}
-                                onDelete={() => void handleServerDelete(item)}
-                                onRename={name => void handleServerRename(item, name)}
-                                onProcess={() => void handleServerProcess(item)}
-                            />
-                        ))}
-                    </div>
-                </div>
-            )}
 
             {pendingProcessAssetId && (
                 <ProcessAssetDialog
-                    assetTitle={getPendingAssetTitle()}
+                    assetTitle={pendingAssetTitle}
                     isLoading={isProcessing}
-                    onProcess={handleProcessPendingAsset}
+                    onProcess={handleProcessConfirm}
                     onSkip={() => setPendingProcessAssetId(null)}
                 />
             )}
-        </div>
+        </>
     )
 }

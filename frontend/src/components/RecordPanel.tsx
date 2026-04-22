@@ -79,6 +79,10 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
     const [activeAudioLabel, setActiveAudioLabel] = useState<string>('')
     const [error, setError] = useState<string>('')
 
+    // --- NEW: expose streams so RecordingsList can show live preview ---
+    const [activeStream, setActiveStream] = useState<MediaStream | null>(null)
+    const [recordingType, setRecordingType] = useState<'screen' | 'audio' | null>(null)
+
     const audioRecorderRef = useRef<MediaRecorder | null>(null)
     const screenRecorderRef = useRef<MediaRecorder | null>(null)
     const audioChunksRef = useRef<Blob[]>([])
@@ -89,24 +93,15 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
     const audioElRef = useRef<HTMLAudioElement | null>(null)
     const audioStreamRef = useRef<MediaStream | null>(null)
     const screenStreamRef = useRef<MediaStream | null>(null)
-    // Keep latest duration for use in onstop closure
     const audioDurationRef = useRef(0)
     const screenDurationRef = useRef(0)
     const recordingsRef = useRef<Recording[]>([])
     const audioLiveUploadRef = useRef<LiveUploadContext | null>(null)
     const screenLiveUploadRef = useRef<LiveUploadContext | null>(null)
 
-    useEffect(() => {
-        recordingsRef.current = recordings
-    }, [recordings])
-
-    useEffect(() => {
-        audioDurationRef.current = audioDuration
-    }, [audioDuration])
-
-    useEffect(() => {
-        screenDurationRef.current = screenDuration
-    }, [screenDuration])
+    useEffect(() => { recordingsRef.current = recordings }, [recordings])
+    useEffect(() => { audioDurationRef.current = audioDuration }, [audioDuration])
+    useEffect(() => { screenDurationRef.current = screenDuration }, [screenDuration])
 
     useEffect(() => {
         return () => {
@@ -127,6 +122,9 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
             audioStreamRef.current = stream
             audioLiveUploadRef.current = liveCtx
+            // expose for preview
+            setActiveStream(stream)
+            setRecordingType('audio')
             const recorder = new MediaRecorder(stream)
             audioRecorderRef.current = recorder
             audioChunksRef.current = []
@@ -160,6 +158,9 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
                 audioLiveUploadRef.current = null
                 stream.getTracks().forEach(t => t.stop())
                 audioStreamRef.current = null
+                // clear preview
+                setActiveStream(null)
+                setRecordingType(null)
             }
             recorder.start(200)
             setIsRecordingAudio(true)
@@ -167,6 +168,8 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Không thể truy cập microphone. Hãy cho phép quyền truy cập.')
             audioLiveUploadRef.current = null
+            setActiveStream(null)
+            setRecordingType(null)
         }
     }, [])
 
@@ -186,6 +189,9 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
             })
             screenStreamRef.current = stream
             screenLiveUploadRef.current = liveCtx
+            // expose for preview
+            setActiveStream(stream)
+            setRecordingType('screen')
             const recorder = new MediaRecorder(stream)
             screenRecorderRef.current = recorder
             screenChunksRef.current = []
@@ -219,16 +225,19 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
                 screenLiveUploadRef.current = null
                 stream.getTracks().forEach(t => t.stop())
                 screenStreamRef.current = null
+                // clear preview
+                setActiveStream(null)
+                setRecordingType(null)
             }
-            stream.getVideoTracks()[0].onended = () => {
-                stopScreenRecording()
-            }
+            stream.getVideoTracks()[0].onended = () => { stopScreenRecording() }
             recorder.start(200)
             setIsRecordingScreen(true)
             screenTimerRef.current = window.setInterval(() => setScreenDuration(d => d + 1), 1000)
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Không thể bắt đầu quay màn hình.')
             screenLiveUploadRef.current = null
+            setActiveStream(null)
+            setRecordingType(null)
         }
     }, [])
 
@@ -247,14 +256,12 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
                 setActiveAudioLabel('')
                 return
             }
-
             videoElRef.current?.pause()
             setActiveVideoId(null)
             setActiveVideoLabel('')
             setPlayingId(rec.id)
             setActiveAudioId(rec.id)
             setActiveAudioLabel(rec.name)
-
             window.requestAnimationFrame(() => {
                 if (audioElRef.current) {
                     audioElRef.current.src = rec.url
@@ -267,7 +274,6 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
                 }
             })
         } else {
-            // Video — show in video player
             if (playingId === rec.id) {
                 videoElRef.current?.pause()
                 setPlayingId(null)
@@ -275,14 +281,12 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
                 setActiveVideoLabel('')
                 return
             }
-
             audioElRef.current?.pause()
             setActiveAudioId(null)
             setActiveAudioLabel('')
             setActiveVideoId(rec.id)
             setActiveVideoLabel(rec.name)
             setPlayingId(rec.id)
-            // Use requestAnimationFrame to ensure state update + DOM ref ready
             window.requestAnimationFrame(() => {
                 if (videoElRef.current) {
                     videoElRef.current.src = rec.url
@@ -301,14 +305,12 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
             setActiveVideoLabel('')
             return
         }
-
         audioElRef.current?.pause()
         setActiveAudioId(null)
         setActiveAudioLabel('')
         setActiveVideoId(params.id)
         setActiveVideoLabel(params.name)
         setPlayingId(params.id)
-
         window.requestAnimationFrame(() => {
             if (videoElRef.current) {
                 videoElRef.current.src = params.url
@@ -330,14 +332,12 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
             setActiveAudioLabel('')
             return
         }
-
         videoElRef.current?.pause()
         setActiveVideoId(null)
         setActiveVideoLabel('')
         setActiveAudioId(params.id)
         setActiveAudioLabel(params.name)
         setPlayingId(params.id)
-
         window.requestAnimationFrame(() => {
             if (audioElRef.current) {
                 audioElRef.current.src = params.url
@@ -367,16 +367,12 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
         if (activeVideoId === id) {
             setActiveVideoId(null)
             setActiveVideoLabel('')
-            if (videoElRef.current) {
-                videoElRef.current.src = ''
-            }
+            if (videoElRef.current) videoElRef.current.src = ''
         }
         if (activeAudioId === id) {
             setActiveAudioId(null)
             setActiveAudioLabel('')
-            if (audioElRef.current) {
-                audioElRef.current.src = ''
-            }
+            if (audioElRef.current) audioElRef.current.src = ''
         }
         setRecordings(prev => {
             const rec = prev.find(r => r.id === id)
@@ -396,17 +392,12 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
         const chunks: Array<{ partNumber: number; chunk: Blob }> = []
         let offset = 0
         let partNumber = 1
-
         while (offset < blob.size) {
             const end = Math.min(offset + MIN_PART_SIZE, blob.size)
-            chunks.push({
-                partNumber,
-                chunk: blob.slice(offset, end, blob.type || 'video/webm'),
-            })
+            chunks.push({ partNumber, chunk: blob.slice(offset, end, blob.type || 'video/webm') })
             partNumber += 1
             offset = end
         }
-
         return chunks
     }, [])
 
@@ -421,40 +412,21 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
                 `/upload/presigned?upload_id=${uploadId}&part_number=${partNumber}`,
                 { method: 'GET' },
             )
-
             const putResponse = await fetch(signed.url, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/octet-stream' },
                 body: chunk,
             })
-
-            if (!putResponse.ok) {
-                throw new Error(`Upload part ${partNumber} failed (${putResponse.status})`)
-            }
-
+            if (!putResponse.ok) throw new Error(`Upload part ${partNumber} failed (${putResponse.status})`)
             const etag = putResponse.headers.get('ETag')
-            if (!etag) {
-                throw new Error(`Missing ETag for part ${partNumber}`)
-            }
-
+            if (!etag) throw new Error(`Missing ETag for part ${partNumber}`)
             await requestWithAuth('/upload/part/confirm', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    upload_id: uploadId,
-                    part_number: partNumber,
-                    etag,
-                    size: chunk.size,
-                    is_last_part: isLastPart,
-                }),
+                body: JSON.stringify({ upload_id: uploadId, part_number: partNumber, etag, size: chunk.size, is_last_part: isLastPart }),
             })
         }
-
-        try {
-            await tryOnce()
-        } catch {
-            await tryOnce()
-        }
+        try { await tryOnce() } catch { await tryOnce() }
     }, [requestWithAuth])
 
     const initLiveUpload = useCallback(async (filenamePrefix: string, contentType: string) => {
@@ -468,7 +440,6 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
                 total_size: 0,
             }),
         })
-
         const context: LiveUploadContext = {
             uploadId: initPayload.upload_id,
             objectKey: initPayload.object_key,
@@ -477,7 +448,6 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
             bufferedBytes: 0,
             flushChain: Promise.resolve(),
         }
-
         return context
     }, [requestWithAuth])
 
@@ -493,55 +463,32 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
                 await uploadPartWithRetry(ctx.uploadId, partNumber, blob, isLastPart)
             }
         }
-
         ctx.flushChain = ctx.flushChain.then(run).catch((err) => {
             ctx.lastError = err instanceof Error ? err.message : 'Upload chunk failed'
             throw err
         })
-
         return ctx.flushChain
     }, [uploadPartWithRetry])
 
     const appendLiveChunk = useCallback((ctx: LiveUploadContext | null, chunk: Blob) => {
         if (!ctx || chunk.size === 0) return
-
         ctx.bufferedChunks.push(chunk)
         ctx.bufferedBytes += chunk.size
-
-        if (ctx.bufferedBytes >= MIN_PART_SIZE) {
-            void enqueueBufferedUpload(ctx, false)
-        }
+        if (ctx.bufferedBytes >= MIN_PART_SIZE) void enqueueBufferedUpload(ctx, false)
     }, [enqueueBufferedUpload])
 
     const finalizeLiveUpload = useCallback(async (ctx: LiveUploadContext | null, totalSize: number) => {
-        if (!ctx) {
-            return { status: 'failed' as const, objectKey: undefined, assetId: undefined, error: 'Missing upload context' }
-        }
-
+        if (!ctx) return { status: 'failed' as const, objectKey: undefined, assetId: undefined, error: 'Missing upload context' }
         try {
             await enqueueBufferedUpload(ctx, true)
             const uploadedParts = ctx.nextPartNumber - 1
-
-            if (uploadedParts <= 0) {
-                return { status: 'failed' as const, objectKey: undefined, assetId: undefined, error: 'No data uploaded' }
-            }
-
+            if (uploadedParts <= 0) return { status: 'failed' as const, objectKey: undefined, assetId: undefined, error: 'No data uploaded' }
             const complete = await requestWithAuth<UploadCompleteResponse>('/upload/complete', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    upload_id: ctx.uploadId,
-                    total_parts: uploadedParts,
-                    total_size: totalSize,
-                }),
+                body: JSON.stringify({ upload_id: ctx.uploadId, total_parts: uploadedParts, total_size: totalSize }),
             })
-
-            return {
-                status: 'uploaded' as const,
-                objectKey: complete.object_key,
-                assetId: complete.asset_id,
-                error: undefined,
-            }
+            return { status: 'uploaded' as const, objectKey: complete.object_key, assetId: complete.asset_id, error: undefined }
         } catch (err) {
             const message = err instanceof Error ? err.message : 'Live upload failed'
             return { status: 'failed' as const, objectKey: undefined, assetId: undefined, error: message }
@@ -554,18 +501,11 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
         if (recording.uploadState === 'uploading') return
         if (recording.uploadState === 'uploaded') return
 
-        updateRecording(recordingId, rec => ({
-            ...rec,
-            uploadState: 'uploading',
-            uploadError: undefined,
-            uploadProgress: rec.uploadProgress || 0,
-        }))
+        updateRecording(recordingId, rec => ({ ...rec, uploadState: 'uploading', uploadError: undefined, uploadProgress: rec.uploadProgress || 0 }))
 
         try {
             const parts = splitBlobIntoParts(recording.blob)
-            if (parts.length === 0) {
-                throw new Error('Recording is empty')
-            }
+            if (parts.length === 0) throw new Error('Recording is empty')
 
             let uploadId = recording.uploadSessionId
             let uploadedPartSet = new Set<number>()
@@ -573,33 +513,18 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
             if (uploadId) {
                 const session = await requestWithAuth<UploadSessionResponse>(`/upload/${uploadId}`)
                 if (session.status === 'completed') {
-                    updateRecording(recordingId, rec => ({
-                        ...rec,
-                        uploadState: 'uploaded',
-                        uploadProgress: 100,
-                        uploadedObjectKey: session.object_key,
-                        uploadedAssetId: rec.uploadedAssetId,
-                    }))
+                    updateRecording(recordingId, rec => ({ ...rec, uploadState: 'uploaded', uploadProgress: 100, uploadedObjectKey: session.object_key }))
                     return
                 }
-
-                if (session.status === 'failed') {
-                    uploadId = undefined
-                } else {
-                    uploadedPartSet = new Set<number>(session.uploaded_parts)
-                }
+                if (session.status === 'failed') { uploadId = undefined }
+                else { uploadedPartSet = new Set<number>(session.uploaded_parts) }
             }
 
             if (!uploadId) {
                 const initPayload = await requestWithAuth<UploadInitResponse>('/upload/init', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        filename: `${recording.name}.webm`,
-                        content_type: recording.blob.type || 'video/webm',
-                        total_parts: parts.length,
-                        total_size: recording.blob.size,
-                    }),
+                    body: JSON.stringify({ filename: `${recording.name}.webm`, content_type: recording.blob.type || 'video/webm', total_parts: parts.length, total_size: recording.blob.size }),
                 })
                 uploadId = initPayload.upload_id
                 uploadedPartSet = new Set<number>()
@@ -609,31 +534,20 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
             const pendingParts = parts.filter(({ partNumber }) => !uploadedPartSet.has(partNumber))
             let completedCount = uploadedPartSet.size
             const totalCount = parts.length
-
-            updateRecording(recordingId, rec => ({
-                ...rec,
-                uploadProgress: Math.floor((completedCount / totalCount) * 100),
-            }))
+            updateRecording(recordingId, rec => ({ ...rec, uploadProgress: Math.floor((completedCount / totalCount) * 100) }))
 
             if (pendingParts.length > 0) {
                 let cursor = 0
-
                 const worker = async () => {
                     while (true) {
-                        const currentIndex = cursor
-                        cursor += 1
+                        const currentIndex = cursor++
                         if (currentIndex >= pendingParts.length) return
-
                         const { partNumber, chunk } = pendingParts[currentIndex]
                         await uploadPartWithRetry(uploadId!, partNumber, chunk, partNumber === totalCount)
                         completedCount += 1
-                        updateRecording(recordingId, rec => ({
-                            ...rec,
-                            uploadProgress: Math.floor((completedCount / totalCount) * 100),
-                        }))
+                        updateRecording(recordingId, rec => ({ ...rec, uploadProgress: Math.floor((completedCount / totalCount) * 100) }))
                     }
                 }
-
                 await Promise.all(Array.from({ length: Math.min(UPLOAD_CONCURRENCY, pendingParts.length) }, () => worker()))
             }
 
@@ -642,39 +556,23 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ upload_id: uploadId }),
             })
-
-            updateRecording(recordingId, rec => ({
-                ...rec,
-                uploadState: 'uploaded',
-                uploadProgress: 100,
-                uploadedObjectKey: complete.object_key,
-                uploadedAssetId: complete.asset_id,
-                uploadError: undefined,
-            }))
+            updateRecording(recordingId, rec => ({ ...rec, uploadState: 'uploaded', uploadProgress: 100, uploadedObjectKey: complete.object_key, uploadedAssetId: complete.asset_id, uploadError: undefined }))
         } catch (err) {
             const message = err instanceof Error ? err.message : 'Upload failed'
-            updateRecording(recordingId, rec => ({
-                ...rec,
-                uploadState: 'failed',
-                uploadError: message,
-            }))
+            updateRecording(recordingId, rec => ({ ...rec, uploadState: 'failed', uploadError: message }))
         }
     }, [requestWithAuth, splitBlobIntoParts, updateRecording, uploadPartWithRetry])
 
     return (
         <div className='record-workspace' style={{ display: isVisible ? undefined : 'none' }}>
             <div className="record-panel">
-                {error && (
-                    <div className="record-error">{error}</div>
-                )}
+                {error && <div className="record-error">{error}</div>}
 
                 {/* Capture cards */}
                 <div className="record-capture-grid">
                     {/* Screen recording */}
                     <div className={`record-capture-card ${isRecordingScreen ? 'recording' : ''}`}>
-                        <div className="record-capture-icon">
-                            <Monitor size={20} />
-                        </div>
+                        <div className="record-capture-icon"><Monitor size={20} /></div>
                         <div className="record-capture-info">
                             <div className="record-capture-title">Screen record</div>
                             <div className="record-capture-sub">
@@ -686,21 +584,15 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
                                 ) : 'Quay lại màn hình hoặc tab'}
                             </div>
                         </div>
-                        <button
-                            type="button"
-                            className={`record-btn ${isRecordingScreen ? 'record-btn--stop' : ''}`}
-                            onClick={isRecordingScreen ? stopScreenRecording : startScreenRecording}
-                            aria-label={isRecordingScreen ? 'Dừng quay màn hình' : 'Bắt đầu quay màn hình'}
-                        >
+                        <button type="button" className={`record-btn ${isRecordingScreen ? 'record-btn--stop' : ''}`}
+                            onClick={isRecordingScreen ? stopScreenRecording : startScreenRecording}>
                             {isRecordingScreen ? <><VideoOff size={13} /> Dừng</> : <><Video size={13} /> Bắt đầu</>}
                         </button>
                     </div>
 
                     {/* Audio recording */}
                     <div className={`record-capture-card ${isRecordingAudio ? 'recording' : ''}`}>
-                        <div className="record-capture-icon">
-                            <Mic size={20} />
-                        </div>
+                        <div className="record-capture-icon"><Mic size={20} /></div>
                         <div className="record-capture-info">
                             <div className="record-capture-title">Ghi âm</div>
                             <div className="record-capture-sub">
@@ -712,25 +604,16 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
                                 ) : 'Ghi âm từ microphone'}
                             </div>
                         </div>
-                        <button
-                            type="button"
-                            className={`record-btn ${isRecordingAudio ? 'record-btn--stop' : ''}`}
-                            onClick={isRecordingAudio ? stopAudioRecording : startAudioRecording}
-                            aria-label={isRecordingAudio ? 'Dừng ghi âm' : 'Bắt đầu ghi âm'}
-                        >
+                        <button type="button" className={`record-btn ${isRecordingAudio ? 'record-btn--stop' : ''}`}
+                            onClick={isRecordingAudio ? stopAudioRecording : startAudioRecording}>
                             {isRecordingAudio ? <><MicOff size={13} /> Dừng</> : <><Mic size={13} /> Bắt đầu</>}
                         </button>
                     </div>
                 </div>
 
-                {/* Video preview — always in DOM when there are video recordings, hidden otherwise */}
+                {/* Video preview player */}
                 <div className="record-video-container" style={{ display: hasVideos ? 'block' : 'none' }}>
-                    <video
-                        ref={videoElRef}
-                        className="record-video-preview"
-                        controls
-                        style={{ width: '100%' }}
-                    />
+                    <video ref={videoElRef} className="record-video-preview" controls style={{ width: '100%' }} />
                     {activeVideoId && (
                         <div className="record-video-label">
                             {activeVideoLabel || recordings.find(r => r.id === activeVideoId)?.name || ''}
@@ -738,12 +621,9 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
                     )}
                 </div>
 
+                {/* Audio preview player */}
                 <div className="record-video-container" style={{ display: hasAudioPreview ? 'block' : 'none' }}>
-                    <audio
-                        ref={audioElRef}
-                        controls
-                        className="record-audio-player"
-                    />
+                    <audio ref={audioElRef} controls className="record-audio-player" />
                     {activeAudioId && (
                         <div className="record-video-label">
                             {activeAudioLabel || recordings.find(r => r.id === activeAudioId)?.name || ''}
@@ -751,7 +631,7 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
                     )}
                 </div>
 
-                {/* Recordings list */}
+                {/* Recordings list — pass live stream for preview panel */}
                 <RecordingsList
                     requestWithAuth={requestWithAuth}
                     recordings={recordings}
@@ -762,6 +642,8 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
                     onUpload={(recordingId) => void handleUpload(recordingId)}
                     onDownload={handleDownload}
                     onDelete={handleDelete}
+                    activeStream={activeStream}
+                    recordingType={recordingType}
                 />
             </div>
         </div>
