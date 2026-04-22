@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Note
 from app.repositories.notes import NoteRepository
 from app.schemas import BatchUpdateItem, BatchUpdateResponse, NoteCreate, NotePatchRequest, NoteResponse, NoteUpdate
-from app.services.embeddings import upsert_note_embedding_async
 from app.utils.note_delta import apply_text_patch, build_text_patch
 
 PATCH_COMPACTION_THRESHOLD = 20
@@ -64,11 +63,6 @@ class NoteService:
         )
         try:
             created = await self.repository.create(note)
-            await upsert_note_embedding_async(
-                self.session,
-                note_id=created.id,
-                content=created.content,
-            )
             await self.session.commit()
             return created
         except Exception:
@@ -144,12 +138,6 @@ class NoteService:
             if self._should_compact(current_note.checkpoint_version, new_version):
                 await self._compact_checkpoint(note_id=note_id, user_id=user_id, full_content=content, version=new_version)
 
-            await upsert_note_embedding_async(
-                self.session,
-                note_id=note_id,
-                content=content,
-            )
-
         await self.session.commit()
         return await self.repository.get_active_by_id_and_user(note_id, user_id)
 
@@ -194,11 +182,6 @@ class NoteService:
         if self._should_compact(current_note.checkpoint_version, new_version):
             await self._compact_checkpoint(note_id=note_id, user_id=user_id, full_content=new_content, version=new_version)
 
-        await upsert_note_embedding_async(
-            self.session,
-            note_id=note_id,
-            content=new_content,
-        )
 
         await self.session.commit()
         return await self.repository.get_active_by_id_and_user(note_id, user_id)

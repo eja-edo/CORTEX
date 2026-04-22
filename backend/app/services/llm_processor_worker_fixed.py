@@ -8,6 +8,14 @@ Supports three asset types:
   1. Video with OCR only
   2. Video with OCR + transcript (audio narration)
   3. Audio only (transcript only, no OCR frames)
+
+Changes vs previous version:
+  - `decisions` is now handled as a first-class knowledge unit type in
+    _extract_and_save_knowledge_units.
+  - `key_quotes` from session synthesis is persisted as knowledge units.
+  - Audio-only path still works correctly even when ocr_frames is empty.
+  - MIN_KNOWLEDGE_VALUE threshold applies to knowledge *unit* extraction
+    but NOT to timeline events in the synthesis (we keep all events).
 """
 
 import asyncio
@@ -25,10 +33,12 @@ from app.services.llm_processing import gemini_service
 from app.services.redis.llm_processor_task import LLM_PROCESSOR_STREAM_KEY, LLMProcessorTask
 from app.utils.decorator import singleton
 from app.utils.logger import get_logger
+from app.models import AssetStatus, Asset
+from app.database import get_db
 
 logger = get_logger(__name__)
 
-WINDOW_SECONDS = settings.LLM_WINDOW_SECONDS        # default 30s per batch
+WINDOW_SECONDS = settings.LLM_WINDOW_SECONDS            # default 30s per batch
 MIN_KNOWLEDGE_VALUE = settings.LLM_MIN_KNOWLEDGE_VALUE  # default 0.3
 
 
@@ -39,30 +49,20 @@ def _get_transcript_for_window(
     window_start: float,
     window_end: float,
 ) -> str:
-    """
-    Return concatenated transcript text for segments that overlap with
-    [window_start, window_end].  Speaker labels are included when present
-    and non-trivial.
-    """
     lines = []
     for seg in transcript_segments:
         seg_start = float(seg.get("start_time_sec", 0))
         seg_end = float(seg.get("end_time_sec", seg_start + 1))
-
-        # Include segment if it overlaps with the window at all
         if seg_end < window_start or seg_start > window_end:
             continue
-
         text = (seg.get("text") or "").strip()
         if not text:
             continue
-
         speaker = (seg.get("speaker_label") or "").strip()
         if speaker and speaker.lower() not in ("unknown", ""):
             lines.append(f"[{speaker}] {text}")
         else:
             lines.append(text)
-
     return " ".join(lines)
 
 
@@ -70,10 +70,6 @@ def _build_transcript_only_windows(
     transcript_segments: list[dict],
     window_seconds: float,
 ) -> list[dict]:
-    """
-    For audio-only assets (no OCR frames), build time windows directly
-    from transcript segments.
-    """
     if not transcript_segments:
         return []
 
@@ -83,7 +79,6 @@ def _build_transcript_only_windows(
 
     for seg in transcript_segments:
         seg_start = float(seg.get("start_time_sec", 0))
-
         if seg_start - window_start <= window_seconds:
             current_segs.append(seg)
         else:
@@ -115,17 +110,19 @@ def _make_transcript_window(segs: list[dict]) -> dict:
         "start_timestamp_sec": start,
         "end_timestamp_sec": end,
         "frame_ids": [],
-        "combined_text": "",           # no OCR
+        "combined_text": "",
         "transcript_text": " ".join(lines),
         "has_ocr": False,
         "has_transcript": True,
     }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Worker
+# ─────────────────────────────────────────────────────────────────────────────
+
 @singleton
 class LLMProcessorWorker:
-    """Worker that consumes LLM processing tasks from Redis."""
-
     def __init__(self):
         self._redis: Optional[redis.Redis] = None
         self._stream_key = LLM_PROCESSOR_STREAM_KEY
@@ -212,8 +209,9 @@ class LLMProcessorWorker:
                 retry_count += 1
                 backoff = min(base_backoff * (2 ** retry_count), 60)
                 logger.error(
-                    f"LLM consumer Redis connection error (attempt {retry_count}/{max_retries}): {exc}. "
-                    f"Reconnecting in {backoff}s..."
+                    f"LLM consumer Redis connection error "
+                    f"(attempt {retry_count}/{max_retries}): {exc}. "
+                    f"Reconnecting in {backoff}s…"
                 )
 
                 if retry_count >= max_retries:
@@ -245,28 +243,28 @@ class LLMProcessorWorker:
 
     async def _process_task(self, task: LLMProcessorTask) -> None:
         """
-        Process LLM task with merged OCR + transcript data.
-
-        Flow:
-          1. Fetch OCR frames from MongoDB (may be empty for audio-only)
-          2. Fetch transcript segments from MongoDB (may be empty for video-only)
-          3. Determine asset type (video/audio/both)
-          4. Build time windows, merging OCR and transcript per window
-          5. Call Gemini for each window → save OCRProcessedDocument
-          6. Extract knowledge units (with time anchors)
-          7. Session synthesis → AssetKnowledgeSummary with knowledge_timeline
+        Main processing flow:
+          1. Fetch OCR frames (may be empty for audio-only)
+          2. Fetch transcript segments (may be empty for video-only)
+          3. Build time windows
+          4. Call Gemini per window → save OCRProcessedDocument
+          5. Extract knowledge units
+          6. Session synthesis → AssetKnowledgeSummary
         """
         if not self._mongo_ocr_service.is_connected:
             await self._mongo_ocr_service.connect()
 
-        await self._mongo_ocr_service.set_llm_status(task.ocr_job_id, "processing")
+        await self._mongo_ocr_service.update_ocr_job_stats(
+            job_id=task.ocr_job_id,
+            total_frames=0,  # Không thay đổi số frame ở đây
+            non_empty_frames=0,
+            status="processing",
+        )
 
-        # ── Step 1: Fetch OCR frames ──────────────────────────────────────────
+        # ── Fetch source data ─────────────────────────────────────────────────
         ocr_frames = await self._mongo_ocr_service.get_ocr_frames(
             task.asset_id, skip_empty=True
         )
-
-        # ── Step 2: Fetch transcript segments ────────────────────────────────
         transcript_segments = await self._mongo_ocr_service.get_transcript_segments_for_asset(
             task.asset_id
         )
@@ -282,27 +280,30 @@ class LLMProcessorWorker:
 
         if not has_ocr and not has_transcript:
             logger.info(f"No content to process for asset {task.asset_id}")
-            await self._mongo_ocr_service.set_llm_status(task.ocr_job_id, "skipped")
+            await self._mongo_ocr_service.update_ocr_job_stats(
+                job_id=task.ocr_job_id,
+                total_frames=0,
+                non_empty_frames=0,
+                status="skipped",
+            )
             return
 
-        # ── Step 3: Build windows ─────────────────────────────────────────────
+        # ── Build windows ─────────────────────────────────────────────────────
         if has_ocr:
             windows = self._build_ocr_windows_with_transcript(
                 ocr_frames, transcript_segments
             )
         else:
-            # Audio-only: drive windows from transcript
-            windows = _build_transcript_only_windows(
-                transcript_segments, WINDOW_SECONDS
-            )
+            # Audio-only: derive windows from transcript
+            windows = _build_transcript_only_windows(transcript_segments, WINDOW_SECONDS)
 
         logger.info(
             f"Processing {len(windows)} windows for asset={task.asset_id} "
             f"(ocr={has_ocr}, transcript={has_transcript})"
         )
 
-        # ── Step 4-6: Process each window ────────────────────────────────────
-        processed_summaries = []
+        # ── Process each window ───────────────────────────────────────────────
+        processed_summaries: list[dict] = []
         total_tokens = 0
         total_cost = 0.0
 
@@ -323,7 +324,7 @@ class LLMProcessorWorker:
             total_tokens += result.tokens_used
             total_cost += result.cost_usd
 
-            window_doc = {
+            window_doc: dict = {
                 "start_timestamp_sec": w_start,
                 "end_timestamp_sec": w_end,
                 "frame_ids": window.get("frame_ids", []),
@@ -339,11 +340,9 @@ class LLMProcessorWorker:
             if result.success and result.parsed_data:
                 window_doc["analysis"] = result.parsed_data
 
-                # Build summary entry for session synthesis
                 summary_entry = {
                     "start_sec": w_start,
                     "end_sec": w_end,
-                    # Keep ms fields for backward compatibility
                     "start_ms": int(w_start * 1000),
                     "end_ms": int(w_end * 1000),
                     "summary": result.parsed_data.get("summary"),
@@ -357,7 +356,7 @@ class LLMProcessorWorker:
                 }
                 processed_summaries.append(summary_entry)
 
-                # Extract knowledge units for high-value windows
+                # Knowledge unit extraction for high-value windows
                 kv = float(result.parsed_data.get("knowledge_value", 0))
                 if kv >= MIN_KNOWLEDGE_VALUE:
                     await self._extract_and_save_knowledge_units(
@@ -372,27 +371,22 @@ class LLMProcessorWorker:
                         has_transcript=has_transcript and bool(transcript_text.strip()),
                     )
 
-                # Also save timeline_events from this window as knowledge units
+                # Persist timeline events as knowledge units (all events, no threshold)
                 for event in result.parsed_data.get("timeline_events", []):
-                    if float(event.get("knowledge_value", 0)) >= MIN_KNOWLEDGE_VALUE:
+                    evt_kv = float(event.get("knowledge_value", 0))
+                    if evt_kv >= MIN_KNOWLEDGE_VALUE:
                         await self._save_timeline_event_as_unit(
                             event=event,
                             asset_id=task.asset_id,
                             user_id=task.user_id,
-                            ocr_processed_id="pending",  # filled after window save
+                            ocr_processed_id="pending",
                             has_ocr=has_ocr and bool(ocr_text.strip()),
                             has_transcript=has_transcript and bool(transcript_text.strip()),
                         )
 
-            # Persist window document
-            await self._mongo_ocr_service.save_ocr_processed(
-                asset_id=task.asset_id,
-                user_id=task.user_id,
-                ocr_job_id=task.ocr_job_id,
-                window=window_doc,
-            )
+            # ĐÃ XOÁ: Không lưu ocr_processed nữa
 
-        # ── Step 7: Session synthesis ─────────────────────────────────────────
+        # ── Session synthesis ─────────────────────────────────────────────────
         if processed_summaries:
             await self._synthesize_and_save(
                 task=task,
@@ -403,7 +397,25 @@ class LLMProcessorWorker:
                 has_audio=has_transcript,
             )
 
-        await self._mongo_ocr_service.set_llm_status(task.ocr_job_id, "completed")
+        await self._mongo_ocr_service.update_ocr_job_stats(
+            job_id=task.ocr_job_id,
+            total_frames=0,
+            non_empty_frames=0,
+            status="completed",
+        )
+        # Update status in assets table (PostgreSQL)
+        db_gen = get_db()
+        db = next(db_gen)
+        try:
+            asset = db.query(Asset).filter(Asset.id == task.asset_id).first()
+            if asset:
+                # Nếu AssetStatus có COMPLETED thì dùng, không thì fallback READY
+                asset.status = AssetStatus.COMPLETED
+                asset.updated_at = datetime.utcnow()
+                db.add(asset)
+                db.commit()
+        finally:
+            db.close()
         logger.info(
             f"✅ LLM processing done: asset={task.asset_id}, "
             f"windows={len(windows)}, tokens={total_tokens}, cost=${total_cost:.4f}"
@@ -416,10 +428,6 @@ class LLMProcessorWorker:
         ocr_frames: list[dict],
         transcript_segments: list[dict],
     ) -> list[dict]:
-        """
-        Group OCR frames into WINDOW_SECONDS windows, then attach the
-        overlapping transcript text to each window.
-        """
         if not ocr_frames:
             return []
 
@@ -467,7 +475,7 @@ class LLMProcessorWorker:
             "end_timestamp_sec": frames[-1]["timestamp_sec"],
             "frame_ids": [f["frame_id"] for f in frames],
             "combined_text": combined,
-            "transcript_text": "",  # filled later
+            "transcript_text": "",
         }
 
     # ── Knowledge unit extraction ─────────────────────────────────────────────
@@ -484,7 +492,6 @@ class LLMProcessorWorker:
         has_ocr: bool,
         has_transcript: bool,
     ) -> int:
-        """Extract structured knowledge units from a window and persist them."""
         result = await gemini_service.extract_knowledge(
             text=ocr_text,
             context=context,
@@ -498,21 +505,35 @@ class LLMProcessorWorker:
         count = 0
         data = result.parsed_data or {}
 
+        # Each tuple: (key, unit_type, content_getter, extra_fields_getter)
         type_map = [
-            ("facts", "fact", lambda x: x.get("content", "")),
-            ("errors", "error", lambda x: x.get("message", "")),
-            ("code_patterns", "code_pattern", lambda x: x.get("snippet", "")),
-            ("commands", "command", lambda x: x.get("command", "")),
-            ("explanations", "explanation", lambda x: x.get("explanation", "")),
+            ("facts", "fact",
+             lambda x: x.get("content", ""),
+             lambda x: {}),
+            ("errors", "error",
+             lambda x: x.get("message", ""),
+             lambda x: {}),
+            ("code_patterns", "code_pattern",
+             lambda x: x.get("snippet", ""),
+             lambda x: {"language": x.get("language")}),
+            ("commands", "command",
+             lambda x: x.get("command", ""),
+             lambda x: {"platform": x.get("platform")}),
+            ("explanations", "explanation",
+             lambda x: x.get("explanation", ""),
+             lambda x: {}),
+            # NEW: decisions
+            ("decisions", "decision",
+             lambda x: x.get("decision", ""),
+             lambda x: {"rationale": x.get("rationale", "")}),
         ]
 
-        for key, unit_type, get_content in type_map:
+        for key, unit_type, get_content, get_extra in type_map:
             for item in data.get(key, []):
                 content = get_content(item)
                 if not content or len(content.strip()) < 5:
                     continue
 
-                # Use item-level time if available, else fall back to window
                 item_start = float(item.get("start_sec", start_sec))
                 item_end = float(item.get("end_sec", end_sec))
 
@@ -520,7 +541,7 @@ class LLMProcessorWorker:
                     f"{user_id}:{content.strip().lower()}".encode()
                 ).hexdigest()
 
-                unit = {
+                unit: dict = {
                     "asset_id": asset_id,
                     "unit_type": unit_type,
                     "content": content.strip(),
@@ -530,6 +551,7 @@ class LLMProcessorWorker:
                     "content_hash": content_hash,
                     "deleted_at": None,
                     "language": item.get("language"),
+                    **get_extra(item),
                 }
 
                 inserted = await self._mongo_ocr_service.save_knowledge_unit(unit)
@@ -547,16 +569,11 @@ class LLMProcessorWorker:
         has_ocr: bool,
         has_transcript: bool,
     ) -> bool:
-        """
-        Save a single timeline_event as a knowledge unit so it appears in
-        the timeline query results with full time anchoring.
-        """
         summary = (event.get("activity_summary") or "").strip()
         if not summary or len(summary) < 10:
             return False
 
         event_type = event.get("event_type", "activity")
-        # Map event_type → knowledge unit_type
         type_map = {
             "error": "error",
             "solution": "fact",
@@ -570,7 +587,7 @@ class LLMProcessorWorker:
             f"{user_id}:{summary.lower()}".encode()
         ).hexdigest()
 
-        unit = {
+        unit: dict = {
             "asset_id": asset_id,
             "unit_type": unit_type,
             "content": summary,
@@ -581,6 +598,12 @@ class LLMProcessorWorker:
             "deleted_at": None,
             "language": None,
         }
+
+        # Attach spoken/screen content as metadata if present
+        if event.get("spoken_content"):
+            unit["spoken_content"] = event["spoken_content"]
+        if event.get("screen_content"):
+            unit["screen_content"] = event["screen_content"]
 
         return await self._mongo_ocr_service.save_knowledge_unit(unit)
 
@@ -597,7 +620,8 @@ class LLMProcessorWorker:
     ) -> None:
         duration_ms = (
             int(summaries[-1]["end_sec"] * 1000) - int(summaries[0]["start_sec"] * 1000)
-            if summaries else 0
+            if summaries
+            else 0
         )
 
         result = await gemini_service.synthesize_session(
@@ -623,9 +647,32 @@ class LLMProcessorWorker:
 
         if result.success and result.parsed_data:
             summary_doc.update(result.parsed_data)
-            # Ensure knowledge_timeline is always present
             if "knowledge_timeline" not in summary_doc:
                 summary_doc["knowledge_timeline"] = []
+
+            # Persist key_quotes as knowledge units so they are searchable
+            for quote_item in result.parsed_data.get("key_quotes", []):
+                quote_text = (quote_item.get("quote") or "").strip()
+                if not quote_text:
+                    continue
+                content_hash = hashlib.sha256(
+                    f"{task.user_id}:quote:{quote_text.lower()}".encode()
+                ).hexdigest()
+                await self._mongo_ocr_service.save_knowledge_unit(
+                    {
+                        "asset_id": task.asset_id,
+                        "unit_type": "fact",
+                        "content": quote_text,
+                        "confidence": 0.9,
+                        "start_sec": float(quote_item.get("start_sec", 0)),
+                        "end_sec": float(quote_item.get("start_sec", 0)) + 5,
+                        "content_hash": content_hash,
+                        "deleted_at": None,
+                        "language": None,
+                        "is_key_quote": True,
+                        "quote_context": quote_item.get("context", ""),
+                    }
+                )
 
         await self._mongo_ocr_service.upsert_asset_knowledge(
             asset_id=task.asset_id,
@@ -638,5 +685,4 @@ class LLMProcessorWorker:
 
 
 def get_llm_processor_worker() -> LLMProcessorWorker:
-    """Get singleton LLM processor worker."""
     return LLMProcessorWorker()

@@ -64,7 +64,6 @@ class OCRFrameDocument(BaseModel):
 
     asset_id: StrictStr
     user_id: StrictStr
-    workspace_id: StrictStr | None = None
 
     frame_id: StrictInt
     timestamp_sec: StrictFloat
@@ -86,7 +85,6 @@ class OCRJobDocument(BaseModel):
 
     asset_id: StrictStr
     user_id: StrictStr
-    workspace_id: StrictStr | None = None
     task_id: StrictStr
 
     status: Literal["pending", "processing", "completed", "failed"]
@@ -94,10 +92,6 @@ class OCRJobDocument(BaseModel):
     non_empty_frames: int = 0
     output_dir: StrictStr | None = None
 
-    llm_status: Literal[
-        "pending", "processing", "completed", "failed", "skipped"
-    ] = "pending"
-    llm_processed_at: datetime | None = None
 
     created_at: datetime
     updated_at: datetime

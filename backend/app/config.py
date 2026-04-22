@@ -14,6 +14,10 @@ class Settings:
         "DATABASE_URL",
         "postgresql+psycopg2://user:password@localhost:5433/cortex_db"
     )
+    ASYNC_DATABASE_URL: str = os.getenv(
+        "ASYNC_DATABASE_URL",
+        "postgresql+asyncpg://user:password@localhost:5433/cortex_db"
+    )
 
     # Redis (pub/sub, distributed locks, cross-service signals)
     REDIS_HOST: str = os.getenv("REDIS_HOST", "localhost")
@@ -38,16 +42,6 @@ class Settings:
     MONGODB_DB_NAME: str = os.getenv("MONGODB_DB_NAME", "cortex")
 
 
-    @property
-    def ASYNC_DATABASE_URL(self) -> str:
-        explicit = os.getenv("ASYNC_DATABASE_URL")
-        if explicit:
-            return explicit
-        if self.DATABASE_URL.startswith("postgresql+psycopg2://"):
-            return self.DATABASE_URL.replace("postgresql+psycopg2://", "postgresql+asyncpg://", 1)
-        if self.DATABASE_URL.startswith("postgresql://"):
-            return self.DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
-        return self.DATABASE_URL
     
     # API Settings
     API_STR: str = "/api"

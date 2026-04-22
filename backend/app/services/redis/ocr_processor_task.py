@@ -31,7 +31,6 @@ class OCRProcessorTask:
     video_id: Optional[str] = None
     video_path: str = ""
     output_dir: str = ""
-    workspace_id: Optional[str] = None
     user_id: Optional[str] = None
 
     # Processing configuration
@@ -68,7 +67,6 @@ class OCRProcessorTask:
             "video_id": self.video_id or "",
             "video_path": self.video_path,
             "output_dir": self.output_dir,
-            "workspace_id": self.workspace_id or "",
             "user_id": self.user_id or "",
             "ocr_engine": self.ocr_engine,
             "target_fps": str(self.target_fps),
@@ -104,7 +102,6 @@ class OCRProcessorProducer(RedisStreamProducerBase[OCRProcessorTask]):
         video_path: str,
         output_dir: str,
         video_id: Optional[UUID] = None,
-        workspace_id: Optional[UUID] = None,
         user_id: Optional[UUID] = None,
         ocr_engine: str = "easyocr",
         target_fps: float = 1.0,
@@ -126,7 +123,6 @@ class OCRProcessorProducer(RedisStreamProducerBase[OCRProcessorTask]):
             video_id=str(video_id) if video_id else None,
             video_path=video_path,
             output_dir=output_dir,
-            workspace_id=str(workspace_id) if workspace_id else None,
             user_id=str(user_id) if user_id else None,
             ocr_engine=ocr_engine,
             target_fps=target_fps,
@@ -151,7 +147,6 @@ async def enqueue_video_processing(
     video_path: str,
     output_dir: str,
     video_id: Optional[UUID] = None,
-    workspace_id: Optional[UUID] = None,
     user_id: Optional[UUID] = None,
     ocr_engine: str = "easyocr",
     target_fps: float = 1.0,
@@ -173,7 +168,6 @@ async def enqueue_video_processing(
         video_path=video_path,
         output_dir=output_dir,
         video_id=video_id,
-        workspace_id=workspace_id,
         user_id=user_id,
         ocr_engine=ocr_engine,
         target_fps=target_fps,

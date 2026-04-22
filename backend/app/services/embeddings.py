@@ -32,9 +32,7 @@ def should_embed_text(text: str) -> bool:
     return len(tokenize_text(normalized)) >= MIN_EMBED_TOKENS
 
 
-def vectorize_text(text: str) -> list[float]:
-    tokens = tokenize_text(text)
-    if not tokens:
+    
         return [0.0] * VECTOR_DIMENSIONS
 
     counts = Counter(tokens)

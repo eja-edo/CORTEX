@@ -61,24 +61,6 @@ async def get_asset_ocr_frames(
     return frames
 
 
-@router.get("/assets/{asset_id}/processed")
-async def get_asset_processed_windows(
-    asset_id: UUID,
-    current_user: User = Depends(get_current_active_user),
-):
-    """Get all processed (Gemini-analyzed) windows for an asset."""
-    if not mongo_ocr_service.is_connected:
-        await mongo_ocr_service.connect()
-
-    windows = await mongo_ocr_service.get_ocr_processed(str(asset_id))
-
-    # Verify ownership
-    if windows and windows[0].get("user_id") != str(current_user.id):
-        raise HTTPException(status_code=403, detail="Forbidden")
-
-    for w in windows:
-        w["_id"] = str(w["_id"])
-    return windows
 
 
 @router.get("/units")

@@ -341,7 +341,6 @@ class AssetCreate(BaseModel):
     description: str | None = None
     source_upload_id: UUID | None = None
     source_object_key: str = Field(..., min_length=1, max_length=1024)
-    workspace_id: UUID | None = None
 
 
 class AssetUpdate(BaseModel):
@@ -356,7 +355,6 @@ class AssetResponse(BaseModel):
 
     id: UUID
     user_id: UUID
-    workspace_id: UUID | None
     type: AssetType
     status: AssetStatus
     title: str | None
@@ -365,8 +363,8 @@ class AssetResponse(BaseModel):
     source_object_key: str
     duration_ms: int | None
     frame_rate: float | None
-    width: int | None
-    height: int | None
+    width: int | None = None
+    height: int | None = None
     size_bytes: int | None
     checksum_sha256: str | None
     metadata: dict[str, Any] = Field(validation_alias="meta")

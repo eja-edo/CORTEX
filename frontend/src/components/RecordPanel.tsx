@@ -1,7 +1,12 @@
+// RecordPanel.tsx — adds knowledge view routing on top of existing panel.
+// Only the bottom section changes: we track knowledgeTarget state and render
+// AssetKnowledgeView as a full-panel overlay when set.
+
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Mic, MicOff, Monitor, Video, VideoOff } from 'lucide-react'
 
 import { RecordingsList } from './RecordingsList'
+import { AssetKnowledgeView } from './AssetKnowledgeView'
 import type { AuthRequest, Recording } from './recordingTypes'
 
 type UploadInitResponse = {
@@ -79,7 +84,9 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
     const [activeAudioLabel, setActiveAudioLabel] = useState<string>('')
     const [error, setError] = useState<string>('')
 
-    // --- NEW: expose streams so RecordingsList can show live preview ---
+    // Knowledge view state
+    const [knowledgeTarget, setKnowledgeTarget] = useState<{ assetId: string; assetTitle: string } | null>(null)
+
     const [activeStream, setActiveStream] = useState<MediaStream | null>(null)
     const [recordingType, setRecordingType] = useState<'screen' | 'audio' | null>(null)
 
@@ -122,7 +129,6 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
             audioStreamRef.current = stream
             audioLiveUploadRef.current = liveCtx
-            // expose for preview
             setActiveStream(stream)
             setRecordingType('audio')
             const recorder = new MediaRecorder(stream)
@@ -158,7 +164,6 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
                 audioLiveUploadRef.current = null
                 stream.getTracks().forEach(t => t.stop())
                 audioStreamRef.current = null
-                // clear preview
                 setActiveStream(null)
                 setRecordingType(null)
             }
@@ -189,7 +194,6 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
             })
             screenStreamRef.current = stream
             screenLiveUploadRef.current = liveCtx
-            // expose for preview
             setActiveStream(stream)
             setRecordingType('screen')
             const recorder = new MediaRecorder(stream)
@@ -225,7 +229,6 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
                 screenLiveUploadRef.current = null
                 stream.getTracks().forEach(t => t.stop())
                 screenStreamRef.current = null
-                // clear preview
                 setActiveStream(null)
                 setRecordingType(null)
             }
@@ -563,12 +566,25 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
         }
     }, [requestWithAuth, splitBlobIntoParts, updateRecording, uploadPartWithRetry])
 
+    // ── If knowledge view is open, render it as full workspace ──
+    if (knowledgeTarget) {
+        return (
+            <div className='record-workspace' style={{ display: isVisible ? undefined : 'none' }}>
+                <AssetKnowledgeView
+                    assetId={knowledgeTarget.assetId}
+                    assetTitle={knowledgeTarget.assetTitle}
+                    requestWithAuth={requestWithAuth}
+                    onClose={() => setKnowledgeTarget(null)}
+                />
+            </div>
+        )
+    }
+
     return (
         <div className='record-workspace' style={{ display: isVisible ? undefined : 'none' }}>
             <div className="record-panel">
                 {error && <div className="record-error">{error}</div>}
 
-                {/* Capture cards */}
                 <div className="record-capture-grid">
                     {/* Screen recording */}
                     <div className={`record-capture-card ${isRecordingScreen ? 'recording' : ''}`}>
@@ -631,7 +647,6 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
                     )}
                 </div>
 
-                {/* Recordings list — pass live stream for preview panel */}
                 <RecordingsList
                     requestWithAuth={requestWithAuth}
                     recordings={recordings}
@@ -644,6 +659,7 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
                     onDelete={handleDelete}
                     activeStream={activeStream}
                     recordingType={recordingType}
+                    onViewKnowledge={(assetId, assetTitle) => setKnowledgeTarget({ assetId, assetTitle })}
                 />
             </div>
         </div>

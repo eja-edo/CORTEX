@@ -66,7 +66,6 @@ async def _enqueue_all_processing(asset: Asset, db: Session) -> dict:
             await enqueue_transcription_job(
                 asset_id=asset.id,
                 egress_id=asset.id,
-                workspace_id=asset.workspace_id,
                 user_id=asset.user_id,
                 source_upload_id=asset.source_upload_id,
                 source_object_key=asset.source_object_key,
@@ -91,7 +90,6 @@ async def _enqueue_all_processing(asset: Asset, db: Session) -> dict:
                 video_path=asset.source_object_key,  # object key trong MinIO
                 output_dir="",                        # worker tự resolve từ task_id
                 video_id=asset.id,
-                workspace_id=asset.workspace_id,
                 user_id=asset.user_id,
                 ocr_engine="easyocr",
                 target_fps=1.0,

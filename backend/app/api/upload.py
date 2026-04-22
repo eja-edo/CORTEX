@@ -119,7 +119,6 @@ def _get_or_create_asset_for_upload(
 
     asset = Asset(
         user_id=current_user.id,
-        workspace_id=None,
         type=_resolve_asset_type(media_type),
         status=AssetStatus.PENDING,
         title=upload.filename or Path(upload.object_key).name,

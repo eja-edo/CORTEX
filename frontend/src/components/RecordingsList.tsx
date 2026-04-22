@@ -1,8 +1,12 @@
+// RecordingsList.tsx — updated to support "View Knowledge" per asset row.
+// Add import in parent (RecordPanel) and pass onViewKnowledge prop, or keep
+// the knowledge view inline here. We expose it inline via a callback prop.
+
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
     Check, Clock, Download, Edit2, FileAudio, FileVideo,
     HardDrive, Monitor, MoreHorizontal, Pause, Play, RefreshCw,
-    Trash2, Upload, X, AlertCircle, Zap, Radio
+    Trash2, X, AlertCircle, Zap, Radio, Brain
 } from 'lucide-react'
 
 import type { AuthRequest, Recording } from './recordingTypes'
@@ -13,9 +17,8 @@ import { ProcessAssetDialog } from './ProcessAssetDialog'
 type AssetResponse = {
     id: string
     user_id: string
-    workspace_id: string | null
     type: string
-    status: string          // 'READY' | 'PROCESSING' | 'PENDING' | 'ERROR' | …
+    status: string
     title: string | null
     description: string | null
     source_upload_id: string | null
@@ -34,7 +37,7 @@ type UploadAccessUrlResponse = {
 
 type RecordingsListProps = {
     requestWithAuth: AuthRequest
-    recordings: Recording[]          // local / in-session recordings
+    recordings: Recording[]
     playingId: string | null
     onPlay: (recording: Recording) => void
     onPlayServerVideo: (params: { id: string; name: string; url: string }) => void
@@ -42,10 +45,10 @@ type RecordingsListProps = {
     onUpload: (recordingId: string) => void
     onDownload: (recording: Recording) => void
     onDelete: (recordingId: string) => void
-    /** Stream from an active screen / audio capture, used for the live preview panel */
     activeStream?: MediaStream | null
-    /** Which card is actively recording – 'screen' | 'audio' | null */
     recordingType?: 'screen' | 'audio' | null
+    /** Called when user clicks "View Knowledge" on a processed asset */
+    onViewKnowledge?: (assetId: string, assetTitle: string) => void
 }
 
 /* ─────────────────────────── Helpers ─────────────────────────── */
@@ -155,11 +158,7 @@ function ContextMenu({ items, onClose }: {
     )
 }
 
-/* ──────────────────── Live Recording Preview Panel ─────────────────────
-   Shows the live MediaStream while a capture is in progress.
-   For screen captures → shows the video feed.
-   For audio captures → shows an animated waveform visualiser.
-──────────────────────────────────────────────────────────────────────── */
+/* ──────────────────── Live Recording Preview Panel ─────────────────────── */
 
 function AudioVisualiser({ stream }: { stream: MediaStream }) {
     const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -185,7 +184,6 @@ function AudioVisualiser({ stream }: { stream: MediaStream }) {
             buf.forEach((v, i) => {
                 const h = (v / 255) * canvas.height * 0.85
                 const x = i * barW
-                // gradient bar
                 const grad = c.createLinearGradient(0, canvas.height, 0, canvas.height - h)
                 grad.addColorStop(0, 'rgba(35,131,226,0.9)')
                 grad.addColorStop(1, 'rgba(35,131,226,0.3)')
@@ -212,9 +210,6 @@ function RecordingPreviewPanel({ stream, recordingType, elapsedSeconds }: {
 }) {
     const isVideo = recordingType === 'screen'
 
-    // Callback ref: fires the instant <video> mounts into the DOM.
-    // A useEffect would run after paint and could miss the window where
-    // autoPlay needs srcObject already set.
     const videoCallbackRef = useCallback((el: HTMLVideoElement | null) => {
         if (el) el.srcObject = stream
     }, [stream])
@@ -223,24 +218,15 @@ function RecordingPreviewPanel({ stream, recordingType, elapsedSeconds }: {
 
     return (
         <div className="rp-panel">
-            {/* Header bar */}
             <div className="rp-header">
                 <span className="rp-live-dot" />
                 <span className="rp-live-label">LIVE</span>
                 <span className="rp-type-label">{isVideo ? 'Screen capture' : 'Audio capture'}</span>
                 <span className="rp-elapsed">{elapsed}</span>
             </div>
-
-            {/* Preview area */}
             <div className="rp-preview-area">
                 {isVideo ? (
-                    <video
-                        ref={videoCallbackRef}
-                        className="rp-video"
-                        autoPlay
-                        muted
-                        playsInline
-                    />
+                    <video ref={videoCallbackRef} className="rp-video" autoPlay muted playsInline />
                 ) : (
                     <div className="rp-audio-wrap">
                         <Radio size={22} className="rp-audio-icon" />
@@ -248,8 +234,6 @@ function RecordingPreviewPanel({ stream, recordingType, elapsedSeconds }: {
                         <span className="rp-audio-hint">Listening…</span>
                     </div>
                 )}
-
-                {/* Corner overlay badge */}
                 <div className="rp-corner-badge">
                     <span className="rp-corner-dot" />
                     REC {elapsed}
@@ -259,79 +243,9 @@ function RecordingPreviewPanel({ stream, recordingType, elapsedSeconds }: {
     )
 }
 
-/* ──────────────────── Local recording row ──────────────────── */
-
-function LocalRecordingRow({ rec, isPlaying, onPlay, onUpload, onDownload, onDelete, onRename }: {
-    rec: Recording; isPlaying: boolean
-    onPlay: () => void; onUpload: () => void; onDownload: () => void
-    onDelete: () => void; onRename: (name: string) => void
-}) {
-    const [isEditing, setIsEditing] = useState(false)
-    const [menuOpen, setMenuOpen] = useState(false)
-    const [confirmDelete, setConfirmDelete] = useState(false)
-
-    const menuItems = [
-        { label: 'Rename', icon: <Edit2 size={12} />, onClick: () => setIsEditing(true) },
-        {
-            label: rec.uploadState === 'uploaded' ? 'Uploaded' : rec.uploadState === 'uploading' ? 'Uploading…' : 'Upload to cloud',
-            icon: <Upload size={12} />,
-            disabled: rec.uploadState === 'uploading' || rec.uploadState === 'uploaded',
-            onClick: onUpload,
-        },
-        { label: 'Download', icon: <Download size={12} />, onClick: onDownload },
-        { label: 'Delete', icon: <Trash2 size={12} />, danger: true, onClick: () => setConfirmDelete(true) },
-    ]
-
-    const statusBadge = () => {
-        if (rec.uploadState === 'uploading') return <span className="rl2-badge rl2-badge--uploading"><RefreshCw size={10} className="rl2-spin" />{rec.uploadProgress}%</span>
-        if (rec.uploadState === 'uploaded') return <span className="rl2-badge rl2-badge--ok"><Check size={10} />Synced</span>
-        if (rec.uploadState === 'failed') return <span className="rl2-badge rl2-badge--err"><AlertCircle size={10} />Failed</span>
-        return <span className="rl2-badge rl2-badge--local">Local</span>
-    }
-
-    return (
-        <>
-            <div className={`rl2-row ${isPlaying ? 'rl2-row--playing' : ''}`}>
-                <button type="button" className={`rl2-play-btn ${isPlaying ? 'rl2-play-btn--active' : ''}`} onClick={onPlay}>
-                    {isPlaying ? <Pause size={14} /> : rec.type === 'audio' ? <FileAudio size={14} /> : <FileVideo size={14} />}
-                </button>
-                <div className="rl2-info">
-                    {isEditing
-                        ? <InlineEdit value={rec.name} onSave={v => { onRename(v); setIsEditing(false) }} onCancel={() => setIsEditing(false)} />
-                        : <div className="rl2-name" onDoubleClick={() => setIsEditing(true)}>{rec.name}</div>}
-                    <div className="rl2-meta">
-                        <span><Clock size={9} />{formatDuration(rec.duration)}</span>
-                        <span>{rec.type === 'audio' ? 'Audio' : 'Video'}</span>
-                        {statusBadge()}
-                    </div>
-                    {rec.uploadError && <div className="rl2-error-text">{rec.uploadError}</div>}
-                </div>
-                <div className="rl2-actions">
-                    <button type="button" className={`rl2-action-btn ${isPlaying ? 'active' : ''}`} onClick={onPlay}>
-                        {isPlaying ? <Pause size={12} /> : <Play size={12} />}
-                    </button>
-                    {rec.uploadState !== 'uploaded' && (
-                        <button type="button" className="rl2-action-btn" onClick={onUpload} disabled={rec.uploadState === 'uploading'} title="Upload">
-                            <Upload size={12} />
-                        </button>
-                    )}
-                    <button type="button" className="rl2-action-btn" onClick={onDownload} title="Download"><Download size={12} /></button>
-                    <div className="rl2-menu-wrap">
-                        <button type="button" className={`rl2-action-btn ${menuOpen ? 'active' : ''}`} onClick={() => setMenuOpen(v => !v)}>
-                            <MoreHorizontal size={12} />
-                        </button>
-                        {menuOpen && <ContextMenu items={menuItems} onClose={() => setMenuOpen(false)} />}
-                    </div>
-                </div>
-            </div>
-            {confirmDelete && <ConfirmDelete name={rec.name} onConfirm={() => { setConfirmDelete(false); onDelete() }} onCancel={() => setConfirmDelete(false)} />}
-        </>
-    )
-}
-
 /* ──────────────────── Asset (cloud) row ───────────────────── */
 
-function AssetRow({ asset, isPlaying, isActionLoading, onPlay, onDownload, onDelete, onRename, onProcess }: {
+function AssetRow({ asset, isPlaying, isActionLoading, onPlay, onDownload, onDelete, onRename, onProcess, onViewKnowledge }: {
     asset: AssetResponse
     isPlaying: boolean
     isActionLoading: boolean
@@ -340,6 +254,7 @@ function AssetRow({ asset, isPlaying, isActionLoading, onPlay, onDownload, onDel
     onDelete: () => void
     onRename: (name: string) => void
     onProcess: () => void
+    onViewKnowledge?: () => void
 }) {
     const [isEditing, setIsEditing] = useState(false)
     const [menuOpen, setMenuOpen] = useState(false)
@@ -348,11 +263,14 @@ function AssetRow({ asset, isPlaying, isActionLoading, onPlay, onDownload, onDel
     const displayName = asset.title || asset.source_object_key.split('/').pop() || asset.id
     const canProcess = asset.status.toUpperCase() === 'READY'
     const isAudio = asset.type?.toLowerCase().includes('audio')
+    // Knowledge is available when status is READY (processed)
+    const hasKnowledge = asset.status.toUpperCase() === 'COMPLETED'
 
     const menuItems = [
         { label: 'Rename', icon: <Edit2 size={12} />, onClick: () => setIsEditing(true) },
         { label: 'Download', icon: <Download size={12} />, onClick: onDownload },
         { label: 'Process with AI', icon: <Zap size={12} />, disabled: !canProcess, onClick: onProcess },
+        { label: 'View Knowledge', icon: <Brain size={12} />, disabled: !hasKnowledge || !onViewKnowledge, onClick: () => onViewKnowledge?.() },
         { label: 'Delete', icon: <Trash2 size={12} />, danger: true, onClick: () => setConfirmDelete(true) },
     ]
 
@@ -373,13 +291,10 @@ function AssetRow({ asset, isPlaying, isActionLoading, onPlay, onDownload, onDel
                         : <div className="rl2-name" onDoubleClick={() => setIsEditing(true)}>{displayName}</div>}
 
                     <div className="rl2-meta">
-                        {/* status */}
                         <AssetStatusBadge status={asset.status} />
-                        {/* size from metadata if available */}
                         {(asset.metadata as any)?.size && (
                             <span><HardDrive size={9} />{formatFileSize((asset.metadata as any).size)}</span>
                         )}
-                        {/* created_at */}
                         <span><Clock size={9} />{formatRelativeTime(asset.created_at)}</span>
                     </div>
 
@@ -393,6 +308,18 @@ function AssetRow({ asset, isPlaying, isActionLoading, onPlay, onDownload, onDel
                     {canProcess && (
                         <button type="button" className="rl2-action-btn" onClick={onProcess} disabled={isActionLoading} title="Process with AI">
                             <Zap size={12} />
+                        </button>
+                    )}
+                    {/* Knowledge button — shown when asset has been processed */}
+                    {hasKnowledge && onViewKnowledge && (
+                        <button
+                            type="button"
+                            className="rl2-action-btn rl2-action-btn--knowledge"
+                            onClick={onViewKnowledge}
+                            disabled={isActionLoading}
+                            title="View Knowledge Summary"
+                        >
+                            <Brain size={12} />
                         </button>
                     )}
                     <button type="button" className="rl2-action-btn" onClick={onDownload} disabled={isActionLoading} title="Download">
@@ -422,27 +349,23 @@ function AssetRow({ asset, isPlaying, isActionLoading, onPlay, onDownload, onDel
 
 export function RecordingsList({
     requestWithAuth, recordings, playingId,
-    onPlay, onPlayServerVideo, onPlayServerAudio,
-    onUpload, onDownload, onDelete,
+    onPlayServerVideo, onPlayServerAudio,
     activeStream, recordingType,
+    onViewKnowledge,
 }: RecordingsListProps) {
     const [assets, setAssets] = useState<AssetResponse[]>([])
     const [isLoadingAssets, setIsLoadingAssets] = useState(false)
     const [assetError, setAssetError] = useState('')
     const [actionLoadingId, setActionLoadingId] = useState<string | null>(null)
-    const [localNames, setLocalNames] = useState<Record<string, string>>({})
     const [pendingProcessAssetId, setPendingProcessAssetId] = useState<string | null>(null)
     const [isProcessing, setIsProcessing] = useState(false)
-    // Track asset IDs that have already triggered the process dialog so we never re-open after dismiss
     const promptedAssetIds = useRef<Set<string>>(new Set())
 
-    // elapsed timer for preview panel
     const [elapsedSeconds, setElapsedSeconds] = useState(0)
     const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
     const isRecording = Boolean(activeStream && recordingType)
 
-    // start / stop elapsed timer with recording state
     useEffect(() => {
         if (isRecording) {
             setElapsedSeconds(0)
@@ -454,13 +377,11 @@ export function RecordingsList({
         return () => { if (timerRef.current) clearInterval(timerRef.current) }
     }, [isRecording])
 
-    /* ── fetch assets ── */
     const loadAssets = useCallback(async () => {
         setIsLoadingAssets(true)
         setAssetError('')
         try {
             const list = await requestWithAuth<AssetResponse[]>('/assets?limit=200&offset=0')
-            // sort newest first
             list.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
             setAssets(list)
         } catch (err) {
@@ -472,13 +393,11 @@ export function RecordingsList({
 
     useEffect(() => { void loadAssets() }, [loadAssets])
 
-    // Reload after a local recording finishes uploading
     useEffect(() => {
         const hasNewUpload = recordings.some(r => r.uploadState === 'uploaded')
         if (hasNewUpload) void loadAssets()
     }, [recordings, loadAssets])
 
-    // Auto-open process dialog when an upload completes — only once per asset ID
     useEffect(() => {
         for (const rec of recordings) {
             if (
@@ -488,12 +407,11 @@ export function RecordingsList({
             ) {
                 promptedAssetIds.current.add(rec.uploadedAssetId)
                 setPendingProcessAssetId(rec.uploadedAssetId)
-                break // only open one dialog at a time
+                break
             }
         }
     }, [recordings])
 
-    /* ── get playback URL from upload id ── */
     const getAccessUrl = useCallback(async (asset: AssetResponse, disposition: 'inline' | 'attachment') => {
         if (!asset.source_upload_id) throw new Error('No upload ID on asset')
         const resp = await requestWithAuth<UploadAccessUrlResponse>(
@@ -503,7 +421,6 @@ export function RecordingsList({
         return resp.url
     }, [requestWithAuth])
 
-    /* ── play ── */
     const handlePlay = useCallback(async (asset: AssetResponse) => {
         setActionLoadingId(asset.id)
         setAssetError('')
@@ -520,7 +437,6 @@ export function RecordingsList({
         }
     }, [getAccessUrl, onPlayServerVideo, onPlayServerAudio])
 
-    /* ── download ── */
     const handleDownload = useCallback(async (asset: AssetResponse) => {
         setActionLoadingId(asset.id)
         setAssetError('')
@@ -536,7 +452,6 @@ export function RecordingsList({
         }
     }, [getAccessUrl])
 
-    /* ── delete ── */
     const handleDelete = useCallback(async (asset: AssetResponse) => {
         setAssetError('')
         try {
@@ -547,7 +462,6 @@ export function RecordingsList({
         }
     }, [requestWithAuth])
 
-    /* ── rename ── */
     const handleRename = useCallback(async (asset: AssetResponse, newTitle: string) => {
         setAssetError('')
         try {
@@ -562,7 +476,6 @@ export function RecordingsList({
         }
     }, [requestWithAuth])
 
-    /* ── process ── */
     const handleProcess = useCallback((asset: AssetResponse) => {
         setPendingProcessAssetId(asset.id)
     }, [])
@@ -581,9 +494,6 @@ export function RecordingsList({
         }
     }, [pendingProcessAssetId, requestWithAuth, loadAssets])
 
-    const handleLocalRename = useCallback((id: string, name: string) => {
-        setLocalNames(prev => ({ ...prev, [id]: name }))
-    }, [])
 
     const pendingAssetTitle = pendingProcessAssetId
         ? (assets.find(a => a.id === pendingProcessAssetId)?.title ?? 'Recording')
@@ -591,7 +501,6 @@ export function RecordingsList({
 
     const totalCount = recordings.length + assets.length
 
-    /* ── empty state ── */
     if (totalCount === 0 && !isLoadingAssets && !isRecording) {
         return (
             <div className="rl2-empty">
@@ -604,7 +513,6 @@ export function RecordingsList({
 
     return (
         <>
-            {/* ── Live preview panel (shown while recording) ── */}
             {isRecording && activeStream && recordingType && (
                 <RecordingPreviewPanel
                     stream={activeStream}
@@ -633,30 +541,6 @@ export function RecordingsList({
                     </div>
                 )}
 
-                {/* This-session recordings (local, not yet uploaded / being uploaded) */}
-                {recordings.length > 0 && (
-                    <div className="rl2-group">
-                        <div className="rl2-group-label">
-                            <span>This session</span>
-                            <span className="rl2-group-count">{recordings.length}</span>
-                        </div>
-                        <div className="rl2-list">
-                            {recordings.map(rec => (
-                                <LocalRecordingRow key={rec.id}
-                                    rec={{ ...rec, name: localNames[rec.id] ?? rec.name }}
-                                    isPlaying={playingId === rec.id}
-                                    onPlay={() => onPlay(rec)}
-                                    onUpload={() => onUpload(rec.id)}
-                                    onDownload={() => onDownload(rec)}
-                                    onDelete={() => onDelete(rec.id)}
-                                    onRename={name => handleLocalRename(rec.id, name)}
-                                />
-                            ))}
-                        </div>
-                    </div>
-                )}
-
-                {/* Cloud assets */}
                 {(assets.length > 0 || isLoadingAssets) && (
                     <div className="rl2-group">
                         <div className="rl2-group-label">
@@ -679,6 +563,11 @@ export function RecordingsList({
                                     onDelete={() => void handleDelete(asset)}
                                     onRename={name => void handleRename(asset, name)}
                                     onProcess={() => handleProcess(asset)}
+                                    onViewKnowledge={
+                                        onViewKnowledge
+                                            ? () => onViewKnowledge(asset.id, asset.title || asset.id)
+                                            : undefined
+                                    }
                                 />
                             ))}
                         </div>

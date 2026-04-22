@@ -226,7 +226,6 @@ class MongoOCRService:
     Collections:
       ocr_jobs           — one doc per asset/task
       ocr_frames         — raw OCR frames after layout reconstruction
-      ocr_processed      — windowed frames after Gemini processing (OCR + transcript)
       knowledge_units    — atomic knowledge facts with time anchors
       asset_knowledge    — session-level summaries with full timeline
       transcription_jobs — STT job metadata (read-only in this service)
@@ -235,7 +234,6 @@ class MongoOCRService:
 
     OCR_JOBS_COLLECTION = "ocr_jobs"
     OCR_FRAMES_COLLECTION = "ocr_frames"
-    OCR_PROCESSED_COLLECTION = "ocr_processed"
     KNOWLEDGE_UNITS_COLLECTION = "knowledge_units"
     ASSET_KNOWLEDGE_COLLECTION = "asset_knowledge"
     # STT collections (read-only references)
@@ -287,14 +285,6 @@ class MongoOCRService:
             name="uq_ocr_frames_asset_frame",
         )
 
-        await db[self.OCR_PROCESSED_COLLECTION].create_index(
-            [("asset_id", 1), ("start_timestamp_sec", 1)],
-            name="ix_ocr_processed_asset_time",
-        )
-        await db[self.OCR_PROCESSED_COLLECTION].create_index(
-            [("user_id", 1), ("status", 1)],
-            name="ix_ocr_processed_user_status",
-        )
 
         await db[self.KNOWLEDGE_UNITS_COLLECTION].create_index(
             [("content_hash", 1)], name="ix_knowledge_units_hash"
@@ -323,7 +313,6 @@ class MongoOCRService:
         asset_id: str,
         user_id: str,
         task_id: str,
-        workspace_id: Optional[str] = None,
         status: str = "processing",
     ) -> str:
         now = datetime.utcnow()
@@ -338,7 +327,6 @@ class MongoOCRService:
                 "$setOnInsert": {
                     "asset_id": asset_id,
                     "user_id": user_id,
-                    "workspace_id": workspace_id,
                     "total_frames": 0,
                     "non_empty_frames": 0,
                     "llm_status": "pending",
@@ -372,19 +360,6 @@ class MongoOCRService:
             {"_id": ObjectId(job_id)}, update
         )
 
-    async def set_llm_status(self, job_id: str, llm_status: str) -> None:
-        await self._db[self.OCR_JOBS_COLLECTION].update_one(
-            {"_id": ObjectId(job_id)},
-            {
-                "$set": {
-                    "llm_status": llm_status,
-                    "llm_processed_at": (
-                        datetime.utcnow() if llm_status == "completed" else None
-                    ),
-                    "updated_at": datetime.utcnow(),
-                }
-            },
-        )
 
     # ── OCR Frames ───────────────────────────────────────────────────────────
 
@@ -504,41 +479,6 @@ class MongoOCRService:
 
     # ── OCR Processed (Gemini windows) ───────────────────────────────────────
 
-    async def save_ocr_processed(
-        self,
-        asset_id: str,
-        user_id: str,
-        ocr_job_id: str,
-        window: dict,
-    ) -> str:
-        now = datetime.utcnow()
-        doc = {
-            "asset_id": asset_id,
-            "user_id": user_id,
-            "ocr_job_id": ocr_job_id,
-            "start_timestamp_sec": window["start_timestamp_sec"],
-            "end_timestamp_sec": window["end_timestamp_sec"],
-            "frame_ids": window.get("frame_ids", []),
-            "combined_text": window.get("combined_text", ""),
-            "transcript_text": window.get("transcript_text", ""),
-            "analysis": window.get("analysis"),
-            "llm_model": window.get("llm_model"),
-            "tokens_used": window.get("tokens_used", 0),
-            "cost_usd": window.get("cost_usd", 0.0),
-            "status": window.get("status", "completed"),
-            "error_message": window.get("error_message"),
-            "created_at": now,
-            "processed_at": now if window.get("status") == "completed" else None,
-        }
-        result = await self._db[self.OCR_PROCESSED_COLLECTION].insert_one(doc)
-        return str(result.inserted_id)
-
-    async def get_ocr_processed(self, asset_id: str) -> list[dict]:
-        cursor = self._db[self.OCR_PROCESSED_COLLECTION].find(
-            {"asset_id": asset_id, "status": "completed"},
-            sort=[("start_timestamp_sec", 1)],
-        )
-        return await cursor.to_list(length=None)
 
     # ── Knowledge Units ──────────────────────────────────────────────────────
 

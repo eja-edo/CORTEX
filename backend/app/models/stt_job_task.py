@@ -23,7 +23,6 @@ class STTJobTask:
     created_at: float = field(default_factory=time.time)
 
     asset_id: Optional[str] = None
-    workspace_id: Optional[str] = None
     user_id: Optional[str] = None
     source_upload_id: Optional[str] = None
 
@@ -43,7 +42,6 @@ class STTJobTask:
             "retry_count": str(self.retry_count),
             "created_at": str(self.created_at),
             "asset_id": self.asset_id or "",
-            "workspace_id": self.workspace_id or "",
             "user_id": self.user_id or "",
             "source_upload_id": self.source_upload_id or "",
             "source_object_key": self.source_object_key,

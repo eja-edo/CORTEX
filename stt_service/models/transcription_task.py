@@ -30,7 +30,6 @@ class TranscriptionStreamTask(BaseStreamTask):
     
     # Backend payload fields
     asset_id: str = ""
-    workspace_id: str = ""
     user_id: str = ""
     source_upload_id: str = ""
     source_object_key: str = ""
@@ -64,7 +63,6 @@ class TranscriptionStreamTask(BaseStreamTask):
         # Add transcription-specific fields
         data.update({
             "asset_id": self.asset_id,
-            "workspace_id": self.workspace_id,
             "user_id": self.user_id,
             "source_upload_id": self.source_upload_id,
             "source_object_key": self.source_object_key,
@@ -119,7 +117,6 @@ class TranscriptionStreamTask(BaseStreamTask):
             retry_count=int(decoded.get("retry_count", 0)),
             priority=parse_priority(decoded.get("priority", TaskPriority.NORMAL)),
             asset_id=decoded.get("asset_id", ""),
-            workspace_id=decoded.get("workspace_id", ""),
             user_id=decoded.get("user_id", ""),
             source_upload_id=decoded.get("source_upload_id", ""),
             source_object_key=decoded.get("source_object_key", ""),

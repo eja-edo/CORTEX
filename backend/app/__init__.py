@@ -10,12 +10,8 @@ from app.config import settings
 from app.api.auth import router as auth_router
 from app.api.google_calendar import router as google_calendar_router
 from app.api.assets import router as assets_router
-from app.api.jobs import router as jobs_router
 from app.api.notes import router as notes_router
-from app.api.note_links import router as note_links_router
 from app.api.notifications import router as notifications_router
-from app.api.search import router as search_router
-from app.api.segments import router as segments_router
 from app.api.schedules import router as schedules_router
 from app.api.upload import router as upload_router
 from app.api.knowledge import router as knowledge_router
@@ -180,11 +176,7 @@ app.include_router(auth_router, prefix=settings.API_STR)
 app.include_router(google_calendar_router, prefix=settings.API_STR)
 app.include_router(schedules_router, prefix=settings.API_STR)
 app.include_router(notes_router, prefix=settings.API_STR)
-app.include_router(note_links_router, prefix=settings.API_STR)
 app.include_router(assets_router, prefix=settings.API_STR)
-app.include_router(segments_router, prefix=settings.API_STR)
-app.include_router(jobs_router, prefix=settings.API_STR)
-app.include_router(search_router, prefix=settings.API_STR)
 app.include_router(notifications_router, prefix=settings.API_STR)
 app.include_router(upload_router, prefix=settings.API_STR)
 app.include_router(knowledge_router, prefix=settings.API_STR)

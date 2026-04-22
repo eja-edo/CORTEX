@@ -26,7 +26,6 @@ class STTJobTask:
 
     asset_id: Optional[str] = None
     egress_id: Optional[str] = None
-    workspace_id: Optional[str] = None
     user_id: Optional[str] = None
     source_upload_id: Optional[str] = None
     source_object_key: str = ""
@@ -44,7 +43,6 @@ class STTJobTask:
             "created_at": str(self.created_at),
             "asset_id": self.asset_id or "",
             "egress_id": self.egress_id or "",
-            "workspace_id": self.workspace_id or "",
             "user_id": self.user_id or "",
             "source_upload_id": self.source_upload_id or "",
             "source_object_key": self.source_object_key,
@@ -74,7 +72,6 @@ class RedisSTTProducer(RedisStreamProducerBase[STTJobTask]):
         self,
         asset_id: Optional[UUID],
         egress_id: Optional[UUID],
-        workspace_id: Optional[UUID],
         user_id: Optional[UUID],
         source_object_key: str,
         media_type: str,
@@ -88,7 +85,6 @@ class RedisSTTProducer(RedisStreamProducerBase[STTJobTask]):
         task = STTJobTask(
             asset_id=str(asset_id) if asset_id else None,
             egress_id=str(egress_id) if egress_id else None,
-            workspace_id=str(workspace_id) if workspace_id else None,
             user_id=str(user_id) if user_id else None,
             source_upload_id=str(source_upload_id) if source_upload_id else None,
             source_object_key=source_object_key,
@@ -105,7 +101,6 @@ class RedisSTTProducer(RedisStreamProducerBase[STTJobTask]):
 async def enqueue_transcription_job(
     asset_id: Optional[UUID],
     egress_id: Optional[UUID],
-    workspace_id: Optional[UUID],
     user_id: Optional[UUID],
     source_object_key: str,
     media_type: str = "video",
@@ -120,7 +115,6 @@ async def enqueue_transcription_job(
     return await producer.enqueue_transcription_job(
         asset_id=asset_id,
         egress_id=egress_id,
-        workspace_id=workspace_id,
         user_id=user_id,
         source_object_key=source_object_key,
         media_type=media_type,
