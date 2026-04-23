@@ -17,6 +17,14 @@ import { WorkspaceNoteEditor } from './components/WorkspaceNoteEditor'
 import { WorkspaceSearch } from './components/WorkspaceSearch'
 import { AskAI } from './components/AskAI'
 
+type SidebarAsset = {
+  id: string
+  title: string | null
+  status: string
+  type: string
+  created_at: string
+}
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api'
 const PKCE_CLIENT_ID = 'cortex-web'
 const PKCE_REDIRECT_URI = window.location.origin + '/auth/callback'
@@ -153,16 +161,22 @@ function mapApiNoteToAppNote(note: ApiNote): AppNote {
   }
 }
 
-function getRouteWorkspaceState(pathname: string): { view: WorkspaceView; noteId: string | null } {
-  if (pathname === '/record') return { view: 'record', noteId: null }
-  if (pathname === '/settings') return { view: 'settings', noteId: null }
+function getRouteWorkspaceState(pathname: string): { view: WorkspaceView; noteId: string | null; assetId: string | null } {
+  if (pathname === '/record') return { view: 'record', noteId: null, assetId: null }
+  
+  const recordMatch = matchPath('/record/:assetId', pathname)
+  if (recordMatch?.params.assetId) {
+    return { view: 'record', noteId: null, assetId: recordMatch.params.assetId }
+  }
+  
+  if (pathname === '/settings') return { view: 'settings', noteId: null, assetId: null }
 
   const noteMatch = matchPath('/notes/:noteId', pathname)
   if (noteMatch?.params.noteId) {
-    return { view: 'note', noteId: noteMatch.params.noteId }
+    return { view: 'note', noteId: noteMatch.params.noteId, assetId: null }
   }
 
-  return { view: 'home', noteId: null }
+  return { view: 'home', noteId: null, assetId: null }
 }
 
 function isKnownWorkspacePath(pathname: string): boolean {
@@ -171,6 +185,7 @@ function isKnownWorkspacePath(pathname: string): boolean {
     || pathname === '/settings'
     || pathname === '/auth/callback'
     || Boolean(matchPath('/notes/:noteId', pathname))
+    || Boolean(matchPath('/record/:assetId', pathname))
 }
 
 // Collapsible sidebar section header
@@ -182,6 +197,7 @@ function SidebarSection({
   isCollapsed,
   sectionBodyProps,
   children,
+  onLabelClick,
 }: {
   icon: React.ReactNode
   label: string
@@ -190,6 +206,7 @@ function SidebarSection({
   isCollapsed: boolean
   sectionBodyProps?: React.HTMLAttributes<HTMLDivElement>
   children?: React.ReactNode
+  onLabelClick?: () => void
 }) {
   const { className: sectionBodyClassName, ...sectionBodyRestProps } = sectionBodyProps ?? {}
 
@@ -205,7 +222,18 @@ function SidebarSection({
         <span className="sidebar-section-toggle-icon">{icon}</span>
         {!isCollapsed && (
           <>
-            <span className="sidebar-section-toggle-label">{label}</span>
+            <span
+              className="sidebar-section-toggle-label"
+              onClick={(e) => {
+                if (onLabelClick) {
+                  e.stopPropagation()
+                  onLabelClick()
+                }
+              }}
+              style={onLabelClick ? { cursor: 'pointer' } : undefined}
+            >
+              {label}
+            </span>
             <span className="sidebar-section-toggle-chevron">
               {isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
             </span>
@@ -247,6 +275,7 @@ function App() {
   const [isWorkspaceSidebarCollapsed, setIsWorkspaceSidebarCollapsed] = useState<boolean>(false)
   const activeWorkspaceView = routeWorkspaceState.view
   const [activeWorkspaceNoteId, setActiveWorkspaceNoteId] = useState<string | null>(routeWorkspaceState.noteId)
+  const [activeWorkspaceAssetId, setActiveWorkspaceAssetId] = useState<string | null>(routeWorkspaceState.assetId)
   const [googleCalendarStatus, setGoogleCalendarStatus] = useState<GoogleCalendarStatus | null>(null)
 
   // Collapsible sidebar sections state
@@ -268,6 +297,10 @@ function App() {
   const [workspaceDraggingNoteId, setWorkspaceDraggingNoteId] = useState<string | null>(null)
   const [workspaceDropTargetParentId, setWorkspaceDropTargetParentId] = useState<string | null>(null)
 
+  // Sidebar assets state
+  const [sidebarAssets, setSidebarAssets] = useState<SidebarAsset[]>([])
+  const [sidebarAssetsLoading, setSidebarAssetsLoading] = useState(false)
+
   useEffect(() => {
     recentNotesRef.current = recentNotes
   }, [recentNotes])
@@ -278,12 +311,19 @@ function App() {
 
   useEffect(() => {
     setActiveWorkspaceNoteId(routeWorkspaceState.noteId)
-  }, [routeWorkspaceState.noteId])
+    setActiveWorkspaceAssetId(routeWorkspaceState.assetId)
+  }, [routeWorkspaceState.noteId, routeWorkspaceState.assetId])
 
   useEffect(() => {
     if (isKnownWorkspacePath(location.pathname)) return
     navigate('/', { replace: true })
   }, [location.pathname, navigate])
+
+  // Load assets when Record section opens
+  useEffect(() => {
+    if (!sectionRecordOpen || !tokens) return
+    void loadSidebarAssets()
+  }, [sectionRecordOpen, tokens])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -595,6 +635,30 @@ function App() {
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Cannot load notes')
     }
+  }
+
+  async function loadSidebarAssets(): Promise<void> {
+    if (!tokens) return
+    setSidebarAssetsLoading(true)
+    try {
+      const assets = await requestWithAuth<Array<{
+        id: string
+        title: string | null
+        status: string
+        type: string
+        created_at: string
+      }>>('/assets?limit=10')
+      setSidebarAssets(assets)
+    } catch (error) {
+      // Silently fail - assets are not critical
+      console.error('Failed to load sidebar assets:', error)
+    } finally {
+      setSidebarAssetsLoading(false)
+    }
+  }
+
+  function handleSidebarAssetClick(assetId: string, _assetTitle: string | null): void {
+    navigate(`/record/${assetId}`)
   }
 
   async function persistNoteContent(noteId: string): Promise<void> {
@@ -1194,7 +1258,7 @@ function App() {
 
                 {/* Notes section — collapsible */}
                 <SidebarSection
-                  icon={<StickyNote size={14} />}
+                  icon={<StickyNote size={15} />}
                   label="Notes"
                   isOpen={sectionNoteOpen}
                   onToggle={() => setSectionNoteOpen(v => !v)}
@@ -1278,23 +1342,46 @@ function App() {
 
                 {/* Record section — collapsible */}
                 <SidebarSection
-                  icon={<Video size={14} />}
+                  icon={<Video size={15} />}
                   label="Record"
                   isOpen={sectionRecordOpen}
                   onToggle={() => {
                     setSectionRecordOpen(v => !v)
-                    if (!sectionRecordOpen) navigate('/record')
                   }}
                   isCollapsed={isWorkspaceSidebarCollapsed}
+                  onLabelClick={() => navigate('/record')}
                 >
-                  <button
-                    type="button"
-                    className={`workspace-nav-item workspace-nav-item--sub ${activeWorkspaceView === 'record' ? 'active' : ''}`}
-                    onClick={() => navigate('/record')}
-                  >
-                    <Video size={13} />
-                    <span>Open recorder</span>
-                  </button>
+                  <div className="workspace-note-links">
+                    {sidebarAssetsLoading ? (
+                      <div className="workspace-nav-item workspace-nav-item--sub" >
+                        <Video size={13} />
+                        <span>Loading...</span>
+                      </div>
+                    ) : sidebarAssets.length === 0 ? (
+                      <div className="workspace-nav-item workspace-nav-item--sub" >
+                        <Video size={13} />
+                        <span>No recordings yet</span>
+                      </div>
+                    ) : (
+                      <>
+                        {sidebarAssets.map(asset => {
+                          const displayName = asset.title || asset.id.slice(0, 8)
+                          return (
+                            <button
+                              key={asset.id}
+                              type="button"
+                              className={`workspace-nav-item workspace-nav-item--sub ${activeWorkspaceView === 'record' && activeWorkspaceAssetId === asset.id ? 'active' : ''}`}
+                              onClick={() => handleSidebarAssetClick(asset.id, asset.title)}
+                              title={displayName}
+                            >
+                              <span className="sidebar-section-toggle-chevron"><Video size={13} /></span>
+                              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName}</span>
+                            </button>
+                          )
+                        })}
+                      </>
+                    )}
+                  </div>
                 </SidebarSection>
               </div>
 
@@ -1340,7 +1427,16 @@ function App() {
                 </div>
               </section>
             ) : activeWorkspaceView === 'record' ? (
-              <RecordPanel requestWithAuth={requestWithAuth} isVisible />
+              <RecordPanel
+                requestWithAuth={requestWithAuth}
+                isVisible
+                initialAssetId={activeWorkspaceAssetId}
+                onAssetViewed={() => {
+                  if (activeWorkspaceAssetId) {
+                    navigate('/record')
+                  }
+                }}
+              />
             ) : activeWorkspaceView === 'settings' ? (
               <section className="settings-workspace">
                 <div className="settings-workspace-header">

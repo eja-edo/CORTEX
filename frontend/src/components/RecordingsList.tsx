@@ -90,6 +90,8 @@ function AssetStatusBadge({ status }: { status: string }) {
             return <span className="rl2-badge rl2-badge--local"><Clock size={10} />Pending</span>
         case 'ERROR':
             return <span className="rl2-badge rl2-badge--err"><AlertCircle size={10} />Error</span>
+        case 'COMPLETED':
+            return <span className="rl2-badge rl2-badge--ok"><Check size={10} />Completed</span>
         default:
             return <span className="rl2-badge rl2-badge--local">{status}</span>
     }

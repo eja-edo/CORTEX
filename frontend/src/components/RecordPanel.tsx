@@ -4,6 +4,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Mic, MicOff, Monitor, Video, VideoOff } from 'lucide-react'
+import { useParams } from 'react-router-dom'
 
 import { RecordingsList } from './RecordingsList'
 import { AssetKnowledgeView } from './AssetKnowledgeView'
@@ -55,6 +56,8 @@ type LiveUploadContext = {
 type RecordPanelProps = {
     requestWithAuth: AuthRequest
     isVisible: boolean
+    initialAssetId?: string | null
+    onAssetViewed?: () => void
 }
 
 const MIN_PART_SIZE = 5 * 1024 * 1024
@@ -71,7 +74,8 @@ function formatDate(date: Date): string {
         ' ' + date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
 }
 
-export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
+export function RecordPanel({ requestWithAuth, isVisible, initialAssetId, onAssetViewed }: RecordPanelProps) {
+    const { assetId: urlAssetId } = useParams<{ assetId: string }>()
     const [recordings, setRecordings] = useState<Recording[]>([])
     const [isRecordingAudio, setIsRecordingAudio] = useState(false)
     const [isRecordingScreen, setIsRecordingScreen] = useState(false)
@@ -89,6 +93,16 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
 
     const [activeStream, setActiveStream] = useState<MediaStream | null>(null)
     const [recordingType, setRecordingType] = useState<'screen' | 'audio' | null>(null)
+
+    // Open knowledge view for asset from URL or initialAssetId
+    useEffect(() => {
+        const assetId = urlAssetId || initialAssetId
+        if (assetId) {
+            // We don't have the title here, so use a placeholder
+            // The AssetKnowledgeView will fetch the asset details
+            setKnowledgeTarget({ assetId, assetTitle: 'Asset' })
+        }
+    }, [urlAssetId, initialAssetId])
 
     const audioRecorderRef = useRef<MediaRecorder | null>(null)
     const screenRecorderRef = useRef<MediaRecorder | null>(null)
@@ -573,7 +587,13 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
                 <AssetKnowledgeView
                     assetId={knowledgeTarget.assetId}
                     requestWithAuth={requestWithAuth}
-                    onClose={() => setKnowledgeTarget(null)}
+                    onClose={() => {
+                        setKnowledgeTarget(null)
+                        // Navigate back to /record when closing knowledge view
+                        if (urlAssetId) {
+                            onAssetViewed?.()
+                        }
+                    }}
                 />
             </div>
         )
