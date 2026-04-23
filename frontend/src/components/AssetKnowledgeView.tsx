@@ -137,7 +137,7 @@ function KnowledgeBar({ value }: { value: number }) {
 
 /* ─────────────────── Main component ─────────────────── */
 
-export function AssetKnowledgeView({ assetId, assetTitle, requestWithAuth, onClose, onSeek }: AssetKnowledgeViewProps) {
+export function AssetKnowledgeView({ assetId, requestWithAuth, onClose, onSeek }: AssetKnowledgeViewProps) {
     const [data, setData] = useState<AssetKnowledgeSummary | null>(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState('')

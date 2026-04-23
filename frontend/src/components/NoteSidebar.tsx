@@ -227,6 +227,7 @@ function NoteCardItem({
     }
   }, [])
 
+  const AUTOSAVE_INTERVAL = Number(import.meta.env.VITE_AUTOSAVE_INTERVAL) || 350
   const queueAutosave = useCallback((value: string) => {
     if (autosaveTimerRef.current) {
       window.clearTimeout(autosaveTimerRef.current)
@@ -234,8 +235,8 @@ function NoteCardItem({
     autosaveTimerRef.current = window.setTimeout(() => {
       onNoteChange(note.id, value)
       autosaveTimerRef.current = null
-    }, 350)
-  }, [note.id, onNoteChange])
+    }, AUTOSAVE_INTERVAL)
+  }, [note.id, onNoteChange, AUTOSAVE_INTERVAL])
 
   const flushAutosave = useCallback((value: string) => {
     if (autosaveTimerRef.current) {

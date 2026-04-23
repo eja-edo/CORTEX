@@ -310,10 +310,11 @@ export function WorkspaceNoteEditor({
         onChange(note.id, value)
     }, [note.id, onChange])
 
+    const AUTOSAVE_INTERVAL = Number(import.meta.env.VITE_AUTOSAVE_INTERVAL) || 350
     const queueFlush = useCallback((value: string) => {
         if (timerRef.current) window.clearTimeout(timerRef.current)
-        timerRef.current = window.setTimeout(() => { flush(value); timerRef.current = null }, 300)
-    }, [flush])
+        timerRef.current = window.setTimeout(() => { flush(value); timerRef.current = null }, AUTOSAVE_INTERVAL)
+    }, [flush, AUTOSAVE_INTERVAL])
 
     const applyValue = useCallback((value: string) => {
         setLocalMd(value)

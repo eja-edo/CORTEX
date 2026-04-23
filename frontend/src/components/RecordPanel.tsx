@@ -572,7 +572,6 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
             <div className='record-workspace' style={{ display: isVisible ? undefined : 'none' }}>
                 <AssetKnowledgeView
                     assetId={knowledgeTarget.assetId}
-                    assetTitle={knowledgeTarget.assetTitle}
                     requestWithAuth={requestWithAuth}
                     onClose={() => setKnowledgeTarget(null)}
                 />
