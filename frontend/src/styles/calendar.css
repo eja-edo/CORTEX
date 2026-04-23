@@ -177,7 +177,7 @@
 .rbc-btn-group button.rbc-active,
 .rbc-btn-group button:active {
     background: var(--text-primary) !important;
-    color: #fff !important;
+    color: var(--purple-light) !important;
     border-color: var(--text-primary) !important;
     box-shadow: none !important;
 }
@@ -242,6 +242,19 @@
 
 .rbc-timeslot-group {
     border-bottom: 1px solid var(--border) !important;
+}
+
+.rbc-day-slot .rbc-time-slot
+{
+    border-top: 1px solid var(--border) !important;
+}
+
+.rbc-time-content > * + * > * {
+    border-left: 1px solid var(--border) !important;
+}
+
+.rbc-off-range-bg{
+    background: var(--bg-hover)
 }
 
 .rbc-time-slot {
@@ -338,25 +351,25 @@
 .cal-event-CLASS {
     background: rgba(35, 131, 226, 0.08);
     border-color: rgba(35, 131, 226, 0.6);
-    color: #1a5d9e;
+    color: var(--text-primary);
 }
 
 .cal-event-DEADLINE {
     background: rgba(235, 87, 87, 0.08);
     border-color: rgba(235, 87, 87, 0.6);
-    color: #9e2b2b;
+    color: var(--text-primary);
 }
 
 .cal-event-EXAM {
     background: rgba(223, 171, 1, 0.1);
     border-color: rgba(223, 171, 1, 0.6);
-    color: #7d5f00;
+    color: var(--text-primary);
 }
 
 .cal-event-PERSONAL {
     background: rgba(15, 123, 108, 0.08);
     border-color: rgba(15, 123, 108, 0.6);
-    color: #0b5c52;
+    color: var(--text-primary);
 }
 
 /* ========== EMPTY STATE ========== */

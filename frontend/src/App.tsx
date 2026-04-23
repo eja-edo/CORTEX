@@ -4,11 +4,13 @@ import { startOfWeek, endOfWeek } from 'date-fns'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
 import 'react-big-calendar/lib/css/react-big-calendar.css'
 import './App.css'
+import './styles/settings.css'
 import { AuthPanel } from './components/AuthPanel'
 import { ScheduleForm } from './components/ScheduleForm'
 import { CalendarView } from './components/CalendarView'
 import { NoteSidebar, type NoteItem } from './components/NoteSidebar'
 import { RecordPanel } from './components/RecordPanel'
+import { SettingsPanel } from './components/SettingsPanel'
 import type { Schedule, TokenPair, User, ScheduleListResponse, GoogleCalendarStatus, SyncUpdateEvent } from './types'
 import { plainTextFromMarkdown } from './utils/noteMarkdown'
 import { NotificationBell, type AppNotification } from './components/NotificationBell'
@@ -16,6 +18,8 @@ import { buildTextPatch, type NotePatchOp } from './utils/textPatch.ts'
 import { WorkspaceNoteEditor } from './components/WorkspaceNoteEditor'
 import { WorkspaceSearch } from './components/WorkspaceSearch'
 import { AskAI } from './components/AskAI'
+import { getStoredTheme, applyThemeToDocument, setStoredTheme } from './utils/theme'
+import type { AppTheme } from './utils/theme'
 
 type SidebarAsset = {
   id: string
@@ -277,6 +281,7 @@ function App() {
   const [activeWorkspaceNoteId, setActiveWorkspaceNoteId] = useState<string | null>(routeWorkspaceState.noteId)
   const [activeWorkspaceAssetId, setActiveWorkspaceAssetId] = useState<string | null>(routeWorkspaceState.assetId)
   const [googleCalendarStatus, setGoogleCalendarStatus] = useState<GoogleCalendarStatus | null>(null)
+  const [theme, setTheme] = useState<AppTheme>(getStoredTheme)
 
   // Collapsible sidebar sections state
   const [sectionNoteOpen, setSectionNoteOpen] = useState(true)
@@ -313,6 +318,12 @@ function App() {
     setActiveWorkspaceNoteId(routeWorkspaceState.noteId)
     setActiveWorkspaceAssetId(routeWorkspaceState.assetId)
   }, [routeWorkspaceState.noteId, routeWorkspaceState.assetId])
+
+  // Apply theme and save to localStorage when it changes
+  useEffect(() => {
+    applyThemeToDocument(theme)
+    window.localStorage.setItem('cortex_theme', theme)
+  }, [theme])
 
   useEffect(() => {
     if (isKnownWorkspacePath(location.pathname)) return
@@ -1438,47 +1449,17 @@ function App() {
                 }}
               />
             ) : activeWorkspaceView === 'settings' ? (
-              <section className="settings-workspace">
-                <div className="settings-workspace-header">
-                  <h1 className="page-title">Settings</h1>
-                </div>
-                <div className="settings-card">
-                  <div className="settings-card-title">Google Calendar</div>
-                  <div className="settings-card-subtitle">
-                    Manage connection and manual sync for your calendar integration.
-                  </div>
-                  <div className="settings-actions-row">
-                    {!googleCalendarStatus?.connected ? (
-                      <button type="button" className="btn btn-primary" onClick={handleConnectGoogleCalendar}>
-                        Connect Google
-                      </button>
-                    ) : (
-                      <>
-                        <button type="button" className="btn btn-ghost" onClick={handleSyncGoogleCalendarNow}>
-                          Sync Google
-                        </button>
-                        <button type="button" className="btn btn-ghost" onClick={handleStartGoogleCalendarWatch}>
-                          Start Watch
-                        </button>
-                        <button type="button" className="btn btn-ghost" onClick={handleRenewGoogleCalendarWatch}>
-                          Renew Watch
-                        </button>
-                        <button type="button" className="btn btn-danger" onClick={handleDisconnectGoogleCalendar}>
-                          Disconnect Google
-                        </button>
-                      </>
-                    )}
-                  </div>
-                  <div className="settings-meta-list">
-                    <div>Status: {googleCalendarStatus?.connected ? 'Connected' : 'Not connected'}</div>
-                    <div>Last sync: {formatDateTimeVi(googleCalendarStatus?.last_synced_at ?? null)}</div>
-                    <div>Channel expires: {formatDateTimeVi(googleCalendarStatus?.channel_expiration ?? null)}</div>
-                    {googleCalendarStatus?.last_sync_error && (
-                      <div className="settings-meta-error">Last error: {googleCalendarStatus.last_sync_error}</div>
-                    )}
-                  </div>
-                </div>
-              </section>
+              <SettingsPanel
+                googleCalendarStatus={googleCalendarStatus}
+                onConnectGoogleCalendar={handleConnectGoogleCalendar}
+                onSyncGoogleCalendarNow={handleSyncGoogleCalendarNow}
+                onStartGoogleCalendarWatch={handleStartGoogleCalendarWatch}
+                onRenewGoogleCalendarWatch={handleRenewGoogleCalendarWatch}
+                onDisconnectGoogleCalendar={handleDisconnectGoogleCalendar}
+                theme={theme}
+                onThemeChange={setTheme}
+                formatDateTimeVi={formatDateTimeVi}
+              />
             ) : activeWorkspaceNote ? (
               <div className="workspace-note-page">
                 <WorkspaceNoteEditor

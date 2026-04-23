@@ -15,9 +15,9 @@ from app.api.notifications import router as notifications_router
 from app.api.schedules import router as schedules_router
 from app.api.upload import router as upload_router
 from app.api.knowledge import router as knowledge_router
+from app.api.internal import router as internal_router
 from app.api.sse import sync_sse_router
 from app.services.transcription_results_consumer import transcription_results_consumer
-from app.services.ocr_processor_worker import get_ocr_processor_worker
 from app.services.llm_processor_worker_fixed import get_llm_processor_worker
 from app.utils.logger import get_logger
 from app.api.sse.sse_manager import SSEManager
@@ -94,7 +94,6 @@ original_sigint = signal.getsignal(signal.SIGINT)
 original_sigterm = signal.getsignal(signal.SIGTERM)
 
 # Global worker threads
-_ocr_worker_thread: Optional[WorkerThread] = None
 _llm_worker_thread: Optional[WorkerThread] = None
 
 def signal_exit(signum, frame):
@@ -126,7 +125,7 @@ logger.info("✅ Signal handlers registered for SIGINT and SIGTERM")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application startup and shutdown lifecycle."""
-    global _ocr_worker_thread, _llm_worker_thread
+    global _llm_worker_thread
     
     # Start transcription results consumer
     try:
@@ -134,10 +133,8 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning(f"Transcription results consumer disabled: {exc}")
 
-    # Start OCR processor worker in separate thread
-    ocr_worker = get_ocr_processor_worker()
-    _ocr_worker_thread = WorkerThread("OCR", ocr_worker)
-    _ocr_worker_thread.start()
+    # OCR processing is handled by external OCR service
+    logger.info("🔧 OCR Service Mode: EXTERNAL (OCR service handles processing)")
 
     # Start LLM processor worker in separate thread
     llm_worker = get_llm_processor_worker()
@@ -149,8 +146,6 @@ async def lifespan(app: FastAPI):
     finally:
         await transcription_results_consumer.stop()
         # Stop workers in separate threads
-        if _ocr_worker_thread:
-            _ocr_worker_thread.stop()
         if _llm_worker_thread:
             _llm_worker_thread.stop()
 
@@ -181,6 +176,9 @@ app.include_router(notifications_router, prefix=settings.API_STR)
 app.include_router(upload_router, prefix=settings.API_STR)
 app.include_router(knowledge_router, prefix=settings.API_STR)
 app.include_router(sync_sse_router, prefix=settings.API_STR)
+
+# Internal service-to-service endpoints (not exposed to internet)
+app.include_router(internal_router)
 
 @app.get("/")
 def read_root():

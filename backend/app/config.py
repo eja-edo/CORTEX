@@ -117,4 +117,7 @@ class Settings:
     LLM_WINDOW_SECONDS: float = float(os.getenv("LLM_WINDOW_SECONDS", "30.0"))
     LLM_MIN_KNOWLEDGE_VALUE: float = float(os.getenv("LLM_MIN_KNOWLEDGE_VALUE", "0.3"))
 
+    # Internal API
+    INTERNAL_API_KEY: str = os.getenv("INTERNAL_API_KEY", "")
+
 settings = Settings()

@@ -24,13 +24,15 @@ import json
 from datetime import datetime
 from typing import Optional
 
-import redis.asyncio as redis
-from redis.exceptions import ConnectionError, ResponseError
-
 from app.config import settings
 from app.services.mongo_service import MongoOCRService
 from app.services.llm_processing import gemini_service
-from app.services.redis.llm_processor_task import LLM_PROCESSOR_STREAM_KEY, LLMProcessorTask
+from app.services.redis.llm_processor_task import (
+    LLM_PROCESSOR_STREAM_KEY,
+    LLM_CONSUMER_GROUP,
+    LLMProcessorTask,
+)
+from app.services.redis.redis_stream_service import RedisStreamService
 from app.utils.decorator import singleton
 from app.utils.logger import get_logger
 from app.models import AssetStatus, Asset
@@ -123,118 +125,100 @@ def _make_transcript_window(segs: list[dict]) -> dict:
 
 @singleton
 class LLMProcessorWorker:
+    """
+    LLM Processor Worker - Consumes tasks from Redis Stream using standardized service.
+    
+    Uses RedisStreamService for:
+    - Connection pooling
+    - Worker heartbeat
+    - Task recovery (orphaned tasks)
+    - Graceful shutdown
+    """
+    
     def __init__(self):
-        self._redis: Optional[redis.Redis] = None
-        self._stream_key = LLM_PROCESSOR_STREAM_KEY
-        self._group_name = "llm-processor-workers"
-        self._consumer_id = "llm-worker-main"
         self._running = False
+        self._redis_service: Optional[RedisStreamService] = None
         self._mongo_ocr_service = MongoOCRService()
 
     async def start(self) -> None:
+        """Start the LLM worker with standardized Redis service."""
         if self._running:
             return
 
-        try:
-            self._redis = redis.from_url(settings.REDIS_URL, decode_responses=False)
-            await self._redis.ping()
-            logger.info(f"✅ Connected to Redis at {settings.REDIS_URL}")
-        except Exception as e:
-            logger.error(f"Failed to connect to Redis: {e}")
-            raise ConnectionError(f"Redis connection failed: {e}")
-
-        try:
-            await self._redis.xgroup_create(
-                self._stream_key, self._group_name, id="0", mkstream=True
-            )
-            logger.info(f"Created consumer group '{self._group_name}'")
-        except ResponseError as e:
-            if "BUSYGROUP" not in str(e):
-                raise
-            logger.debug("Consumer group already exists")
-
+        # Initialize standardized Redis stream service
+        self._redis_service = RedisStreamService.get_instance(
+            task_class=LLMProcessorTask,
+            stream_key=LLM_PROCESSOR_STREAM_KEY,
+            group_name=LLM_CONSUMER_GROUP,
+        )
+        
+        await self._redis_service.connect()
+        await self._redis_service.start_background_tasks()
+        
         self._running = True
-        logger.info("🤖 LLM Processor Worker started")
+        logger.info("🤖 LLM Processor Worker started (with standardized Redis service)")
         await self._consume_loop()
 
     async def stop(self) -> None:
+        """Stop the LLM worker gracefully."""
         self._running = False
-        if self._redis:
-            await self._redis.close()
-            self._redis = None
+        
+        if self._redis_service:
+            # Stop background tasks (heartbeat, recovery)
+            await self._redis_service.stop_background_tasks()
+            # Disconnect and release pending tasks
+            await self._redis_service.disconnect(release_pending=True)
+            self._redis_service = None
+        
+        logger.info("🛑 LLM Processor Worker stopped")
 
     async def _consume_loop(self) -> None:
-        retry_count = 0
-        max_retries = 10
-        base_backoff = 1
-
+        """
+        Consume tasks from Redis Stream using standardized service.
+        
+        Features:
+        - Automatic connection pooling
+        - Worker heartbeat (running in background)
+        - Task acknowledgment/rejection
+        - Graceful error handling
+        """
         while self._running:
             try:
-                result = await self._redis.xreadgroup(
-                    groupname=self._group_name,
-                    consumername=self._consumer_id,
-                    streams={self._stream_key: ">"},
-                    count=1,
-                    block=5000,
-                )
-
-                if not result:
-                    retry_count = 0
+                # Read tasks from stream (blocks for 5 seconds if no tasks)
+                tasks = await self._redis_service.read_tasks(count=1, block_ms=5000)
+                
+                if not tasks:
+                    # No tasks available, loop will retry
                     continue
-
-                retry_count = 0
-                for _, messages in result:
-                    for msg_id, data in messages:
-                        decoded = {k.decode(): v.decode() for k, v in data.items()}
-                        task = LLMProcessorTask(
-                            task_id=decoded.get("task_id", ""),
-                            asset_id=decoded.get("asset_id", ""),
-                            user_id=decoded.get("user_id", ""),
-                            ocr_job_id=decoded.get("ocr_job_id", ""),
-                            job_context=json.loads(decoded.get("job_context", "{}")),
-                        )
-                        try:
-                            await self._process_task(task)
-                        except Exception as exc:
-                            logger.exception(f"LLM task failed: {task.task_id}: {exc}")
-                        finally:
-                            try:
-                                await self._redis.xack(
-                                    self._stream_key, self._group_name, msg_id
-                                )
-                            except Exception:
-                                pass
-
-            except ConnectionError as exc:
-                retry_count += 1
-                backoff = min(base_backoff * (2 ** retry_count), 60)
-                logger.error(
-                    f"LLM consumer Redis connection error "
-                    f"(attempt {retry_count}/{max_retries}): {exc}. "
-                    f"Reconnecting in {backoff}s…"
-                )
-
-                if retry_count >= max_retries:
-                    logger.error("Max reconnection attempts exceeded. Stopping worker.")
-                    self._running = False
-                    break
-
-                if self._redis:
+                
+                # Process each task
+                for task in tasks:
                     try:
-                        await self._redis.close()
-                    except Exception:
-                        pass
-                self._redis = None
-                await asyncio.sleep(backoff)
-
-                try:
-                    self._redis = redis.from_url(settings.REDIS_URL, decode_responses=False)
-                    await self._redis.ping()
-                    logger.info("✅ LLM worker reconnected to Redis")
-                    retry_count = 0
-                except Exception as e:
-                    logger.error(f"LLM worker failed to reconnect: {e}")
-
+                        logger.info(f"🔍 Processing LLM task: {task.task_id} (asset={task.asset_id})")
+                        await self._process_task(task)
+                        
+                        # Acknowledge successful completion
+                        await self._redis_service.acknowledge(task)
+                        logger.info(f"✅ LLM task completed: {task.task_id}")
+                        
+                    except Exception as exc:
+                        logger.exception(f"❌ LLM task failed: {task.task_id}: {exc}")
+                        
+                        # Reject task (will retry up to max_retries, then move to DLQ)
+                        try:
+                            await self._redis_service.reject(
+                                task, 
+                                error=str(exc)[:500],  # Truncate long errors
+                                retry=True
+                            )
+                        except Exception as reject_error:
+                            logger.error(f"Failed to reject task {task.task_id}: {reject_error}")
+                
+            except ConnectionError as exc:
+                logger.error(f"LLM consumer Redis connection error: {exc}")
+                # RedisStreamService will handle reconnection automatically
+                await asyncio.sleep(5)
+                
             except Exception as exc:
                 logger.error(f"LLM consumer loop error: {exc}")
                 await asyncio.sleep(2)

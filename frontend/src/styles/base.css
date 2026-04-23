@@ -53,7 +53,7 @@
   border-radius: 4px;
   display: grid;
   place-items: center;
-  color: white;
+  color: var(--purple-light);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: -0.02em;
@@ -144,7 +144,7 @@
 
 .topbar-btn.primary {
   background: var(--text-primary);
-  color: #fff;
+  color: var(--purple-light);
   font-weight: 500;
 }
 
@@ -276,7 +276,7 @@
 
 .btn-primary {
   background: var(--text-primary);
-  color: #fff;
+  color: var(--purple-light);
   border-color: var(--text-primary);
 }
 
@@ -295,58 +295,6 @@
   border-color: rgba(235, 87, 87, 0.3);
 }
 
-.settings-workspace {
-  padding: 20px 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.settings-workspace-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.settings-card {
-  border: 1px solid var(--border);
-  background: var(--bg);
-  border-radius: var(--radius-xl);
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  max-width: 760px;
-}
-
-.settings-card-title {
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-
-.settings-card-subtitle {
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-
-.settings-actions-row {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.settings-meta-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 12.5px;
-  color: var(--text-secondary);
-}
-
-.settings-meta-error {
-  color: var(--red);
-}
 
 /* ========== MISC ========== */
 .icon-btn {

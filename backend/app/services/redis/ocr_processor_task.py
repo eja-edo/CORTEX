@@ -2,6 +2,7 @@
 OCR/Video Processing Task for Redis Stream
 
 Defines task model and producer for video frame OCR processing pipeline.
+Standardized to support both ProducerTaskProtocol and StreamTaskProtocol.
 """
 
 import time
@@ -11,21 +12,23 @@ from typing import Any, ClassVar, Optional, Dict
 from uuid import UUID
 
 from app.services.redis.base_producer import RedisStreamProducerBase
+from app.services.redis.stream_base import BaseStreamTask, BaseProducerTask, TaskPriority
+from app.services.redis.redis_producer_service import create_producer_service
 
 
 # Task stream configuration
 OCR_PROCESSOR_STREAM_KEY = "ocr:processor:stream"
+OCR_CONSUMER_GROUP = "ocr-processor-workers"
 
 
 @dataclass
-class OCRProcessorTask:
-    """Task for video OCR and layout processing."""
-
-    # Common task fields
-    priority: int = 5
-    retry_count: int = 0
-    task_id: str = field(default_factory=lambda: f"ocr_task_{int(time.time() * 1000)}_{uuid.uuid4().hex[:4]}")
-    created_at: float = field(default_factory=time.time)
+class OCRProcessorTask(BaseProducerTask):
+    """
+    Task for video OCR and layout processing.
+    
+    Extends BaseProducerTask for producing and implements StreamTaskProtocol
+    for consuming (via from_stream_message classmethod).
+    """
 
     # Video processing fields
     video_id: Optional[str] = None
@@ -54,16 +57,16 @@ class OCRProcessorTask:
 
     # Context data (job metadata)
     job_context: Optional[Dict[str, Any]] = None
+    
+    # For consumer side (StreamTaskProtocol) - not set by producer
+    message_id: str = ""
 
     def to_dict(self) -> dict[str, str]:
         """Serialize task to dict for Redis XADD."""
         import json
 
-        return {
-            "task_id": self.task_id,
-            "priority": str(self.priority),
-            "retry_count": str(self.retry_count),
-            "created_at": str(self.created_at),
+        base_dict = super().to_dict()
+        base_dict.update({
             "video_id": self.video_id or "",
             "video_path": self.video_path,
             "output_dir": self.output_dir,
@@ -80,7 +83,76 @@ class OCRProcessorTask:
             "debug_mode": str(self.debug_mode),
             "save_masks": str(self.save_masks),
             "job_context": json.dumps(self.job_context or {}),
-        }
+        })
+        return base_dict
+    
+    @classmethod
+    def from_stream_message(cls, message_id: str, data: Dict[bytes, bytes]) -> 'OCRProcessorTask':
+        """
+        Create task instance from Redis stream message.
+        
+        Required by StreamTaskProtocol for consumer compatibility.
+        """
+        import json
+        
+        def decode_bytes(val):
+            """Decode bytes to string."""
+            if isinstance(val, bytes):
+                return val.decode('utf-8')
+            return val
+        
+        def decode_key(key):
+            """Decode bytes key to string."""
+            if isinstance(key, bytes):
+                return key.decode('utf-8')
+            return key
+        
+        # Decode all keys and values
+        decoded_data = {decode_key(k): decode_bytes(v) for k, v in data.items()}
+        
+        # Parse job_context if present
+        job_context = None
+        if decoded_data.get('job_context'):
+            try:
+                job_context = json.loads(decoded_data['job_context'])
+            except (json.JSONDecodeError, TypeError):
+                job_context = {}
+        
+        # Parse priority
+        try:
+            priority = int(decoded_data.get('priority', '5'))
+        except ValueError:
+            priority = 5
+        
+        # Parse retry count
+        try:
+            retry_count = int(decoded_data.get('retry_count', '0'))
+        except ValueError:
+            retry_count = 0
+        
+        return cls(
+            task_id=decoded_data.get('task_id', ''),
+            message_id=message_id,
+            retry_count=retry_count,
+            priority=priority,
+            created_at=float(decoded_data.get('created_at', time.time())),
+            video_id=decoded_data.get('video_id') or None,
+            video_path=decoded_data.get('video_path', ''),
+            output_dir=decoded_data.get('output_dir', ''),
+            user_id=decoded_data.get('user_id') or None,
+            ocr_engine=decoded_data.get('ocr_engine', 'easyocr'),
+            target_fps=float(decoded_data.get('target_fps', '1.0')),
+            enable_ui_detect=decoded_data.get('enable_ui_detect', 'True').lower() == 'true',
+            enable_ocr=decoded_data.get('enable_ocr', 'True').lower() == 'true',
+            easyocr_langs=decoded_data.get('easyocr_langs', 'en,vi'),
+            easyocr_confidence=float(decoded_data.get('easyocr_confidence', '0.3')),
+            use_gpu=decoded_data.get('use_gpu', 'True').lower() == 'true',
+            ui_canny_low=int(decoded_data.get('ui_canny_low', '30')),
+            ui_canny_high=int(decoded_data.get('ui_canny_high', '100')),
+            debug_mode=decoded_data.get('debug_mode', 'False').lower() == 'true',
+            save_masks=decoded_data.get('save_masks', 'False').lower() == 'true',
+            job_context=job_context,
+        )
 
 
 class OCRProcessorProducer(RedisStreamProducerBase[OCRProcessorTask]):
