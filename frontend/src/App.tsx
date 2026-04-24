@@ -11,6 +11,7 @@ import { CalendarView } from './components/CalendarView'
 import { NoteSidebar, type NoteItem } from './components/NoteSidebar'
 import { RecordPanel } from './components/RecordPanel'
 import { SettingsPanel } from './components/SettingsPanel'
+import { AssetKnowledgeView } from './components/AssetKnowledgeView'
 import type { Schedule, TokenPair, User, ScheduleListResponse, GoogleCalendarStatus, SyncUpdateEvent } from './types'
 import { plainTextFromMarkdown } from './utils/noteMarkdown'
 import { NotificationBell, type AppNotification } from './components/NotificationBell'
@@ -18,7 +19,7 @@ import { buildTextPatch, type NotePatchOp } from './utils/textPatch.ts'
 import { WorkspaceNoteEditor } from './components/WorkspaceNoteEditor'
 import { WorkspaceSearch } from './components/WorkspaceSearch'
 import { AskAI } from './components/AskAI'
-import { getStoredTheme, applyThemeToDocument, setStoredTheme } from './utils/theme'
+import { getStoredTheme, applyThemeToDocument } from './utils/theme'
 import type { AppTheme } from './utils/theme'
 
 type SidebarAsset = {
@@ -74,9 +75,9 @@ type NoteSyncState = {
   queued: boolean
 }
 
-type WorkspaceView = 'home' | 'note' | 'record' | 'settings'
+type WorkspaceView = 'home' | 'note' | 'record' | 'settings' | 'knowledge'
 
-class ApiError extends Error {
+export class ApiError extends Error {
   status: number
 
   constructor(message: string, status: number) {
@@ -168,9 +169,11 @@ function mapApiNoteToAppNote(note: ApiNote): AppNote {
 function getRouteWorkspaceState(pathname: string): { view: WorkspaceView; noteId: string | null; assetId: string | null } {
   if (pathname === '/record') return { view: 'record', noteId: null, assetId: null }
   
-  const recordMatch = matchPath('/record/:assetId', pathname)
-  if (recordMatch?.params.assetId) {
-    return { view: 'record', noteId: null, assetId: recordMatch.params.assetId }
+  
+  // Knowledge view route
+  const knowledgeMatch = matchPath('/assets/:assetId/knowledge', pathname)
+  if (knowledgeMatch?.params.assetId) {
+    return { view: 'knowledge', noteId: null, assetId: knowledgeMatch.params.assetId }
   }
   
   if (pathname === '/settings') return { view: 'settings', noteId: null, assetId: null }
@@ -189,7 +192,7 @@ function isKnownWorkspacePath(pathname: string): boolean {
     || pathname === '/settings'
     || pathname === '/auth/callback'
     || Boolean(matchPath('/notes/:noteId', pathname))
-    || Boolean(matchPath('/record/:assetId', pathname))
+    || Boolean(matchPath('/assets/:assetId/knowledge', pathname))
 }
 
 // Collapsible sidebar section header
@@ -280,6 +283,7 @@ function App() {
   const activeWorkspaceView = routeWorkspaceState.view
   const [activeWorkspaceNoteId, setActiveWorkspaceNoteId] = useState<string | null>(routeWorkspaceState.noteId)
   const [activeWorkspaceAssetId, setActiveWorkspaceAssetId] = useState<string | null>(routeWorkspaceState.assetId)
+  const [activeWorkspaceKnowledgeAssetId, setActiveWorkspaceKnowledgeAssetId] = useState<string | null>(routeWorkspaceState.assetId)
   const [googleCalendarStatus, setGoogleCalendarStatus] = useState<GoogleCalendarStatus | null>(null)
   const [theme, setTheme] = useState<AppTheme>(getStoredTheme)
 
@@ -317,7 +321,10 @@ function App() {
   useEffect(() => {
     setActiveWorkspaceNoteId(routeWorkspaceState.noteId)
     setActiveWorkspaceAssetId(routeWorkspaceState.assetId)
-  }, [routeWorkspaceState.noteId, routeWorkspaceState.assetId])
+    if (routeWorkspaceState.view === 'knowledge') {
+      setActiveWorkspaceKnowledgeAssetId(routeWorkspaceState.assetId)
+    }
+  }, [routeWorkspaceState.noteId, routeWorkspaceState.assetId, routeWorkspaceState.view])
 
   // Apply theme and save to localStorage when it changes
   useEffect(() => {
@@ -669,7 +676,7 @@ function App() {
   }
 
   function handleSidebarAssetClick(assetId: string, _assetTitle: string | null): void {
-    navigate(`/record/${assetId}`)
+    navigate(`/assets/${assetId}/knowledge`)
   }
 
   async function persistNoteContent(noteId: string): Promise<void> {
@@ -1447,6 +1454,12 @@ function App() {
                     navigate('/record')
                   }
                 }}
+              />
+            ) : activeWorkspaceView === 'knowledge' && activeWorkspaceKnowledgeAssetId ? (
+              <AssetKnowledgeView
+                assetId={activeWorkspaceKnowledgeAssetId}
+                requestWithAuth={requestWithAuth}
+                onClose={() => navigate('/record')}
               />
             ) : activeWorkspaceView === 'settings' ? (
               <SettingsPanel

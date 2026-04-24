@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Calendar as BigCalendar } from 'react-big-calendar'
-import { CheckCircle2, Clock3, MapPin, Tag, Trash2, X, Plus, RefreshCw, } from 'lucide-react'
+import { CheckCircle2, Clock3, MapPin, Tag, Trash2, X, Plus, RefreshCw, Repeat } from 'lucide-react'
 import { format, parseISO } from 'date-fns'
 import { clsx } from 'clsx'
 import type { Schedule } from '../types'
@@ -232,7 +232,12 @@ export function CalendarView({
                                     className={clsx('cal-event', `cal-event-${item.type}`, item.is_completed && 'is-completed')}
                                     title={`${item.title}${item.location ? ` • ${item.location}` : ''} • ${formatTimeRange(start, end)}`}
                                 >
-                                    <div className="cal-event-title">{item.title}</div>
+                                    <div className="cal-event-title">
+                                        {item.title}
+                                        {item.recurrence && item.recurrence.freq !== 'NONE' && (
+                                            <Repeat size={12} style={{ marginLeft: 4, opacity: 0.7 }} />
+                                        )}
+                                    </div>
                                     <div className="cal-event-time">{formatTimeRange(start, end)}</div>
                                 </div>
                             )
@@ -268,6 +273,20 @@ export function CalendarView({
                                         {format(selectedStart, 'EEEE, MMM d, yyyy')} · {formatTimeRange(selectedStart, selectedEnd)}
                                     </span>
                                 </div>
+                                
+                                {/* Recurrence indicator */}
+                                {selectedSchedule.recurrence && selectedSchedule.recurrence.freq !== 'NONE' && (
+                                    <div className="modal-meta-row">
+                                        <Repeat size={14} className="modal-meta-icon" />
+                                        <span className="modal-meta-text">
+                                            {selectedSchedule.recurrence.freq === 'DAILY' && 'Daily'}
+                                            {selectedSchedule.recurrence.freq === 'WEEKLY' && 'Weekly'}
+                                            {selectedSchedule.recurrence.freq === 'MONTHLY' && 'Monthly'}
+                                            {selectedSchedule.recurrence.interval > 1 && ` every ${selectedSchedule.recurrence.interval}`}
+                                        </span>
+                                    </div>
+                                )}
+                                
                                 {selectedSchedule.location && (
                                     <div className="modal-meta-row">
                                         <MapPin size={14} className="modal-meta-icon" />

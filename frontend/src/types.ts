@@ -11,8 +11,35 @@ export type User = {
 
 export type ScheduleType = 'CLASS' | 'DEADLINE' | 'EXAM' | 'PERSONAL'
 
-export type Schedule = {
+export type RecurrenceFreq = 'NONE' | 'DAILY' | 'WEEKLY' | 'MONTHLY'
+
+export type RecurrenceRule = {
+  freq: RecurrenceFreq
+  interval?: number  // Always 1 - kept for backward compatibility
+  until?: string    // ISO datetime
+  count?: number
+  tzid: string
+}
+
+export type ReminderMethod = 'push' | 'email'
+
+export type ReminderConfig = {
+  minutes_before: number
+  method: ReminderMethod
+}
+
+export type ReminderResponse = {
   id: string
+  minutes_before: number
+  method: ReminderMethod
+  scheduled_at: string
+  status: 'pending' | 'sent' | 'failed' | 'cancelled'
+}
+
+export type EditScope = 'this_only' | 'this_and_after' | 'all'
+
+export type Schedule = {
+  id: string | null  // null for virtual instances
   user_id: string
   title: string
   type: ScheduleType
@@ -21,9 +48,18 @@ export type Schedule = {
   location: string | null
   description: string | null
   is_completed: boolean
+  recurrence?: RecurrenceRule | null
+  reminders?: ReminderConfig[] | ReminderResponse[]  // Accept both input and output types
+  is_recurring?: boolean
+  is_exception?: boolean
+  is_cancelled?: boolean
+  recurrence_id?: string | null
+  original_start_time?: string | null
+  is_virtual?: boolean
   google_synced?: boolean
-  created_at: string
-  updated_at: string
+  version?: number
+  created_at: string | null  // null for virtual instances
+  updated_at: string | null  // null for virtual instances
 }
 
 export type TokenPair = {

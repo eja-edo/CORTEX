@@ -4,6 +4,7 @@ import uuid
 
 from sqlalchemy import BigInteger, Boolean, Column, DateTime, Enum as SQLEnum, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 Base = declarative_base()
@@ -30,6 +31,49 @@ class SyncSource(str, Enum):
     """Identify which side produced the latest change."""
     INTERNAL = "INTERNAL"
     PROVIDER = "PROVIDER"
+
+
+class RecurrenceFreq(str, Enum):
+    """Recurrence frequency enumeration."""
+    NONE = "NONE"
+    DAILY = "DAILY"
+    WEEKLY = "WEEKLY"
+    MONTHLY = "MONTHLY"
+
+
+class ReminderMethod(str, Enum):
+    """Reminder notification method."""
+    PUSH = "push"
+    EMAIL = "email"
+
+
+class ReminderStatus(str, Enum):
+    """Reminder lifecycle status."""
+    PENDING = "pending"
+    SENT = "sent"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class SyncOperation(str, Enum):
+    """Sync queue operation type."""
+    UPSERT = "UPSERT"
+    DELETE = "DELETE"
+
+
+class SyncQueueStatus(str, Enum):
+    """Sync queue item status."""
+    PENDING = "pending"
+    PROCESSING = "processing"
+    DONE = "done"
+    FAILED = "failed"
+
+
+class EditScope(str, Enum):
+    """Edit scope for recurring event instances."""
+    THIS_ONLY = "this_only"
+    THIS_AND_AFTER = "this_and_after"
+    ALL = "all"
 
 
 class AssetType(str, Enum):
@@ -150,13 +194,29 @@ class Schedule(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     title = Column(String(255), nullable=False)
     type = Column(SQLEnum(ScheduleType), nullable=False)
-    start_time = Column(DateTime, nullable=False)
-    end_time = Column(DateTime, nullable=False)
+    start_time = Column(DateTime(timezone=True), nullable=False)
+    end_time = Column(DateTime(timezone=True), nullable=False)
     location = Column(String(255), nullable=True)  # Optional: classroom or meeting link
     description = Column(String(1000), nullable=True)  # Optional: notes
     is_completed = Column(Boolean, default=False)  # For DEADLINE type
+    
+    # Recurrence fields
+    recurrence_rule = Column(JSONB, nullable=True)
+    recurrence_id = Column(UUID(as_uuid=True), ForeignKey("schedules.id", ondelete="CASCADE"), nullable=True, index=True)
+    original_start_time = Column(DateTime(timezone=True), nullable=True)
+    is_exception = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    is_cancelled = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    
+    # Versioning for conflict detection
+    version = Column(Integer, nullable=False, default=1, server_default=text("1"))
+    updated_by = Column(String(20), nullable=False, default="INTERNAL", server_default=text("'INTERNAL'"))
+    
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    reminders = relationship("ScheduleReminder", back_populates="schedule", cascade="all, delete-orphan")
+    instances = relationship("Schedule", foreign_keys="Schedule.recurrence_id")
     
     def __repr__(self):
         return f"<Schedule(id={self.id}, title={self.title}, type={self.type})>"
@@ -212,6 +272,51 @@ class ScheduleExternalMap(Base):
         UniqueConstraint("provider", "provider_calendar_id", "provider_event_id", name="uq_schedule_external_maps_provider_event"),
         Index("ix_schedule_external_maps_user_provider", "user_id", "provider"),
         Index("ix_schedule_external_maps_provider_event_id", "provider_event_id"),
+    )
+
+
+class ScheduleReminder(Base):
+    """Reminder configuration for schedule events."""
+    __tablename__ = "schedule_reminders"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    schedule_id = Column(UUID(as_uuid=True), ForeignKey("schedules.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    minutes_before = Column(Integer, nullable=False, default=10)
+    method = Column(SQLEnum(ReminderMethod, values_callable=_enum_values, name="remindermethod"), nullable=False, default=ReminderMethod.PUSH)
+    status = Column(SQLEnum(ReminderStatus, values_callable=_enum_values, name="reminderstatus"), nullable=False, default=ReminderStatus.PENDING)
+    scheduled_at = Column(DateTime(timezone=True), nullable=False)
+    sent_at = Column(DateTime(timezone=True), nullable=True)
+    failed_reason = Column(Text, nullable=True)
+    retry_count = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    schedule = relationship("Schedule", back_populates="reminders")
+
+    __table_args__ = (
+        Index("ix_reminders_scheduled_at_status", "scheduled_at", "status", postgresql_where=text("status = 'pending'")),
+        Index("ix_reminders_schedule_id", "schedule_id"),
+    )
+
+
+class ScheduleSyncQueue(Base):
+    """Queue for async Google Calendar synchronization."""
+    __tablename__ = "schedule_sync_queue"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    schedule_id = Column(UUID(as_uuid=True), ForeignKey("schedules.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(UUID(as_uuid=True), nullable=False)
+    operation = Column(SQLEnum(SyncOperation, values_callable=_enum_values, name="syncoperation"), nullable=False)
+    priority = Column(Integer, nullable=False, default=5)
+    status = Column(SQLEnum(SyncQueueStatus, values_callable=_enum_values, name="syncqueuestatus"), nullable=False, default=SyncQueueStatus.PENDING)
+    retry_count = Column(Integer, nullable=False, default=0)
+    last_error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    processed_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("ix_sync_queue_pending", "priority", "created_at", postgresql_where=text("status = 'pending'")),
     )
 
 

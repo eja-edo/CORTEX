@@ -5,6 +5,7 @@ import {
     RefreshCw, Star, Tag, Target, TrendingUp, Zap
 } from 'lucide-react'
 import type { AuthRequest } from './recordingTypes'
+import { ApiError } from '../App'
 
 /* ─────────────────── Types ─────────────────── */
 
@@ -191,6 +192,8 @@ export function AssetKnowledgeView({ assetId, requestWithAuth, onClose }: AssetK
     const [data, setData] = useState<AssetKnowledgeSummary | null>(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState('')
+    const [summaryExists, setSummaryExists] = useState(true)
+    const [isProcessing, setIsProcessing] = useState(false)
     const [activeTab, setActiveTab] = useState<'overview' | 'timeline' | 'workflow'>('overview')
 
     // Player state
@@ -231,8 +234,16 @@ export function AssetKnowledgeView({ assetId, requestWithAuth, onClose }: AssetK
         try {
             const result = await requestWithAuth<AssetKnowledgeSummary>(`/knowledge/assets/${assetId}/summary`)
             setData(result)
+            setSummaryExists(true)
         } catch (err) {
-            setError(err instanceof Error ? err.message : 'Cannot load knowledge summary')
+            // Check if it's a 404 (summary not found)
+            if (err instanceof ApiError && err.status === 404) {
+                setSummaryExists(false)
+                setData(null)
+            } else {
+                setError(err instanceof Error ? err.message : 'Cannot load knowledge summary')
+                setSummaryExists(true)
+            }
         } finally {
             setLoading(false)
         }
@@ -281,6 +292,37 @@ export function AssetKnowledgeView({ assetId, requestWithAuth, onClose }: AssetK
         }
     }, [isPlaying])
 
+    const triggerProcess = useCallback(async () => {
+        setIsProcessing(true)
+        setError('')
+        try {
+            await requestWithAuth(`/assets/${assetId}/process`, {
+                method: 'POST'
+            })
+            // // Poll for summary every 3 seconds
+            // const pollInterval = setInterval(async () => {
+            //     try {
+            //         const result = await requestWithAuth<AssetKnowledgeSummary>(`/knowledge/assets/${assetId}/summary`)
+            //         setData(result)
+            //         setSummaryExists(true)
+            //         setIsProcessing(false)
+            //         clearInterval(pollInterval)
+            //     } catch {
+            //         // Still processing, continue polling
+            //     }
+            // }, 3000)
+            
+            // // Stop polling after 5 minutes
+            // setTimeout(() => {
+            //     clearInterval(pollInterval)
+            //     setIsProcessing(false)
+            // }, 300000)
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to start processing')
+            setIsProcessing(false)
+        }
+    }, [assetId, requestWithAuth])
+
     /* ── Loading / Error ── */
     if (loading) return (
         <div className="akv-root">
@@ -301,6 +343,60 @@ export function AssetKnowledgeView({ assetId, requestWithAuth, onClose }: AssetK
             </div>
         </div>
     )
+
+    // Show trigger button when summary doesn't exist yet
+    if (!summaryExists && !loading) {
+        return (
+            <div className="akv-root">
+                <div className="akv-topbar">
+                    <button type="button" className="akv-back-btn" onClick={onClose}><ArrowLeft size={14} /><span>Back</span></button>
+                </div>
+                <div className="akv-body">
+                    {/* Keep media player visible */}
+                    {mediaUrl && (
+                        <InlinePlayer
+                            url={mediaUrl}
+                            isAudio={isAudioAsset}
+                            onTimeUpdate={setCurrentTime}
+                            onPlay={handlePlay}
+                            onPause={handlePause}
+                            onEnded={handleEnded}
+                            mediaRef={mediaRef}
+                        />
+                    )}
+                    
+                    <div className="akv-no-summary">
+                        <Brain size={48} style={{ marginBottom: 16, opacity: 0.3 }} />
+                        <h2 style={{ fontSize: 20, fontWeight: 600, marginBottom: 8 }}>
+                            Knowledge Summary Not Generated
+                        </h2>
+                        <p style={{ fontSize: 14, color: 'var(--text-secondary)', marginBottom: 24, maxWidth: 400, textAlign: 'center' }}>
+                            This asset hasn't been processed for knowledge extraction yet. 
+                            Click the button below to start the analysis.
+                        </p>
+                        <button 
+                            type="button" 
+                            className="btn btn-primary" 
+                            onClick={triggerProcess}
+                            disabled={isProcessing}
+                        >
+                            {isProcessing ? (
+                                <>
+                                    <RefreshCw size={16} className="akv-spin" />
+                                    Processing...
+                                </>
+                            ) : (
+                                <>
+                                    <Zap size={16} />
+                                    Generate Knowledge Summary
+                                </>
+                            )}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        )
+    }
 
     if (!data) return null
 

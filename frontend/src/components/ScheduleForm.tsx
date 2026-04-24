@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react'
 import type { FormEvent } from 'react'
 import { Plus } from 'lucide-react'
-import type { Schedule, ScheduleType } from '../types'
+import type { Schedule, ScheduleType, RecurrenceRule, ReminderConfig } from '../types'
+import { RecurrenceConfig } from './RecurrenceConfig'
+import { ReminderConfig as ReminderConfigComponent } from './ReminderConfig'
 
 function toLocalInputDateTime(value: Date): string {
   const local = new Date(value.getTime() - value.getTimezoneOffset() * 60000)
@@ -41,6 +43,11 @@ export function ScheduleForm({ onCreate, initialTimes, onClose }: ScheduleFormPr
   })
   const [location, setLocation] = useState('')
   const [description, setDescription] = useState('')
+  
+  // New fields for recurrence and reminders
+  const [recurrence, setRecurrence] = useState<RecurrenceRule | null>(null)
+  const [reminders, setReminders] = useState<ReminderConfig[]>([])
+  
   const [formError, setFormError] = useState('')
 
   // When initialTimes changes (e.g. user clicks a different slot and re-opens),
@@ -70,8 +77,23 @@ export function ScheduleForm({ onCreate, initialTimes, onClose }: ScheduleFormPr
     const end = new Date(endTime)
     if (end <= start) { setFormError('End time must be after start time.'); return }
     setFormError('')
-    await onCreate({ title, type, start_time: start.toISOString(), end_time: end.toISOString(), location: location || null, description: description || null })
-    setTitle(''); setLocation(''); setDescription('')
+    
+    await onCreate({
+      title,
+      type,
+      start_time: start.toISOString(),
+      end_time: end.toISOString(),
+      location: location || null,
+      description: description || null,
+      recurrence: recurrence || undefined,
+      reminders: reminders.length > 0 ? reminders : undefined,
+    })
+    
+    setTitle('')
+    setLocation('')
+    setDescription('')
+    setRecurrence(null)
+    setReminders([])
     onClose?.()
   }
 
@@ -118,6 +140,12 @@ export function ScheduleForm({ onCreate, initialTimes, onClose }: ScheduleFormPr
         <label className="form-label" htmlFor="ev-notes">Notes <span style={{ color: 'var(--text-disabled)', fontWeight: 400 }}>(optional)</span></label>
         <textarea id="ev-notes" className="form-textarea" placeholder="Preparation materials, links…" rows={3} value={description} onChange={(e) => setDescription(e.target.value)} />
       </div>
+
+      {/* Recurrence Section */}
+      <RecurrenceConfig value={recurrence} onChange={setRecurrence} />
+
+      {/* Reminders Section */}
+      <ReminderConfigComponent value={reminders} onChange={setReminders} />
 
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, paddingTop: 4 }}>
         {onClose && (

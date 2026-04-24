@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, List, Optional
 from uuid import UUID
-from pydantic import BaseModel, ConfigDict, Field, EmailStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, EmailStr, field_validator, model_validator
 from enum import Enum
 
 from app.models import AssetStatus, AssetType, UploadStatus
@@ -15,6 +15,47 @@ class ScheduleType(str, Enum):
     EXAM = "EXAM"
     PERSONAL = "PERSONAL"
 
+
+class EditScope(str, Enum):
+    """Edit scope for recurring event instances."""
+    THIS_ONLY = "this_only"
+    THIS_AND_AFTER = "this_and_after"
+    ALL = "all"
+
+
+class ReminderConfig(BaseModel):
+    """Reminder configuration input."""
+    minutes_before: int = Field(..., ge=1, le=43200, description="Minutes before event to trigger reminder")
+    method: str = Field(default="push", pattern="^(push|email)$")
+
+
+class ReminderResponse(BaseModel):
+    """Reminder response schema."""
+    id: UUID
+    minutes_before: int
+    method: str
+    scheduled_at: datetime
+    status: str
+
+    class Config:
+        from_attributes = True
+
+
+class RecurrenceRuleInput(BaseModel):
+    """Recurrence rule input schema."""
+    freq: str = Field(..., pattern="^(NONE|DAILY|WEEKLY|MONTHLY)$")
+    interval: int = Field(default=1, ge=1, le=365)
+    until: Optional[datetime] = None
+    count: Optional[int] = Field(default=None, ge=1, le=730)
+    tzid: str = Field(default="Asia/Ho_Chi_Minh")
+
+    @model_validator(mode="after")
+    def validate_recurrence(self):
+        # No byday validation needed - uses start_time's weekday automatically
+        if self.until and self.count:
+            raise ValueError("Use only one of 'until' or 'count'")
+        return self
+
 class ScheduleCreate(BaseModel):
     """Schema for creating a new schedule"""
     title: str = Field(..., min_length=1, max_length=255, description="Schedule title")
@@ -23,6 +64,8 @@ class ScheduleCreate(BaseModel):
     end_time: datetime = Field(..., description="End time")
     location: Optional[str] = Field(None, max_length=255, description="Location or meeting link")
     description: Optional[str] = Field(None, max_length=1000, description="Additional notes")
+    recurrence: Optional[RecurrenceRuleInput] = Field(default=None, description="Recurrence rule")
+    reminders: Optional[List[ReminderConfig]] = Field(default=None, max_length=5, description="Reminder configurations")
 
 class ScheduleUpdate(BaseModel):
     """Schema for updating a schedule"""
@@ -33,10 +76,12 @@ class ScheduleUpdate(BaseModel):
     location: Optional[str] = Field(None, max_length=255)
     description: Optional[str] = Field(None, max_length=1000)
     is_completed: Optional[bool] = None
+    recurrence: Optional[RecurrenceRuleInput] = None
+    reminders: Optional[List[ReminderConfig]] = None
 
 class ScheduleResponse(BaseModel):
     """Schema for schedule response"""
-    id: UUID
+    id: Optional[UUID] = None  # None for virtual instances
     user_id: UUID
     title: str
     type: ScheduleType
@@ -45,9 +90,18 @@ class ScheduleResponse(BaseModel):
     location: Optional[str]
     description: Optional[str]
     is_completed: bool
+    recurrence: Optional[RecurrenceRuleInput] = None
+    reminders: List[ReminderResponse] = []
+    is_recurring: bool = False
+    is_exception: bool = False
+    is_cancelled: bool = False
+    recurrence_id: Optional[UUID] = None
+    original_start_time: Optional[datetime] = None
+    is_virtual: bool = False  # True if instance not yet persisted
     google_synced: bool = False
-    created_at: datetime
-    updated_at: datetime
+    version: int = 1
+    created_at: Optional[datetime] = None  # Optional for virtual instances
+    updated_at: Optional[datetime] = None  # Optional for virtual instances
     
     class Config:
         from_attributes = True
@@ -56,6 +110,12 @@ class ScheduleListResponse(BaseModel):
     """Schema for list of schedules"""
     items: list[ScheduleResponse]
     total: int
+
+
+class ScheduleInstanceUpdate(BaseModel):
+    """Schema for updating a recurring event instance."""
+    edit_scope: EditScope = Field(..., description="this_only | this_and_after | all")
+    updates: ScheduleUpdate
 
 
 class UserCreate(BaseModel):

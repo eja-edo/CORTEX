@@ -1,13 +1,11 @@
-// RecordPanel.tsx — adds knowledge view routing on top of existing panel.
-// Only the bottom section changes: we track knowledgeTarget state and render
-// AssetKnowledgeView as a full-panel overlay when set.
+// RecordPanel.tsx — screen/audio recording panel.
+// Knowledge view is now handled as a workspace route (/assets/:assetId/knowledge)
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Mic, MicOff, Monitor, Video, VideoOff } from 'lucide-react'
-import { useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 
 import { RecordingsList } from './RecordingsList'
-import { AssetKnowledgeView } from './AssetKnowledgeView'
 import type { AuthRequest, Recording } from './recordingTypes'
 
 type UploadInitResponse = {
@@ -75,6 +73,7 @@ function formatDate(date: Date): string {
 }
 
 export function RecordPanel({ requestWithAuth, isVisible, initialAssetId, onAssetViewed }: RecordPanelProps) {
+    const navigate = useNavigate()
     const { assetId: urlAssetId } = useParams<{ assetId: string }>()
     const [recordings, setRecordings] = useState<Recording[]>([])
     const [isRecordingAudio, setIsRecordingAudio] = useState(false)
@@ -88,21 +87,8 @@ export function RecordPanel({ requestWithAuth, isVisible, initialAssetId, onAsse
     const [activeAudioLabel, setActiveAudioLabel] = useState<string>('')
     const [error, setError] = useState<string>('')
 
-    // Knowledge view state
-    const [knowledgeTarget, setKnowledgeTarget] = useState<{ assetId: string; assetTitle: string } | null>(null)
-
     const [activeStream, setActiveStream] = useState<MediaStream | null>(null)
     const [recordingType, setRecordingType] = useState<'screen' | 'audio' | null>(null)
-
-    // Open knowledge view for asset from URL or initialAssetId
-    useEffect(() => {
-        const assetId = urlAssetId || initialAssetId
-        if (assetId) {
-            // We don't have the title here, so use a placeholder
-            // The AssetKnowledgeView will fetch the asset details
-            setKnowledgeTarget({ assetId, assetTitle: 'Asset' })
-        }
-    }, [urlAssetId, initialAssetId])
 
     const audioRecorderRef = useRef<MediaRecorder | null>(null)
     const screenRecorderRef = useRef<MediaRecorder | null>(null)
@@ -580,25 +566,6 @@ export function RecordPanel({ requestWithAuth, isVisible, initialAssetId, onAsse
         }
     }, [requestWithAuth, splitBlobIntoParts, updateRecording, uploadPartWithRetry])
 
-    // ── If knowledge view is open, render it as full workspace ──
-    if (knowledgeTarget) {
-        return (
-            <div className='record-workspace' style={{ display: isVisible ? undefined : 'none' }}>
-                <AssetKnowledgeView
-                    assetId={knowledgeTarget.assetId}
-                    requestWithAuth={requestWithAuth}
-                    onClose={() => {
-                        setKnowledgeTarget(null)
-                        // Navigate back to /record when closing knowledge view
-                        if (urlAssetId) {
-                            onAssetViewed?.()
-                        }
-                    }}
-                />
-            </div>
-        )
-    }
-
     return (
         <div className='record-workspace' style={{ display: isVisible ? undefined : 'none' }}>
             <div className="record-panel">
@@ -678,7 +645,7 @@ export function RecordPanel({ requestWithAuth, isVisible, initialAssetId, onAsse
                     onDelete={handleDelete}
                     activeStream={activeStream}
                     recordingType={recordingType}
-                    onViewKnowledge={(assetId, assetTitle) => setKnowledgeTarget({ assetId, assetTitle })}
+                    onViewKnowledge={(assetId) => navigate(`/assets/${assetId}/knowledge`)}
                 />
             </div>
         </div>

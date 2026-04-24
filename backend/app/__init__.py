@@ -19,6 +19,8 @@ from app.api.internal import router as internal_router
 from app.api.sse import sync_sse_router
 from app.services.transcription_results_consumer import transcription_results_consumer
 from app.services.llm_processor_worker_fixed import get_llm_processor_worker
+from app.services.reminder_worker import ReminderWorker
+from app.services.google_sync_worker import GoogleSyncWorker
 from app.utils.logger import get_logger
 from app.api.sse.sse_manager import SSEManager
 
@@ -95,6 +97,8 @@ original_sigterm = signal.getsignal(signal.SIGTERM)
 
 # Global worker threads
 _llm_worker_thread: Optional[WorkerThread] = None
+_reminder_worker_thread: Optional[WorkerThread] = None
+_google_sync_worker_thread: Optional[WorkerThread] = None
 
 def signal_exit(signum, frame):
     """
@@ -125,7 +129,7 @@ logger.info("✅ Signal handlers registered for SIGINT and SIGTERM")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application startup and shutdown lifecycle."""
-    global _llm_worker_thread
+    global _llm_worker_thread, _reminder_worker_thread, _google_sync_worker_thread
     
     # Start transcription results consumer
     try:
@@ -141,11 +145,26 @@ async def lifespan(app: FastAPI):
     _llm_worker_thread = WorkerThread("LLM", llm_worker)
     _llm_worker_thread.start()
 
+    # Start ReminderWorker in separate thread
+    reminder_worker = ReminderWorker()
+    _reminder_worker_thread = WorkerThread("Reminder", reminder_worker)
+    _reminder_worker_thread.start()
+
+    # Start GoogleSyncWorker in separate thread
+    google_sync_worker = GoogleSyncWorker()
+    _google_sync_worker_thread = WorkerThread("GoogleSync", google_sync_worker)
+    _google_sync_worker_thread.start()
+
     try:
         yield
     finally:
         await transcription_results_consumer.stop()
-        # Stop workers in separate threads
+        
+        # Stop all workers
+        if _reminder_worker_thread:
+            _reminder_worker_thread.stop()
+        if _google_sync_worker_thread:
+            _google_sync_worker_thread.stop()
         if _llm_worker_thread:
             _llm_worker_thread.stop()
 
