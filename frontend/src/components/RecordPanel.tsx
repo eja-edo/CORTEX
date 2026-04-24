@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Mic, MicOff, Monitor, Video, VideoOff } from 'lucide-react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 
 import { RecordingsList } from './RecordingsList'
 import type { AuthRequest, Recording } from './recordingTypes'
@@ -72,9 +72,8 @@ function formatDate(date: Date): string {
         ' ' + date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
 }
 
-export function RecordPanel({ requestWithAuth, isVisible, initialAssetId, onAssetViewed }: RecordPanelProps) {
+export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
     const navigate = useNavigate()
-    const { assetId: urlAssetId } = useParams<{ assetId: string }>()
     const [recordings, setRecordings] = useState<Recording[]>([])
     const [isRecordingAudio, setIsRecordingAudio] = useState(false)
     const [isRecordingScreen, setIsRecordingScreen] = useState(false)

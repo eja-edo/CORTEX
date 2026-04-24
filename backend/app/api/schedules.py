@@ -115,26 +115,33 @@ def get_schedules(
         raise HTTPException(status_code=400, detail="start_date must be before end_date")
     
     # Get non-recurring events in range
+    # Note: recurrence_rule can be NULL or {"freq": "NONE"} for non-recurring events
     non_recurring_schedules = db.query(Schedule).filter(
         Schedule.user_id == current_user.id,
         Schedule.start_time >= start_date,
         Schedule.start_time <= end_date,
         Schedule.recurrence_id.is_(None),  # Only root events
-        Schedule.recurrence_rule.is_(None),  # Non-recurring only
     ).order_by(Schedule.start_time).all()
+    
+    # Filter to only truly non-recurring (exclude those with actual recurrence rules)
+    from app.services.recurrence import RecurrenceService
+    recurrence_service = RecurrenceService()
+    non_recurring_schedules = [
+        s for s in non_recurring_schedules
+        if not recurrence_service.is_recurring(s.recurrence_rule)
+    ]
     
     # Get ALL root recurring events (need to generate instances for the range)
     # Don't filter by start_time - recurring events may have started before the range
     root_recurring_schedules = db.query(Schedule).filter(
         Schedule.user_id == current_user.id,
         Schedule.recurrence_id.is_(None),  # Only root events
-        Schedule.recurrence_rule.isnot(None),  # Has recurrence rule
     ).order_by(Schedule.start_time).all()
     
-    # Filter out NONE frequency in Python (JSONB query is tricky)
+    # Filter to only truly recurring events
     root_recurring_schedules = [
         s for s in root_recurring_schedules 
-        if s.recurrence_rule and s.recurrence_rule.get("freq") != "NONE"
+        if recurrence_service.is_recurring(s.recurrence_rule)
     ]
     
     # Expand recurring events into instances
@@ -167,7 +174,7 @@ def get_schedules(
     
     # Process recurring events - generate instances for the date range
     for schedule in root_recurring_schedules:
-        if schedule.recurrence_rule and schedule.recurrence_rule.get("freq") != "NONE":
+        if recurrence_service.is_recurring(schedule.recurrence_rule):
             # This is a recurring event - generate instances
             instances = recurrence_service.generate_instances(
                 root=schedule,
@@ -311,7 +318,7 @@ def get_schedule_instances(
     if not schedule:
         raise HTTPException(status_code=404, detail="Schedule not found")
 
-    if not schedule.recurrence_rule or schedule.recurrence_rule.get("freq") == "NONE":
+    if not RecurrenceService().is_recurring(schedule.recurrence_rule):
         raise HTTPException(status_code=400, detail="Schedule is not recurring")
 
     instances = RecurrenceService().generate_instances(
@@ -340,7 +347,7 @@ def update_schedule_instance(
     if not root:
         raise HTTPException(status_code=404, detail="Schedule not found")
 
-    if not root.recurrence_rule or root.recurrence_rule.get("freq") == "NONE":
+    if not RecurrenceService().is_recurring(root.recurrence_rule):
         raise HTTPException(status_code=400, detail="Schedule is not recurring")
 
     # Handle based on edit_scope
@@ -463,7 +470,7 @@ def cancel_schedule_instance(
     if not root:
         raise HTTPException(status_code=404, detail="Schedule not found")
 
-    if not root.recurrence_rule or root.recurrence_rule.get("freq") == "NONE":
+    if not RecurrenceService().is_recurring(root.recurrence_rule):
         raise HTTPException(status_code=400, detail="Schedule is not recurring")
 
     # Find or create exception and mark as cancelled

@@ -153,7 +153,7 @@ class RecurrenceService:
             "description": schedule.description,
             "is_completed": schedule.is_completed,
             "recurrence": schedule.recurrence_rule,
-            "is_recurring": schedule.recurrence_rule is not None and schedule.recurrence_rule.get("freq") != "NONE",
+            "is_recurring": self.is_recurring(schedule.recurrence_rule),
             "is_exception": schedule.is_exception,
             "is_cancelled": schedule.is_cancelled,
             "recurrence_id": str(schedule.recurrence_id) if schedule.recurrence_id else None,
@@ -186,10 +186,10 @@ class RecurrenceService:
 
         return "RRULE:" + ";".join(parts)
 
-    def parse_google_rrule(self, rrule_str: str) -> dict:
-        """Parse RRULE string from Google to internal format."""
+    def parse_google_rrule(self, rrule_str: str) -> dict | None:
+        """Parse RRULE string from Google to internal format. Returns None if no recurrence."""
         if not rrule_str or not rrule_str.startswith("RRULE:"):
-            return {"freq": "NONE"}
+            return None
 
         rule = {}
         for part in rrule_str[6:].split(";"):
@@ -215,3 +215,7 @@ class RecurrenceService:
             result["tzid"] = rule["TZID"]
 
         return result
+
+    def is_recurring(self, rule: dict | None) -> bool:
+        """Check if a recurrence rule represents a recurring event."""
+        return rule is not None and rule.get("freq") != "NONE"
