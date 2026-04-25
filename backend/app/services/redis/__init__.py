@@ -21,6 +21,12 @@ from app.services.redis.ocr_processor_task import (
     OCRProcessorProducer,
     enqueue_video_processing,
 )
+from app.services.redis.google_sync_task import (
+    GoogleSyncTask,
+    GOOGLE_SYNC_STREAM_KEY,
+    GOOGLE_SYNC_CONSUMER_GROUP,
+    enqueue_google_sync,
+)
 
 __all__ = [
     # Standardized services
@@ -48,4 +54,9 @@ __all__ = [
     "OCR_CONSUMER_GROUP",
     "OCRProcessorProducer",
     "enqueue_video_processing",
+    # Google Calendar sync
+    "GoogleSyncTask",
+    "GOOGLE_SYNC_STREAM_KEY",
+    "GOOGLE_SYNC_CONSUMER_GROUP",
+    "enqueue_google_sync",
 ]

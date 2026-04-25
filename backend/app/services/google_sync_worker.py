@@ -1,129 +1,191 @@
-"""Background worker for async Google Calendar synchronization."""
+"""
+Google Calendar Sync Worker
+
+Consumes GoogleSyncTask messages from Redis Stream and syncs schedules to
+Google Calendar via GoogleCalendarSyncService.
+"""
 
 import asyncio
-from datetime import datetime
 from typing import Optional
-
-from sqlalchemy.orm import Session
+from uuid import UUID
 
 from app.database import get_db
-from app.models import ScheduleSyncQueue, Schedule, SyncQueueStatus, SyncOperation
+from app.models import Schedule, SyncOperation
 from app.services.google_calendar_sync import GoogleCalendarSyncService
+from app.services.redis.google_sync_task import (
+    GOOGLE_SYNC_CONSUMER_GROUP,
+    GOOGLE_SYNC_STREAM_KEY,
+    GoogleSyncTask,
+)
+from app.services.redis.redis_stream_service import RedisStreamService
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
 class GoogleSyncWorker:
-    """Background worker that processes the schedule sync queue."""
+    """
+    Background worker that consumes GoogleSyncTask from Redis Stream and
+    applies the sync via GoogleCalendarSyncService.
 
-    POLL_INTERVAL = 5  # seconds
-    MAX_RETRIES = 3
-    BATCH_SIZE = 20
+    Chạy trong WorkerThread riêng với event loop riêng (xem app/__init__.py).
+    KHÔNG dùng RedisStreamService.get_instance() singleton để tránh cross-loop
+    issue — tạo instance mới trực tiếp trong start() khi đã ở đúng event loop.
+    """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._running = False
-        self._task: Optional[asyncio.Task] = None
+        self._redis_service: Optional[RedisStreamService] = None
 
-    async def start(self):
-        """Start the sync worker."""
-        self._running = True
-        logger.info(
-            "GoogleSyncWorker started with poll_interval=%ds, batch_size=%d",
-            self.POLL_INTERVAL,
-            self.BATCH_SIZE,
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    async def start(self) -> None:
+        if self._running:
+            return
+
+        # FIX: Dùng constructor trực tiếp thay vì get_instance() singleton.
+        # get_instance() trả cached instance có thể đã bind với loop khác
+        # (FastAPI loop). Tạo instance mới đảm bảo Redis client bind đúng
+        # với worker thread loop hiện tại.
+        self._redis_service = RedisStreamService(
+            task_class=GoogleSyncTask,
+            stream_key=GOOGLE_SYNC_STREAM_KEY,
+            group_name=GOOGLE_SYNC_CONSUMER_GROUP,
         )
 
+        try:
+            await self._redis_service.connect()
+        except ConnectionError as exc:
+            logger.error("GoogleSyncWorker: Redis connection failed on start: %s", exc)
+            # Tiếp tục vào consume_loop — loop sẽ retry connect khi ConnectionError
+
+        await self._redis_service.start_background_tasks()
+
+        self._running = True
+        logger.info(
+            "GoogleSyncWorker started (stream=%s, group=%s, consumer=%s)",
+            GOOGLE_SYNC_STREAM_KEY,
+            GOOGLE_SYNC_CONSUMER_GROUP,
+            self._redis_service._consumer_id,
+        )
+        await self._consume_loop()
+
+    async def stop(self) -> None:
+        self._running = False
+        if self._redis_service:
+            await self._redis_service.stop_background_tasks()
+            await self._redis_service.disconnect(release_pending=True)
+            self._redis_service = None
+        logger.info("GoogleSyncWorker stopped")
+
+    # ------------------------------------------------------------------
+    # Consume loop
+    # ------------------------------------------------------------------
+
+    async def _consume_loop(self) -> None:
         while self._running:
             try:
-                await self._process_sync_queue()
-            except Exception as e:
-                logger.exception("Error in sync worker loop: %s", e)
+                tasks = await self._redis_service.read_tasks(count=10, block_ms=5000)
 
-            await asyncio.sleep(self.POLL_INTERVAL)
+                # Khi stream idle, thử claim orphaned tasks từ worker cũ crash
+                if not tasks:
+                    claimed = await self._redis_service.claim_orphaned_tasks(count=5)
+                    if claimed:
+                        logger.info(
+                            "GoogleSyncWorker: claimed %d orphaned task(s)", len(claimed)
+                        )
+                        tasks = claimed
 
-    async def stop(self):
-        """Stop the sync worker."""
-        self._running = False
-        logger.info("GoogleSyncWorker stopping...")
-        if self._task:
-            self._task.cancel()
+                for task in tasks:
+                    try:
+                        logger.info(
+                            "Processing sync task: task_id=%s schedule_id=%s op=%s retry=%d",
+                            task.task_id,
+                            task.schedule_id,
+                            task.operation,
+                            task.retry_count,
+                        )
+                        await self._process_task(task)
+                        await self._redis_service.acknowledge(task)
+                        logger.info("Sync task done: task_id=%s", task.task_id)
 
-    async def _process_sync_queue(self):
-        """Process pending sync queue entries."""
-        db: Session = next(get_db())
+                    except Exception as exc:
+                        logger.exception(
+                            "Sync task failed: task_id=%s — %s", task.task_id, exc
+                        )
+                        try:
+                            await self._redis_service.reject(
+                                task, error=str(exc)[:500], retry=True
+                            )
+                        except Exception as reject_err:
+                            logger.error(
+                                "Failed to reject task %s: %s", task.task_id, reject_err
+                            )
+
+            except ConnectionError as exc:
+                logger.error("GoogleSyncWorker: Redis connection lost: %s", exc)
+                await asyncio.sleep(5)
+                try:
+                    await self._redis_service.connect()
+                    logger.info("GoogleSyncWorker: reconnected to Redis")
+                except Exception as reconnect_err:
+                    logger.error("GoogleSyncWorker: reconnect failed: %s", reconnect_err)
+
+            except Exception as exc:
+                logger.error("GoogleSyncWorker: loop error: %s", exc, exc_info=True)
+                await asyncio.sleep(2)
+
+    # ------------------------------------------------------------------
+    # Task processing
+    # ------------------------------------------------------------------
+
+    async def _process_task(self, task: GoogleSyncTask) -> None:
+        """
+        Xử lý một sync task: load Schedule từ DB rồi gọi GoogleCalendarSyncService.
+
+        DB session mở ngắn gọn per-task để tránh giữ connection
+        trong suốt thời gian Redis blocking read.
+        """
+        if not task.schedule_id:
+            logger.warning(
+                "GoogleSyncWorker: task %s has empty schedule_id, skipping", task.task_id
+            )
+            return
+
+        db_gen = get_db()
+        db = next(db_gen)
         try:
-            # Claim batch with optimistic lock (skip_locked prevents contention)
-            batch = db.query(ScheduleSyncQueue).filter(
-                ScheduleSyncQueue.status == SyncQueueStatus.PENDING,
-            ).order_by(
-                ScheduleSyncQueue.priority.desc(),
-                ScheduleSyncQueue.created_at.asc(),
-            ).limit(self.BATCH_SIZE).with_for_update(skip_locked=True).all()
+            schedule = (
+                db.query(Schedule)
+                .filter(Schedule.id == UUID(task.schedule_id))
+                .first()
+            )
 
-            if not batch:
+            if schedule is None:
+                # Schedule đã bị xoá trước khi worker kịp xử lý — bình thường.
+                # Không raise để tránh retry vô ích.
+                logger.warning(
+                    "GoogleSyncWorker: schedule %s not found (deleted?), "
+                    "acknowledging task %s without sync",
+                    task.schedule_id,
+                    task.task_id,
+                )
                 return
 
-            logger.info("Processing %d sync queue entries", len(batch))
+            sync_service = GoogleCalendarSyncService(db)
 
-            # Mark as processing
-            for entry in batch:
-                entry.status = SyncQueueStatus.PROCESSING
-            db.commit()
+            if task.operation == SyncOperation.UPSERT.value:
+                sync_service.sync_upsert_schedule(schedule)
+            elif task.operation == SyncOperation.DELETE.value:
+                sync_service.sync_delete_schedule(schedule)
+            else:
+                logger.warning(
+                    "GoogleSyncWorker: unknown operation '%s' in task %s",
+                    task.operation,
+                    task.task_id,
+                )
 
-            for entry in batch:
-                try:
-                    schedule = db.query(Schedule).filter(
-                        Schedule.id == entry.schedule_id
-                    ).first()
-
-                    if schedule is None:
-                        logger.warning(
-                            "Schedule %s not found for sync queue entry %s",
-                            entry.schedule_id,
-                            entry.id,
-                        )
-                        entry.status = SyncQueueStatus.DONE
-                        db.commit()
-                        continue
-
-                    sync_service = GoogleCalendarSyncService(db)
-
-                    if entry.operation == SyncOperation.UPSERT:
-                        sync_service.sync_upsert_schedule(schedule)
-                    elif entry.operation == SyncOperation.DELETE:
-                        sync_service.sync_delete_schedule(schedule)
-
-                    entry.status = SyncQueueStatus.DONE
-                    entry.processed_at = datetime.utcnow()
-                    db.commit()
-                    logger.info("Sync queue entry %s completed", entry.id)
-
-                except Exception as e:
-                    logger.exception("Failed to process sync queue entry %s", entry.id)
-                    entry.retry_count += 1
-                    entry.last_error = str(e)[:500]
-
-                    if entry.retry_count >= self.MAX_RETRIES:
-                        entry.status = SyncQueueStatus.FAILED
-                        logger.error(
-                            "Sync queue entry %s failed after %d retries",
-                            entry.id,
-                            entry.retry_count,
-                        )
-                    else:
-                        entry.status = SyncQueueStatus.PENDING
-                        logger.info(
-                            "Sync queue entry %s will retry (attempt %d/%d)",
-                            entry.id,
-                            entry.retry_count,
-                            self.MAX_RETRIES,
-                        )
-
-                    db.commit()
-
-        except Exception as e:
-            logger.exception("Error processing sync queue")
-            db.rollback()
         finally:
             db.close()
