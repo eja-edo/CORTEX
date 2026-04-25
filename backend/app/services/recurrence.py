@@ -104,7 +104,7 @@ class RecurrenceService:
             else:
                 # Virtual instance - include ALL required fields for ScheduleResponse
                 results.append({
-                    "id": None,  # Not in DB yet - will cause validation error, need to make optional
+                    "id": str(root.id),  # Not in DB yet - will cause validation error, need to make optional
                     "user_id": str(root.user_id),
                     "title": root.title,
                     "type": root.type.value if hasattr(root.type, 'value') else root.type,

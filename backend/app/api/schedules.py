@@ -24,6 +24,7 @@ from app.services.google_calendar_sync import GoogleCalendarSyncService
 from app.services.recurrence import RecurrenceService
 from app.services.reminder_service import ReminderService
 from app.services.redis.google_sync_task import enqueue_google_sync
+from app.services.recurrence import RecurrenceService
 from app.utils.logger import get_logger
 
 router = APIRouter(prefix="/schedules", tags=["schedules"])
@@ -118,7 +119,6 @@ def get_schedules(
         Schedule.recurrence_id.is_(None),
     ).order_by(Schedule.start_time).all()
 
-    from app.services.recurrence import RecurrenceService
     recurrence_service = RecurrenceService()
     non_recurring_schedules = [
         s for s in non_recurring_schedules
