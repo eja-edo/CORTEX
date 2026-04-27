@@ -10,9 +10,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.database import get_db
+from app.database import get_db, SessionLocal
 from app.dependencies import get_current_active_user
-from app.models import Asset, AssetStatus, AssetType, Upload, UploadPart, UploadStatus, User
+from app.models import Asset, AssetStatus, AssetType, Upload, UploadPart, UploadStatus, User, Workspace, WorkspaceMember
 from app.schemas import (
     UploadAccessUrlResponse,
     UploadCompleteRequest,
@@ -104,6 +104,7 @@ def _get_or_create_asset_for_upload(
     current_user: User,
     media_type: str,
     total_size: int,
+    workspace_id: UUID | None = None,
 ) -> tuple[Asset, bool]:
     existing_asset = (
         db.query(Asset)
@@ -117,8 +118,23 @@ def _get_or_create_asset_for_upload(
     if existing_asset:
         return existing_asset, False
 
+    # If workspace_id not provided, try to find user's personal workspace
+    if workspace_id is None:
+        personal_ws = (
+            db.query(WorkspaceMember)
+            .join(WorkspaceMember.workspace)
+            .filter(
+                WorkspaceMember.user_id == current_user.id,
+                Workspace.workspace.is_personal == True,
+            )
+            .first()
+        )
+        if personal_ws:
+            workspace_id = personal_ws.workspace_id
+
     asset = Asset(
         user_id=current_user.id,
+        workspace_id=workspace_id,
         type=_resolve_asset_type(media_type),
         status=AssetStatus.PENDING,
         title=upload.filename or Path(upload.object_key).name,

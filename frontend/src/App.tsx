@@ -12,12 +12,13 @@ import { NoteSidebar, type NoteItem } from './components/NoteSidebar'
 import { RecordPanel } from './components/RecordPanel'
 import { SettingsPanel } from './components/SettingsPanel'
 import { AssetKnowledgeView } from './components/AssetKnowledgeView'
-import type { Schedule, TokenPair, User, ScheduleListResponse, GoogleCalendarStatus, SyncUpdateEvent } from './types'
+import type { Schedule, TokenPair, User, ScheduleListResponse, GoogleCalendarStatus, SyncUpdateEvent, Workspace } from './types'
 import { plainTextFromMarkdown } from './utils/noteMarkdown'
 import { NotificationBell, type AppNotification } from './components/NotificationBell'
 import { buildTextPatch, type NotePatchOp } from './utils/textPatch.ts'
 import { WorkspaceNoteEditor } from './components/WorkspaceNoteEditor'
 import { WorkspaceSearch } from './components/WorkspaceSearch'
+import { WorkspaceSwitcher } from './components/WorkspaceSwitcher'
 import { AskAI } from './components/AskAI'
 import { getStoredTheme, applyThemeToDocument } from './utils/theme'
 import type { AppTheme } from './utils/theme'
@@ -49,6 +50,7 @@ function getOrCreateSseTabAppId(): string {
 type ApiNote = {
   id: string
   user_id: string
+  workspace_id: string | null
   parent_note_id: string | null
   content: string
   content_type: string
@@ -286,6 +288,11 @@ function App() {
   const [activeWorkspaceKnowledgeAssetId, setActiveWorkspaceKnowledgeAssetId] = useState<string | null>(routeWorkspaceState.assetId)
   const [googleCalendarStatus, setGoogleCalendarStatus] = useState<GoogleCalendarStatus | null>(null)
   const [theme, setTheme] = useState<AppTheme>(getStoredTheme)
+
+  // Workspace state
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([])
+  const [currentWorkspace, setCurrentWorkspace] = useState<Workspace | null>(null)
+  const [workspaceSwitcherOpen, setWorkspaceSwitcherOpen] = useState(false)
 
   // Collapsible sidebar sections state
   const [sectionNoteOpen, setSectionNoteOpen] = useState(true)
@@ -525,17 +532,20 @@ function App() {
       setRecentNotes([])
       setActiveWorkspaceNoteId(null)
       setGoogleCalendarStatus(null)
+      setWorkspaces([])
+      setCurrentWorkspace(null)
       return
     }
     void fetchCurrentUser(tokens)
     void fetchSchedules(tokens)
     void fetchGoogleCalendarStatus()
+    void fetchWorkspaces(tokens)
   }, [tokens, startDate, endDate])
 
   useEffect(() => {
     if (!tokens) return
     void fetchNotes(tokens)
-  }, [tokens])
+  }, [tokens, currentWorkspace])
 
   useEffect(() => {
     const url = new URL(window.location.href)
@@ -633,11 +643,45 @@ function App() {
     return body as T
   }, [refreshToken])
 
-  async function fetchNotes(activeTokens?: TokenPair): Promise<void> {
+  async function fetchWorkspaces(activeTokens?: TokenPair): Promise<void> {
     const sessionTokens = activeTokens ?? tokens
     if (!sessionTokens) return
     try {
-      const data = await requestWithAuth<ApiNote[]>('/notes')
+      const data = await requestWithAuth<Workspace[]>('/workspaces')
+      setWorkspaces(data)
+      
+      // Auto-select personal workspace or first workspace
+      if (!currentWorkspace && data.length > 0) {
+        const personal = data.find(ws => ws.is_personal)
+        const defaultWs = personal || data[0]
+        setCurrentWorkspace(defaultWs)
+      }
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Cannot load workspaces')
+    }
+  }
+
+  function handleWorkspaceSwitch(workspace: Workspace): void {
+    if (workspace.id === currentWorkspace?.id) return
+    
+    // Clear state to prevent stale data flash
+    setRecentNotes([])
+    setSidebarAssets([])
+    noteSyncStatesRef.current = {}
+    
+    setCurrentWorkspace(workspace)
+    setActiveWorkspaceNoteId(null)
+    setWorkspaceSwitcherOpen(false)
+    navigate('/')
+  }
+
+  async function fetchNotes(activeTokens?: TokenPair): Promise<void> {
+    const sessionTokens = activeTokens ?? tokens
+    if (!sessionTokens) return
+    if (!currentWorkspace) return // Wait for workspace to be set
+    
+    try {
+      const data = await requestWithAuth<ApiNote[]>(`/notes/workspaces/${currentWorkspace.id}`)
       const mappedNotes = data.map(mapApiNoteToAppNote)
       setRecentNotes(mappedNotes)
       const nextSyncStates: Record<string, NoteSyncState> = {}
@@ -656,7 +700,7 @@ function App() {
   }
 
   async function loadSidebarAssets(): Promise<void> {
-    if (!tokens) return
+    if (!tokens || !currentWorkspace) return
     setSidebarAssetsLoading(true)
     try {
       const assets = await requestWithAuth<Array<{
@@ -665,7 +709,7 @@ function App() {
         status: string
         type: string
         created_at: string
-      }>>('/assets?limit=10')
+      }>>(`/assets/workspaces/${currentWorkspace.id}`)
       setSidebarAssets(assets)
     } catch (error) {
       // Silently fail - assets are not critical
@@ -777,12 +821,24 @@ function App() {
   }
 
   async function handleCreateNote(parentNoteId?: string): Promise<void> {
+    if (!currentWorkspace) {
+      setErrorMessage('Please select a workspace first')
+      return
+    }
+    
+    // Check permission
+    if (currentWorkspace.my_role === 'viewer') {
+      setErrorMessage('You do not have permission to create notes in this workspace')
+      return
+    }
+    
     setErrorMessage('')
     try {
       const created = await requestWithAuth<ApiNote>('/notes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          workspace_id: currentWorkspace.id,
           content: '# New note',
           content_type: 'markdown',
           parent_note_id: parentNoteId ?? null,
@@ -1173,7 +1229,7 @@ function App() {
             <>
               <div className="topbar-divider" />
               <nav className="breadcrumb">
-                <span className="breadcrumb-item">Workspace</span>
+                <span className="breadcrumb-item">{currentWorkspace?.name || 'Workspace'}</span>
                 <span className="breadcrumb-sep">/</span>
                 <span className="breadcrumb-item" style={{ color: 'var(--text-primary)', fontWeight: 500 }}>
                   {activeWorkspaceView === 'home' ? 'Home'
@@ -1264,6 +1320,14 @@ function App() {
 
             <div className="workspace-sidebar-body">
               <div className="workspace-sidebar-main">
+                {/* Workspace Switcher */}
+                <WorkspaceSwitcher
+                  workspaces={workspaces}
+                  currentWorkspace={currentWorkspace}
+                  onSwitch={handleWorkspaceSwitch}
+                  isCollapsed={isWorkspaceSidebarCollapsed}
+                />
+
                 {/* Home nav item */}
                 <button
                   type="button"
@@ -1303,7 +1367,17 @@ function App() {
                   }}
                 >
                   <div className="workspace-note-links">
-                    {workspaceRootNotes.map((note) => (
+                    {!currentWorkspace ? (
+                      <div className="workspace-nav-item workspace-nav-item--sub" style={{ color: '#a39e98', fontStyle: 'italic' }}>
+                        <span>Loading workspace...</span>
+                      </div>
+                    ) : workspaceRootNotes.length === 0 ? (
+                      <div className="workspace-nav-item workspace-nav-item--sub" style={{ color: '#a39e98', fontStyle: 'italic' }}>
+                        <span>No notes in this workspace yet</span>
+                      </div>
+                    ) : (
+                      <>
+                        {workspaceRootNotes.map((note) => (
                       <div key={note.id}>
                         <button
                           type="button"
@@ -1346,6 +1420,8 @@ function App() {
                         {renderWorkspaceSidebarNoteTree(note.id, 1)}
                       </div>
                     ))}
+                      </>
+                    )}
                     <button
                       type="button"
                       className="workspace-nav-item workspace-nav-item--sub workspace-nav-item--add"
@@ -1432,15 +1508,6 @@ function App() {
                     onSlotSelect={handleCalendarSlotSelect}
                     onToggleComplete={handleToggleComplete}
                     onRemove={handleRemoveSchedule}
-                  />
-                </div>
-                <div className="home-quick-notes-area">
-                  <NoteSidebar
-                    notes={recentNotes}
-                    onNoteChange={handleNoteChange}
-                    onCreateNote={handleCreateNote}
-                    onMoveNote={handleMoveNote}
-                    onDeleteNote={handleDeleteNote}
                   />
                 </div>
               </section>

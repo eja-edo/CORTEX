@@ -182,6 +182,7 @@ class TokenExchangeRequest(BaseModel):
 
 
 class NoteCreate(BaseModel):
+    workspace_id: UUID  # Required: which workspace this note belongs to
     content: str = Field(..., min_length=1, max_length=MAX_NOTE_CONTENT_LENGTH)
     content_type: str = Field(default="markdown", max_length=20)
     parent_note_id: UUID | None = None
@@ -278,6 +279,7 @@ class NoteResponse(BaseModel):
 
     id: UUID
     user_id: UUID
+    workspace_id: UUID | None
     parent_note_id: UUID | None
     content: str
     content_type: str
@@ -314,6 +316,7 @@ class UploadInitRequest(BaseModel):
     # Set 0 for live streaming mode when final size/parts are unknown at init time.
     total_parts: int = Field(default=0, ge=0)
     total_size: int = Field(default=0, ge=0)
+    workspace_id: UUID | None = Field(default=None, description="Optional: workspace to associate uploaded asset with")
 
 
 class UploadInitResponse(BaseModel):
@@ -396,6 +399,7 @@ class UploadAccessUrlResponse(BaseModel):
 
 
 class AssetCreate(BaseModel):
+    workspace_id: UUID  # Required: which workspace this asset belongs to
     type: AssetType
     title: str | None = Field(default=None, max_length=255)
     description: str | None = None
@@ -415,6 +419,7 @@ class AssetResponse(BaseModel):
 
     id: UUID
     user_id: UUID
+    workspace_id: UUID | None
     type: AssetType
     status: AssetStatus
     title: str | None

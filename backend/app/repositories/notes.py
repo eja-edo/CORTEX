@@ -26,6 +26,16 @@ class NoteRepository:
         result = await self.session.execute(stmt)
         return result.scalars().all()
 
+    async def list_active_by_workspace(self, workspace_id: UUID) -> Sequence[Note]:
+        """List all active notes in a workspace."""
+        stmt = (
+            select(Note)
+            .where(Note.workspace_id == workspace_id, Note.is_deleted.is_(False))
+            .order_by(Note.updated_at.desc())
+        )
+        result = await self.session.execute(stmt)
+        return result.scalars().all()
+
     async def get_active_by_id_and_user(self, note_id: UUID, user_id: UUID) -> Note | None:
         stmt = select(Note).where(
             Note.id == note_id,

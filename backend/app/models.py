@@ -76,6 +76,13 @@ class EditScope(str, Enum):
     ALL = "all"
 
 
+class WorkspaceRole(str, Enum):
+    """Workspace membership role enumeration."""
+    OWNER = "owner"
+    EDITOR = "editor"
+    VIEWER = "viewer"
+
+
 class AssetType(str, Enum):
     """Supported asset source types."""
     UPLOADED_VIDEO = "uploaded_video"
@@ -100,6 +107,7 @@ class Asset(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=True, index=True)
     type = Column(SQLEnum(AssetType, values_callable=_enum_values, name="assettype"), nullable=False)
     status = Column(SQLEnum(AssetStatus, values_callable=_enum_values, name="assetstatus"), nullable=False, default=AssetStatus.PENDING, server_default=text("'pending'"))
     title = Column(String(255), nullable=True)
@@ -121,6 +129,7 @@ class Asset(Base):
     __table_args__ = (
         Index("ix_assets_user_created", "user_id", "created_at"),
         Index("ix_assets_user_status", "user_id", "status"),
+        Index("ix_assets_workspace_id", "workspace_id"),
     )
 
 
@@ -342,6 +351,7 @@ class Note(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), nullable=False)
+    workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=True, index=True)
     parent_note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="SET NULL"), nullable=True, index=True)
     content = Column(Text, nullable=False)
     content_type = Column(String(20), nullable=False, default="markdown", server_default=text("'markdown'"))
@@ -373,6 +383,7 @@ class Note(Base):
         Index("ix_notes_user_id", "user_id"),
         Index("ix_notes_user_id_updated_at", "user_id", "updated_at"),
         Index("ix_notes_user_parent_updated_at", "user_id", "parent_note_id", "updated_at"),
+        Index("ix_notes_workspace_id", "workspace_id"),
     )
 
 
@@ -445,4 +456,37 @@ class UploadPart(Base):
     __table_args__ = (
         UniqueConstraint("upload_record_id", "part_number", name="uq_upload_parts_upload_part_number"),
         Index("ix_upload_parts_upload_part_number", "upload_record_id", "part_number"),
+    )
+
+
+class Workspace(Base):
+    """Workspace: organizational unit for grouping notes and assets."""
+    __tablename__ = "workspaces"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    slug = Column(String(255), nullable=True, unique=True)
+    is_personal = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    created_at = Column(DateTime, default=datetime.utcnow, server_default=text("NOW()"))
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=text("NOW()"))
+
+    members = relationship("WorkspaceMember", back_populates="workspace", cascade="all, delete-orphan")
+
+
+class WorkspaceMember(Base):
+    """Workspace membership: which users belong to which workspace with what role."""
+    __tablename__ = "workspace_members"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    role = Column(SQLEnum(WorkspaceRole, values_callable=_enum_values, name="workspacerole"), nullable=False, default=WorkspaceRole.VIEWER)
+    invited_by = Column(UUID(as_uuid=True), nullable=True)
+    joined_at = Column(DateTime, default=datetime.utcnow, server_default=text("NOW()"))
+
+    workspace = relationship("Workspace", back_populates="members")
+
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "user_id", name="uq_workspace_members_workspace_user"),
     )

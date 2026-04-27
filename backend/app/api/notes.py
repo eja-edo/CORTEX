@@ -2,12 +2,15 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
+from app.database import get_db, SessionLocal
 from app.database_async import get_async_db
 from app.dependencies import get_current_active_user
 from app.models import User
 from app.schemas import BatchUpdateItem, BatchUpdateResponse, NoteCreate, NotePatchRequest, NoteResponse, NoteRevisionResponse, NoteUpdate
 from app.services.notes import NoteService
+from app.services.workspace_permission import WorkspacePermission
 
 router = APIRouter(prefix="/notes", tags=["notes"])
 
@@ -34,6 +37,27 @@ async def get_notes(
 ):
     service = NoteService(db)
     notes = await service.get_notes(current_user.id)
+    responses: list[NoteResponse] = []
+    for note in notes:
+        content = await service.materialize_note_content(note)
+        responses.append(service.to_response(note, render_html=render_html, content_override=content))
+    return responses
+
+
+@router.get("/workspaces/{workspace_id}", response_model=list[NoteResponse])
+async def get_workspace_notes(
+    workspace_id: UUID,
+    render_html: bool = Query(False, description="Render markdown to sanitized HTML"),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Get all notes in a workspace. User must be a member."""
+    # Check workspace membership (sync DB)
+    with SessionLocal() as sync_db:
+        WorkspacePermission.require_member(workspace_id, current_user.id, sync_db)
+
+    service = NoteService(db)
+    notes = await service.get_notes_by_workspace(workspace_id)
     responses: list[NoteResponse] = []
     for note in notes:
         content = await service.materialize_note_content(note)

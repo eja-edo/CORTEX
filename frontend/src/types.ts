@@ -1,5 +1,15 @@
 export type AuthMode = 'login' | 'register'
 
+export type WorkspaceRole = 'owner' | 'editor' | 'viewer'
+
+export type Workspace = {
+  id: string
+  owner_id: string
+  name: string
+  is_personal: boolean
+  my_role: WorkspaceRole
+}
+
 export type User = {
   id: string
   email: string

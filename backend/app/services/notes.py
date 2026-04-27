@@ -6,9 +6,11 @@ import bleach
 from markdown_it import MarkdownIt
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import SessionLocal
 from app.models import Note
 from app.repositories.notes import NoteRepository
 from app.schemas import BatchUpdateItem, BatchUpdateResponse, NoteCreate, NotePatchRequest, NoteResponse, NoteUpdate
+from app.services.workspace_permission import WorkspacePermission
 from app.utils.note_delta import apply_text_patch, build_text_patch
 
 PATCH_COMPACTION_THRESHOLD = 20
@@ -46,6 +48,11 @@ class NoteService:
         self.markdown = MarkdownIt("commonmark", {"html": False, "linkify": True, "typographer": True})
 
     async def create_note(self, payload: NoteCreate, user_id: UUID) -> Note:
+        # Check user has write permission in the workspace
+        with SessionLocal() as sync_db:
+            member = WorkspacePermission.require_member(payload.workspace_id, user_id, sync_db)
+            WorkspacePermission.require_editor(member)
+
         if payload.parent_note_id is not None:
             parent = await self.repository.get_active_by_id_and_user(payload.parent_note_id, user_id)
             if parent is None:
@@ -53,6 +60,7 @@ class NoteService:
 
         note = Note(
             user_id=user_id,
+            workspace_id=payload.workspace_id,
             parent_note_id=payload.parent_note_id,
             content=payload.content,
             content_type=payload.content_type,
@@ -71,6 +79,11 @@ class NoteService:
 
     async def get_notes(self, user_id: UUID) -> list[Note]:
         notes = await self.repository.list_active_by_user(user_id)
+        return list(notes)
+
+    async def get_notes_by_workspace(self, workspace_id: UUID) -> list[Note]:
+        """Get all active notes in a workspace."""
+        notes = await self.repository.list_active_by_workspace(workspace_id)
         return list(notes)
 
     async def get_note(self, note_id: UUID, user_id: UUID) -> Note | None:
@@ -254,6 +267,7 @@ class NoteService:
         return NoteResponse(
             id=note.id,
             user_id=note.user_id,
+            workspace_id=note.workspace_id,
             parent_note_id=getattr(note, "parent_note_id", None),
             content=content,
             content_type=note.content_type,
