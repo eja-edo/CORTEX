@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Home, LogOut, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings, StickyNote, Video, X } from 'lucide-react'
+import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Home, LogOut, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings, StickyNote, Video, X, Trash2 } from 'lucide-react'
 import { startOfWeek, endOfWeek } from 'date-fns'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
 import 'react-big-calendar/lib/css/react-big-calendar.css'
@@ -8,7 +8,7 @@ import './styles/settings.css'
 import { AuthPanel } from './components/AuthPanel'
 import { ScheduleForm } from './components/ScheduleForm'
 import { CalendarView } from './components/CalendarView'
-import { NoteSidebar, type NoteItem } from './components/NoteSidebar'
+import { type NoteItem } from './components/NoteSidebar'
 import { RecordPanel } from './components/RecordPanel'
 import { SettingsPanel } from './components/SettingsPanel'
 import { AssetKnowledgeView } from './components/AssetKnowledgeView'
@@ -170,14 +170,14 @@ function mapApiNoteToAppNote(note: ApiNote): AppNote {
 
 function getRouteWorkspaceState(pathname: string): { view: WorkspaceView; noteId: string | null; assetId: string | null } {
   if (pathname === '/record') return { view: 'record', noteId: null, assetId: null }
-  
-  
+
+
   // Knowledge view route
   const knowledgeMatch = matchPath('/assets/:assetId/knowledge', pathname)
   if (knowledgeMatch?.params.assetId) {
     return { view: 'knowledge', noteId: null, assetId: knowledgeMatch.params.assetId }
   }
-  
+
   if (pathname === '/settings') return { view: 'settings', noteId: null, assetId: null }
 
   const noteMatch = matchPath('/notes/:noteId', pathname)
@@ -292,7 +292,6 @@ function App() {
   // Workspace state
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [currentWorkspace, setCurrentWorkspace] = useState<Workspace | null>(null)
-  const [workspaceSwitcherOpen, setWorkspaceSwitcherOpen] = useState(false)
 
   // Collapsible sidebar sections state
   const [sectionNoteOpen, setSectionNoteOpen] = useState(true)
@@ -476,7 +475,22 @@ function App() {
           }}
         >
           <StickyNote size={13} />
-          <span>{note.title}</span>
+          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{note.title}</span>
+          <div className="workspace-nav-item-actions">
+            <button
+              type="button"
+              className="workspace-nav-action-btn danger"
+              title="Delete"
+              onClick={(e) => {
+                e.stopPropagation()
+                if (window.confirm('Are you sure you want to delete this note?')) {
+                  void handleDeleteNote(note.id)
+                }
+              }}
+            >
+              <Trash2 size={12} />
+            </button>
+          </div>
         </button>
         {renderWorkspaceSidebarNoteTree(note.id, depth + 1)}
       </div>
@@ -649,7 +663,7 @@ function App() {
     try {
       const data = await requestWithAuth<Workspace[]>('/workspaces')
       setWorkspaces(data)
-      
+
       // Auto-select personal workspace or first workspace
       if (!currentWorkspace && data.length > 0) {
         const personal = data.find(ws => ws.is_personal)
@@ -663,15 +677,14 @@ function App() {
 
   function handleWorkspaceSwitch(workspace: Workspace): void {
     if (workspace.id === currentWorkspace?.id) return
-    
+
     // Clear state to prevent stale data flash
     setRecentNotes([])
     setSidebarAssets([])
     noteSyncStatesRef.current = {}
-    
+
     setCurrentWorkspace(workspace)
     setActiveWorkspaceNoteId(null)
-    setWorkspaceSwitcherOpen(false)
     navigate('/')
   }
 
@@ -679,7 +692,7 @@ function App() {
     const sessionTokens = activeTokens ?? tokens
     if (!sessionTokens) return
     if (!currentWorkspace) return // Wait for workspace to be set
-    
+
     try {
       const data = await requestWithAuth<ApiNote[]>(`/notes/workspaces/${currentWorkspace.id}`)
       const mappedNotes = data.map(mapApiNoteToAppNote)
@@ -825,13 +838,13 @@ function App() {
       setErrorMessage('Please select a workspace first')
       return
     }
-    
+
     // Check permission
     if (currentWorkspace.my_role === 'viewer') {
       setErrorMessage('You do not have permission to create notes in this workspace')
       return
     }
-    
+
     setErrorMessage('')
     try {
       const created = await requestWithAuth<ApiNote>('/notes', {
@@ -1378,48 +1391,63 @@ function App() {
                     ) : (
                       <>
                         {workspaceRootNotes.map((note) => (
-                      <div key={note.id}>
-                        <button
-                          type="button"
-                          className={[
-                            'workspace-nav-item',
-                            'workspace-nav-item--sub',
-                            activeWorkspaceView === 'note' && activeWorkspaceNoteId === note.id ? 'active' : '',
-                            workspaceDropTargetParentId === note.id ? 'workspace-nav-item--drop-target' : '',
-                          ].filter(Boolean).join(' ')}
-                          style={{ paddingLeft: '10px' }}
-                          onClick={() => openWorkspaceNote(note.id)}
-                          title={note.title}
-                          draggable
-                          onDragStart={(e) => {
-                            e.dataTransfer.effectAllowed = 'move'
-                            e.dataTransfer.setData('text/plain', note.id)
-                            setWorkspaceDraggingNoteId(note.id)
-                            setWorkspaceDropTargetParentId(null)
-                          }}
-                          onDragEnd={() => {
-                            setWorkspaceDraggingNoteId(null)
-                            setWorkspaceDropTargetParentId(null)
-                          }}
-                          onDragOver={(e) => {
-                            if (!workspaceDraggingNoteId || !canMoveWorkspaceNote(workspaceDraggingNoteId, note.id)) return
-                            e.preventDefault()
-                            e.dataTransfer.dropEffect = 'move'
-                            setWorkspaceDropTargetParentId(note.id)
-                          }}
-                          onDrop={(e) => {
-                            e.preventDefault()
-                            void handleWorkspaceSidebarDrop(note.id)
-                            setWorkspaceDraggingNoteId(null)
-                            setWorkspaceDropTargetParentId(null)
-                          }}
-                        >
-                          <StickyNote size={13} />
-                          <span>{note.title}</span>
-                        </button>
-                        {renderWorkspaceSidebarNoteTree(note.id, 1)}
-                      </div>
-                    ))}
+                          <div key={note.id}>
+                            <button
+                              type="button"
+                              className={[
+                                'workspace-nav-item',
+                                'workspace-nav-item--sub',
+                                activeWorkspaceView === 'note' && activeWorkspaceNoteId === note.id ? 'active' : '',
+                                workspaceDropTargetParentId === note.id ? 'workspace-nav-item--drop-target' : '',
+                              ].filter(Boolean).join(' ')}
+                              style={{ paddingLeft: '10px' }}
+                              onClick={() => openWorkspaceNote(note.id)}
+                              title={note.title}
+                              draggable
+                              onDragStart={(e) => {
+                                e.dataTransfer.effectAllowed = 'move'
+                                e.dataTransfer.setData('text/plain', note.id)
+                                setWorkspaceDraggingNoteId(note.id)
+                                setWorkspaceDropTargetParentId(null)
+                              }}
+                              onDragEnd={() => {
+                                setWorkspaceDraggingNoteId(null)
+                                setWorkspaceDropTargetParentId(null)
+                              }}
+                              onDragOver={(e) => {
+                                if (!workspaceDraggingNoteId || !canMoveWorkspaceNote(workspaceDraggingNoteId, note.id)) return
+                                e.preventDefault()
+                                e.dataTransfer.dropEffect = 'move'
+                                setWorkspaceDropTargetParentId(note.id)
+                              }}
+                              onDrop={(e) => {
+                                e.preventDefault()
+                                void handleWorkspaceSidebarDrop(note.id)
+                                setWorkspaceDraggingNoteId(null)
+                                setWorkspaceDropTargetParentId(null)
+                              }}
+                            >
+                              <StickyNote size={13} />
+                              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{note.title}</span>
+                              <div className="workspace-nav-item-actions">
+                                <button
+                                  type="button"
+                                  className="workspace-nav-action-btn danger"
+                                  title="Delete"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    if (window.confirm('Are you sure you want to delete this note?')) {
+                                      void handleDeleteNote(note.id)
+                                    }
+                                  }}
+                                >
+                                  <Trash2 size={12} />
+                                </button>
+                              </div>
+                            </button>
+                            {renderWorkspaceSidebarNoteTree(note.id, 1)}
+                          </div>
+                        ))}
                       </>
                     )}
                     <button
@@ -1470,6 +1498,26 @@ function App() {
                             >
                               <span className="sidebar-section-toggle-chevron"><Video size={13} /></span>
                               <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName}</span>
+                              <div className="workspace-nav-item-actions">
+                                <button
+                                  type="button"
+                                  className="workspace-nav-action-btn danger"
+                                  title="Delete"
+                                  onClick={async (e) => {
+                                    e.stopPropagation()
+                                    if (window.confirm('Are you sure you want to delete this recording?')) {
+                                      try {
+                                        await requestWithAuth(`/assets/${asset.id}`, { method: 'DELETE' })
+                                        void loadSidebarAssets()
+                                      } catch (err) {
+                                        setErrorMessage(err instanceof Error ? err.message : 'Cannot delete recording')
+                                      }
+                                    }
+                                  }}
+                                >
+                                  <Trash2 size={12} />
+                                </button>
+                              </div>
                             </button>
                           )
                         })}
@@ -1520,6 +1568,10 @@ function App() {
                   if (activeWorkspaceAssetId) {
                     navigate('/record')
                   }
+                }}
+                workspaceId={currentWorkspace?.id}
+                onAssetChange={() => {
+                  void loadSidebarAssets()
                 }}
               />
             ) : activeWorkspaceView === 'knowledge' && activeWorkspaceKnowledgeAssetId ? (

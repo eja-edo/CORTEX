@@ -56,6 +56,8 @@ type RecordPanelProps = {
     isVisible: boolean
     initialAssetId?: string | null
     onAssetViewed?: () => void
+    workspaceId?: string | null
+    onAssetChange?: () => void
 }
 
 const MIN_PART_SIZE = 5 * 1024 * 1024
@@ -72,7 +74,7 @@ function formatDate(date: Date): string {
         ' ' + date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
 }
 
-export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
+export function RecordPanel({ requestWithAuth, isVisible, workspaceId, onAssetChange }: RecordPanelProps) {
     const navigate = useNavigate()
     const [recordings, setRecordings] = useState<Recording[]>([])
     const [isRecordingAudio, setIsRecordingAudio] = useState(false)
@@ -645,6 +647,8 @@ export function RecordPanel({ requestWithAuth, isVisible }: RecordPanelProps) {
                     activeStream={activeStream}
                     recordingType={recordingType}
                     onViewKnowledge={(assetId) => navigate(`/assets/${assetId}/knowledge`)}
+                    workspaceId={workspaceId}
+                    onAssetChange={onAssetChange}
                 />
             </div>
         </div>

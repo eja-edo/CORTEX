@@ -49,6 +49,8 @@ type RecordingsListProps = {
     recordingType?: 'screen' | 'audio' | null
     /** Called when user clicks "View Knowledge" on a processed asset */
     onViewKnowledge?: (assetId: string, assetTitle: string) => void
+    workspaceId?: string | null
+    onAssetChange?: () => void
 }
 
 /* ─────────────────────────── Helpers ─────────────────────────── */
@@ -353,7 +355,7 @@ export function RecordingsList({
     requestWithAuth, recordings, playingId,
     onPlayServerVideo, onPlayServerAudio,
     activeStream, recordingType,
-    onViewKnowledge,
+    onViewKnowledge, workspaceId, onAssetChange,
 }: RecordingsListProps) {
     const [assets, setAssets] = useState<AssetResponse[]>([])
     const [isLoadingAssets, setIsLoadingAssets] = useState(false)
@@ -383,7 +385,10 @@ export function RecordingsList({
         setIsLoadingAssets(true)
         setAssetError('')
         try {
-            const list = await requestWithAuth<AssetResponse[]>('/assets?limit=200&offset=0')
+            const url = workspaceId 
+                ? `/assets/workspaces/${workspaceId}` 
+                : '/assets?limit=200&offset=0'
+            const list = await requestWithAuth<AssetResponse[]>(url)
             list.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
             setAssets(list)
         } catch (err) {
@@ -391,14 +396,17 @@ export function RecordingsList({
         } finally {
             setIsLoadingAssets(false)
         }
-    }, [requestWithAuth])
+    }, [requestWithAuth, workspaceId])
 
     useEffect(() => { void loadAssets() }, [loadAssets])
 
     useEffect(() => {
         const hasNewUpload = recordings.some(r => r.uploadState === 'uploaded')
-        if (hasNewUpload) void loadAssets()
-    }, [recordings, loadAssets])
+        if (hasNewUpload) {
+            void loadAssets()
+            onAssetChange?.()
+        }
+    }, [recordings, loadAssets, onAssetChange])
 
     useEffect(() => {
         for (const rec of recordings) {
@@ -459,10 +467,11 @@ export function RecordingsList({
         try {
             await requestWithAuth(`/assets/${asset.id}`, { method: 'DELETE' })
             setAssets(prev => prev.filter(a => a.id !== asset.id))
+            onAssetChange?.()
         } catch (err) {
             setAssetError(err instanceof Error ? err.message : 'Cannot delete recording')
         }
-    }, [requestWithAuth])
+    }, [requestWithAuth, onAssetChange])
 
     const handleRename = useCallback(async (asset: AssetResponse, newTitle: string) => {
         setAssetError('')
@@ -473,10 +482,11 @@ export function RecordingsList({
                 body: JSON.stringify({ title: newTitle }),
             })
             setAssets(prev => prev.map(a => a.id === asset.id ? updated : a))
+            onAssetChange?.()
         } catch (err) {
             setAssetError(err instanceof Error ? err.message : 'Cannot rename recording')
         }
-    }, [requestWithAuth])
+    }, [requestWithAuth, onAssetChange])
 
     const handleProcess = useCallback((asset: AssetResponse) => {
         setPendingProcessAssetId(asset.id)
@@ -488,13 +498,16 @@ export function RecordingsList({
         try {
             await requestWithAuth(`/assets/${pendingProcessAssetId}/process`, { method: 'POST' })
             setPendingProcessAssetId(null)
-            setTimeout(() => void loadAssets(), 1000)
+            setTimeout(() => {
+                void loadAssets()
+                onAssetChange?.()
+            }, 1000)
         } catch (err) {
             setAssetError(err instanceof Error ? err.message : 'Cannot start processing')
         } finally {
             setIsProcessing(false)
         }
-    }, [pendingProcessAssetId, requestWithAuth, loadAssets])
+    }, [pendingProcessAssetId, requestWithAuth, loadAssets, onAssetChange])
 
 
     const pendingAssetTitle = pendingProcessAssetId

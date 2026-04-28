@@ -113,6 +113,40 @@
     white-space: nowrap;
 }
 
+.workspace-nav-item-actions {
+    display: none;
+    margin-left: auto;
+    align-items: center;
+    gap: 4px;
+}
+
+.workspace-nav-item:hover .workspace-nav-item-actions {
+    display: flex;
+}
+
+.workspace-nav-action-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border: none;
+    background: transparent;
+    border-radius: 4px;
+    color: var(--text-tertiary);
+    cursor: pointer;
+}
+
+.workspace-nav-action-btn:hover {
+    background: var(--bg-active);
+    color: var(--text-primary);
+}
+
+.workspace-nav-action-btn.danger:hover {
+    color: #e03131; /* Use a red color for danger action */
+    background: rgba(224, 49, 49, 0.1);
+}
+
 .workspace-sidebar.collapsed .workspace-sidebar-body {
     padding-left: 8px;
     padding-right: 8px;
