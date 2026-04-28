@@ -282,7 +282,7 @@ export function CalendarView({
                                             {selectedSchedule.recurrence.freq === 'DAILY' && 'Daily'}
                                             {selectedSchedule.recurrence.freq === 'WEEKLY' && 'Weekly'}
                                             {selectedSchedule.recurrence.freq === 'MONTHLY' && 'Monthly'}
-                                            {selectedSchedule.recurrence.interval > 1 && ` every ${selectedSchedule.recurrence.interval}`}
+                                            {selectedSchedule.recurrence.interval && selectedSchedule.recurrence.interval > 1 && ` every ${selectedSchedule.recurrence.interval}`}
                                         </span>
                                     </div>
                                 )}
@@ -313,7 +313,7 @@ export function CalendarView({
                             <button
                                 type="button"
                                 className="btn btn-danger"
-                                onClick={async () => { await onRemove(selectedSchedule.id); setSelectedSchedule(null) }}
+                                onClick={async () => { if (selectedSchedule.id) { await onRemove(selectedSchedule.id); } setSelectedSchedule(null) }}
                             >
                                 <Trash2 size={13} /> Delete
                             </button>

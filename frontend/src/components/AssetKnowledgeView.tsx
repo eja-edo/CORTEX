@@ -5,7 +5,7 @@ import {
     RefreshCw, Star, Tag, Target, TrendingUp, Zap
 } from 'lucide-react'
 import type { AuthRequest } from './recordingTypes'
-import { ApiError } from '../App'
+import { ApiError } from '../services/api'
 
 /* ─────────────────── Types ─────────────────── */
 
