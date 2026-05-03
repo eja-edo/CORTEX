@@ -39,6 +39,7 @@
     gap: 10px;
     flex: 1;
     min-height: 0;
+    overflow-y: auto;
 }
 
 .workspace-sidebar-main {
@@ -61,7 +62,6 @@
     border: none;
     background: transparent;
     border-radius: 10px;
-    padding: 8px 10px;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -101,8 +101,9 @@
 }
 
 .workspace-nav-item--drop-target {
-    box-shadow: inset 0 0 0 1px var(--accent);
+    box-shadow: inset 0 0 0 2px var(--accent);
     background: var(--accent-light);
+    transition: all 0.15s ease;
 }
 
 
@@ -143,7 +144,8 @@
 }
 
 .workspace-nav-action-btn.danger:hover {
-    color: #e03131; /* Use a red color for danger action */
+    color: #e03131;
+    /* Use a red color for danger action */
     background: rgba(224, 49, 49, 0.1);
 }
 
@@ -458,6 +460,347 @@
     display: grid;
     place-items: center;
     color: var(--text-tertiary);
+}
+
+/* ========== REDESIGNED SIDEBAR - GLOBAL VS WORKSPACE SECTIONS ========== */
+
+/* Global Section - Top area */
+.sidebar-global-section {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 0;
+}
+
+/* Section Divider */
+.sidebar-section-divider {
+    margin-top: 8px;
+    border-top: 1px solid var(--border);
+}
+
+.sidebar-section-divider span {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary);
+    opacity: 0.7;
+}
+
+/* Workspace Section Container */
+.sidebar-workspace-section {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-bottom: 8px;
+}
+
+/* "IN THIS WORKSPACE" Label */
+.sidebar-workspace-label {
+    padding: 12px 16px 6px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-secondary);
+    opacity: 0.6;
+}
+
+/* Adjust workspace switcher spacing */
+.workspace-switcher-container {
+    position: relative;
+    width: 100%;
+    flex-shrink: 0;
+}
+
+/* Ensure nav items in global section have proper spacing */
+.sidebar-global-section .workspace-nav-item {
+    margin: 0 8px;
+}
+
+/* Workspace section nav items */
+.sidebar-workspace-section .workspace-nav-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-tertiary);
+    letter-spacing: 0.06em;
+    padding: 8px 16px;
+}
+
+/* Collapsed state adjustments */
+.workspace-sidebar.collapsed .sidebar-section-divider span,
+.workspace-sidebar.collapsed .sidebar-workspace-label {
+    display: none;
+}
+
+.workspace-sidebar.collapsed .sidebar-global-section .workspace-nav-item,
+.workspace-sidebar.collapsed .sidebar-workspace-section .workspace-nav-item {
+    margin: 0 4px;
+}
+
+/* ========== WORKSPACE CRUD - CONTEXT MENU & INLINE EDIT ========== */
+
+/* Dropdown item wrapper for context menu positioning */
+.workspace-dropdown-item-wrapper {
+    position: relative;
+}
+
+/* 3-dot actions button */
+.workspace-dropdown-item-actions {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border: none;
+    background: transparent;
+    border-radius: 4px;
+    color: var(--text-tertiary);
+    cursor: pointer;
+}
+
+.workspace-dropdown-item:hover .workspace-dropdown-item-actions {
+    display: flex;
+}
+
+.workspace-dropdown-item-actions:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+/* Context Menu */
+.workspace-context-menu {
+    position: absolute;
+    right: 0;
+    top: 100%;
+    z-index: 100;
+    min-width: 160px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    padding: 4px;
+}
+
+.workspace-context-menu-item {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border: none;
+    background: transparent;
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--text-primary);
+    cursor: pointer;
+    text-align: left;
+}
+
+.workspace-context-menu-item:hover {
+    background: var(--bg-hover);
+}
+
+.workspace-context-menu-item.danger {
+    color: #e03131;
+}
+
+.workspace-context-menu-item.danger:hover {
+    background: rgba(224, 49, 49, 0.1);
+}
+
+/* Inline edit input */
+.workspace-dropdown-edit-input {
+    width: 100%;
+    padding: 2px 6px;
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+}
+
+.workspace-dropdown-edit-input:focus {
+    border-color: var(--accent-hover);
+    box-shadow: 0 0 0 2px var(--accent-light);
+}
+
+/* ========== WORKSPACE MEMBERS MODAL ========== */
+
+.workspace-members-modal {
+    width: min(600px, 90vw);
+    max-height: 80vh;
+}
+
+.add-member-form {
+    margin-bottom: 24px;
+    padding-bottom: 24px;
+    border-bottom: 1px solid var(--border);
+}
+
+.add-member-inputs {
+    display: flex;
+    gap: 8px;
+}
+
+.add-member-inputs .form-input {
+    flex: 1;
+}
+
+.add-member-inputs .form-select {
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    cursor: pointer;
+}
+
+.add-member-inputs .form-select:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-light);
+}
+
+.add-member-inputs .btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* Members List */
+.members-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.members-list-header {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary);
+    padding: 8px 0;
+}
+
+.members-empty {
+    padding: 24px;
+    text-align: center;
+    color: var(--text-tertiary);
+    font-style: italic;
+}
+
+.member-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+}
+
+.member-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.member-avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: var(--accent-light);
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 16px;
+}
+
+.member-details {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.member-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.member-email {
+    font-size: 12px;
+    color: var(--text-tertiary);
+}
+
+.member-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.member-role-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: capitalize;
+}
+
+.member-role-badge span {
+    font-size: 11px;
+}
+
+.member-role-select {
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text-primary);
+    font-size: 12px;
+    font-family: inherit;
+    outline: none;
+    cursor: pointer;
+}
+
+.member-role-select:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-light);
+}
+
+.member-remove-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: none;
+    background: transparent;
+    border-radius: 6px;
+    color: var(--text-tertiary);
+    cursor: pointer;
+}
+
+.member-remove-btn:hover {
+    background: rgba(224, 49, 49, 0.1);
+    color: #e03131;
 }
 
 @media (max-width: 1100px) {

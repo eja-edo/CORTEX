@@ -490,14 +490,14 @@ export function RecordPanel({ requestWithAuth, isVisible, workspaceId, onAssetCh
             const complete = await requestWithAuth<UploadCompleteResponse>('/upload/complete', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ upload_id: ctx.uploadId, total_parts: uploadedParts, total_size: totalSize }),
+                body: JSON.stringify({ upload_id: ctx.uploadId, workspace_id: workspaceId, total_parts: uploadedParts, total_size: totalSize }),
             })
             return { status: 'uploaded' as const, objectKey: complete.object_key, assetId: complete.asset_id, error: undefined }
         } catch (err) {
             const message = err instanceof Error ? err.message : 'Live upload failed'
             return { status: 'failed' as const, objectKey: undefined, assetId: undefined, error: message }
         }
-    }, [enqueueBufferedUpload, requestWithAuth])
+    }, [enqueueBufferedUpload, requestWithAuth, workspaceId])
 
     const handleUpload = useCallback(async (recordingId: string) => {
         const recording = recordingsRef.current.find(r => r.id === recordingId)
@@ -558,14 +558,14 @@ export function RecordPanel({ requestWithAuth, isVisible, workspaceId, onAssetCh
             const complete = await requestWithAuth<UploadCompleteResponse>('/upload/complete', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ upload_id: uploadId }),
+                body: JSON.stringify({ upload_id: uploadId, workspace_id: workspaceId }),
             })
             updateRecording(recordingId, rec => ({ ...rec, uploadState: 'uploaded', uploadProgress: 100, uploadedObjectKey: complete.object_key, uploadedAssetId: complete.asset_id, uploadError: undefined }))
         } catch (err) {
             const message = err instanceof Error ? err.message : 'Upload failed'
             updateRecording(recordingId, rec => ({ ...rec, uploadState: 'failed', uploadError: message }))
         }
-    }, [requestWithAuth, splitBlobIntoParts, updateRecording, uploadPartWithRetry])
+    }, [requestWithAuth, splitBlobIntoParts, updateRecording, uploadPartWithRetry, workspaceId])
 
     return (
         <div className='record-workspace' style={{ display: isVisible ? undefined : 'none' }}>

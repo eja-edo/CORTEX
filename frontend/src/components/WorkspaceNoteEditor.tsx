@@ -265,7 +265,6 @@ interface WorkspaceNoteEditorProps {
 export function WorkspaceNoteEditor({
     note,
     onChange,
-    onAskAI,
 }: WorkspaceNoteEditorProps) {
     const [localMd, setLocalMd] = useState(note.contentMd)
     const [viewMode, setViewMode] = useState<ViewMode>('split')
@@ -409,17 +408,6 @@ export function WorkspaceNoteEditor({
                     </div>
                 </div>
                 <div className="wne-header-right">
-                    {onAskAI && (
-                        <button
-                            type="button"
-                            className="wne-ai-btn"
-                            onClick={onAskAI}
-                            title="Ask AI about this note"
-                        >
-                            <span className="wne-ai-btn-icon">✦</span>
-                            Ask AI
-                        </button>
-                    )}
                     <div className="wne-view-switcher">
                         <button type="button" className={`wne-view-btn ${viewMode === 'edit' ? 'active' : ''}`} onClick={() => setViewMode('edit')} title="Editor only">
                             <FileText size={14} /><span>Edit</span>

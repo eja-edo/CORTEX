@@ -1,10 +1,5 @@
 /* Workspace Switcher - Notion Design System */
 
-.workspace-switcher-container {
-  position: relative;
-  width: 100%;
-  margin-bottom: 8px;
-}
 
 .workspace-switcher-btn {
   width: 100%;
@@ -96,6 +91,7 @@
     rgba(0, 0, 0, 0.01) 0px 0.175px 1.04062px;
   z-index: 1000;
   max-height: 400px;
+  width: 350px;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -210,4 +206,234 @@
 
 .workspace-dropdown-list::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 0, 0, 0.25);
+}
+
+/* New dropdown sections structure */
+.workspace-dropdown-section {
+  padding: 8px 8px;
+}
+
+/* 1. Header Section */
+.workspace-dropdown-header-section {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 12px;
+}
+
+.workspace-dropdown-header-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.workspace-dropdown-header-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #0075de, #0d6fde);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.workspace-dropdown-header-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.workspace-dropdown-header-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.95);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-dropdown-header-metadata {
+  font-size: 12px;
+  color: #a39e98;
+}
+
+.workspace-dropdown-header-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.workspace-dropdown-header-action-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f6f5f4;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #615d59;
+  transition: all 0.1s ease;
+}
+
+.workspace-dropdown-header-action-btn:hover {
+  background: #ebe7e0;
+  color: #000000;
+}
+
+.workspace-dropdown-header-action-btn:active {
+  transform: scale(0.95);
+}
+
+/* Divider */
+.workspace-dropdown-divider {
+  height: 1px;
+  background: rgba(0, 0, 0, 0.08);
+  margin: 0;
+}
+
+/* 2. Account Section */
+.workspace-dropdown-account-section {
+  padding: 12px;
+}
+
+.workspace-dropdown-account-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.workspace-dropdown-account-avatar {
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  border-radius: 50%;
+  background: #e0e0e0;
+  color: #615d59;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.workspace-dropdown-account-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.workspace-dropdown-account-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(0, 0, 0, 0.95);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-dropdown-account-email {
+  font-size: 12px;
+  color: #a39e98;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 3. Workspaces Section */
+.workspace-dropdown-workspaces-section {
+  padding: 8px 8px;
+}
+
+.workspace-dropdown-section-label {
+  padding: 8px 12px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #a39e98;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Update dropdown-list to be inside section */
+.workspace-dropdown-workspaces-section .workspace-dropdown-list {
+  padding: 0;
+  max-height: 200px;
+}
+
+.workspace-dropdown-create-btn {
+  width: calc(100% - 16px);
+  margin: 8px 8px;
+  padding: 10px 12px;
+  background: #f6f5f4;
+  border: 1px dashed rgba(0, 0, 0, 0.1);
+  border-radius: 6px;
+  cursor: pointer;
+  color: #615d59;
+  font-weight: 500;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.1s ease;
+}
+
+.workspace-dropdown-create-btn:hover {
+  background: #ebe7e0;
+  border-color: rgba(0, 0, 0, 0.15);
+  color: #000000;
+}
+
+.workspace-dropdown-create-btn:active {
+  transform: scale(0.98);
+}
+
+/* 4. Actions Section */
+.workspace-dropdown-actions-section {
+  padding: 8px;
+}
+
+.workspace-dropdown-action-item {
+  width: 100%;
+  padding: 10px 12px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #615d59;
+  font-weight: 500;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  transition: all 0.1s ease;
+}
+
+.workspace-dropdown-action-item:hover {
+  background: #f6f5f4;
+  color: #000000;
+}
+
+.workspace-dropdown-action-item:active {
+  transform: scale(0.98);
+}
+
+.workspace-dropdown-action-item.danger {
+  color: #d83e3e;
+}
+
+.workspace-dropdown-action-item.danger:hover {
+  background: rgba(216, 62, 62, 0.1);
 }

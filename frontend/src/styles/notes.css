@@ -191,7 +191,9 @@
 }
 
 .sidebar-section-body .sidebar-section-body--drop-target {
-    transition: border-color 0.5s;
+    background: var(--accent-light);
+    border-radius: var(--radius);
+    transition: all 0.2s ease;
 }
 
 
@@ -486,9 +488,9 @@
     }
 }
 
-.workspace-nav-item--sub {
+.workspace-nav-item.workspace-nav-item--sub {
     font-size: 12.5px;
-    padding: 5px 8px;
+    padding: 16px 8px;
 }
 
 .workspace-nav-item--add {

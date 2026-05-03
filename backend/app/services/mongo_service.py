@@ -268,28 +268,38 @@ class MongoOCRService:
 
     async def connect(self) -> None:
         if not self._needs_reconnect():
+            logger.debug("Already connected, no reconnect needed")
             return
 
         # Close the stale client safely (may belong to a different loop)
         if self._client is not None:
             try:
+                logger.info(f"Closing stale MongoDB client (loop_id={self._loop_id})")
                 self._client.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Error closing stale client: {e}")
             self._client = None
             self._db = None
-            self._connected = False
+        
+        self._connected = False  # Mark as disconnected before reconnecting
 
-        self._client = AsyncIOMotorClient(settings.MONGODB_URL)
-        await self._client.admin.command("ping")
-        self._db = self._client[settings.MONGODB_DB_NAME]
-        await self._create_indexes()
-        self._connected = True
-        self._loop_id = self._current_loop_id()
-        logger.info(
-            f"✅ MongoOCRService connected (loop_id={self._loop_id}, "
-            f"db={settings.MONGODB_DB_NAME})"
-        )
+        try:
+            self._client = AsyncIOMotorClient(settings.MONGODB_URL)
+            await self._client.admin.command("ping")
+            self._db = self._client[settings.MONGODB_DB_NAME]
+            await self._create_indexes()
+            self._connected = True
+            self._loop_id = self._current_loop_id()
+            logger.info(
+                f"✅ MongoOCRService connected (loop_id={self._loop_id}, "
+                f"db={settings.MONGODB_DB_NAME})"
+            )
+        except Exception as e:
+            self._connected = False
+            self._client = None
+            self._db = None
+            logger.error(f"Failed to connect to MongoDB: {e}")
+            raise
 
     async def _ensure_connected(self) -> None:
         """Call at the top of every public async method."""

@@ -74,6 +74,44 @@ export function useWorkspaces() {
         }
     }, [currentWorkspace, workspaces])
 
+    const addMember = useCallback(async (workspaceId: string, email: string, role: 'editor' | 'viewer'): Promise<boolean> => {
+        try {
+            await requestWithAuth(`/workspaces/${workspaceId}/members`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, role }),
+            })
+            return true
+        } catch (error) {
+            console.error('Cannot add member:', error)
+            return false
+        }
+    }, [])
+
+    const removeMember = useCallback(async (workspaceId: string, userId: string): Promise<boolean> => {
+        try {
+            await requestWithAuth(`/workspaces/${workspaceId}/members/${userId}`, { method: 'DELETE' })
+            return true
+        } catch (error) {
+            console.error('Cannot remove member:', error)
+            return false
+        }
+    }, [])
+
+    const changeMemberRole = useCallback(async (workspaceId: string, userId: string, role: 'editor' | 'viewer'): Promise<boolean> => {
+        try {
+            await requestWithAuth(`/workspaces/${workspaceId}/members/${userId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ role }),
+            })
+            return true
+        } catch (error) {
+            console.error('Cannot change member role:', error)
+            return false
+        }
+    }, [])
+
     return {
         workspaces,
         currentWorkspace,
@@ -84,5 +122,8 @@ export function useWorkspaces() {
         createWorkspace,
         renameWorkspace,
         deleteWorkspace,
+        addMember,
+        removeMember,
+        changeMemberRole,
     }
 }

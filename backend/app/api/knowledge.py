@@ -21,9 +21,6 @@ async def get_asset_summary(
     current_user: User = Depends(get_current_active_user),
 ):
     """Get session-level knowledge summary for an asset."""
-    if not mongo_ocr_service.is_connected:
-        await mongo_ocr_service.connect()
-
     doc = await mongo_ocr_service.get_asset_knowledge(str(asset_id))
     if not doc:
         raise HTTPException(
@@ -45,9 +42,6 @@ async def get_asset_ocr_frames(
     current_user: User = Depends(get_current_active_user),
 ):
     """Get all OCR frames for an asset."""
-    if not mongo_ocr_service.is_connected:
-        await mongo_ocr_service.connect()
-
     frames = await mongo_ocr_service.get_ocr_frames(
         str(asset_id), skip_empty=skip_empty
     )
@@ -71,9 +65,6 @@ async def get_knowledge_units(
     current_user: User = Depends(get_current_active_user),
 ):
     """Get extracted knowledge units, optionally filtered by asset and type."""
-    if not mongo_ocr_service.is_connected:
-        await mongo_ocr_service.connect()
-
     units = await mongo_ocr_service.get_knowledge_units(
         user_id=str(current_user.id),
         asset_id=str(asset_id) if asset_id else None,

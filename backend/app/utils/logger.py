@@ -25,6 +25,7 @@ def _configure_root_logger() -> None:
     # Suppress noisy dependencies.
     logging.getLogger("websockets").setLevel(logging.WARNING)
     logging.getLogger("asyncio").setLevel(logging.WARNING)
+    logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
     _is_configured = True
 
 def setup_logger(name: str) -> logging.Logger:

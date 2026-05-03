@@ -122,10 +122,10 @@ def _get_or_create_asset_for_upload(
     if workspace_id is None:
         personal_ws = (
             db.query(WorkspaceMember)
-            .join(WorkspaceMember.workspace)
+            .join(Workspace)
             .filter(
                 WorkspaceMember.user_id == current_user.id,
-                Workspace.workspace.is_personal == True,
+                Workspace.is_personal == True,
             )
             .first()
         )
@@ -359,6 +359,7 @@ async def complete_upload(
             current_user=current_user,
             media_type=media_type,
             total_size=upload.total_size,
+            workspace_id=payload.workspace_id,
         )
         # Đảm bảo status READY để người dùng có thể trigger process
         if asset.status == AssetStatus.PENDING:
@@ -437,6 +438,7 @@ async def complete_upload(
         current_user=current_user,
         media_type=media_type,
         total_size=final_total_size,
+        workspace_id=payload.workspace_id,
     )
     asset.status = AssetStatus.READY
     db.commit()

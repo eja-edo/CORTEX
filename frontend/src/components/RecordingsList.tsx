@@ -406,7 +406,7 @@ export function RecordingsList({
             void loadAssets()
             onAssetChange?.()
         }
-    }, [recordings, loadAssets, onAssetChange])
+    }, [recordings])
 
     useEffect(() => {
         for (const rec of recordings) {

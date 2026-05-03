@@ -349,6 +349,7 @@ class UploadPartConfirmResponse(BaseModel):
 
 class UploadCompleteRequest(BaseModel):
     upload_id: UUID
+    workspace_id: UUID | None = Field(default=None, description="Workspace to assign asset to. If not provided, uses personal workspace.")
     # Required for live streaming mode where init total_parts == 0.
     total_parts: int | None = Field(default=None, ge=1)
     total_size: int | None = Field(default=None, ge=1)
