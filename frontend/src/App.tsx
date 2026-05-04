@@ -984,7 +984,7 @@ function App() {
               </section>
             )}
           </div>
-          
+
           {/* AskAI Side Panel */}
           {auth.tokens && isAskAIOpen && (
             <div className="ask-ai-sidebar">

@@ -301,8 +301,8 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                 {/* Input */}
                 <div className="ask-ai-input-area">
                     {pendingSelection && !addedPills.some(p => p.text === pendingSelection) ||
-                    !pendingSelection && noteContent && !addedPills.some(p => p.text === noteContent) ||
-                    addedPills.length > 0 ? (
+                        !pendingSelection && noteContent && !addedPills.some(p => p.text === noteContent) ||
+                        addedPills.length > 0 ? (
                         <div className="ask-ai-context-area">
                             <div className="ask-ai-context-pills">
                                 {/* Pending Selection - only show if not already added */}
