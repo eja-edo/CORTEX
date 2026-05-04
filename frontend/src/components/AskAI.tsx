@@ -4,8 +4,15 @@ import { Bot, Send, X, Sparkles, RefreshCw, Copy, Check } from 'lucide-react'
 interface AskAIProps {
     noteContent?: string
     noteTitle?: string
+    pendingSelection?: string
     onClose: () => void
     onInsert?: (text: string) => void
+}
+
+type ContextPill = {
+    id: string
+    text: string
+    label: string
 }
 
 type Message = {
@@ -27,17 +34,33 @@ const QUICK_PROMPTS = [
     { label: 'Explain concepts', prompt: 'Explain the key concepts in this note simply' },
 ]
 
-export function AskAI({ noteContent, noteTitle, onClose, onInsert }: AskAIProps) {
+export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onInsert }: AskAIProps) {
     const [messages, setMessages] = useState<Message[]>([])
     const [input, setInput] = useState('')
     const [isLoading, setIsLoading] = useState(false)
     const [copiedId, setCopiedId] = useState<string | null>(null)
+    const [addedPills, setAddedPills] = useState<ContextPill[]>([
+        ...(noteContent ? [{ id: 'note', text: noteContent, label: `📝 ${noteTitle || 'Note'}` }] : []),
+    ])
     const inputRef = useRef<HTMLTextAreaElement>(null)
     const messagesEndRef = useRef<HTMLDivElement>(null)
 
     useEffect(() => {
         inputRef.current?.focus()
     }, [])
+
+    const addPendingSelection = useCallback(() => {
+        if (!pendingSelection || !pendingSelection.trim()) return
+        const label = pendingSelection.slice(0, 40) + (pendingSelection.length > 40 ? '…' : '')
+        const existingPill = addedPills.find(p => p.text === pendingSelection)
+        if (!existingPill) {
+            setAddedPills(prev => [...prev, {
+                id: Date.now().toString(),
+                text: pendingSelection,
+                label: `📌 ${label}`,
+            }])
+        }
+    }, [pendingSelection, addedPills])
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -54,15 +77,16 @@ export function AskAI({ noteContent, noteTitle, onClose, onInsert }: AskAIProps)
     const buildMessages = useCallback((userMsg: string) => {
         const msgs: Array<{ role: string; content: string }> = []
 
-        // Add note context as first user message if available
-        if (noteContent) {
+        // Add added pills as first user message if available
+        if (addedPills.length > 0) {
+            const contextTexts = addedPills.map(p => p.text).join('\n\n---\n\n')
             msgs.push({
                 role: 'user',
-                content: `Here is my current note${noteTitle ? ` titled "${noteTitle}"` : ''}:\n\n${noteContent}\n\nPlease use this as context for our conversation.`,
+                content: `Here is my current context:\n\n${contextTexts}\n\nPlease use this as reference for our conversation.`,
             })
             msgs.push({
                 role: 'assistant',
-                content: 'I\'ve read your note and I\'m ready to help. What would you like to know or do with it?',
+                content: 'I\'ve reviewed your context and I\'m ready to help. What would you like to know or do?',
             })
         }
 
@@ -77,7 +101,7 @@ export function AskAI({ noteContent, noteTitle, onClose, onInsert }: AskAIProps)
         msgs.push({ role: 'user', content: userMsg })
 
         return msgs
-    }, [messages, noteContent, noteTitle])
+    }, [messages, addedPills])
 
     const sendMessage = useCallback(async (text: string) => {
         if (!text.trim() || isLoading) return
@@ -176,11 +200,6 @@ export function AskAI({ noteContent, noteTitle, onClose, onInsert }: AskAIProps)
                             <Sparkles size={14} />
                         </div>
                         <span className="ask-ai-title">Ask AI</span>
-                        {noteTitle && (
-                            <span className="ask-ai-context-pill">
-                                📝 {noteTitle.slice(0, 24)}{noteTitle.length > 24 ? '…' : ''}
-                            </span>
-                        )}
                     </div>
                     <div className="ask-ai-header-actions">
                         {messages.length > 0 && (
@@ -281,24 +300,90 @@ export function AskAI({ noteContent, noteTitle, onClose, onInsert }: AskAIProps)
 
                 {/* Input */}
                 <div className="ask-ai-input-area">
-                    <textarea
-                        ref={inputRef}
-                        className="ask-ai-input"
-                        placeholder="Ask anything… (Enter to send, Shift+Enter for newline)"
-                        value={input}
-                        onChange={e => setInput(e.target.value)}
-                        onKeyDown={handleKeyDown}
-                        rows={1}
-                        disabled={isLoading}
-                    />
-                    <button
-                        type="button"
-                        className={`ask-ai-send-btn ${input.trim() && !isLoading ? 'active' : ''}`}
-                        onClick={() => void sendMessage(input)}
-                        disabled={!input.trim() || isLoading}
-                    >
-                        <Send size={14} />
-                    </button>
+                    {pendingSelection && !addedPills.some(p => p.text === pendingSelection) ||
+                    !pendingSelection && noteContent && !addedPills.some(p => p.text === noteContent) ||
+                    addedPills.length > 0 ? (
+                        <div className="ask-ai-context-area">
+                            <div className="ask-ai-context-pills">
+                                {/* Pending Selection - only show if not already added */}
+                                {pendingSelection && !addedPills.some(p => p.text === pendingSelection) && (
+                                    <div className="ask-ai-context-pill ask-ai-context-pill--pending">
+                                        <span className="ask-ai-context-pill-text" title={pendingSelection}>
+                                            {pendingSelection.slice(0, 40) + (pendingSelection.length > 40 ? '…' : '')}
+                                        </span>
+                                        <button
+                                            type="button"
+                                            className="ask-ai-context-pill-action"
+                                            onClick={addPendingSelection}
+                                            title="Add to context"
+                                        >
+                                            +
+                                        </button>
+                                    </div>
+                                )}
+
+                                {/* Add Full Note - only show if no pending and note not added */}
+                                {!pendingSelection && noteContent && !addedPills.some(p => p.text === noteContent) && (
+                                    <div className="ask-ai-context-pill ask-ai-context-pill--pending">
+                                        <span className="ask-ai-context-pill-text" title="Add full note content">
+                                            Add full note
+                                        </span>
+                                        <button
+                                            type="button"
+                                            className="ask-ai-context-pill-action"
+                                            onClick={() => {
+                                                setAddedPills(prev => [...prev, {
+                                                    id: Date.now().toString(),
+                                                    text: noteContent,
+                                                    label: `📝 ${noteTitle || 'Note'}`,
+                                                }])
+                                            }}
+                                            title="Add to context"
+                                        >
+                                            +
+                                        </button>
+                                    </div>
+                                )}
+
+                                {/* Added Pills */}
+                                {addedPills.map(pill => (
+                                    <div key={pill.id} className="ask-ai-context-pill ask-ai-context-pill--added">
+                                        <span className="ask-ai-context-pill-text" title={pill.text}>
+                                            {pill.label}
+                                        </span>
+                                        <button
+                                            type="button"
+                                            className="ask-ai-context-pill-action"
+                                            onClick={() => setAddedPills(prev => prev.filter(p => p.id !== pill.id))}
+                                            title="Remove from context"
+                                        >
+                                            ×
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    ) : null}
+                    <div className="ask-ai-input-wrapper">
+                        <textarea
+                            ref={inputRef}
+                            className="ask-ai-input"
+                            placeholder="Ask anything… (Enter to send, Shift+Enter for newline)"
+                            value={input}
+                            onChange={e => setInput(e.target.value)}
+                            onKeyDown={handleKeyDown}
+                            rows={1}
+                            disabled={isLoading}
+                        />
+                        <button
+                            type="button"
+                            className={`ask-ai-send-btn ${input.trim() && !isLoading ? 'active' : ''}`}
+                            onClick={() => void sendMessage(input)}
+                            disabled={!input.trim() || isLoading}
+                        >
+                            <Send size={14} />
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>

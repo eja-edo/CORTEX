@@ -10,6 +10,7 @@ interface WorkspaceSwitcherProps {
   onRenameWorkspace: (id: string, name: string) => Promise<boolean>
   onDeleteWorkspace: (id: string) => Promise<boolean>
   onManageMembers: (workspace: Workspace) => void
+  onOpenSettings: (workspace: Workspace) => void
   isCollapsed: boolean
   user?: { email: string; full_name?: string } | null
   onLogout?: () => void
@@ -23,6 +24,7 @@ export function WorkspaceSwitcher({
   onRenameWorkspace,
   onDeleteWorkspace,
   onManageMembers,
+  onOpenSettings,
   isCollapsed,
   user,
 }: WorkspaceSwitcherProps) {
@@ -34,7 +36,6 @@ export function WorkspaceSwitcher({
   const contextMenuRef = useRef<HTMLDivElement>(null)
   const editInputRef = useRef<HTMLInputElement>(null)
 
-  // Close dropdown on outside click
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
@@ -49,7 +50,6 @@ export function WorkspaceSwitcher({
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  // Focus edit input when editing starts
   useEffect(() => {
     if (editingId && editInputRef.current) {
       editInputRef.current.focus()
@@ -108,7 +108,7 @@ export function WorkspaceSwitcher({
       {/* Workspace Dropdown */}
       {isOpen && !isCollapsed && (
         <div className="workspace-switcher-dropdown">
-          {/* 1. HEADER SECTION - Current workspace info */}
+          {/* 1. HEADER SECTION */}
           {currentWorkspace && (
             <div className="workspace-dropdown-section workspace-dropdown-header-section">
               <div className="workspace-dropdown-header-content">
@@ -127,7 +127,10 @@ export function WorkspaceSwitcher({
                   type="button"
                   className="workspace-dropdown-header-action-btn"
                   title="Settings"
-                  onClick={() => {/* TODO: Open workspace settings */ }}
+                  onClick={() => {
+                    onOpenSettings(currentWorkspace)
+                    setIsOpen(false)
+                  }}
                 >
                   <Settings size={14} />
                 </button>
@@ -226,7 +229,6 @@ export function WorkspaceSwitcher({
                       )}
                     </button>
 
-                    {/* 3-dot context menu button */}
                     {!isEditing && (
                       <button
                         type="button"
@@ -240,9 +242,20 @@ export function WorkspaceSwitcher({
                       </button>
                     )}
 
-                    {/* Context Menu */}
                     {contextMenuId === workspace.id && (
                       <div ref={contextMenuRef} className="workspace-context-menu">
+                        <button
+                          type="button"
+                          className="workspace-context-menu-item"
+                          onClick={() => {
+                            onOpenSettings(workspace)
+                            setContextMenuId(null)
+                            setIsOpen(false)
+                          }}
+                        >
+                          <Settings size={14} />
+                          <span>Settings</span>
+                        </button>
                         <button
                           type="button"
                           className="workspace-context-menu-item"
@@ -284,7 +297,6 @@ export function WorkspaceSwitcher({
               })}
             </div>
 
-            {/* Create Workspace Button */}
             <button
               type="button"
               className="workspace-dropdown-create-btn"

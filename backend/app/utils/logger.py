@@ -23,9 +23,18 @@ def _configure_root_logger() -> None:
     )
 
     # Suppress noisy dependencies.
+    # For SQLAlchemy, completely disable by clearing handlers and setting CRITICAL
+    sqlalchemy_logger = logging.getLogger("sqlalchemy.engine")
+    sqlalchemy_logger.setLevel(logging.CRITICAL)
+    sqlalchemy_logger.propagate = False
+    # Remove all existing handlers that might have been attached
+    for handler in sqlalchemy_logger.handlers[:]:
+        sqlalchemy_logger.removeHandler(handler)
+    # Add NullHandler to ensure nothing gets logged
+    sqlalchemy_logger.addHandler(logging.NullHandler())
+    
     logging.getLogger("websockets").setLevel(logging.WARNING)
     logging.getLogger("asyncio").setLevel(logging.WARNING)
-    logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
     _is_configured = True
 
 def setup_logger(name: str) -> logging.Logger:

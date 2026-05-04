@@ -12,6 +12,10 @@
   text-align: left;
 }
 
+.workspace-sidebar.collapsed .workspace-switcher-btn {
+  display: none;
+}
+
 .workspace-switcher-btn:hover {
   background: #f6f5f4;
   border-color: rgba(0, 0, 0, 0.15);
@@ -80,7 +84,8 @@
   position: absolute;
   top: calc(100% + 4px);
   left: 0;
-  right: 0;
+  right: auto;
+  min-width: 350px;
   background: #ffffff;
   border: 1px solid rgba(0, 0, 0, 0.1);
   border-radius: 12px;
@@ -89,9 +94,8 @@
     rgba(0, 0, 0, 0.027) 0px 2.025px 7.84688px,
     rgba(0, 0, 0, 0.02) 0px 0.8px 2.925px,
     rgba(0, 0, 0, 0.01) 0px 0.175px 1.04062px;
-  z-index: 1000;
+  z-index: 9999;
   max-height: 400px;
-  width: 350px;
   overflow: hidden;
   display: flex;
   flex-direction: column;

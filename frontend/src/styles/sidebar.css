@@ -13,18 +13,40 @@
     width: 58px;
 }
 
+.workspace-sidebar-header {
+    padding: 8px 10px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    flex-shrink: 0;
+    gap: 6px;
+    overflow: visible;
+    min-height: 44px;
+}
+
+.workspace-switcher-container {
+    flex: 1;
+    min-width: 0;
+    position: relative;
+    overflow: visible;
+}
+
 .workspace-sidebar-toggle {
-    display: inline-flex;
+    display: flex;
     align-items: center;
     justify-content: center;
     width: 32px;
     height: 32px;
-    margin: 10px 12px 6px;
+    min-width: 32px;
+    min-height: 32px;
+    margin: 0;
+    padding: 0;
     border: none;
     border-radius: 10px;
     background: transparent;
     color: var(--text-secondary);
     cursor: pointer;
+    flex-shrink: 0;
 }
 
 .workspace-sidebar-toggle:hover {

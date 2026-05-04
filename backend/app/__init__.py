@@ -1,3 +1,7 @@
+# Configure logging FIRST before any other imports to suppress SQLAlchemy
+from app.utils.logger import _configure_root_logger, get_logger
+_configure_root_logger()
+
 from contextlib import asynccontextmanager
 import signal
 import threading
@@ -22,7 +26,6 @@ from app.services.transcription_results_consumer import transcription_results_co
 from app.services.llm_processor_worker_fixed import get_llm_processor_worker
 from app.services.reminder_worker import ReminderWorker
 from app.services.google_sync_worker import GoogleSyncWorker
-from app.utils.logger import get_logger
 from app.api.sse.sse_manager import SSEManager
 
 logger = get_logger(__name__)

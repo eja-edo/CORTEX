@@ -260,11 +260,13 @@ interface WorkspaceNoteEditorProps {
     note: NoteItem
     onChange: (id: string, contentMd: string) => void
     onAskAI?: () => void
+    onSelectionChange?: (selectedText: string) => void
 }
 
 export function WorkspaceNoteEditor({
     note,
     onChange,
+    onSelectionChange,
 }: WorkspaceNoteEditorProps) {
     const [localMd, setLocalMd] = useState(note.contentMd)
     const [viewMode, setViewMode] = useState<ViewMode>('split')
@@ -329,6 +331,20 @@ export function WorkspaceNoteEditor({
     const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
         applyValue(e.target.value)
     }
+
+    const handleSelectionChange = useCallback(() => {
+        const ta = textareaRef.current
+        if (!ta) return
+        const start = ta.selectionStart
+        const end = ta.selectionEnd
+        if (start !== end) {
+            const selectedText = localMd.slice(start, end)
+            onSelectionChange?.(selectedText)
+        } else {
+            // No selection, clear pending
+            onSelectionChange?.('')
+        }
+    }, [localMd, onSelectionChange])
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
         const ta = e.currentTarget
@@ -440,6 +456,8 @@ export function WorkspaceNoteEditor({
                             onKeyDown={handleKeyDown}
                             onBlur={() => flush(localMd)}
                             onScroll={handleEditorScroll}
+                            onMouseUp={handleSelectionChange}
+                            onTouchEnd={handleSelectionChange}
                             placeholder={'bắt đầu viết...'}
                             spellCheck={false}
                         />

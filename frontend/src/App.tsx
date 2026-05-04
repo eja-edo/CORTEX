@@ -5,6 +5,7 @@ import 'react-big-calendar/lib/css/react-big-calendar.css'
 import './App.css'
 import './styles/settings.css'
 import './styles/globalHome.css'
+import './styles/workspace-settings.css'
 import { AuthPanel } from './components/AuthPanel'
 import { ScheduleForm } from './components/ScheduleForm'
 import { CalendarView } from './components/CalendarView'
@@ -17,6 +18,7 @@ import { WorkspaceSearch } from './components/WorkspaceSearch'
 import { WorkspaceSwitcher } from './components/WorkspaceSwitcher'
 import { WorkspaceCreateModal } from './components/WorkspaceCreateModal'
 import { WorkspaceMembersModal } from './components/WorkspaceMembersModal'
+import { WorkspaceSettingsModal } from './components/WorkspaceSettingsModal'
 import { GlobalHome } from './components/GlobalHome'
 import { AskAI } from './components/AskAI'
 import { getStoredTheme, applyThemeToDocument } from './utils/theme'
@@ -28,6 +30,7 @@ import { useSchedules } from './hooks/useSchedules'
 import { useAssets } from './hooks/useAssets'
 import { requestWithAuth } from './services/api'
 import { extractWorkspaceId, isWorkspaceRoute, noteRoute, knowledgeRoute, workspaceRoute } from './services/routes'
+import type { Workspace } from './types'
 
 const SSE_TAB_APPID_KEY = 'cortex_sse_appid'
 
@@ -39,12 +42,9 @@ function getRouteWorkspaceState(pathname: string): {
   noteId: string | null
   assetId: string | null
 } {
-  // Extract workspaceId from URL if present
   const workspaceId = extractWorkspaceId(pathname)
 
-  // Workspace-scoped routes
   if (workspaceId) {
-    // Knowledge view: /w/:workspaceId/records/:assetId/knowledge
     const knowledgeMatch = matchPath('/w/:workspaceId/records/:assetId/knowledge', pathname)
     if (knowledgeMatch?.params.assetId) {
       return {
@@ -55,7 +55,6 @@ function getRouteWorkspaceState(pathname: string): {
       }
     }
 
-    // Note editor: /w/:workspaceId/notes/:noteId
     const noteMatch = matchPath('/w/:workspaceId/notes/:noteId', pathname)
     if (noteMatch?.params.noteId) {
       return {
@@ -66,23 +65,19 @@ function getRouteWorkspaceState(pathname: string): {
       }
     }
 
-    // Records list: /w/:workspaceId/records
     if (matchPath('/w/:workspaceId/records', pathname)) {
       return { view: 'records', workspaceId, noteId: null, assetId: null }
     }
 
-    // Schedule: /w/:workspaceId/schedule
     if (matchPath('/w/:workspaceId/schedule', pathname)) {
       return { view: 'schedule', workspaceId, noteId: null, assetId: null }
     }
 
-    // Workspace dashboard or notes list: /w/:workspaceId or /w/:workspaceId/notes
     if (matchPath('/w/:workspaceId', pathname) || matchPath('/w/:workspaceId/notes', pathname)) {
       return { view: 'dashboard', workspaceId, noteId: null, assetId: null }
     }
   }
 
-  // Global routes (no workspace)
   return { view: 'dashboard', workspaceId: null, noteId: null, assetId: null }
 }
 
@@ -102,7 +97,6 @@ function getOrCreateSseTabAppId(): string {
   return appid
 }
 
-// Collapsible sidebar section header
 function SidebarSection({
   icon,
   label,
@@ -174,19 +168,19 @@ function App() {
   const location = useLocation()
   const routeWorkspaceState = useMemo(() => getRouteWorkspaceState(location.pathname), [location.pathname])
 
-  // Use hooks for state management
   const auth = useAuth()
   const workspaces = useWorkspaces()
   const notes = useNotes(workspaces.currentWorkspace, routeWorkspaceState.noteId)
   const schedules = useSchedules()
   const assets = useAssets(workspaces.currentWorkspace)
 
-  // Local UI state only
   const [isCreateEventOpen, setIsCreateEventOpen] = useState<boolean>(false)
   const [isSearchOpen, setIsSearchOpen] = useState(false)
   const [isAskAIOpen, setIsAskAIOpen] = useState(false)
+  const [pendingSelection, setPendingSelection] = useState<string>('')
   const [isCreateWorkspaceOpen, setIsCreateWorkspaceOpen] = useState(false)
   const [managingMembersWorkspace, setManagingMembersWorkspace] = useState<{ id: string; name: string; is_personal: boolean } | null>(null)
+  const [settingsWorkspace, setSettingsWorkspace] = useState<Workspace | null>(null)
   const [createEventInitialTimes, setCreateEventInitialTimes] = useState<{ startDate: string; endDate: string } | null>(null)
   const [isWorkspaceSidebarCollapsed, setIsWorkspaceSidebarCollapsed] = useState<boolean>(false)
   const [theme, _setTheme] = useState<AppTheme>(getStoredTheme)
@@ -234,7 +228,6 @@ function App() {
     return () => document.removeEventListener('keydown', handler)
   }, [])
 
-  // Load data when tokens change
   useEffect(() => {
     if (!auth.tokens) {
       workspaces.setCurrentWorkspace(null)
@@ -245,7 +238,6 @@ function App() {
     void schedules.fetchGoogleCalendarStatus()
   }, [auth.tokens])
 
-  // Sync currentWorkspace with URL workspaceId
   useEffect(() => {
     if (!routeWorkspaceState.workspaceId || workspaces.workspaces.length === 0) return
 
@@ -312,7 +304,6 @@ function App() {
     notes.clearNotes()
     workspaces.switchWorkspace(workspace)
     setActiveWorkspaceNoteId(null)
-    // Navigate to workspace dashboard
     navigate(workspaceRoute(workspace.id), { replace: true })
   }, [navigate, notes, workspaces])
 
@@ -639,40 +630,43 @@ function App() {
       ) : (
         <div className="main-layout">
           <aside className={`workspace-sidebar ${isWorkspaceSidebarCollapsed ? 'collapsed' : ''}`}>
-            <button
-              type="button"
-              className="workspace-sidebar-toggle"
-              onClick={() => setIsWorkspaceSidebarCollapsed((prev) => !prev)}
-              aria-label={isWorkspaceSidebarCollapsed ? 'Mở sidebar' : 'Thu sidebar'}
-            >
-              {isWorkspaceSidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
-            </button>
-
-            {/* WORKSPACE HEADER - Top of sidebar (outside body to avoid overflow-y clip) */}
-            {workspaces.currentWorkspace && (
-              <WorkspaceSwitcher
-                workspaces={workspaces.workspaces}
-                currentWorkspace={workspaces.currentWorkspace}
-                onSwitch={handleWorkspaceSwitch}
-                onCreateWorkspace={() => setIsCreateWorkspaceOpen(true)}
-                onRenameWorkspace={workspaces.renameWorkspace}
-                onDeleteWorkspace={workspaces.deleteWorkspace}
-                onManageMembers={(workspace) => {
-                  setManagingMembersWorkspace({
-                    id: workspace.id,
-                    name: workspace.name,
-                    is_personal: workspace.is_personal,
-                  })
-                }}
-                isCollapsed={isWorkspaceSidebarCollapsed}
-                user={auth.user}
-              />
-            )}
-
+            <div className='workspace-sidebar-header'>
+              <div className="workspace-switcher-container">
+                {workspaces.currentWorkspace && (
+                  <WorkspaceSwitcher
+                    workspaces={workspaces.workspaces}
+                    currentWorkspace={workspaces.currentWorkspace}
+                    onSwitch={handleWorkspaceSwitch}
+                    onCreateWorkspace={() => setIsCreateWorkspaceOpen(true)}
+                    onRenameWorkspace={workspaces.renameWorkspace}
+                    onDeleteWorkspace={workspaces.deleteWorkspace}
+                    onManageMembers={(workspace) => {
+                      setManagingMembersWorkspace({
+                        id: workspace.id,
+                        name: workspace.name,
+                        is_personal: workspace.is_personal,
+                      })
+                    }}
+                    onOpenSettings={(workspace) => {
+                      setSettingsWorkspace(workspace)
+                    }}
+                    isCollapsed={isWorkspaceSidebarCollapsed}
+                    user={auth.user}
+                  />
+                )}
+              </div>
+              <button
+                type="button"
+                className="workspace-sidebar-toggle"
+                onClick={() => setIsWorkspaceSidebarCollapsed((prev) => !prev)}
+                aria-label={isWorkspaceSidebarCollapsed ? 'Mở sidebar' : 'Thu sidebar'}
+              >
+                {isWorkspaceSidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+              </button>
+            </div>
             <div className="workspace-sidebar-body">
-              {/* GLOBAL SECTION - Always visible */}
+              {/* GLOBAL SECTION */}
               <div className="sidebar-global-section">
-                {/* Home - Global scope */}
                 <button
                   type="button"
                   className={`workspace-sidebar-section-title sidebar-section-toggle ${!routeWorkspaceState.workspaceId ? 'active' : ''}`}
@@ -682,7 +676,6 @@ function App() {
                   <span>Home</span>
                 </button>
 
-                {/* Notifications - Global scope */}
                 <button
                   type="button"
                   className="workspace-sidebar-section-title sidebar-section-toggle"
@@ -699,12 +692,9 @@ function App() {
               {/* WORKSPACE SECTION */}
               {workspaces.currentWorkspace && (
                 <>
-                  {/* Visual Separator */}
-                  <div className="sidebar-section-divider">
-                  </div>
+                  <div className="sidebar-section-divider" />
 
                   <div className="sidebar-workspace-section">
-                    {/* Schedule - Workspace scope */}
                     <button
                       type="button"
                       className={`workspace-sidebar-section-title sidebar-section-toggle  ${activeWorkspaceView === 'schedule' ? 'active' : ''}`}
@@ -722,7 +712,6 @@ function App() {
                       <span>Schedule</span>
                     </button>
 
-                    {/* Notes section - Workspace scope */}
                     <SidebarSection
                       icon={<StickyNote size={15} />}
                       label="Notes"
@@ -832,7 +821,6 @@ function App() {
                       </div>
                     </SidebarSection>
 
-                    {/* Records section - Workspace scope */}
                     <SidebarSection
                       icon={<Video size={15} />}
                       label="Records"
@@ -903,7 +891,7 @@ function App() {
                 </>
               )}
 
-              {/* SIDEBAR FOOTER - Settings */}
+              {/* SIDEBAR FOOTER */}
               <div className="workspace-sidebar-footer">
                 <button
                   type="button"
@@ -917,9 +905,8 @@ function App() {
             </div>
           </aside>
 
-          <div className="workspace-area">
+          <div className="workspace-area" style={{ maxWidth: '100%' }}>
             {!routeWorkspaceState.workspaceId ? (
-              // Global Home - no workspace selected
               <GlobalHome
                 user={auth.user}
                 workspaces={workspaces.workspaces}
@@ -988,6 +975,7 @@ function App() {
                   note={notes.activeWorkspaceNote}
                   onChange={handleNoteChange}
                   onAskAI={() => setIsAskAIOpen(true)}
+                  onSelectionChange={(text) => setPendingSelection(text)}
                 />
               </div>
             ) : (
@@ -995,103 +983,148 @@ function App() {
                 <p>Chọn một note từ sidebar để mở trong workspace.</p>
               </section>
             )}
-
           </div>
-        </div>
-      )}
-
-      {/* CREATE EVENT MODAL */}
-      {auth.tokens && isCreateEventOpen && (
-        <div className="modal-backdrop" onClick={handleCloseCreateEvent}>
-          <div className="modal create-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div className="modal-title-area">
-                <div className="modal-title">New event</div>
-              </div>
-              <button type="button" className="modal-close" onClick={handleCloseCreateEvent}>
-                <X size={16} />
-              </button>
-            </div>
-            <div className="modal-body">
-              <ScheduleForm
-                onCreate={schedules.handleCreateSchedule}
-                initialTimes={createEventInitialTimes}
-                onClose={handleCloseCreateEvent}
+          
+          {/* AskAI Side Panel */}
+          {auth.tokens && isAskAIOpen && (
+            <div className="ask-ai-sidebar">
+              <AskAI
+                noteContent={notes.activeWorkspaceNote?.contentMd}
+                noteTitle={notes.activeWorkspaceNote ? noteTitleFromMd(notes.activeWorkspaceNote.contentMd) : undefined}
+                pendingSelection={pendingSelection}
+                onClose={() => setIsAskAIOpen(false)}
+                onInsert={(text) => {
+                  if (!notes.activeWorkspaceNote) return
+                  const newContent = notes.activeWorkspaceNote.contentMd + '\n\n' + text
+                  handleNoteChange(notes.activeWorkspaceNote.id, newContent)
+                }}
               />
             </div>
+          )}
+        </div >
+      )
+      }
+
+      {/* CREATE EVENT MODAL */}
+      {
+        auth.tokens && isCreateEventOpen && (
+          <div className="modal-backdrop" onClick={handleCloseCreateEvent}>
+            <div className="modal create-modal" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-header">
+                <div className="modal-title-area">
+                  <div className="modal-title">New event</div>
+                </div>
+                <button type="button" className="modal-close" onClick={handleCloseCreateEvent}>
+                  <X size={16} />
+                </button>
+              </div>
+              <div className="modal-body">
+                <ScheduleForm
+                  onCreate={schedules.handleCreateSchedule}
+                  initialTimes={createEventInitialTimes}
+                  onClose={handleCloseCreateEvent}
+                />
+              </div>
+            </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
-      {auth.tokens && isSearchOpen && (
-        <WorkspaceSearch
-          notes={notes.recentNotes}
-          onOpenNote={(noteId) => {
-            openWorkspaceNote(noteId)
-          }}
-          onClose={() => setIsSearchOpen(false)}
-        />
-      )}
-
-      {auth.tokens && isAskAIOpen && (
-        <AskAI
-          noteContent={notes.activeWorkspaceNote?.contentMd}
-          noteTitle={notes.activeWorkspaceNote ? noteTitleFromMd(notes.activeWorkspaceNote.contentMd) : undefined}
-          onClose={() => setIsAskAIOpen(false)}
-          onInsert={(text) => {
-            if (!notes.activeWorkspaceNote) return
-            const newContent = notes.activeWorkspaceNote.contentMd + '\n\n' + text
-            handleNoteChange(notes.activeWorkspaceNote.id, newContent)
-          }}
-        />
-      )}
+      {
+        auth.tokens && isSearchOpen && (
+          <WorkspaceSearch
+            notes={notes.recentNotes}
+            onOpenNote={(noteId) => {
+              openWorkspaceNote(noteId)
+            }}
+            onClose={() => setIsSearchOpen(false)}
+          />
+        )
+      }
 
       {/* Create Workspace Modal */}
-      {auth.tokens && isCreateWorkspaceOpen && (
-        <WorkspaceCreateModal
-          onClose={() => setIsCreateWorkspaceOpen(false)}
-          onCreated={(workspaceId) => {
-            setIsCreateWorkspaceOpen(false)
-            // Switch to newly created workspace
-            const workspace = workspaces.workspaces.find(ws => ws.id === workspaceId)
-            if (workspace) {
-              handleWorkspaceSwitch(workspace)
-            }
-          }}
-          onCreateWorkspace={workspaces.createWorkspace}
-        />
-      )}
+      {
+        auth.tokens && isCreateWorkspaceOpen && (
+          <WorkspaceCreateModal
+            onClose={() => setIsCreateWorkspaceOpen(false)}
+            onCreated={(workspaceId) => {
+              setIsCreateWorkspaceOpen(false)
+              const workspace = workspaces.workspaces.find(ws => ws.id === workspaceId)
+              if (workspace) {
+                handleWorkspaceSwitch(workspace)
+              }
+            }}
+            onCreateWorkspace={workspaces.createWorkspace}
+          />
+        )
+      }
 
       {/* Manage Members Modal */}
-      {auth.tokens && managingMembersWorkspace && (
-        <WorkspaceMembersModal
-          workspace={managingMembersWorkspace}
-          members={[]} // TODO: Fetch members from API
-          onClose={() => setManagingMembersWorkspace(null)}
-          onAddMember={async (email, role) => {
-            const success = await workspaces.addMember(managingMembersWorkspace.id, email, role)
-            if (success) {
-              // TODO: Refresh members list
-            }
-            return success
-          }}
-          onRemoveMember={async (userId) => {
-            const success = await workspaces.removeMember(managingMembersWorkspace.id, userId)
-            if (success) {
-              // TODO: Refresh members list
-            }
-            return success
-          }}
-          onChangeRole={async (userId, role) => {
-            const success = await workspaces.changeMemberRole(managingMembersWorkspace.id, userId, role)
-            if (success) {
-              // TODO: Refresh members list
-            }
-            return success
-          }}
-        />
-      )}
-    </div>
+      {
+        auth.tokens && managingMembersWorkspace && (
+          <WorkspaceMembersModal
+            workspace={managingMembersWorkspace}
+            members={[]}
+            onClose={() => setManagingMembersWorkspace(null)}
+            onAddMember={async (email, role) => {
+              const success = await workspaces.addMember(managingMembersWorkspace.id, email, role)
+              if (success) {
+                // TODO: Refresh members list
+              }
+              return success
+            }}
+            onRemoveMember={async (userId) => {
+              const success = await workspaces.removeMember(managingMembersWorkspace.id, userId)
+              if (success) {
+                // TODO: Refresh members list
+              }
+              return success
+            }}
+            onChangeRole={async (userId, role) => {
+              const success = await workspaces.changeMemberRole(managingMembersWorkspace.id, userId, role)
+              if (success) {
+                // TODO: Refresh members list
+              }
+              return success
+            }}
+          />
+        )
+      }
+
+      {/* Workspace Settings Modal */}
+      {
+        auth.tokens && settingsWorkspace && (
+          <WorkspaceSettingsModal
+            workspace={settingsWorkspace}
+            onClose={() => setSettingsWorkspace(null)}
+            onRenameWorkspace={async (id, name) => {
+              const ok = await workspaces.renameWorkspace(id, name)
+              if (ok) {
+                // Update local settingsWorkspace to reflect new name
+                setSettingsWorkspace(prev => prev ? { ...prev, name } : null)
+              }
+              return ok
+            }}
+            onDeleteWorkspace={async (id) => {
+              const ok = await workspaces.deleteWorkspace(id)
+              if (ok) setSettingsWorkspace(null)
+              return ok
+            }}
+            onAddMember={async (email, role) => {
+              return workspaces.addMember(settingsWorkspace.id, email, role)
+            }}
+            onRemoveMember={async (userId) => {
+              return workspaces.removeMember(settingsWorkspace.id, userId)
+            }}
+            onChangeRole={async (userId, role) => {
+              return workspaces.changeMemberRole(settingsWorkspace.id, userId, role)
+            }}
+            members={[]}
+            currentUserId={auth.user?.id}
+          />
+        )
+      }
+    </div >
   )
 }
 

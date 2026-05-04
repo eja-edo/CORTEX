@@ -6,6 +6,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from pydantic import model_validator
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -38,8 +40,15 @@ class WorkspaceResponse(BaseModel):
 
 
 class AddMemberRequest(BaseModel):
-    user_id: UUID
+    user_id: Optional[UUID] = None
+    email: Optional[str] = Field(None, min_length=1, max_length=255)
     role: str = Field(default="viewer", pattern="^(editor|viewer)$")
+
+    @model_validator(mode="after")
+    def validate_member_identifier(self):
+        if self.user_id is None and not self.email:
+            raise ValueError("Either user_id or email is required")
+        return self
 
 
 class UpdateMemberRoleRequest(BaseModel):
@@ -180,18 +189,24 @@ def add_member(
     member = WorkspacePermission.require_member(workspace_id, current_user.id, db)
     WorkspacePermission.require_owner(member)
 
-    # Check if target user exists
-    target_user = db.query(User).filter(User.id == payload.user_id).first()
+    # Resolve the invited user by id first, then by email for the current UI flow.
+    target_user = None
+    if payload.user_id is not None:
+        target_user = db.query(User).filter(User.id == payload.user_id).first()
+    elif payload.email:
+        normalized_email = payload.email.strip().lower()
+        target_user = db.query(User).filter(func.lower(User.email) == normalized_email).first()
+
     if not target_user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    existing = WorkspacePermission.get_member(workspace_id, payload.user_id, db)
+    existing = WorkspacePermission.get_member(workspace_id, target_user.id, db)
     if existing:
         raise HTTPException(status_code=409, detail="User already a member")
 
     new_member = WorkspaceMember(
         workspace_id=workspace_id,
-        user_id=payload.user_id,
+        user_id=target_user.id,
         role=WorkspaceRole(payload.role),
         invited_by=current_user.id,
     )
