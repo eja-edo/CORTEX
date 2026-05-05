@@ -13,40 +13,18 @@
     width: 58px;
 }
 
-.workspace-sidebar-header {
-    padding: 8px 10px;
-    display: flex;
-    align-items: center;
-    justify-content: flex-start;
-    flex-shrink: 0;
-    gap: 6px;
-    overflow: visible;
-    min-height: 44px;
-}
-
-.workspace-switcher-container {
-    flex: 1;
-    min-width: 0;
-    position: relative;
-    overflow: visible;
-}
-
 .workspace-sidebar-toggle {
-    display: flex;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
     width: 32px;
     height: 32px;
-    min-width: 32px;
-    min-height: 32px;
-    margin: 0;
-    padding: 0;
+    margin: 10px 12px 6px;
     border: none;
     border-radius: 10px;
     background: transparent;
     color: var(--text-secondary);
     cursor: pointer;
-    flex-shrink: 0;
 }
 
 .workspace-sidebar-toggle:hover {
@@ -61,7 +39,6 @@
     gap: 10px;
     flex: 1;
     min-height: 0;
-    overflow-y: auto;
 }
 
 .workspace-sidebar-main {
@@ -123,9 +100,8 @@
 }
 
 .workspace-nav-item--drop-target {
-    box-shadow: inset 0 0 0 2px var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent);
     background: var(--accent-light);
-    transition: all 0.15s ease;
 }
 
 
@@ -166,8 +142,7 @@
 }
 
 .workspace-nav-action-btn.danger:hover {
-    color: #e03131;
-    /* Use a red color for danger action */
+    color: #e03131; /* Use a red color for danger action */
     background: rgba(224, 49, 49, 0.1);
 }
 
@@ -532,7 +507,6 @@
 .workspace-switcher-container {
     position: relative;
     width: 100%;
-    flex-shrink: 0;
 }
 
 /* Ensure nav items in global section have proper spacing */

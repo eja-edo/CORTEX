@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.api.auth import router as auth_router
+from app.api.agent import router as agent_router
 from app.api.google_calendar import router as google_calendar_router
 from app.api.assets import router as assets_router
 from app.api.notes import router as notes_router
@@ -191,6 +192,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(auth_router, prefix=settings.API_STR)
+app.include_router(agent_router, prefix=settings.API_STR)
 app.include_router(google_calendar_router, prefix=settings.API_STR)
 app.include_router(schedules_router, prefix=settings.API_STR)
 app.include_router(notes_router, prefix=settings.API_STR)

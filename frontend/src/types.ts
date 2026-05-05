@@ -106,3 +106,58 @@ export type SyncUpdateEvent = {
   detail?: string | null
   occurred_at: string
 }
+
+// ============================================================================
+// Phase 5: Agent Memory and Proactive Suggestions
+// ============================================================================
+
+export type AgentMessageRole = 'user' | 'assistant' | 'tool'
+
+export type AgentMessage = {
+  id: string
+  role: AgentMessageRole
+  content: string
+  tool_name?: string
+  tool_input?: string
+  tool_output?: string
+  created_at: string
+}
+
+export type AgentConversation = {
+  id: string
+  workspace_id: string | null
+  title: string
+  summary: string | null
+  message_count: number
+  total_tokens: number
+  created_at: string
+  updated_at: string
+}
+
+export type ConversationListItem = {
+  id: string
+  workspace_id: string | null
+  title: string
+  message_count: number
+  has_summary: boolean
+  updated_at: string
+  created_at: string
+}
+
+export type TokenBudgetStatus = {
+  used: number
+  limit: number  // 100,000
+  remaining: number
+  percentage: number  // 0-100
+}
+
+export type AgentChatRequest = {
+  message: string
+  conversation_id?: string
+  workspace_id?: string
+}
+
+export type AgentChatResponse = {
+  conversation_id: string
+  reply: string
+}

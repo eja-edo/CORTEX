@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Bot, Send, X, Sparkles, RefreshCw, Copy, Check } from 'lucide-react'
+import { sendAgentMessage } from '../services/api'
+import { useConversationStore } from '../stores/conversationStore'
 
 interface AskAIProps {
     noteContent?: string
@@ -39,11 +41,14 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
     const [input, setInput] = useState('')
     const [isLoading, setIsLoading] = useState(false)
     const [copiedId, setCopiedId] = useState<string | null>(null)
+    const [conversationId, setConversationId] = useState<string | null>(null)
+    const [error, setError] = useState<string | null>(null)
     const [addedPills, setAddedPills] = useState<ContextPill[]>([
         ...(noteContent ? [{ id: 'note', text: noteContent, label: `📝 ${noteTitle || 'Note'}` }] : []),
     ])
     const inputRef = useRef<HTMLTextAreaElement>(null)
     const messagesEndRef = useRef<HTMLDivElement>(null)
+    const { updateTokenUsage } = useConversationStore()
 
     useEffect(() => {
         inputRef.current?.focus()
@@ -107,6 +112,7 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
         if (!text.trim() || isLoading) return
         const userMsg = text.trim()
         setInput('')
+        setError(null)
 
         const userMsgObj: Message = {
             id: Date.now().toString(),
@@ -124,42 +130,37 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
         setIsLoading(true)
 
         try {
-            const builtMessages = buildMessages(userMsg)
+            // Call backend agent API
+            const response = await sendAgentMessage(userMsg, conversationId || undefined)
+            
+            // Update conversation ID if this is the first message
+            if (!conversationId) {
+                setConversationId(response.conversation_id)
+            }
 
-            const response = await fetch('https://api.anthropic.com/v1/messages', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    model: 'claude-sonnet-4-20250514',
-                    max_tokens: 1000,
-                    system: SYSTEM_PROMPT,
-                    messages: builtMessages,
-                }),
-            })
-
-            const data = await response.json()
-            const content = data.content
-                ?.filter((b: { type: string }) => b.type === 'text')
-                .map((b: { text: string }) => b.text)
-                .join('') ?? 'Sorry, I could not generate a response.'
+            // Update token usage in store
+            // Note: Backend will track this; we can fetch actual usage if needed
+            updateTokenUsage(0) // Placeholder - real implementation would get actual usage
 
             setMessages(prev =>
                 prev.map(m => m.id === loadingMsgObj.id
-                    ? { ...m, content, loading: false }
+                    ? { ...m, content: response.reply, loading: false }
                     : m
                 )
             )
-        } catch {
+        } catch (err) {
+            const errorMsg = err instanceof Error ? err.message : 'Failed to get response. Please try again.'
+            setError(errorMsg)
             setMessages(prev =>
                 prev.map(m => m.id === loadingMsgObj.id
-                    ? { ...m, content: 'Failed to get response. Please try again.', loading: false }
+                    ? { ...m, content: errorMsg, loading: false }
                     : m
                 )
             )
         } finally {
             setIsLoading(false)
         }
-    }, [isLoading, buildMessages])
+    }, [isLoading, conversationId, updateTokenUsage])
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -220,6 +221,14 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
 
                 {/* Messages */}
                 <div className="ask-ai-messages">
+                    {error && (
+                        <div className="ask-ai-error-banner">
+                            <span>{error}</span>
+                            <button onClick={() => setError(null)} className="ask-ai-error-close">
+                                <X size={14} />
+                            </button>
+                        </div>
+                    )}
                     {messages.length === 0 ? (
                         <div className="ask-ai-empty">
                             <div className="ask-ai-empty-icon">

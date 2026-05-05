@@ -378,6 +378,10 @@ class Note(Base):
     is_deleted = Column(Boolean, nullable=False, default=False, server_default=text("false"))
     created_at = Column(DateTime, default=datetime.utcnow, server_default=text("NOW()"))
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=text("NOW()"))
+    # Vector embedding for semantic search (768-dim for Gemini text-embedding-004)
+    # Stored as PostgreSQL vector type via pgvector extension
+    embedding = Column(JSONB, nullable=True)  # Fallback: store as JSON array until proper vector type
+    embedding_generated_at = Column(DateTime, nullable=True)  # Track when embedding was computed
 
     __table_args__ = (
         Index("ix_notes_user_id", "user_id"),
@@ -489,4 +493,45 @@ class WorkspaceMember(Base):
 
     __table_args__ = (
         UniqueConstraint("workspace_id", "user_id", name="uq_workspace_members_workspace_user"),
+    )
+
+
+class AgentConversation(Base):
+    """Multi-turn conversation thread with an AI agent."""
+    __tablename__ = "agent_conversations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=True, index=True)
+    title = Column(String(255), nullable=True)
+    summary = Column(Text, nullable=True)  # Stores compressed summary of older messages
+    message_count = Column(Integer, nullable=False, default=0, server_default=text("0"))  # Track total messages
+    total_token_count = Column(Integer, nullable=False, default=0, server_default=text("0"))  # Total tokens in conversation
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, server_default=text("NOW()"))
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, server_default=text("NOW()"))
+
+    __table_args__ = (
+        Index("ix_agent_conversations_user_id", "user_id"),
+        Index("ix_agent_conversations_user_created", "user_id", "created_at"),
+        Index("ix_agent_conversations_workspace_id", "workspace_id"),
+    )
+
+
+class AgentMessage(Base):
+    """Message in an agent conversation (user, assistant, or tool result)."""
+    __tablename__ = "agent_messages"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id = Column(UUID(as_uuid=True), ForeignKey("agent_conversations.id", ondelete="CASCADE"), nullable=False, index=True)
+    role = Column(String(20), nullable=False)  # "user" | "assistant" | "tool"
+    content = Column(Text, nullable=True)
+    tool_name = Column(String(100), nullable=True)
+    tool_input = Column(JSONB, nullable=True, default=dict, server_default=text("'{}'::jsonb"))
+    tool_output = Column(JSONB, nullable=True, default=dict, server_default=text("'{}'::jsonb"))
+    token_count = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, server_default=text("NOW()"))
+
+    __table_args__ = (
+        Index("ix_agent_messages_conversation_created", "conversation_id", "created_at"),
+        Index("ix_agent_messages_conversation_role", "conversation_id", "role"),
     )

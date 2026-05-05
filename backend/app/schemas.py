@@ -475,3 +475,23 @@ class NotificationResponse(BaseModel):
 class NotificationListResponse(BaseModel):
     items: list[NotificationResponse]
     total: int
+
+
+class AgentChatRequest(BaseModel):
+    """Request body for agent chat endpoint."""
+    message: str = Field(..., min_length=1, max_length=5000, description="User message")
+    conversation_id: UUID | None = Field(default=None, description="Existing conversation ID, or null to start new")
+    workspace_id: UUID | None = Field(default=None, description="Optional workspace context")
+
+
+class AgentChatResponse(BaseModel):
+    """Response body for agent chat endpoint."""
+    conversation_id: UUID = Field(..., description="Conversation ID")
+    reply: str = Field(..., description="Agent's text response")
+
+
+class AgentStreamingStartResponse(BaseModel):
+    """Response body for streaming chat endpoint."""
+    status: str = Field(default="streaming_started", description="Status indicating streaming has begun")
+    conversation_id: UUID | None = Field(default=None, description="Conversation ID if available")
+    message: str = Field(default="Events will be streamed via SSE", description="Informational message")

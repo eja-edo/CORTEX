@@ -83,4 +83,109 @@ export async function requestWithAuth<T>(path: string, init?: RequestInit): Prom
     return body as T
 }
 
+// ============================================================================
+// Agent Conversation APIs (Phase 5: Memory & Proactive Suggestions)
+// ============================================================================
+
+export interface ConversationListItem {
+    id: string
+    workspace_id: string | null
+    title: string
+    message_count: number
+    has_summary: boolean
+    updated_at: string
+    created_at: string
+}
+
+export interface ConversationListResponse {
+    conversations: ConversationListItem[]
+    pagination: {
+        total: number
+        limit: number
+        offset: number
+        remaining: number
+    }
+}
+
+export interface AgentMessage {
+    id: string
+    role: 'user' | 'assistant' | 'tool'
+    content: string
+    tool_name?: string
+    tool_input?: string
+    tool_output?: string
+    created_at: string
+}
+
+export interface ConversationDetailResponse {
+    id: string
+    workspace_id: string | null
+    title: string
+    summary: string | null
+    message_count: number
+    total_tokens: number
+    created_at: string
+    updated_at: string
+    messages: AgentMessage[]
+}
+
+export interface DeleteConversationResponse {
+    status: string
+    conversation_id: string
+    message: string
+}
+
+/**
+ * List all conversations for the authenticated user.
+ * @param limit - Maximum conversations to return (default: 50, max: 100)
+ * @param offset - Number of conversations to skip (default: 0)
+ */
+export async function listConversations(limit = 50, offset = 0): Promise<ConversationListResponse> {
+    const params = new URLSearchParams({
+        limit: Math.min(limit, 100).toString(),
+        offset: offset.toString(),
+    })
+    return requestWithAuth(`/agent/conversations?${params}`)
+}
+
+/**
+ * Get a specific conversation with full message history.
+ * @param conversationId - UUID of the conversation
+ */
+export async function getConversation(conversationId: string): Promise<ConversationDetailResponse> {
+    return requestWithAuth(`/agent/conversations/${conversationId}`)
+}
+
+/**
+ * Delete a conversation permanently.
+ * @param conversationId - UUID of the conversation
+ */
+export async function deleteConversation(conversationId: string): Promise<DeleteConversationResponse> {
+    return requestWithAuth(`/agent/conversations/${conversationId}`, {
+        method: 'DELETE',
+    })
+}
+
+/**
+ * Send a chat message to the agent.
+ * @param message - User message
+ * @param conversationId - Optional existing conversation ID (creates new if not provided)
+ * @param workspaceId - Optional workspace ID for context
+ */
+export async function sendAgentMessage(
+    message: string,
+    conversationId?: string,
+    workspaceId?: string,
+): Promise<{ conversation_id: string; reply: string }> {
+    return requestWithAuth('/agent/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            message,
+            conversation_id: conversationId,
+            workspace_id: workspaceId,
+        }),
+    })
+}
+
 export { API_BASE_URL }
