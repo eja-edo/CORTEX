@@ -132,7 +132,7 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
         try {
             // Call backend agent API
             const response = await sendAgentMessage(userMsg, conversationId || undefined)
-            
+
             // Update conversation ID if this is the first message
             if (!conversationId) {
                 setConversationId(response.conversation_id)
