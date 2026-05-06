@@ -5,6 +5,8 @@ from typing import Callable, Dict, Any, Optional
 from datetime import datetime
 from pydantic import BaseModel, ValidationError
 
+from google.genai import types
+
 from app.services.agent.tool_context import ToolContext
 from app.utils.logger import get_logger
 
@@ -160,12 +162,30 @@ class ToolRegistry:
         tool = self.tools[name]
         return await tool.validate_and_execute(args, ctx)
 
+    def get_gemini_tools(self) -> list[types.Tool]:
+        """Get all tools in new SDK format.
+        
+        Returns a list with single Tool containing all function declarations.
+        Gemini SDK expects all functions in one Tool object.
+        """
+        function_declarations = []
+        for tool_def in self.tools.values():
+            func_decl = types.FunctionDeclaration(
+                name=tool_def.name,
+                description=tool_def.description,
+                parameters_json_schema=tool_def.schema,
+            )
+            function_declarations.append(func_decl)
+        
+        # Return single Tool with all function declarations
+        return [types.Tool(function_declarations=function_declarations)]
+
     def get_gemini_tool_definitions(self) -> list[dict]:
         """
         Get all tools in Gemini function calling format.
         
         Returns:
-            List of tool definitions compatible with Gemini API
+            List of tool definitions (dict format for old SDK)
         """
         return [tool.to_gemini_format() for tool in self.tools.values()]
 

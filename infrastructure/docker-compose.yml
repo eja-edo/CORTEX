@@ -18,6 +18,9 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    networks:
+      - default
+      - cortex
 
   mongo:
     image: mongo:7
@@ -76,6 +79,9 @@ services:
       - pgadmin_data:/var/lib/pgadmin
     mem_limit: 256m
     cpus: 0.2
+    networks:
+      - default
+      - cortex
 
   minio-cortex:
     image: minio/minio:latest

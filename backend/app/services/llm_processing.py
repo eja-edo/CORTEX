@@ -3,18 +3,6 @@ LLM Processing Service — Gemini API Integration
 
 Supports combined OCR + transcript input and produces timeline-based
 knowledge output where every insight is anchored to a specific time range.
-
-Changes vs previous version:
-  - Much more detailed prompts for window analysis, knowledge extraction,
-    and session synthesis — instructs the model to be exhaustive rather
-    than brief.
-  - Audio-only path gets its own focused prompt (no screen content to
-    describe, but speech is the primary signal).
-  - Knowledge extraction prompt now explicitly asks for explanations and
-    decisions in addition to facts/errors/code.
-  - Session synthesis prompt asks for a complete, dense timeline with
-    enough detail that the user can reconstruct what happened without
-    watching the recording.
 """
 
 import json
@@ -28,6 +16,9 @@ from app.config import settings
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# Revert to old SDK for llm_processing (needs separate update)
+client = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -871,10 +862,10 @@ class GeminiProcessingService:
             response = await model.generate_content_async(
                 prompt,
                 generation_config=genai.types.GenerationConfig(
-                    temperature=0.2,       # lower = more faithful to content
+                    temperature=0.2,
                     top_p=0.85,
                     top_k=40,
-                    max_output_tokens=2000,  # increased for detailed output
+                    max_output_tokens=2000,
                     response_mime_type="application/json",
                     response_schema=_window_analysis_schema(start_sec, end_sec),
                 ),

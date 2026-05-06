@@ -158,7 +158,7 @@ async def chat_streaming(
     Args:
         payload: Chat request with message and optional conversation_id
         current_user: Authenticated user
-        db: Async database session
+        db: Async database session (used only to access user info before launching background task)
         
     Returns:
         AgentStreamingStartResponse indicating streaming has started
@@ -167,12 +167,16 @@ async def chat_streaming(
         HTTPException: If background task cannot be started
     """
     try:
-        # Create service
-        service = AgentService(user=current_user, db=db)
-        
         # Start background streaming task (non-blocking)
+        # Note: We pass user_id and workspace_id instead of db/current_user
+        # because background task will create its own AsyncSession
         asyncio.create_task(
-            service.handle_streaming(payload)
+            AgentService.handle_streaming_background(
+                user_id=current_user.id,
+                message=payload.message,
+                conversation_id=payload.conversation_id,
+                workspace_id=payload.workspace_id,
+            )
         )
         
         logger.info(

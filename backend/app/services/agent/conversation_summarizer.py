@@ -4,7 +4,8 @@ import json
 from uuid import UUID
 from datetime import datetime
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +14,10 @@ from app.models import AgentConversation, AgentMessage
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# Create client
+client = genai.Client(api_key=settings.GEMINI_API_KEY)
+GEMINI_MODEL = "gemini-1.5-flash"
 
 
 class ConversationSummarizer:
@@ -27,10 +32,7 @@ class ConversationSummarizer:
     def __init__(self, db: AsyncSession):
         """Initialize summarizer with database session."""
         self.db = db
-        self.model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",
-            system_instruction=self._get_summarizer_prompt(),
-        )
+        # No model - use client directly
 
     @staticmethod
     def _get_summarizer_prompt() -> str:
@@ -116,9 +118,15 @@ Provide a natural language summary that captures the essence of the conversation
         conversation_text = self._build_conversation_text(messages_to_summarize)
         
         try:
-            # Call Gemini to summarize
+            # Call Gemini to summarize using new SDK
             logger.debug(f"Calling Gemini to summarize {len(messages_to_summarize)} messages")
-            response = await self.model.generate_content_async(conversation_text)
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=conversation_text,
+                config=types.GenerateContentConfig(
+                    system_instruction=self._get_summarizer_prompt(),
+                ),
+            )
             
             if not response or not response.text:
                 logger.error("Gemini returned empty response for summarization")

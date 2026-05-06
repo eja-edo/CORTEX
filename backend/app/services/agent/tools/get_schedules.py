@@ -46,7 +46,12 @@ async def get_schedules_handler(args: dict, ctx: ToolContext) -> dict:
         raise ValueError("start_date must be before end_date")
 
     try:
-        async with ctx.async_db() as db:
+        # Use sync database directly for RecurrenceService
+        from app.database import SessionLocal
+        sync_db = SessionLocal()
+        try:
+            recurrence_service = RecurrenceService()
+            
             # Get root schedules for the user
             stmt = select(Schedule).where(
                 Schedule.user_id == ctx.user_id,
@@ -56,35 +61,28 @@ async def get_schedules_handler(args: dict, ctx: ToolContext) -> dict:
             if type_filter:
                 stmt = stmt.where(Schedule.type == type_filter)
 
-            result = await db.execute(stmt)
+            result = sync_db.execute(stmt)
             root_schedules = result.scalars().all()
 
             # Generate instances using RecurrenceService
-            # Note: RecurrenceService requires sync db, so we need to get one
-            recurrence_service = RecurrenceService()
+            all_instances = []
+            for root in root_schedules:
+                instances = recurrence_service.generate_instances(
+                    root, start_date, end_date, sync_db
+                )
+                all_instances.extend(instances)
 
-            # Convert async_db to sync context for recurrence service
-            from app.database import SessionLocal
-            sync_db = SessionLocal()
-            try:
-                all_instances = []
-                for root in root_schedules:
-                    instances = recurrence_service.generate_instances(
-                        root, start_date, end_date, sync_db
-                    )
-                    all_instances.extend(instances)
+            # Sort by start_time and limit
+            all_instances.sort(key=lambda x: x["start_time"])
+            all_instances = all_instances[:limit]
 
-                # Sort by start_time and limit
-                all_instances.sort(key=lambda x: x["start_time"])
-                all_instances = all_instances[:limit]
+            return {
+                "count": len(all_instances),
+                "schedules": all_instances,
+            }
 
-                return {
-                    "count": len(all_instances),
-                    "schedules": all_instances,
-                }
-
-            finally:
-                sync_db.close()
+        finally:
+            sync_db.close()
 
     except Exception as exc:
         logger.error(f"get_schedules failed: {exc}", exc_info=True)

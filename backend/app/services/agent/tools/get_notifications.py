@@ -44,18 +44,18 @@ async def get_notifications_handler(args: dict, ctx: ToolContext) -> dict:
             result = await db.execute(stmt)
             notifications = result.scalars().all()
 
-        # Serialize notifications
-        serialized = [
-            {
-                "id": str(notif.id),
-                "type": notif.type,
-                "title": notif.title,
-                "body": notif.body,
-                "read_at": notif.read_at.isoformat() if notif.read_at else None,
-                "created_at": notif.created_at.isoformat(),
-            }
-            for notif in notifications
-        ]
+            # Serialize notifications INSIDE the async context before session closes
+            serialized = [
+                {
+                    "id": str(notif.id),
+                    "type": notif.type,
+                    "title": notif.title,
+                    "body": notif.body,
+                    "read_at": notif.read_at.isoformat() if notif.read_at else None,
+                    "created_at": notif.created_at.isoformat(),
+                }
+                for notif in notifications
+            ]
 
         return {
             "count": len(serialized),

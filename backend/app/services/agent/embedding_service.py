@@ -10,13 +10,17 @@ import json
 import logging
 from typing import Optional
 
-import google.generativeai as genai
+from google import genai
 import redis.asyncio as redis
 from app.config import Settings
 
 logger = logging.getLogger(__name__)
 
 settings = Settings()
+
+# Create client
+client = genai.Client(api_key=settings.GEMINI_API_KEY)
+EMBEDDING_MODEL = "text-embedding-004"
 
 
 class EmbeddingService:
