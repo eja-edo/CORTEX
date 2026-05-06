@@ -1,6 +1,6 @@
 """Recurrence service for generating and managing recurring schedule instances."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -23,6 +23,13 @@ FREQ_MAP = {
 }
 
 
+def _to_naive_utc(dt: datetime) -> datetime:
+    """Convert datetime to naive UTC. If already naive, return as-is."""
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 class RecurrenceService:
     """Service for handling recurring event logic."""
 
@@ -41,10 +48,15 @@ class RecurrenceService:
         For WEEKLY: Uses the weekday from root.start_time (no byday needed)
         For MONTHLY: Uses the day-of-month from root.start_time
         """
+        # Normalize range boundaries to naive UTC to avoid comparison errors
+        range_start = _to_naive_utc(range_start)
+        range_end = _to_naive_utc(range_end)
+
         rule = root.recurrence_rule
         if not rule or rule.get("freq") == "NONE":
             # Non-recurring: return root if in range
-            if range_start <= root.start_time <= range_end:
+            root_start = _to_naive_utc(root.start_time)
+            if range_start <= root_start <= range_end:
                 return [self._schedule_to_dict(root)]
             return []
 
@@ -69,11 +81,6 @@ class RecurrenceService:
             "dtstart": dtstart,
         }
 
-        # For WEEKLY: automatically use the weekday from start_time
-        # No need for byday - rrule uses dtstart's weekday by default
-        # For MONTHLY: automatically uses the day-of-month from start_time
-        # No extra config needed - rrule uses dtstart's day by default
-
         if rule.get("until"):
             try:
                 kwargs["until"] = parse_dt(rule["until"])
@@ -84,7 +91,13 @@ class RecurrenceService:
             kwargs["count"] = rule["count"]
 
         try:
-            occurrences = list(rrule(**kwargs).between(range_start, range_end, inc=True))
+            # rrule.between requires both boundaries to share timezone awareness with dtstart.
+            # dtstart is aware (tz-attached), so pass aware boundaries.
+            aware_range_start = range_start.replace(tzinfo=timezone.utc)
+            aware_range_end = range_end.replace(tzinfo=timezone.utc)
+            occurrences_raw = list(rrule(**kwargs).between(aware_range_start, aware_range_end, inc=True))
+            # Normalize back to naive UTC for consistent downstream usage
+            occurrences = [_to_naive_utc(occ) for occ in occurrences_raw]
         except Exception as e:
             logger.exception("Failed to generate recurrence occurrences: %s", e)
             return []
@@ -96,15 +109,19 @@ class RecurrenceService:
         for occ_start in occurrences:
             occ_key = occ_start.isoformat()
 
-            if occ_key in exceptions_by_original:
-                exc = exceptions_by_original[occ_key]
-                if not exc.is_cancelled:
-                    results.append(self._schedule_to_dict(exc, is_instance=True))
+            # Also check aware version of the key in case exceptions were stored with tz
+            occ_key_aware = occ_start.replace(tzinfo=timezone.utc).isoformat()
+
+            matched_exc = exceptions_by_original.get(occ_key) or exceptions_by_original.get(occ_key_aware)
+
+            if matched_exc:
+                if not matched_exc.is_cancelled:
+                    results.append(self._schedule_to_dict(matched_exc, is_instance=True))
                 # is_cancelled => skip (don't append)
             else:
-                # Virtual instance - include ALL required fields for ScheduleResponse
+                # Virtual instance
                 results.append({
-                    "id": str(root.id),  # Not in DB yet - will cause validation error, need to make optional
+                    "id": str(root.id),
                     "user_id": str(root.user_id),
                     "title": root.title,
                     "type": root.type.value if hasattr(root.type, 'value') else root.type,
@@ -119,7 +136,7 @@ class RecurrenceService:
                     "is_cancelled": False,
                     "recurrence_id": str(root.id),
                     "original_start_time": occ_start.isoformat(),
-                    "is_virtual": True,  # client flag
+                    "is_virtual": True,
                     "version": root.version,
                     "created_at": root.created_at.isoformat() if root.created_at else None,
                     "updated_at": root.updated_at.isoformat() if root.updated_at else None,
@@ -136,8 +153,11 @@ class RecurrenceService:
         result = {}
         for exc in exceptions:
             if exc.original_start_time is not None:
-                key = exc.original_start_time.isoformat()
-                result[key] = exc
+                # Store both naive and aware keys for flexible lookup
+                naive_dt = _to_naive_utc(exc.original_start_time)
+                result[naive_dt.isoformat()] = exc
+                # Also store the original isoformat as fallback
+                result[exc.original_start_time.isoformat()] = exc
         return result
 
     def _schedule_to_dict(self, schedule: Schedule, is_instance: bool = False) -> dict:
@@ -171,10 +191,7 @@ class RecurrenceService:
 
         parts = [f"FREQ={rule['freq']}", f"INTERVAL={rule.get('interval', 1)}"]
 
-        # No byday needed - Google will use DTSTART's weekday automatically
-
         if rule.get("until"):
-            # Google needs format YYYYMMDDTHHMMSSZ
             try:
                 until_dt = parse_dt(rule["until"]).astimezone(ZoneInfo("UTC"))
                 parts.append(f"UNTIL={until_dt.strftime('%Y%m%dT%H%M%SZ')}")
@@ -200,10 +217,6 @@ class RecurrenceService:
             "freq": rule.get("FREQ", "NONE"),
             "interval": int(rule.get("INTERVAL", 1)),
         }
-
-        # Ignore BYDAY - we use DTSTART's weekday automatically
-        # if "BYDAY" in rule:
-        #     result["byday"] = rule["BYDAY"].split(",")
 
         if "UNTIL" in rule:
             result["until"] = rule["UNTIL"]
