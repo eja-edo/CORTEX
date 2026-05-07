@@ -12,6 +12,7 @@ interface GlobalHomeProps {
   upcomingSchedules: Schedule[]
   onCreateNote: () => void
   onCreateEvent: () => void
+  onCreateWorkspace: () => void
   onOpenWorkspace: (workspaceId: string) => void
   onOpenNote: (noteId: string) => void
 }
@@ -44,6 +45,7 @@ export function GlobalHome({
   upcomingSchedules,
   onCreateNote,
   onCreateEvent,
+  onCreateWorkspace,
   onOpenWorkspace,
   onOpenNote,
 }: GlobalHomeProps) {
@@ -163,23 +165,41 @@ export function GlobalHome({
               <Zap size={16} />
               Workspaces
             </h2>
-            <div className="home-workspace-list">
-              {workspaces.map(workspace => (
+            {workspaces.length === 0 ? (
+              <div className="home-empty-state">
+                <Zap size={24} />
+                <p>No workspaces yet</p>
+                <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
+                  Create your first workspace to get started
+                </p>
                 <button
-                  key={workspace.id}
-                  className="home-workspace-item"
-                  onClick={() => onOpenWorkspace(workspace.id)}
+                  className="btn btn-primary"
+                  onClick={onCreateWorkspace}
+                  style={{ marginTop: '1rem' }}
                 >
-                  <div className="home-workspace-icon">
-                    {workspace.name.charAt(0).toUpperCase()}
-                  </div>
-                  <div className="home-workspace-info">
-                    <div className="home-workspace-name">{workspace.name}</div>
-                    <div className="home-workspace-role">{workspace.my_role}</div>
-                  </div>
+                  <Plus size={14} style={{ marginRight: '0.5rem' }} />
+                  Create Workspace
                 </button>
-              ))}
-            </div>
+              </div>
+            ) : (
+              <div className="home-workspace-list">
+                {workspaces.map(workspace => (
+                  <button
+                    key={workspace.id}
+                    className="home-workspace-item"
+                    onClick={() => onOpenWorkspace(workspace.id)}
+                  >
+                    <div className="home-workspace-icon">
+                      {workspace.name.charAt(0).toUpperCase()}
+                    </div>
+                    <div className="home-workspace-info">
+                      <div className="home-workspace-name">{workspace.name}</div>
+                      <div className="home-workspace-role">{workspace.my_role}</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
           </section>
         </div>
 

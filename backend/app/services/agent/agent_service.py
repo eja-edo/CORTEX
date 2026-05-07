@@ -313,6 +313,15 @@ class AgentService:
             ),
         )
 
+        # Debug: log available tools
+        tools_list = self.registry.get_gemini_tools()
+        tool_names = []
+        if tools_list:
+            for tool in tools_list:
+                if hasattr(tool, 'function_declarations') and tool.function_declarations:
+                    tool_names.extend([fd.name for fd in tool.function_declarations])
+        logger.info(f"📚 Available tools for Gemini: {tool_names if tool_names else 'None'}")
+
         try:
             ctx = ToolContext(
                 user_id=self.user.id,
@@ -375,25 +384,51 @@ class AgentService:
                     reply_text = "I'm unable to generate a response at this time."
                     break
 
+                # Debug: log response details
+                logger.debug(
+                    f"Gemini response type: {type(response)} | "
+                    f"has text: {hasattr(response, 'text')} | "
+                    f"finish_reason: {response.finish_reason if hasattr(response, 'finish_reason') else 'N/A'}"
+                )
+
                 # Check for function calls
                 tool_calls = response.function_calls or []
+                call_names = [getattr(tc, 'name', 'unknown') for tc in tool_calls]
+                logger.info(f"Tool calls found: {len(tool_calls)} | tools: {call_names}")
 
                 # No tool calls → extract text and finish
                 if not tool_calls:
                     try:
                         reply_text = response.text
-                    except (ValueError, AttributeError):
+                        logger.info(f"✅ Response text extracted: '{reply_text[:80]}...' (len={len(reply_text)})")
+                    except (ValueError, AttributeError) as e:
+                        logger.error(f"❌ Failed to extract response.text: {type(e).__name__}: {e}")
+                        logger.debug(f"Response object: {response}")
                         reply_text = None
+                    
+                    # Fallback if text extraction failed
+                    if not reply_text:
+                        logger.warning(
+                            f"Empty reply_text after extraction | "
+                            f"finish_reason: {response.finish_reason if hasattr(response, 'finish_reason') else 'N/A'} | "
+                            f"response parts: {len(response.parts) if hasattr(response, 'parts') else 'N/A'} | "
+                            f"response candidates: {len(response.candidates) if hasattr(response, 'candidates') else 'N/A'}"
+                        )
+                    
                     reply_text = reply_text or "I couldn't process your request."
-                    logger.info(
-                        f"✅ Agent finished at turn {turn + 1} (no tool calls)"
-                    )
+                    logger.info(f"✅ Agent finished at turn {turn + 1} (no tool calls)")
                     break
 
                 # Execute tools
+                logger.info(f"🔧 Processing {len(tool_calls)} tool call(s) at turn {turn + 1}:")
+                for i, tc in enumerate(tool_calls, 1):
+                    tc_name = getattr(tc, 'name', 'unknown')
+                    tc_args = getattr(tc, 'args', {})
+                    logger.info(f"  [{i}/{len(tool_calls)}] Tool: {tc_name} | Args: {tc_args}")
+                
                 for function_call in tool_calls:
-                    tool_name = function_call.name
-                    tool_args = dict(function_call.args) if function_call.args else {}
+                    tool_name = getattr(function_call, 'name', 'unknown')
+                    tool_args = dict(getattr(function_call, 'args', {})) if getattr(function_call, 'args', None) else {}
 
                     # Guard against infinite tool loops
                     tool_call_counts[tool_name] = tool_call_counts.get(tool_name, 0) + 1
@@ -409,8 +444,9 @@ class AgentService:
                         turn = MAX_TOOL_TURNS  # Force exit
                         break
 
-                    logger.info(f"🔧 Executing tool: {tool_name}")
+                    logger.info(f"🔧 Executing tool: {tool_name} with args: {tool_args}")
                     result = await self.registry.execute(tool_name, tool_args, ctx)
+                    logger.info(f"✅ Tool '{tool_name}' executed | result: {str(result)[:200]}")
 
                     await self._check_proactive_triggers(
                         tool_name=tool_name,

@@ -2,12 +2,10 @@
 
 from datetime import datetime
 from typing import Optional
-from uuid import UUID
 from pydantic import BaseModel, Field
 
 from app.models import Schedule, ScheduleType
 from app.services.agent.tool_context import ToolContext
-from app.services.workspace_permission import WorkspacePermission
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -25,16 +23,11 @@ class CreateScheduleInput(BaseModel):
     end_time: str = Field(..., description="ISO 8601 datetime")
     location: Optional[str] = Field(None, max_length=255, description="Location or link")
     description: Optional[str] = Field(None, max_length=1000, description="Notes")
-    workspace_id: Optional[str] = Field(None, description="Optional workspace UUID")
 
 
 async def create_schedule_handler(args: dict, ctx: ToolContext) -> dict:
     """
     Create a new schedule/event for the user.
-    
-    Security:
-    - Optional workspace context
-    - If workspace specified, user must be editor
     """
     try:
         start_time = datetime.fromisoformat(args["start_time"])
@@ -49,24 +42,11 @@ async def create_schedule_handler(args: dict, ctx: ToolContext) -> dict:
     schedule_type = args["type"]
     location = args.get("location")
     description = args.get("description")
-    workspace_id_str = args.get("workspace_id")
-
-    workspace_id = None
-    if workspace_id_str:
-        try:
-            workspace_id = UUID(workspace_id_str)
-            # Check workspace permission
-            with ctx.get_sync_db() as sync_db:
-                member = WorkspacePermission.require_member(workspace_id, ctx.user_id, sync_db)
-                WorkspacePermission.require_editor(member)
-        except ValueError:
-            raise ValueError(f"Invalid workspace_id format: {workspace_id_str}")
 
     try:
         async with ctx.async_db() as db:
             schedule = Schedule(
                 user_id=ctx.user_id,
-                workspace_id=workspace_id,
                 title=title,
                 type=ScheduleType[schedule_type],  # Convert string to enum
                 start_time=start_time,
@@ -119,10 +99,6 @@ CREATE_SCHEDULE_SCHEMA = {
             "type": "string",
             "description": "Additional notes (optional)",
         },
-        "workspace_id": {
-            "type": "string",
-            "description": "Optional workspace UUID to associate schedule",
-        },
     },
     "required": ["title", "type", "start_time", "end_time"],
 }
@@ -132,5 +108,5 @@ CREATE_SCHEDULE_DEFINITION = {
     "handler": create_schedule_handler,
     "input_model": CreateScheduleInput,
     "schema": CREATE_SCHEDULE_SCHEMA,
-    "description": "Create a new schedule/event. User must be editor in workspace if specified.",
+    "description": "Create a new schedule/event for the user.",
 }

@@ -9,8 +9,12 @@
     transition: width 0.2s ease;
 }
 
-.workspace-sidebar.collapsed {
-    width: 58px;
+.workspace-sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 3px 5px;
+    border-bottom: 1px solid var(--border);
 }
 
 .workspace-sidebar-toggle {
@@ -19,7 +23,7 @@
     justify-content: center;
     width: 32px;
     height: 32px;
-    margin: 10px 12px 6px;
+    margin-left: 10px;
     border: none;
     border-radius: 10px;
     background: transparent;
@@ -142,7 +146,8 @@
 }
 
 .workspace-nav-action-btn.danger:hover {
-    color: #e03131; /* Use a red color for danger action */
+    color: #e03131;
+    /* Use a red color for danger action */
     background: rgba(224, 49, 49, 0.1);
 }
 

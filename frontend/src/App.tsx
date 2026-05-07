@@ -28,7 +28,7 @@ import { useWorkspaces } from './hooks/useWorkspaces'
 import { useNotes, noteTitleFromMd } from './hooks/useNotes'
 import { useSchedules } from './hooks/useSchedules'
 import { useAssets } from './hooks/useAssets'
-import { requestWithAuth } from './services/api'
+import { requestWithAuth, getCurrentTokens, setCurrentTokens } from './services/api'
 import { extractWorkspaceId, isWorkspaceRoute, noteRoute, knowledgeRoute, workspaceRoute } from './services/routes'
 import type { Workspace } from './types'
 
@@ -493,14 +493,47 @@ function App() {
 
       while (!isStopped) {
         try {
+          // Always get fresh token from store, not from state closure
+          const tokens = getCurrentTokens()
+          if (!tokens?.accessToken) {
+            throw new Error('No valid tokens available')
+          }
+
           const response = await fetch(sseUrl, {
             method: 'GET',
             headers: {
-              Authorization: `Bearer ${auth.tokens!.accessToken}`,
+              Authorization: `Bearer ${tokens.accessToken}`,
               Accept: 'text/event-stream',
             },
             signal: abortController.signal,
           })
+
+          // Handle 401 - token expired
+          if (response.status === 401) {
+            if (tokens.refreshToken) {
+              try {
+                // Attempt to refresh token
+                const refreshResponse = await fetch(`${API_BASE_URL}/auth/refresh`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ refresh_token: tokens.refreshToken }),
+                })
+                const refreshData = await refreshResponse.json()
+                if (refreshData.access_token && refreshData.refresh_token) {
+                  const newTokens = { accessToken: refreshData.access_token, refreshToken: refreshData.refresh_token }
+                  setCurrentTokens(newTokens)
+                  // Retry SSE connection with new token
+                  await sleep(1000)
+                  continue
+                }
+              } catch {
+                // Refresh failed, disconnect SSE
+                break
+              }
+            } else {
+              break
+            }
+          }
 
           if (!response.ok || !response.body) {
             throw new Error(`SSE request failed (${response.status})`)
@@ -687,6 +720,23 @@ function App() {
                   </svg>
                   <span>Notifications</span>
                 </button>
+
+                <button
+                  type="button"
+                  className={`workspace-sidebar-section-title sidebar-section-toggle  ${activeWorkspaceView === 'schedule' ? 'active' : ''}`}
+                  onClick={() => {
+                    const workspaceId = workspaces.currentWorkspace?.id
+                    if (workspaceId) navigate(workspaceRoute(workspaceId))
+                  }}
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                    <line x1="16" y1="2" x2="16" y2="6" />
+                    <line x1="8" y1="2" x2="8" y2="6" />
+                    <line x1="3" y1="10" x2="21" y2="10" />
+                  </svg>
+                  <span>Schedule</span>
+                </button>
               </div>
 
               {/* WORKSPACE SECTION */}
@@ -695,22 +745,6 @@ function App() {
                   <div className="sidebar-section-divider" />
 
                   <div className="sidebar-workspace-section">
-                    <button
-                      type="button"
-                      className={`workspace-sidebar-section-title sidebar-section-toggle  ${activeWorkspaceView === 'schedule' ? 'active' : ''}`}
-                      onClick={() => {
-                        const workspaceId = workspaces.currentWorkspace?.id
-                        if (workspaceId) navigate(workspaceRoute(workspaceId, '/schedule'))
-                      }}
-                    >
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-                        <line x1="16" y1="2" x2="16" y2="6" />
-                        <line x1="8" y1="2" x2="8" y2="6" />
-                        <line x1="3" y1="10" x2="21" y2="10" />
-                      </svg>
-                      <span>Schedule</span>
-                    </button>
 
                     <SidebarSection
                       icon={<StickyNote size={15} />}
@@ -920,6 +954,7 @@ function App() {
                   }
                 }}
                 onCreateEvent={() => setIsCreateEventOpen(true)}
+                onCreateWorkspace={() => setIsCreateWorkspaceOpen(true)}
                 onOpenWorkspace={(workspaceId) => {
                   const workspace = workspaces.workspaces.find(ws => ws.id === workspaceId)
                   if (workspace) handleWorkspaceSwitch(workspace)

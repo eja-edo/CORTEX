@@ -1,4 +1,5 @@
 from typing import Generator
+import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from app.config import settings
@@ -6,7 +7,7 @@ from app.config import settings
 # Create the database engine
 engine = create_engine(
     settings.DATABASE_URL,
-    echo=True,  # Set to False in production
+    echo=os.getenv("SQLALCHEMY_ECHO", "false").lower() == "true",
     future=True
 )
 
