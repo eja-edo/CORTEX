@@ -120,4 +120,6 @@ class Settings:
     # Internal API
     INTERNAL_API_KEY: str = os.getenv("INTERNAL_API_KEY", "")
 
+    UNSEARCH_URL: str = os.getenv("UNSEARCH_URL", "http://localhost:8009")
+
 settings = Settings()

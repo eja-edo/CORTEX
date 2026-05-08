@@ -11,7 +11,9 @@ from app.services.agent.tools.update_schedule import UPDATE_SCHEDULE_DEFINITION
 from app.services.agent.tools.search_knowledge import SEARCH_KNOWLEDGE_DEFINITION
 from app.services.agent.tools.summarize_asset import SUMMARIZE_ASSET_DEFINITION
 from app.services.agent.tools.get_notifications import GET_NOTIFICATIONS_DEFINITION
-
+from app.services.agent.tools.web_search import WEB_SEARCH_DEFINITION
+from app.services.agent.tools.neural_search import NEURAL_SEARCH_DEFINITION
+from app.services.agent.tools.deep_research import DEEP_RESEARCH_DEFINITION
 
 def register_all_tools() -> None:
     """Register all tools with the global registry."""
@@ -27,6 +29,9 @@ def register_all_tools() -> None:
         SEARCH_KNOWLEDGE_DEFINITION,
         SUMMARIZE_ASSET_DEFINITION,
         GET_NOTIFICATIONS_DEFINITION,
+        WEB_SEARCH_DEFINITION,
+        NEURAL_SEARCH_DEFINITION,
+        DEEP_RESEARCH_DEFINITION,
     ]
 
     for tool_def in tools:

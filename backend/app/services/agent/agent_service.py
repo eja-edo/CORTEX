@@ -400,11 +400,14 @@ class AgentService:
                 if not tool_calls:
                     try:
                         reply_text = response.text
-                        logger.info(f"✅ Response text extracted: '{reply_text[:80]}...' (len={len(reply_text)})")
-                    except (ValueError, AttributeError) as e:
+                    except (ValueError, AttributeError, TypeError) as e:
                         logger.error(f"❌ Failed to extract response.text: {type(e).__name__}: {e}")
                         logger.debug(f"Response object: {response}")
                         reply_text = None
+                    
+                    # Log extraction result safely
+                    if reply_text:
+                        logger.info(f"✅ Response text extracted: '{reply_text[:80]}...' (len={len(reply_text)})")
                     
                     # Fallback if text extraction failed
                     if not reply_text:

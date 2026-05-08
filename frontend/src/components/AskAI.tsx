@@ -24,10 +24,6 @@ type Message = {
     loading?: boolean
 }
 
-const SYSTEM_PROMPT = `You are an intelligent writing assistant embedded in a note-taking workspace called Cortex. You help users think, write, research, and organize their notes.
-
-When given note context, you can reference it. Be concise, insightful, and practical. Use markdown in your responses when it helps clarity (headers, bullets, code blocks). Don't be verbose.`
-
 const QUICK_PROMPTS = [
     { label: 'Summarize', prompt: 'Summarize this note in 3 bullet points' },
     { label: 'Improve writing', prompt: 'Improve the writing style and clarity of this note' },
@@ -52,6 +48,21 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
 
     useEffect(() => {
         inputRef.current?.focus()
+    }, [])
+
+    // Build minimal runtime UI context (collected at send time)
+    const buildRuntimeContextText = useCallback(() => {
+        if (typeof window === 'undefined') return ''
+        try {
+            const url = window.location.href
+            const locale = navigator.language || 'unknown'
+            const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+            const now = new Date()
+            const timeIso = now.toISOString()
+            return `URL: ${url}\nTime: ${timeIso}\nTimezone: ${tz}\nLocale: ${locale}`
+        } catch (e) {
+            return ''
+        }
     }, [])
 
     const addPendingSelection = useCallback(() => {
@@ -79,35 +90,6 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
         return () => document.removeEventListener('keydown', handler)
     }, [onClose, isLoading])
 
-    const buildMessages = useCallback((userMsg: string) => {
-        const msgs: Array<{ role: string; content: string }> = []
-
-        // Add added pills as first user message if available
-        if (addedPills.length > 0) {
-            const contextTexts = addedPills.map(p => p.text).join('\n\n---\n\n')
-            msgs.push({
-                role: 'user',
-                content: `Here is my current context:\n\n${contextTexts}\n\nPlease use this as reference for our conversation.`,
-            })
-            msgs.push({
-                role: 'assistant',
-                content: 'I\'ve reviewed your context and I\'m ready to help. What would you like to know or do?',
-            })
-        }
-
-        // Add conversation history
-        for (const msg of messages) {
-            if (!msg.loading) {
-                msgs.push({ role: msg.role, content: msg.content })
-            }
-        }
-
-        // Add new user message
-        msgs.push({ role: 'user', content: userMsg })
-
-        return msgs
-    }, [messages, addedPills])
-
     const sendMessage = useCallback(async (text: string) => {
         if (!text.trim() || isLoading) return
         const userMsg = text.trim()
@@ -130,8 +112,17 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
         setIsLoading(true)
 
         try {
+            // Prepare combined message: include user-selected context (pills) and runtime UI context
+            const runtimeText = buildRuntimeContextText()
+            const pillsText = addedPills.length > 0 ? addedPills.map(p => p.text).join('\n\n---\n\n') : ''
+            let finalMessage = userMsg
+            const parts: string[] = []
+            if (pillsText) parts.push(`Context:\n\n${pillsText}`)
+            if (runtimeText) parts.push(`Runtime UI Context:\n\n${runtimeText}`)
+            if (parts.length > 0) finalMessage = `${parts.join('\n\n')}\n\n${userMsg}`
+
             // Call backend agent API
-            const response = await sendAgentMessage(userMsg, conversationId || undefined)
+            const response = await sendAgentMessage(finalMessage, conversationId || undefined)
 
             // Update conversation ID if this is the first message
             if (!conversationId) {
@@ -160,7 +151,7 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
         } finally {
             setIsLoading(false)
         }
-    }, [isLoading, conversationId, updateTokenUsage])
+    }, [isLoading, conversationId, updateTokenUsage, addedPills, buildRuntimeContextText])
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -370,6 +361,7 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                                         </button>
                                     </div>
                                 ))}
+                                {/* runtime context is collected automatically on send; no manual refresh UI */}
                             </div>
                         </div>
                     ) : null}
