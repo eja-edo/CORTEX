@@ -11,8 +11,8 @@ from dotenv import load_dotenv
 _env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(dotenv_path=_env_path)
 
-from stt_service.utils.decorator import singleton
-from stt_service.utils.logger import get_logger
+from utils.decorator import singleton
+from utils.logger import get_logger
 
 logger = get_logger(__name__)
 

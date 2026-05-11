@@ -9,6 +9,10 @@
     transition: width 0.2s ease;
 }
 
+.workspace-sidebar.collapsed {
+    width: 64px;
+}
+
 .workspace-sidebar-header {
     display: flex;
     align-items: center;
@@ -154,6 +158,20 @@
 .workspace-sidebar.collapsed .workspace-sidebar-body {
     padding-left: 8px;
     padding-right: 8px;
+}
+
+.workspace-sidebar.collapsed .workspace-sidebar-header {
+    justify-content: center;
+    padding-left: 6px;
+    padding-right: 6px;
+}
+
+.workspace-sidebar.collapsed .workspace-switcher-container {
+    display: none;
+}
+
+.workspace-sidebar.collapsed .workspace-sidebar-toggle {
+    margin-left: 0;
 }
 
 .workspace-sidebar.collapsed .workspace-sidebar-section-title span,

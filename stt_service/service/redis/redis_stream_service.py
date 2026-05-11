@@ -29,12 +29,18 @@ from typing import (
     TypeVar,
 )
 
-import redis.asyncio as redis
-from redis.asyncio import ConnectionPool, Redis
-from redis.exceptions import ResponseError
+try:
+    import redis.asyncio as redis
+    from redis.asyncio import ConnectionPool, Redis
+    from redis.exceptions import ResponseError
+except Exception:
+    redis = None
+    ConnectionPool = None
+    Redis = None
+    ResponseError = None
 
-from stt_service.config.app_config import ConfigManager
-from stt_service.models.stream_base import (
+from config.app_config import ConfigManager
+from models.stream_base import (
     StreamTaskProtocol,
     StreamTaskStatus,
 )
@@ -183,6 +189,9 @@ class RedisStreamService(Generic[T]):
             logger.debug("Redis already connected")
             return
         
+        if Redis is None:
+            raise ImportError("Missing 'redis' dependency. Install with 'pip install redis>=4.6.0'.")
+
         try:
             # Create connection pool
             self._pool = ConnectionPool(

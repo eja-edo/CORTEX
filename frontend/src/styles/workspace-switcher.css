@@ -3,7 +3,7 @@
 
 .workspace-switcher-btn {
   width: 100%;
-  background: #ffffff;
+  background: var(--bg);
   border: 1px solid rgba(0, 0, 0, 0.1);
   border-radius: 8px;
   padding: 8px 12px;
@@ -17,7 +17,7 @@
 }
 
 .workspace-switcher-btn:hover {
-  background: #f6f5f4;
+  background: var(--bg-hover);
   border-color: rgba(0, 0, 0, 0.15);
 }
 
@@ -45,7 +45,7 @@
   font-family: 'Inter', -apple-system, system-ui, sans-serif;
   font-size: 14px;
   font-weight: 500;
-  color: rgba(0, 0, 0, 0.95);
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -86,7 +86,7 @@
   left: 0;
   right: auto;
   min-width: 350px;
-  background: #ffffff;
+  background: var(--bg-active);
   border: 1px solid rgba(0, 0, 0, 0.1);
   border-radius: 12px;
   box-shadow:
@@ -105,7 +105,7 @@
   padding: 8px 12px 6px;
   font-size: 11px;
   font-weight: 600;
-  color: #a39e98;
+  color: var(--bg-active);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -130,7 +130,7 @@
 }
 
 .workspace-dropdown-item:hover {
-  background: #f6f5f4;
+  background: var(--bg-hover);
 }
 
 .workspace-dropdown-item:active {
@@ -138,7 +138,7 @@
 }
 
 .workspace-dropdown-item.active {
-  background: #f2f9ff;
+  background: var(--bg-secondary);
 }
 
 .workspace-dropdown-item-content {
@@ -168,7 +168,7 @@
 .workspace-dropdown-item-name {
   font-size: 14px;
   font-weight: 500;
-  color: rgba(0, 0, 0, 0.95);
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -191,7 +191,7 @@
 
 .workspace-dropdown-check {
   flex-shrink: 0;
-  color: #0075de;
+  color: var(--accent);
 }
 
 /* Scrollbar styling */
@@ -238,7 +238,7 @@
   width: 36px;
   height: 36px;
   border-radius: 8px;
-  background: linear-gradient(135deg, #0075de, #0d6fde);
+  background: var(--accent);
   color: #ffffff;
   display: flex;
   align-items: center;
@@ -258,7 +258,7 @@
 .workspace-dropdown-header-name {
   font-size: 14px;
   font-weight: 600;
-  color: rgba(0, 0, 0, 0.95);
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -266,7 +266,7 @@
 
 .workspace-dropdown-header-metadata {
   font-size: 12px;
-  color: #a39e98;
+  color: var(--text-secondary);
 }
 
 .workspace-dropdown-header-actions {
@@ -281,17 +281,17 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #f6f5f4;
+  background: var(--bg-secondary);
   border: none;
   border-radius: 6px;
   cursor: pointer;
-  color: #615d59;
+  color: var(--text-secondary);
   transition: all 0.1s ease;
 }
 
 .workspace-dropdown-header-action-btn:hover {
-  background: #ebe7e0;
-  color: #000000;
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .workspace-dropdown-header-action-btn:active {
@@ -379,11 +379,11 @@
   width: calc(100% - 16px);
   margin: 8px 8px;
   padding: 10px 12px;
-  background: #f6f5f4;
+  background: var(--bg-secondary);
   border: 1px dashed rgba(0, 0, 0, 0.1);
   border-radius: 6px;
   cursor: pointer;
-  color: #615d59;
+  color: var(--text-secondary);
   font-weight: 500;
   font-size: 13px;
   display: flex;
@@ -394,9 +394,9 @@
 }
 
 .workspace-dropdown-create-btn:hover {
-  background: #ebe7e0;
+  background: var(--bg-hover);
   border-color: rgba(0, 0, 0, 0.15);
-  color: #000000;
+  color: var(--text-primary);
 }
 
 .workspace-dropdown-create-btn:active {

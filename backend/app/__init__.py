@@ -24,7 +24,7 @@ from app.api.internal import router as internal_router
 from app.api.workspaces import router as workspaces_router
 from app.api.sse import sync_sse_router
 from app.services.transcription_results_consumer import transcription_results_consumer
-from app.services.llm_processor_worker_fixed import get_llm_processor_worker
+from app.services.llm_processor_worker import get_llm_processor_worker
 from app.services.reminder_worker import ReminderWorker
 from app.services.google_sync_worker import GoogleSyncWorker
 from app.api.sse.sse_manager import SSEManager

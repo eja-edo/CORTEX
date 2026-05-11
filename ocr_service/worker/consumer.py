@@ -6,27 +6,15 @@ Updated to use standardized RedisStreamService.
 """
 
 import asyncio
-import json
 import logging
 from typing import Optional
 
 from config import settings
 from worker.processor import OCRTaskProcessor
 from lib.redis_stream_service import RedisStreamService
-from lib.stream_base import StreamTaskProtocol
+from worker.ocr_processor_task import OCRProcessorTask, OCR_PROCESSOR_STREAM_KEY, OCR_CONSUMER_GROUP
 
 logger = logging.getLogger(__name__)
-
-
-# Import OCRProcessorTask from backend for compatibility
-# This ensures the task model has from_stream_message() implemented
-import sys
-from pathlib import Path
-backend_path = str(Path(__file__).parent.parent.parent / "backend")
-if backend_path not in sys.path:
-    sys.path.insert(0, backend_path)
-
-from app.services.redis.ocr_processor_task import OCRProcessorTask, OCR_PROCESSOR_STREAM_KEY, OCR_CONSUMER_GROUP
 
 
 class OCRConsumer:

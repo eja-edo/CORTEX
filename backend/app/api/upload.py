@@ -131,6 +131,24 @@ def _get_or_create_asset_for_upload(
         )
         if personal_ws:
             workspace_id = personal_ws.workspace_id
+        else:
+            # Auto-create personal workspace if not exists
+            new_workspace = Workspace(
+                name=f"{current_user.email}'s Workspace",
+                is_personal=True,
+                owner_id=current_user.id,
+            )
+            db.add(new_workspace)
+            db.flush()
+            
+            member = WorkspaceMember(
+                workspace_id=new_workspace.id,
+                user_id=current_user.id,
+                role="owner",
+            )
+            db.add(member)
+            db.commit()
+            workspace_id = new_workspace.id
 
     asset = Asset(
         user_id=current_user.id,

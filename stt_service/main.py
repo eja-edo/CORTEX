@@ -9,9 +9,9 @@ from dotenv import load_dotenv
 _env_path = Path(__file__).parent / ".env"
 load_dotenv(dotenv_path=_env_path)
 
-from stt_service.service.redis.redis_transcription_queue_service import RedisTranscriptionQueueService
-from stt_service.service.whisper_transcription_processor import transcribe_task, WhisperTranscriptionProcessor
-from stt_service.utils.logger import get_logger
+from service.redis.redis_transcription_queue_service import RedisTranscriptionQueueService
+from service.whisper_transcription_processor import transcribe_task, WhisperTranscriptionProcessor
+from utils.logger import get_logger
 from fastapi import FastAPI
 
 
@@ -45,3 +45,14 @@ log_level = getattr(logging, log_level_str, logging.INFO)
 logger = get_logger(__name__)
 
 app = FastAPI(lifespan=lifespan)
+
+
+if __name__ == "__main__":
+    import uvicorn
+    
+    uvicorn.run(
+        "main:app",
+        host="localhost",
+        port=8008,
+        log_level=log_level_str.lower(),
+    )

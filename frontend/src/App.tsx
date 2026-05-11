@@ -11,6 +11,7 @@ import { ScheduleForm } from './components/ScheduleForm'
 import { CalendarView } from './components/CalendarView'
 import { RecordPanel } from './components/RecordPanel'
 import { AssetKnowledgeView } from './components/AssetKnowledgeView'
+import { SettingsPanel } from './components/SettingsPanel'
 import type { SyncUpdateEvent } from './types'
 import { NotificationBell, type AppNotification } from './components/NotificationBell'
 import { WorkspaceNoteEditor } from './components/WorkspaceNoteEditor'
@@ -29,12 +30,12 @@ import { useNotes, noteTitleFromMd } from './hooks/useNotes'
 import { useSchedules } from './hooks/useSchedules'
 import { useAssets } from './hooks/useAssets'
 import { requestWithAuth, getCurrentTokens, setCurrentTokens } from './services/api'
-import { extractWorkspaceId, isWorkspaceRoute, noteRoute, knowledgeRoute, workspaceRoute } from './services/routes'
+import { extractWorkspaceId, isWorkspaceRoute, noteRoute, knowledgeRoute, scheduleRoute, workspaceRoute } from './services/routes'
 import type { Workspace } from './types'
 
 const SSE_TAB_APPID_KEY = 'cortex_sse_appid'
 
-type WorkspaceView = 'dashboard' | 'note' | 'records' | 'knowledge' | 'schedule'
+type WorkspaceView = 'dashboard' | 'note' | 'records' | 'knowledge' | 'schedule' | 'settings'
 
 function getRouteWorkspaceState(pathname: string): {
   view: WorkspaceView
@@ -42,6 +43,14 @@ function getRouteWorkspaceState(pathname: string): {
   noteId: string | null
   assetId: string | null
 } {
+  if (matchPath('/schedule', pathname) || matchPath('/w/:workspaceId', pathname) || matchPath('/w/:workspaceId/schedule', pathname)) {
+    return { view: 'schedule', workspaceId: null, noteId: null, assetId: null }
+  }
+
+  if (matchPath('/settings', pathname)) {
+    return { view: 'settings', workspaceId: null, noteId: null, assetId: null }
+  }
+
   const workspaceId = extractWorkspaceId(pathname)
 
   if (workspaceId) {
@@ -69,10 +78,6 @@ function getRouteWorkspaceState(pathname: string): {
       return { view: 'records', workspaceId, noteId: null, assetId: null }
     }
 
-    if (matchPath('/w/:workspaceId/schedule', pathname)) {
-      return { view: 'schedule', workspaceId, noteId: null, assetId: null }
-    }
-
     if (matchPath('/w/:workspaceId', pathname) || matchPath('/w/:workspaceId/notes', pathname)) {
       return { view: 'dashboard', workspaceId, noteId: null, assetId: null }
     }
@@ -83,6 +88,9 @@ function getRouteWorkspaceState(pathname: string): {
 
 function isKnownRoute(pathname: string): boolean {
   return pathname === '/'
+    || pathname === '/schedule'
+    || pathname === '/settings'
+    || pathname === '/notifications'
     || pathname === '/auth/callback'
     || isWorkspaceRoute(pathname)
 }
@@ -210,6 +218,12 @@ function App() {
   useEffect(() => {
     if (isKnownRoute(location.pathname)) return
     navigate('/', { replace: true })
+  }, [location.pathname, navigate])
+
+  useEffect(() => {
+    if (matchPath('/w/:workspaceId', location.pathname) || matchPath('/w/:workspaceId/schedule', location.pathname)) {
+      navigate(scheduleRoute(), { replace: true })
+    }
   }, [location.pathname, navigate])
 
   useEffect(() => {
@@ -589,14 +603,25 @@ function App() {
             <>
               <div className="topbar-divider" />
               <nav className="breadcrumb">
-                <span className="breadcrumb-item">{workspaces.currentWorkspace?.name || 'Workspace'}</span>
-                <span className="breadcrumb-sep">/</span>
-                <span className="breadcrumb-item" style={{ color: 'var(--text-primary)', fontWeight: 500 }}>
-                  {activeWorkspaceView === 'dashboard' ? 'Dashboard'
-                    : activeWorkspaceView === 'records' ? 'Records'
-                      : activeWorkspaceView === 'schedule' ? 'Schedule'
-                        : (notes.activeWorkspaceNote ? noteTitleFromMd(notes.activeWorkspaceNote.contentMd) : 'Note')}
-                </span>
+                {activeWorkspaceView === 'schedule' ? (
+                  <span className="breadcrumb-item" style={{ color: 'var(--text-primary)', fontWeight: 500 }}>
+                    Schedule
+                  </span>
+                ) : activeWorkspaceView === 'settings' ? (
+                  <span className="breadcrumb-item" style={{ color: 'var(--text-primary)', fontWeight: 500 }}>
+                    Settings
+                  </span>
+                ) : (
+                  <>
+                    <span className="breadcrumb-item">{workspaces.currentWorkspace?.name || 'Workspace'}</span>
+                    <span className="breadcrumb-sep">/</span>
+                    <span className="breadcrumb-item" style={{ color: 'var(--text-primary)', fontWeight: 500 }}>
+                      {activeWorkspaceView === 'dashboard' ? 'Dashboard'
+                        : activeWorkspaceView === 'records' ? 'Records'
+                          : (notes.activeWorkspaceNote ? noteTitleFromMd(notes.activeWorkspaceNote.contentMd) : 'Note')}
+                    </span>
+                  </>
+                )}
               </nav>
               {auth.tokens && (
                 <button
@@ -725,8 +750,7 @@ function App() {
                   type="button"
                   className={`workspace-sidebar-section-title sidebar-section-toggle  ${activeWorkspaceView === 'schedule' ? 'active' : ''}`}
                   onClick={() => {
-                    const workspaceId = workspaces.currentWorkspace?.id
-                    if (workspaceId) navigate(workspaceRoute(workspaceId))
+                    navigate(scheduleRoute())
                   }}
                 >
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -929,7 +953,7 @@ function App() {
               <div className="workspace-sidebar-footer">
                 <button
                   type="button"
-                  className="workspace-nav-item"
+                  className={`workspace-sidebar-section-title sidebar-section-toggle ${activeWorkspaceView === 'settings' ? 'active' : ''}`}
                   onClick={() => navigate('/settings')}
                 >
                   <Settings size={15} />
@@ -940,7 +964,41 @@ function App() {
           </aside>
 
           <div className="workspace-area" style={{ maxWidth: '100%' }}>
-            {!routeWorkspaceState.workspaceId ? (
+            {activeWorkspaceView === 'settings' ? (
+              <SettingsPanel
+                googleCalendarStatus={schedules.googleCalendarStatus}
+                onConnectGoogleCalendar={schedules.handleConnectGoogleCalendar}
+                onSyncGoogleCalendarNow={schedules.handleSyncGoogleCalendarNow}
+                onStartGoogleCalendarWatch={schedules.handleStartGoogleCalendarWatch}
+                onRenewGoogleCalendarWatch={schedules.handleRenewGoogleCalendarWatch}
+                onDisconnectGoogleCalendar={schedules.handleDisconnectGoogleCalendar}
+                theme={theme}
+                onThemeChange={_setTheme}
+                formatDateTimeVi={(isoDateTime: string | null) => {
+                  if (!isoDateTime) return ''
+                  const date = new Date(isoDateTime)
+                  return date.toLocaleString('vi-VN', { dateStyle: 'short', timeStyle: 'short' })
+                }}
+              />
+            ) : activeWorkspaceView === 'schedule' ? (
+              <section className="home-workspace">
+                <div className="home-schedule-area">
+                  <CalendarView
+                    schedules={schedules.schedules}
+                    isGoogleCalendarConnected={Boolean(schedules.googleCalendarStatus?.connected)}
+                    startDate={schedules.startDate}
+                    endDate={schedules.endDate}
+                    onStartDateChange={schedules.setStartDate}
+                    onEndDateChange={schedules.setEndDate}
+                    onFetch={() => void schedules.fetchSchedules()}
+                    onOpenCreateEvent={handleOpenCreateEvent}
+                    onSlotSelect={handleCalendarSlotSelect}
+                    onToggleComplete={schedules.handleToggleComplete}
+                    onRemove={schedules.handleRemoveSchedule}
+                  />
+                </div>
+              </section>
+            ) : !routeWorkspaceState.workspaceId ? (
               <GlobalHome
                 user={auth.user}
                 workspaces={workspaces.workspaces}
@@ -961,24 +1019,6 @@ function App() {
                 }}
                 onOpenNote={(noteId) => openWorkspaceNote(noteId)}
               />
-            ) : activeWorkspaceView === 'dashboard' ? (
-              <section className="home-workspace">
-                <div className="home-schedule-area">
-                  <CalendarView
-                    schedules={schedules.schedules}
-                    isGoogleCalendarConnected={Boolean(schedules.googleCalendarStatus?.connected)}
-                    startDate={schedules.startDate}
-                    endDate={schedules.endDate}
-                    onStartDateChange={schedules.setStartDate}
-                    onEndDateChange={schedules.setEndDate}
-                    onFetch={() => void schedules.fetchSchedules()}
-                    onOpenCreateEvent={handleOpenCreateEvent}
-                    onSlotSelect={handleCalendarSlotSelect}
-                    onToggleComplete={schedules.handleToggleComplete}
-                    onRemove={schedules.handleRemoveSchedule}
-                  />
-                </div>
-              </section>
             ) : activeWorkspaceView === 'records' ? (
               <RecordPanel
                 requestWithAuth={requestWithAuth}

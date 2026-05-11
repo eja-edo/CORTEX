@@ -24,21 +24,21 @@
 }
 
 .google-calendar-connected {
-    width: 20px;
-    height: 20px;
-    border-radius: 6px;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
     overflow: hidden;
-    border: 1px solid var(--border);
-    background: #fff;
+    border: 2px solid var(--bg-hover);
+    background: var(--bg-hover);
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+    box-shadow: 1px 1px 2px rgba(0, 0, 0, 0.06);
 }
 
 .google-calendar-connected img {
-    width: 100%;
-    height: 100%;
+    width: 16px;
+    height: 16px;
     object-fit: cover;
     display: block;
 }
@@ -244,16 +244,15 @@
     border-bottom: 1px solid var(--border) !important;
 }
 
-.rbc-day-slot .rbc-time-slot
-{
+.rbc-day-slot .rbc-time-slot {
     border-top: 1px solid var(--border) !important;
 }
 
-.rbc-time-content > * + * > * {
+.rbc-time-content>*+*>* {
     border-left: 1px solid var(--border) !important;
 }
 
-.rbc-off-range-bg{
+.rbc-off-range-bg {
     background: var(--bg-hover)
 }
 
@@ -431,106 +430,107 @@
 }
 
 .recurrence-card {
-  padding: 16px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  transition: all 0.2s ease;
-  animation: fadeIn 0.2s ease;
+    padding: 16px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    transition: all 0.2s ease;
+    animation: fadeIn 0.2s ease;
 }
 
 @keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 .recurrence-card:hover {
-  border-color: var(--primary);
-  box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+    border-color: var(--primary);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
 }
 
 /* Header */
 .recurrence-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
 }
 
 .recurrence-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 600;
-  font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+    font-size: 14px;
 }
 
 .recurrence-remove {
-  background: transparent;
-  border: none;
-  font-size: 12px;
-  color: var(--danger);
-  cursor: pointer;
-  padding: 4px 8px;
-  border-radius: 6px;
-  transition: background 0.2s;
+    background: transparent;
+    border: none;
+    font-size: 12px;
+    color: var(--danger);
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 6px;
+    transition: background 0.2s;
 }
 
 .recurrence-remove:hover {
-  background: rgba(255, 0, 0, 0.08);
+    background: rgba(255, 0, 0, 0.08);
 }
 
 /* Group */
 .recurrence-group {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
 }
 
 .recurrence-group label {
-  font-size: 12px;
-  color: var(--text-secondary);
+    font-size: 12px;
+    color: var(--text-secondary);
 }
 
 .recurrence-group select,
 .recurrence-group input {
-  padding: 8px 10px;
-  font-size: 13px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--bg-primary);
-  transition: border 0.2s, box-shadow 0.2s;
+    padding: 8px 10px;
+    font-size: 13px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg-primary);
+    transition: border 0.2s, box-shadow 0.2s;
 }
 
 .recurrence-group select:focus,
 .recurrence-group input:focus {
-  outline: none;
-  border-color: var(--primary);
-  box-shadow: 0 0 0 2px rgba(59,130,246,0.15);
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
 }
 
 /* Hint */
 .recurrence-hint {
-  font-size: 11px;
-  color: var(--text-disabled);
+    font-size: 11px;
+    color: var(--text-disabled);
 }
 
 /* Info box */
 .recurrence-info {
-  padding: 10px 12px;
-  background: var(--bg-tertiary);
-  border-radius: 8px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  display: flex;
-  align-items: center;
-  gap: 6px;
+    padding: 10px 12px;
+    background: var(--bg-tertiary);
+    border-radius: 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 6px;
 }

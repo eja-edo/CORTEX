@@ -3,29 +3,29 @@
  * 
  * Route structure:
  * /                          → GlobalHome (user dashboard)
+ * /schedule                  → ScheduleView
  * /notifications             → Notifications
  * /settings                  → UserSettings
  * 
- * /w/:workspaceId            → WorkspaceDashboard (or redirect to /w/:id/notes)
+ * /w/:workspaceId            → Workspace landing (legacy alias for /schedule)
  * /w/:workspaceId/notes      → NotesList
  * /w/:workspaceId/notes/:id  → NoteEditor
  * /w/:workspaceId/records    → RecordsList
  * /w/:workspaceId/records/:assetId/knowledge → KnowledgeView
- * /w/:workspaceId/schedule   → ScheduleView
  */
 
 export const ROUTES = {
   // Global routes (no workspace context)
   HOME: '/',
+  SCHEDULE: '/schedule',
   AUTH_CALLBACK: '/auth/callback',
-  
+
   // Workspace routes (require workspaceId)
   WORKSPACE_BASE: '/w/:workspaceId',
   WORKSPACE_NOTES: '/w/:workspaceId/notes',
   WORKSPACE_NOTE: '/w/:workspaceId/notes/:noteId',
   WORKSPACE_RECORDS: '/w/:workspaceId/records',
   WORKSPACE_RECORD_KNOWLEDGE: '/w/:workspaceId/records/:assetId/knowledge',
-  WORKSPACE_SCHEDULE: '/w/:workspaceId/schedule',
 } as const
 
 export type RoutePath = typeof ROUTES[keyof typeof ROUTES]
@@ -33,12 +33,19 @@ export type RoutePath = typeof ROUTES[keyof typeof ROUTES]
 /**
  * Helper to build workspace-scoped URLs
  */
-export function workspaceRoute(workspaceId: string, path: '/notes' | '/records' | '/schedule' | '' = ''): string {
+export function workspaceRoute(workspaceId: string, path: '/notes' | '/records' | '' = ''): string {
   if (!workspaceId) {
     console.warn('workspaceRoute called with empty workspaceId')
     return '/'
   }
   return `/w/${workspaceId}${path}`
+}
+
+/**
+ * Helper to build the global schedule URL
+ */
+export function scheduleRoute(): string {
+  return ROUTES.SCHEDULE
 }
 
 /**
@@ -82,7 +89,8 @@ export function isWorkspaceRoute(pathname: string): boolean {
  * Check if path is a global route (no workspace context)
  */
 export function isGlobalRoute(pathname: string): boolean {
-  return pathname === '/' 
+  return pathname === '/'
+    || pathname === '/schedule'
     || pathname === '/auth/callback'
     || !pathname.startsWith('/w/')
 }

@@ -5,13 +5,18 @@ This service allows producing tasks directly to Redis Stream using XADD.
 Supports any task type implementing ProducerTaskProtocol.
 """
 
-import redis.asyncio as redis
-from redis.asyncio import ConnectionPool, Redis
+try:
+    import redis.asyncio as redis
+    from redis.asyncio import ConnectionPool, Redis
+except Exception:
+    redis = None
+    ConnectionPool = None
+    Redis = None
 from typing import ClassVar, Dict, Any, Generic, Optional, Type, TypeVar, List
 
-from stt_service.utils.logger import get_logger
-from stt_service.config.app_config import ConfigManager
-from stt_service.models.stream_base import (
+from utils.logger import get_logger
+from config.app_config import ConfigManager
+from models.stream_base import (
     ProducerTaskProtocol,
     StreamTaskStatus,
 )
@@ -100,6 +105,9 @@ class RedisProducerService(Generic[T]):
             logger.debug("Redis already connected")
             return
         
+        if Redis is None:
+            raise ImportError("Missing 'redis' dependency. Install with 'pip install redis>=4.6.0'.")
+
         try:
             # Create connection pool
             self._pool = ConnectionPool(

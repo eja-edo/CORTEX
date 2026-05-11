@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Mic, MicOff, Monitor, Video, VideoOff } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 
 import { RecordingsList } from './RecordingsList'
 import type { AuthRequest, Recording } from './recordingTypes'
@@ -76,6 +76,10 @@ function formatDate(date: Date): string {
 
 export function RecordPanel({ requestWithAuth, isVisible, workspaceId, onAssetChange }: RecordPanelProps) {
     const navigate = useNavigate()
+    const params = useParams<{ workspaceId: string }>()
+    
+    // Get workspace ID from URL params first, fallback to props (for page reload support)
+    const effectiveWorkspaceId = params.workspaceId || workspaceId
     const [recordings, setRecordings] = useState<Recording[]>([])
     const [isRecordingAudio, setIsRecordingAudio] = useState(false)
     const [isRecordingScreen, setIsRecordingScreen] = useState(false)
@@ -490,14 +494,14 @@ export function RecordPanel({ requestWithAuth, isVisible, workspaceId, onAssetCh
             const complete = await requestWithAuth<UploadCompleteResponse>('/upload/complete', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ upload_id: ctx.uploadId, workspace_id: workspaceId, total_parts: uploadedParts, total_size: totalSize }),
+                body: JSON.stringify({ upload_id: ctx.uploadId, workspace_id: effectiveWorkspaceId, total_parts: uploadedParts, total_size: totalSize }),
             })
             return { status: 'uploaded' as const, objectKey: complete.object_key, assetId: complete.asset_id, error: undefined }
         } catch (err) {
             const message = err instanceof Error ? err.message : 'Live upload failed'
             return { status: 'failed' as const, objectKey: undefined, assetId: undefined, error: message }
         }
-    }, [enqueueBufferedUpload, requestWithAuth, workspaceId])
+    }, [enqueueBufferedUpload, requestWithAuth, effectiveWorkspaceId])
 
     const handleUpload = useCallback(async (recordingId: string) => {
         const recording = recordingsRef.current.find(r => r.id === recordingId)
@@ -558,14 +562,14 @@ export function RecordPanel({ requestWithAuth, isVisible, workspaceId, onAssetCh
             const complete = await requestWithAuth<UploadCompleteResponse>('/upload/complete', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ upload_id: uploadId, workspace_id: workspaceId }),
+                body: JSON.stringify({ upload_id: uploadId, workspace_id: effectiveWorkspaceId }),
             })
             updateRecording(recordingId, rec => ({ ...rec, uploadState: 'uploaded', uploadProgress: 100, uploadedObjectKey: complete.object_key, uploadedAssetId: complete.asset_id, uploadError: undefined }))
         } catch (err) {
             const message = err instanceof Error ? err.message : 'Upload failed'
             updateRecording(recordingId, rec => ({ ...rec, uploadState: 'failed', uploadError: message }))
         }
-    }, [requestWithAuth, splitBlobIntoParts, updateRecording, uploadPartWithRetry, workspaceId])
+    }, [requestWithAuth, splitBlobIntoParts, updateRecording, uploadPartWithRetry, effectiveWorkspaceId])
 
     return (
         <div className='record-workspace' style={{ display: isVisible ? undefined : 'none' }}>
@@ -647,7 +651,7 @@ export function RecordPanel({ requestWithAuth, isVisible, workspaceId, onAssetCh
                     activeStream={activeStream}
                     recordingType={recordingType}
                     onViewKnowledge={(assetId) => navigate(`/assets/${assetId}/knowledge`)}
-                    workspaceId={workspaceId}
+                    workspaceId={effectiveWorkspaceId}
                     onAssetChange={onAssetChange}
                 />
             </div>

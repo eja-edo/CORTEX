@@ -30,15 +30,18 @@ from typing import Optional, Dict, Any
 from pathlib import Path
 from dataclasses import dataclass
 
-from minio import Minio
+try:
+    from minio import Minio
+except Exception:
+    Minio = None
 
-from stt_service.utils.logger import get_logger
-from stt_service.service.redis.redis_producer_service import RedisProducerService
-from stt_service.utils.decorator import singleton
+from utils.logger import get_logger
+from service.redis.redis_producer_service import RedisProducerService
+from utils.decorator import singleton
 
-from stt_service.config.app_config import ConfigManager
-from stt_service.models.transcription_task import TranscriptionStreamTask
-from stt_service.models.save_transcription_task import SaveTranscriptionTask
+from config.app_config import ConfigManager
+from models.transcription_task import TranscriptionStreamTask
+from models.save_transcription_task import SaveTranscriptionTask
 
 logger = get_logger(__name__)
 

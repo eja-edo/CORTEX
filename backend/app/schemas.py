@@ -420,7 +420,7 @@ class AssetResponse(BaseModel):
 
     id: UUID
     user_id: UUID
-    workspace_id: UUID | None
+    workspace_id: UUID
     type: AssetType
     status: AssetStatus
     title: str | None

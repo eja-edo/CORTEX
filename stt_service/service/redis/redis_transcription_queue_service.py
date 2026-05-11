@@ -13,13 +13,13 @@ import logging
 import time
 from typing import Optional, Callable
 
-from stt_service.models.transcription_task import TranscriptionStreamTask
-from stt_service.models.stream_base import StreamTaskStatus
-from stt_service.service.redis.redis_stream_service import (
+from models.transcription_task import TranscriptionStreamTask
+from models.stream_base import StreamTaskStatus
+from service.redis.redis_stream_service import (
     RedisStreamService,
     create_stream_service,
 )
-from stt_service.utils.decorator import singleton
+from utils.decorator import singleton
 
 logger = logging.getLogger(__name__)
 stream_key = "transcription:stream"

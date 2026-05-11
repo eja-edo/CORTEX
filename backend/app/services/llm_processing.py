@@ -5,12 +5,17 @@ Supports combined OCR + transcript input and produces timeline-based
 knowledge output where every insight is anchored to a specific time range.
 """
 
+import asyncio
 import json
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, Callable, TypeVar, Awaitable
 
-import google.generativeai as genai
-from google.generativeai import protos
+try:
+    from google import genai
+except ImportError:
+    import google.genai as genai
+from google.genai import types
+from google.genai import errors as genai_errors
 
 from app.config import settings
 from app.utils.logger import get_logger
@@ -19,6 +24,95 @@ logger = get_logger(__name__)
 
 # Revert to old SDK for llm_processing (needs separate update)
 client = None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Retry helper for transient Gemini API errors
+# ─────────────────────────────────────────────────────────────────────────────
+
+T = TypeVar('T')
+
+
+def _is_retryable_genai_error(exc: Exception) -> bool:
+    """Check if error is retryable (transient/server error)."""
+    if not isinstance(exc, genai_errors.APIError):
+        return False
+    
+    # Check status attribute (for APIError)
+    status = getattr(exc, 'status_code', None) or getattr(exc, 'status', None)
+    
+    # For ServerError, status might be in HTTP status_code
+    if hasattr(exc, 'http_status'):
+        status = exc.http_status
+    
+    # Extract from error message if needed (fallback for 500 errors)
+    if status is None and '500' in str(exc):
+        status = 500
+    if status is None and '502' in str(exc):
+        status = 502
+    if status is None and '503' in str(exc):
+        status = 503
+    if status is None and '504' in str(exc):
+        status = 504
+    
+    return status in {429, 500, 502, 503, 504}
+
+async def _call_with_retry(
+    fn: Callable[..., Awaitable[T]],
+    *args,
+    max_retries: int = 3,
+    base_delay_sec: float = 1.0,
+    **kwargs
+) -> T:
+    """
+    Call async function with exponential backoff retry for transient errors.
+    
+    Retries on transient google-genai APIError statuses:
+    - 429 Too Many Requests
+    - 500/502/503/504 Server errors
+    
+    Args:
+        fn: Async function to call
+        args: Positional arguments to fn
+        max_retries: Max retry attempts (default 3 = 4 total calls)
+        base_delay_sec: Initial delay in seconds (1, 2, 4, ...)
+        kwargs: Keyword arguments to fn
+        
+    Returns:
+        Result from fn() if successful
+        
+    Raises:
+        Last exception if all retries exhausted
+    """
+    last_exc = None
+    
+    for attempt in range(max_retries + 1):
+        try:
+            return await fn(*args, **kwargs)
+        except Exception as e:
+            if not _is_retryable_genai_error(e):
+                logger.error(f"Non-retryable Gemini error: {e.__class__.__name__}: {e}")
+                raise
+            last_exc = e
+            
+            if attempt < max_retries:
+                delay = base_delay_sec * (2 ** attempt)  # Exponential: 1, 2, 4, ...
+                status = getattr(e, 'status_code', None) or getattr(e, 'status', None)
+                logger.warning(
+                    f"🔄 Gemini API transient error (attempt {attempt + 1}/{max_retries + 1}): "
+                    f"{e.__class__.__name__} status={status}. "
+                    f"Retrying in {delay}s..."
+                )
+                await asyncio.sleep(delay)
+            else:
+                status = getattr(e, 'status_code', None) or getattr(e, 'status', None)
+                logger.error(
+                    f"❌ Gemini API call failed after {max_retries + 1} attempts: "
+                    f"{e.__class__.__name__} status={status}: {e}"
+                )
+    
+    if last_exc:
+        raise last_exc
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -38,69 +132,69 @@ class LLMResult:
 # Schema helpers (unchanged from original — keep them compact)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _entity_schema() -> protos.Schema:
-    return protos.Schema(
-        type=protos.Type.OBJECT,
+def _entity_schema() -> types.Schema:
+    return types.Schema(
+        type=types.Type.OBJECT,
         properties={
-            "type": protos.Schema(
-                type=protos.Type.STRING,
+            "type": types.Schema(
+                type=types.Type.STRING,
                 enum=["url", "code", "error", "person", "tool", "file"],
             ),
-            "value": protos.Schema(type=protos.Type.STRING),
-            "confidence": protos.Schema(type=protos.Type.NUMBER),
+            "value": types.Schema(type=types.Type.STRING),
+            "confidence": types.Schema(type=types.Type.NUMBER),
         },
         required=["type", "value", "confidence"],
     )
 
 
-def _timeline_event_schema(start_sec: float, end_sec: float) -> protos.Schema:
-    return protos.Schema(
-        type=protos.Type.OBJECT,
+def _timeline_event_schema(start_sec: float, end_sec: float) -> types.Schema:
+    return types.Schema(
+        type=types.Type.OBJECT,
         properties={
-            "start_sec": protos.Schema(
-                type=protos.Type.NUMBER,
+            "start_sec": types.Schema(
+                type=types.Type.NUMBER,
                 description=f"Start time in seconds (>= {start_sec:.1f})",
             ),
-            "end_sec": protos.Schema(
-                type=protos.Type.NUMBER,
+            "end_sec": types.Schema(
+                type=types.Type.NUMBER,
                 description=f"End time in seconds (<= {end_sec:.1f})",
             ),
-            "activity_summary": protos.Schema(
-                type=protos.Type.STRING,
+            "activity_summary": types.Schema(
+                type=types.Type.STRING,
                 description="2-3 sentences describing exactly what happened at this moment",
             ),
-            "spoken_content": protos.Schema(
-                type=protos.Type.STRING,
+            "spoken_content": types.Schema(
+                type=types.Type.STRING,
                 description="Verbatim or near-verbatim transcript excerpt for this moment",
             ),
-            "screen_content": protos.Schema(
-                type=protos.Type.STRING,
+            "screen_content": types.Schema(
+                type=types.Type.STRING,
                 description="Key text or UI elements visible on screen at this moment",
             ),
-            "screen_type": protos.Schema(
-                type=protos.Type.STRING,
+            "screen_type": types.Schema(
+                type=types.Type.STRING,
                 enum=["browser", "editor", "terminal", "settings", "document", "other"],
             ),
-            "application": protos.Schema(type=protos.Type.STRING),
-            "event_type": protos.Schema(
-                type=protos.Type.STRING,
+            "application": types.Schema(type=types.Type.STRING),
+            "event_type": types.Schema(
+                type=types.Type.STRING,
                 enum=["activity", "error", "solution", "decision", "explanation"],
             ),
-            "knowledge_value": protos.Schema(
-                type=protos.Type.NUMBER,
+            "knowledge_value": types.Schema(
+                type=types.Type.NUMBER,
                 description="0.0 = trivial/idle, 1.0 = critical learning moment",
             ),
-            "topics": protos.Schema(
-                type=protos.Type.ARRAY,
-                items=protos.Schema(type=protos.Type.STRING),
+            "topics": types.Schema(
+                type=types.Type.ARRAY,
+                items=types.Schema(type=types.Type.STRING),
             ),
-            "entities": protos.Schema(
-                type=protos.Type.ARRAY,
+            "entities": types.Schema(
+                type=types.Type.ARRAY,
                 items=_entity_schema(),
             ),
-            "keywords": protos.Schema(
-                type=protos.Type.ARRAY,
-                items=protos.Schema(type=protos.Type.STRING),
+            "keywords": types.Schema(
+                type=types.Type.ARRAY,
+                items=types.Schema(type=types.Type.STRING),
             ),
         },
         required=[
@@ -110,45 +204,45 @@ def _timeline_event_schema(start_sec: float, end_sec: float) -> protos.Schema:
     )
 
 
-def _window_analysis_schema(start_sec: float, end_sec: float) -> protos.Schema:
-    return protos.Schema(
-        type=protos.Type.OBJECT,
+def _window_analysis_schema(start_sec: float, end_sec: float) -> types.Schema:
+    return types.Schema(
+        type=types.Type.OBJECT,
         properties={
-            "screen_type": protos.Schema(
-                type=protos.Type.STRING,
+            "screen_type": types.Schema(
+                type=types.Type.STRING,
                 enum=["browser", "editor", "terminal", "settings", "document", "other"],
             ),
-            "application": protos.Schema(type=protos.Type.STRING),
-            "user_intent": protos.Schema(
-                type=protos.Type.STRING,
+            "application": types.Schema(type=types.Type.STRING),
+            "user_intent": types.Schema(
+                type=types.Type.STRING,
                 description="Detailed description of the user's goal in this window",
             ),
-            "knowledge_value": protos.Schema(
-                type=protos.Type.NUMBER,
+            "knowledge_value": types.Schema(
+                type=types.Type.NUMBER,
                 description="Overall knowledge value 0.0-1.0 for this window",
             ),
-            "summary": protos.Schema(
-                type=protos.Type.STRING,
+            "summary": types.Schema(
+                type=types.Type.STRING,
                 description=(
                     "4-6 sentence summary covering: what was on screen, "
                     "what the user was trying to do, what they actually did, "
                     "and any problems or insights that occurred."
                 ),
             ),
-            "topics": protos.Schema(
-                type=protos.Type.ARRAY,
-                items=protos.Schema(type=protos.Type.STRING),
+            "topics": types.Schema(
+                type=types.Type.ARRAY,
+                items=types.Schema(type=types.Type.STRING),
             ),
-            "entities": protos.Schema(
-                type=protos.Type.ARRAY,
+            "entities": types.Schema(
+                type=types.Type.ARRAY,
                 items=_entity_schema(),
             ),
-            "searchable_keywords": protos.Schema(
-                type=protos.Type.ARRAY,
-                items=protos.Schema(type=protos.Type.STRING),
+            "searchable_keywords": types.Schema(
+                type=types.Type.ARRAY,
+                items=types.Schema(type=types.Type.STRING),
             ),
-            "timeline_events": protos.Schema(
-                type=protos.Type.ARRAY,
+            "timeline_events": types.Schema(
+                type=types.Type.ARRAY,
                 description=(
                     "Fine-grained events within this window, ordered by start_sec. "
                     "Each event covers a distinct action, topic shift, or moment of interest. "
@@ -164,104 +258,104 @@ def _window_analysis_schema(start_sec: float, end_sec: float) -> protos.Schema:
     )
 
 
-def _knowledge_extraction_schema() -> protos.Schema:
-    confidence_field = protos.Schema(type=protos.Type.NUMBER)
-    return protos.Schema(
-        type=protos.Type.OBJECT,
+def _knowledge_extraction_schema() -> types.Schema:
+    confidence_field = types.Schema(type=types.Type.NUMBER)
+    return types.Schema(
+        type=types.Type.OBJECT,
         properties={
-            "facts": protos.Schema(
-                type=protos.Type.ARRAY,
-                items=protos.Schema(
-                    type=protos.Type.OBJECT,
+            "facts": types.Schema(
+                type=types.Type.ARRAY,
+                items=types.Schema(
+                    type=types.Type.OBJECT,
                     properties={
-                        "content": protos.Schema(type=protos.Type.STRING),
+                        "content": types.Schema(type=types.Type.STRING),
                         "confidence": confidence_field,
-                        "context": protos.Schema(type=protos.Type.STRING),
-                        "start_sec": protos.Schema(type=protos.Type.NUMBER),
-                        "end_sec": protos.Schema(type=protos.Type.NUMBER),
+                        "context": types.Schema(type=types.Type.STRING),
+                        "start_sec": types.Schema(type=types.Type.NUMBER),
+                        "end_sec": types.Schema(type=types.Type.NUMBER),
                     },
                     required=["content", "confidence", "start_sec", "end_sec"],
                 ),
             ),
-            "errors": protos.Schema(
-                type=protos.Type.ARRAY,
-                items=protos.Schema(
-                    type=protos.Type.OBJECT,
+            "errors": types.Schema(
+                type=types.Type.ARRAY,
+                items=types.Schema(
+                    type=types.Type.OBJECT,
                     properties={
-                        "message": protos.Schema(type=protos.Type.STRING),
-                        "error_type": protos.Schema(
-                            type=protos.Type.STRING,
+                        "message": types.Schema(type=types.Type.STRING),
+                        "error_type": types.Schema(
+                            type=types.Type.STRING,
                             enum=["connection", "syntax", "runtime", "logic", "other"],
                         ),
-                        "resolution": protos.Schema(type=protos.Type.STRING),
+                        "resolution": types.Schema(type=types.Type.STRING),
                         "confidence": confidence_field,
-                        "start_sec": protos.Schema(type=protos.Type.NUMBER),
-                        "end_sec": protos.Schema(type=protos.Type.NUMBER),
+                        "start_sec": types.Schema(type=types.Type.NUMBER),
+                        "end_sec": types.Schema(type=types.Type.NUMBER),
                     },
                     required=["message", "resolution", "confidence", "start_sec", "end_sec"],
                 ),
             ),
-            "code_patterns": protos.Schema(
-                type=protos.Type.ARRAY,
-                items=protos.Schema(
-                    type=protos.Type.OBJECT,
+            "code_patterns": types.Schema(
+                type=types.Type.ARRAY,
+                items=types.Schema(
+                    type=types.Type.OBJECT,
                     properties={
-                        "snippet": protos.Schema(type=protos.Type.STRING),
-                        "language": protos.Schema(
-                            type=protos.Type.STRING,
+                        "snippet": types.Schema(type=types.Type.STRING),
+                        "language": types.Schema(
+                            type=types.Type.STRING,
                             enum=["python", "javascript", "typescript", "bash", "sql", "other"],
                         ),
-                        "purpose": protos.Schema(type=protos.Type.STRING),
+                        "purpose": types.Schema(type=types.Type.STRING),
                         "confidence": confidence_field,
-                        "start_sec": protos.Schema(type=protos.Type.NUMBER),
-                        "end_sec": protos.Schema(type=protos.Type.NUMBER),
+                        "start_sec": types.Schema(type=types.Type.NUMBER),
+                        "end_sec": types.Schema(type=types.Type.NUMBER),
                     },
                     required=["snippet", "language", "purpose", "confidence", "start_sec", "end_sec"],
                 ),
             ),
-            "commands": protos.Schema(
-                type=protos.Type.ARRAY,
-                items=protos.Schema(
-                    type=protos.Type.OBJECT,
+            "commands": types.Schema(
+                type=types.Type.ARRAY,
+                items=types.Schema(
+                    type=types.Type.OBJECT,
                     properties={
-                        "command": protos.Schema(type=protos.Type.STRING),
-                        "platform": protos.Schema(
-                            type=protos.Type.STRING,
+                        "command": types.Schema(type=types.Type.STRING),
+                        "platform": types.Schema(
+                            type=types.Type.STRING,
                             enum=["docker", "bash", "powershell", "npm", "pip", "git", "other"],
                         ),
-                        "purpose": protos.Schema(type=protos.Type.STRING),
-                        "start_sec": protos.Schema(type=protos.Type.NUMBER),
-                        "end_sec": protos.Schema(type=protos.Type.NUMBER),
+                        "purpose": types.Schema(type=types.Type.STRING),
+                        "start_sec": types.Schema(type=types.Type.NUMBER),
+                        "end_sec": types.Schema(type=types.Type.NUMBER),
                     },
                     required=["command", "platform", "purpose", "start_sec", "end_sec"],
                 ),
             ),
-            "explanations": protos.Schema(
-                type=protos.Type.ARRAY,
-                items=protos.Schema(
-                    type=protos.Type.OBJECT,
+            "explanations": types.Schema(
+                type=types.Type.ARRAY,
+                items=types.Schema(
+                    type=types.Type.OBJECT,
                     properties={
-                        "topic": protos.Schema(type=protos.Type.STRING),
-                        "explanation": protos.Schema(type=protos.Type.STRING),
+                        "topic": types.Schema(type=types.Type.STRING),
+                        "explanation": types.Schema(type=types.Type.STRING),
                         "confidence": confidence_field,
-                        "start_sec": protos.Schema(type=protos.Type.NUMBER),
-                        "end_sec": protos.Schema(type=protos.Type.NUMBER),
+                        "start_sec": types.Schema(type=types.Type.NUMBER),
+                        "end_sec": types.Schema(type=types.Type.NUMBER),
                     },
                     required=["topic", "explanation", "confidence", "start_sec", "end_sec"],
                 ),
             ),
-            "decisions": protos.Schema(
-                type=protos.Type.ARRAY,
+            "decisions": types.Schema(
+                type=types.Type.ARRAY,
                 description="Key decisions made by the user with their reasoning",
-                items=protos.Schema(
-                    type=protos.Type.OBJECT,
+                items=types.Schema(
+                    type=types.Type.OBJECT,
                     properties={
-                        "decision": protos.Schema(type=protos.Type.STRING),
-                        "rationale": protos.Schema(type=protos.Type.STRING),
-                        "alternatives_considered": protos.Schema(type=protos.Type.STRING),
+                        "decision": types.Schema(type=types.Type.STRING),
+                        "rationale": types.Schema(type=types.Type.STRING),
+                        "alternatives_considered": types.Schema(type=types.Type.STRING),
                         "confidence": confidence_field,
-                        "start_sec": protos.Schema(type=protos.Type.NUMBER),
-                        "end_sec": protos.Schema(type=protos.Type.NUMBER),
+                        "start_sec": types.Schema(type=types.Type.NUMBER),
+                        "end_sec": types.Schema(type=types.Type.NUMBER),
                     },
                     required=["decision", "rationale", "confidence", "start_sec", "end_sec"],
                 ),
@@ -270,130 +364,130 @@ def _knowledge_extraction_schema() -> protos.Schema:
     )
 
 
-def _session_synthesis_schema() -> protos.Schema:
-    return protos.Schema(
-        type=protos.Type.OBJECT,
+def _session_synthesis_schema() -> types.Schema:
+    return types.Schema(
+        type=types.Type.OBJECT,
         properties={
-            "session_title": protos.Schema(type=protos.Type.STRING),
-            "primary_technology": protos.Schema(type=protos.Type.STRING),
-            "secondary_technologies": protos.Schema(
-                type=protos.Type.ARRAY,
-                items=protos.Schema(type=protos.Type.STRING),
+            "session_title": types.Schema(type=types.Type.STRING),
+            "primary_technology": types.Schema(type=types.Type.STRING),
+            "secondary_technologies": types.Schema(
+                type=types.Type.ARRAY,
+                items=types.Schema(type=types.Type.STRING),
             ),
-            "difficulty_level": protos.Schema(
-                type=protos.Type.STRING,
+            "difficulty_level": types.Schema(
+                type=types.Type.STRING,
                 enum=["beginner", "intermediate", "advanced"],
             ),
-            "overall_summary": protos.Schema(
-                type=protos.Type.STRING,
+            "overall_summary": types.Schema(
+                type=types.Type.STRING,
                 description=(
                     "5-8 sentence executive summary covering: what was the goal, "
                     "what approach was taken, what worked, what didn't, and what "
                     "the end state was."
                 ),
             ),
-            "tags": protos.Schema(
-                type=protos.Type.ARRAY,
-                items=protos.Schema(type=protos.Type.STRING),
+            "tags": types.Schema(
+                type=types.Type.ARRAY,
+                items=types.Schema(type=types.Type.STRING),
             ),
-            "workflow": protos.Schema(
-                type=protos.Type.ARRAY,
+            "workflow": types.Schema(
+                type=types.Type.ARRAY,
                 description="Ordered list of high-level steps taken in this session",
-                items=protos.Schema(
-                    type=protos.Type.OBJECT,
+                items=types.Schema(
+                    type=types.Type.OBJECT,
                     properties={
-                        "step": protos.Schema(type=protos.Type.INTEGER),
-                        "description": protos.Schema(type=protos.Type.STRING),
-                        "start_sec": protos.Schema(type=protos.Type.NUMBER),
-                        "end_sec": protos.Schema(type=protos.Type.NUMBER),
+                        "step": types.Schema(type=types.Type.INTEGER),
+                        "description": types.Schema(type=types.Type.STRING),
+                        "start_sec": types.Schema(type=types.Type.NUMBER),
+                        "end_sec": types.Schema(type=types.Type.NUMBER),
                     },
                     required=["step", "description", "start_sec", "end_sec"],
                 ),
             ),
-            "problems_encountered": protos.Schema(
-                type=protos.Type.ARRAY,
-                items=protos.Schema(
-                    type=protos.Type.OBJECT,
+            "problems_encountered": types.Schema(
+                type=types.Type.ARRAY,
+                items=types.Schema(
+                    type=types.Type.OBJECT,
                     properties={
-                        "problem": protos.Schema(type=protos.Type.STRING),
-                        "context": protos.Schema(type=protos.Type.STRING),
-                        "resolution": protos.Schema(type=protos.Type.STRING),
-                        "time_to_resolve_sec": protos.Schema(type=protos.Type.NUMBER),
-                        "start_sec": protos.Schema(type=protos.Type.NUMBER),
-                        "end_sec": protos.Schema(type=protos.Type.NUMBER),
+                        "problem": types.Schema(type=types.Type.STRING),
+                        "context": types.Schema(type=types.Type.STRING),
+                        "resolution": types.Schema(type=types.Type.STRING),
+                        "time_to_resolve_sec": types.Schema(type=types.Type.NUMBER),
+                        "start_sec": types.Schema(type=types.Type.NUMBER),
+                        "end_sec": types.Schema(type=types.Type.NUMBER),
                     },
                     required=["problem", "start_sec", "end_sec"],
                 ),
             ),
-            "solutions_found": protos.Schema(
-                type=protos.Type.ARRAY,
-                items=protos.Schema(
-                    type=protos.Type.OBJECT,
+            "solutions_found": types.Schema(
+                type=types.Type.ARRAY,
+                items=types.Schema(
+                    type=types.Type.OBJECT,
                     properties={
-                        "problem": protos.Schema(type=protos.Type.STRING),
-                        "solution": protos.Schema(type=protos.Type.STRING),
-                        "generalizability": protos.Schema(type=protos.Type.NUMBER),
-                        "start_sec": protos.Schema(type=protos.Type.NUMBER),
-                        "end_sec": protos.Schema(type=protos.Type.NUMBER),
+                        "problem": types.Schema(type=types.Type.STRING),
+                        "solution": types.Schema(type=types.Type.STRING),
+                        "generalizability": types.Schema(type=types.Type.NUMBER),
+                        "start_sec": types.Schema(type=types.Type.NUMBER),
+                        "end_sec": types.Schema(type=types.Type.NUMBER),
                     },
                     required=["problem", "solution", "start_sec", "end_sec"],
                 ),
             ),
-            "knowledge_gained": protos.Schema(
-                type=protos.Type.ARRAY,
+            "knowledge_gained": types.Schema(
+                type=types.Type.ARRAY,
                 description=(
                     "Exhaustive list of distinct things learned or demonstrated in "
                     "this session — every concept, technique, and insight, stated as "
                     "a complete sentence."
                 ),
-                items=protos.Schema(type=protos.Type.STRING),
+                items=types.Schema(type=types.Type.STRING),
             ),
-            "key_quotes": protos.Schema(
-                type=protos.Type.ARRAY,
+            "key_quotes": types.Schema(
+                type=types.Type.ARRAY,
                 description="Most important verbatim or near-verbatim spoken statements",
-                items=protos.Schema(
-                    type=protos.Type.OBJECT,
+                items=types.Schema(
+                    type=types.Type.OBJECT,
                     properties={
-                        "quote": protos.Schema(type=protos.Type.STRING),
-                        "context": protos.Schema(type=protos.Type.STRING),
-                        "start_sec": protos.Schema(type=protos.Type.NUMBER),
+                        "quote": types.Schema(type=types.Type.STRING),
+                        "context": types.Schema(type=types.Type.STRING),
+                        "start_sec": types.Schema(type=types.Type.NUMBER),
                     },
                     required=["quote", "start_sec"],
                 ),
             ),
-            "knowledge_timeline": protos.Schema(
-                type=protos.Type.ARRAY,
+            "knowledge_timeline": types.Schema(
+                type=types.Type.ARRAY,
                 description=(
                     "Complete ordered timeline of ALL notable moments across the "
                     "session. Include every event_type. Order by start_sec. "
                     "Be exhaustive — the user should be able to understand the "
                     "full session from this timeline alone."
                 ),
-                items=protos.Schema(
-                    type=protos.Type.OBJECT,
+                items=types.Schema(
+                    type=types.Type.OBJECT,
                     properties={
-                        "start_sec": protos.Schema(type=protos.Type.NUMBER),
-                        "end_sec": protos.Schema(type=protos.Type.NUMBER),
-                        "activity_summary": protos.Schema(type=protos.Type.STRING),
-                        "spoken_content": protos.Schema(type=protos.Type.STRING),
-                        "screen_content": protos.Schema(type=protos.Type.STRING),
-                        "screen_type": protos.Schema(
-                            type=protos.Type.STRING,
+                        "start_sec": types.Schema(type=types.Type.NUMBER),
+                        "end_sec": types.Schema(type=types.Type.NUMBER),
+                        "activity_summary": types.Schema(type=types.Type.STRING),
+                        "spoken_content": types.Schema(type=types.Type.STRING),
+                        "screen_content": types.Schema(type=types.Type.STRING),
+                        "screen_type": types.Schema(
+                            type=types.Type.STRING,
                             enum=["browser", "editor", "terminal", "settings", "document", "other"],
                         ),
-                        "application": protos.Schema(type=protos.Type.STRING),
-                        "event_type": protos.Schema(
-                            type=protos.Type.STRING,
+                        "application": types.Schema(type=types.Type.STRING),
+                        "event_type": types.Schema(
+                            type=types.Type.STRING,
                             enum=["activity", "error", "solution", "decision", "explanation"],
                         ),
-                        "knowledge_value": protos.Schema(type=protos.Type.NUMBER),
-                        "topics": protos.Schema(
-                            type=protos.Type.ARRAY,
-                            items=protos.Schema(type=protos.Type.STRING),
+                        "knowledge_value": types.Schema(type=types.Type.NUMBER),
+                        "topics": types.Schema(
+                            type=types.Type.ARRAY,
+                            items=types.Schema(type=types.Type.STRING),
                         ),
-                        "keywords": protos.Schema(
-                            type=protos.Type.ARRAY,
-                            items=protos.Schema(type=protos.Type.STRING),
+                        "keywords": types.Schema(
+                            type=types.Type.ARRAY,
+                            items=types.Schema(type=types.Type.STRING),
                         ),
                     },
                     required=[
@@ -793,6 +887,34 @@ Your output is the PERMANENT knowledge record of this session. It must be:
 # Service class
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _parse_json_response(response: types.GenerateContentResponse) -> dict[str, Any]:
+    parsed = getattr(response, "parsed", None)
+    if isinstance(parsed, dict):
+        return parsed
+
+    if parsed is not None and hasattr(parsed, "model_dump"):
+        return parsed.model_dump()
+
+    response_text = (getattr(response, "text", "") or "").strip()
+    if not response_text:
+        return {}
+
+    start_idx = response_text.find("{")
+    end_idx = response_text.rfind("}")
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        response_text = response_text[start_idx : end_idx + 1]
+
+    return json.loads(response_text)
+
+
+def _extract_usage_and_cost(response: types.GenerateContentResponse) -> tuple[int, float]:
+    usage = getattr(response, "usage_metadata", None)
+    prompt_tokens = getattr(usage, "prompt_token_count", 0) or 0
+    output_tokens = getattr(usage, "candidates_token_count", 0) or 0
+    total_tokens = getattr(usage, "total_token_count", 0) or (prompt_tokens + output_tokens)
+    cost = (prompt_tokens * 0.075 + output_tokens * 0.30) / 1_000_000
+    return total_tokens, cost
+
 class GeminiProcessingService:
     """Service for Gemini API-based LLM processing."""
 
@@ -800,9 +922,10 @@ class GeminiProcessingService:
         self.api_key = settings.GEMINI_API_KEY
         self.DEFAULT_MODEL = settings.GEMINI_DEFAULT_MODEL
         self.SYNTHESIS_MODEL = settings.GEMINI_SYNTHESIS_MODEL
+        self.client: Optional[genai.Client] = None
 
         if self.api_key:
-            genai.configure(api_key=self.api_key)
+            self.client = genai.Client(api_key=self.api_key)
 
     async def process_window(
         self,
@@ -821,7 +944,7 @@ class GeminiProcessingService:
           • OCR only               → silent screen recording prompt
           • Neither                → returns empty result immediately
         """
-        if not self.api_key:
+        if not self.client:
             return LLMResult(success=False, error_message="GEMINI_API_KEY not configured")
 
         has_ocr = bool(ocr_text and ocr_text.strip())
@@ -858,10 +981,11 @@ class GeminiProcessingService:
             )
 
         try:
-            model = genai.GenerativeModel(self.DEFAULT_MODEL)
-            response = await model.generate_content_async(
-                prompt,
-                generation_config=genai.types.GenerationConfig(
+            response = await _call_with_retry(
+                self.client.aio.models.generate_content,
+                model=self.DEFAULT_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
                     temperature=0.2,
                     top_p=0.85,
                     top_k=40,
@@ -869,22 +993,12 @@ class GeminiProcessingService:
                     response_mime_type="application/json",
                     response_schema=_window_analysis_schema(start_sec, end_sec),
                 ),
+                max_retries=3,
+                base_delay_sec=1.0,
             )
 
-            response_text = response.text.strip()
-            start_idx = response_text.find("{")
-            end_idx = response_text.rfind("}")
-            if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-                json_str = response_text[start_idx : end_idx + 1]
-            else:
-                json_str = response_text
-
-            parsed = json.loads(json_str)
-            usage = response.usage_metadata
-            prompt_tokens = getattr(usage, "prompt_token_count", 0) or 0
-            output_tokens = getattr(usage, "candidates_token_count", 0) or 0
-            total_tokens = prompt_tokens + output_tokens
-            cost = (prompt_tokens * 0.075 + output_tokens * 0.30) / 1_000_000
+            parsed = _parse_json_response(response)
+            total_tokens, cost = _extract_usage_and_cost(response)
 
             return LLMResult(
                 success=True,
@@ -926,7 +1040,7 @@ class GeminiProcessingService:
         Extract structured knowledge units from OCR + transcript text.
         Now includes decisions as a first-class extraction category.
         """
-        if not self.api_key:
+        if not self.client:
             return LLMResult(success=False, error_message="GEMINI_API_KEY not configured")
 
         prompt = _knowledge_extraction_prompt(
@@ -938,23 +1052,22 @@ class GeminiProcessingService:
         )
 
         try:
-            model = genai.GenerativeModel(self.DEFAULT_MODEL)
-            response = await model.generate_content_async(
-                prompt,
-                generation_config=genai.types.GenerationConfig(
+            response = await _call_with_retry(
+                self.client.aio.models.generate_content,
+                model=self.DEFAULT_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
                     temperature=0.2,
                     max_output_tokens=2000,
                     response_mime_type="application/json",
                     response_schema=_knowledge_extraction_schema(),
                 ),
+                max_retries=3,
+                base_delay_sec=1.0,
             )
 
-            parsed = json.loads(response.text)
-            usage = response.usage_metadata
-            prompt_tokens = getattr(usage, "prompt_token_count", 0) or 0
-            output_tokens = getattr(usage, "candidates_token_count", 0) or 0
-            total_tokens = prompt_tokens + output_tokens
-            cost = (prompt_tokens * 0.075 + output_tokens * 0.30) / 1_000_000
+            parsed = _parse_json_response(response)
+            total_tokens, cost = _extract_usage_and_cost(response)
 
             return LLMResult(
                 success=True,
@@ -980,7 +1093,7 @@ class GeminiProcessingService:
         Uses a dense, exhaustive prompt that pushes the model to capture
         everything rather than summarizing aggressively.
         """
-        if not self.api_key:
+        if not self.client:
             return LLMResult(success=False, error_message="GEMINI_API_KEY not configured")
 
         duration_sec = duration_ms / 1000.0
@@ -994,23 +1107,22 @@ class GeminiProcessingService:
         )
 
         try:
-            model = genai.GenerativeModel(self.SYNTHESIS_MODEL)
-            response = await model.generate_content_async(
-                prompt,
-                generation_config=genai.types.GenerationConfig(
+            response = await _call_with_retry(
+                self.client.aio.models.generate_content,
+                model=self.SYNTHESIS_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
                     temperature=0.3,
                     max_output_tokens=4000,   # increased for exhaustive output
                     response_mime_type="application/json",
                     response_schema=_session_synthesis_schema(),
                 ),
+                max_retries=3,
+                base_delay_sec=1.0,
             )
 
-            parsed = json.loads(response.text)
-            usage = response.usage_metadata
-            prompt_tokens = getattr(usage, "prompt_token_count", 0) or 0
-            output_tokens = getattr(usage, "candidates_token_count", 0) or 0
-            total_tokens = prompt_tokens + output_tokens
-            cost = (prompt_tokens * 0.075 + output_tokens * 0.30) / 1_000_000
+            parsed = _parse_json_response(response)
+            total_tokens, cost = _extract_usage_and_cost(response)
 
             return LLMResult(
                 success=True,

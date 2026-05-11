@@ -11,7 +11,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
-from stt_service.models.stream_base import (
+from models.stream_base import (
     BaseStreamTask,
     parse_priority,
     TaskPriority,
