@@ -213,7 +213,7 @@ export async function* streamAgentMessage(
         conversation_id: conversationId,
         workspace_id: workspaceId,
     })
-    
+
     let response = await fetch(url, {
         method: 'POST',
         headers: {
@@ -271,26 +271,26 @@ export async function* streamAgentMessage(
                 if (line.startsWith('data: ')) {
                     try {
                         const data = JSON.parse(line.slice(6))
-                        
+
                         if (data.event === 'token' && data.text) {
                             yield { type: 'text', text: data.text }
                         } else if (data.event === 'done') {
                             yield { type: 'done', conversation_id: data.conversation_id }
                         } else if (data.event === 'tool_start') {
-                            yield { 
-                                type: 'tool_start', 
+                            yield {
+                                type: 'tool_start',
                                 tool_name: data.tool_name,
                                 tool_args: data.tool_args
                             }
                         } else if (data.event === 'tool_result') {
-                            yield { 
-                                type: 'tool_result', 
+                            yield {
+                                type: 'tool_result',
                                 tool_name: data.tool_name,
                                 result: data.result
                             }
                         } else if (data.event === 'thinking') {
-                            yield { 
-                                type: 'thinking', 
+                            yield {
+                                type: 'thinking',
                                 text: data.content
                             }
                         }
@@ -310,14 +310,14 @@ export async function* streamAgentMessage(
                 } else if (data.event === 'done') {
                     yield { type: 'done', conversation_id: data.conversation_id }
                 } else if (data.event === 'tool_start') {
-                    yield { 
-                        type: 'tool_start', 
+                    yield {
+                        type: 'tool_start',
                         tool_name: data.tool_name,
                         tool_args: data.tool_args
                     }
                 } else if (data.event === 'tool_result') {
-                    yield { 
-                        type: 'tool_result', 
+                    yield {
+                        type: 'tool_result',
                         tool_name: data.tool_name,
                         result: data.result
                     }

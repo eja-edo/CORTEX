@@ -479,8 +479,8 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                                                                             <span className="ask-ai-step-text">
                                                                                 Got result from <strong>{step.toolName}</strong>
                                                                                 {step.result ? (() => {
-                                                                                    const resultStr = typeof step.result === 'string' 
-                                                                                        ? step.result 
+                                                                                    const resultStr = typeof step.result === 'string'
+                                                                                        ? step.result
                                                                                         : JSON.stringify(step.result);
                                                                                     return (
                                                                                         <code style={{ marginLeft: '4px', fontSize: '11px' }}>
