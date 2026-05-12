@@ -25,13 +25,12 @@ logger = get_logger(__name__)
 
 # Create client (uses GEMINI_API_KEY env var)
 client = genai.Client(api_key=settings.GEMINI_API_KEY)
-GEMINI_MODEL = settings.GEMINI_DEFAULT_MODEL
 
-# Fallback models when primary model hits limit or is unavailable
-FALLBACK_MODELS = [
-    "gemma-4-26b-a4b-it",
-    "gemini-3.1-flash-live-preview",
-    "gemini-flash-latest",
+# Available models in order of priority (first model is primary, rest are fallbacks)
+AVAILABLE_MODELS = [
+    "models/gemini-3.1-flash-lite",
+    "models/gemma-4-31b-it",
+    "models/gemma-4-26b-a4b-it",
 ]
 
 # System prompt that prevents tool hallucination and sets context
@@ -182,20 +181,20 @@ async def _call_with_retry(
 
 async def _call_with_fallback(contents, config) -> tuple[str, object]:
     """
-    Try GEMINI_MODEL first, then each FALLBACK_MODELS in order.
+    Try each model in AVAILABLE_MODELS in order of priority.
     Returns (model_name_used, response).
 
     - Transient errors (500/503) are retried on the SAME model before moving on.
     - Quota errors (429) immediately move to the next model.
     - Fatal errors (4xx) stop immediately.
     """
-    models_to_try = [GEMINI_MODEL] + FALLBACK_MODELS
+    models_to_try = AVAILABLE_MODELS
     last_exc: Exception | None = None
 
-    for model in models_to_try:
+    for idx, model in enumerate(models_to_try):
         try:
             response = await _call_with_retry(model, contents, config)
-            if model != GEMINI_MODEL:
+            if idx > 0:  # idx=0 is primary model, >0 is fallback
                 logger.info(f"Successfully used fallback model: {model}")
             return model, response
 
@@ -572,6 +571,328 @@ class AgentService:
     ) -> None:
         logger.debug("Checking for knowledge suggestions...")
 
+    async def handle_streaming_generator(
+        self,
+        message: str,
+        conversation_id: UUID | None = None,
+        workspace_id: UUID | None = None,
+    ):
+        """
+        Process a user message with streaming response, yielding events.
+        
+        Yields:
+            dict with "event", "text", and "conversation_id" keys
+        """
+        user_id = self.user.id
+        conv = None
+        ctx = None
+
+        try:
+            conv = await self.store.get_or_create_conversation(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                workspace_id=workspace_id,
+            )
+
+            # Check token budget
+            if conv.total_token_count and conv.total_token_count >= MAX_TOKENS_PER_DAY_PER_USER:
+                logger.warning(
+                    f"❌ User {user_id} exceeded daily token budget in streaming | "
+                    f"used={conv.total_token_count}/{MAX_TOKENS_PER_DAY_PER_USER}"
+                )
+                yield {
+                    "event": "error",
+                    "message": "You have reached your daily AI interaction limit. Please try again tomorrow.",
+                }
+                return
+
+            # Get conversation summarizer (non-fatal if unavailable)
+            summarizer = None
+            try:
+                summarizer = get_conversation_summarizer(self.db)
+            except Exception as exc:
+                logger.warning(f"Error creating summarizer (non-fatal): {exc}")
+
+            # Load recent message history (sliding window)
+            await self.store.get_recent_messages(conv.id, limit=MAX_CONVERSATION_HISTORY)
+
+            # Save user message
+            await self.store.save_message(
+                conversation_id=conv.id,
+                role="user",
+                content=message,
+            )
+            await self.store.increment_message_count(conv.id)
+
+            # Build system prompt with conversation memory
+            system_prompt = SYSTEM_PROMPT
+            if summarizer and conv.summary:
+                try:
+                    summary_context = await summarizer.get_conversation_context(
+                        conv.id, include_summary=True
+                    )
+                    if summary_context:
+                        system_prompt = (
+                            f"{SYSTEM_PROMPT}\n\n"
+                            f"=== PREVIOUS CONVERSATION CONTEXT ===\n{summary_context}"
+                        )
+                except Exception as exc:
+                    logger.warning(f"Error getting summary context (streaming): {exc}")
+
+            ctx = ToolContext(
+                user_id=user_id,
+                async_db=self.db,
+                workspace_id=workspace_id,
+            )
+
+            turn = 0
+            reply_text = ""
+            tool_call_counts: dict[str, int] = {}
+
+            contents = [
+                types.Content(
+                    role="user",
+                    parts=[types.Part.from_text(text=message)],
+                )
+            ]
+
+            gen_config = types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                tools=self.registry.get_gemini_tools(),
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                    disable=True
+                ),
+            )
+
+            models_to_try = AVAILABLE_MODELS
+
+            while turn < MAX_TOOL_TURNS:
+                logger.debug(
+                    f"Streaming turn {turn + 1}/{MAX_TOOL_TURNS} | conversation={conv.id}"
+                )
+
+                # Try each model with retry for streaming
+                response = None
+                last_error = None
+                stream_success = False
+                turn_text = ""
+                tool_calls = []
+
+                for idx, model in enumerate(models_to_try):
+                    is_primary = (idx == 0)
+                    for attempt in range(1, RETRY_MAX_ATTEMPTS + 1):
+                        try:
+                            response = client.models.generate_content_stream(
+                                model=model,
+                                contents=contents,
+                                config=gen_config,
+                            )
+                            if not is_primary:
+                                logger.info(f"Successfully used fallback model: {model}")
+                            break  # Success
+                        except Exception as api_error:
+                            last_error = api_error
+
+                            if _is_fatal_error(api_error):
+                                logger.error(
+                                    f"Fatal streaming error (model={model}): "
+                                    f"{str(api_error)[:200]}"
+                                )
+                                model = None
+                                break
+
+                            if _is_quota_error(api_error):
+                                logger.warning(
+                                    f"Quota error on streaming model={model}, "
+                                    f"trying next: {str(api_error)[:120]}"
+                                )
+                                break  # Try next model
+
+                            if _is_retryable_error(api_error):
+                                if attempt < RETRY_MAX_ATTEMPTS:
+                                    logger.warning(
+                                        f"Transient streaming error model={model} "
+                                        f"attempt {attempt}/{RETRY_MAX_ATTEMPTS}, "
+                                        f"retrying in {RETRY_DELAY_SECONDS}s"
+                                    )
+                                    await asyncio.sleep(RETRY_DELAY_SECONDS)
+                                    continue
+                                else:
+                                    logger.warning(
+                                        f"Transient streaming error model={model} "
+                                        f"after {RETRY_MAX_ATTEMPTS} attempts, "
+                                        f"trying next model"
+                                    )
+                                    break  # Try next model
+
+                            logger.error(
+                                f"Unknown streaming error model={model}: "
+                                f"{str(api_error)[:200]}"
+                            )
+                            break  # Try next model
+
+                    if response is not None:
+                        # Attempt to collect from stream with this model
+                        try:
+                            turn_text = ""
+                            tool_calls = []
+
+                            for chunk in response:
+                                if chunk.text:
+                                    turn_text += chunk.text
+                                    yield {"event": "token", "text": chunk.text}
+                                if hasattr(chunk, "function_calls") and chunk.function_calls:
+                                    tool_calls.extend(chunk.function_calls)
+
+                            reply_text += turn_text
+                            stream_success = True
+                            break  # Success, exit models loop
+
+                        except Exception as stream_error:
+                            # Error during streaming iteration - try next model
+                            last_error = stream_error
+                            logger.warning(
+                                f"Error during streaming iteration with model={model}: "
+                                f"{str(stream_error)[:200]}"
+                            )
+                            response = None  # Reset, will try next model
+                            continue  # Try next model
+
+                if response is None or not stream_success:
+                    err_msg = str(last_error)[:200] if last_error else "unknown"
+                    logger.error(f"All streaming models exhausted. Last: {err_msg}")
+                    yield {"event": "error", "message": "All AI models are currently busy. Please try again."}
+                    break
+
+                if not tool_calls:
+                    logger.info(
+                        f"✅ Streaming finished at turn {turn + 1} (no tool calls)"
+                    )
+                    break
+
+                # Execute tools
+                should_break = False
+                for function_call in tool_calls:
+                    tool_name = function_call.name
+                    tool_args = dict(function_call.args) if function_call.args else {}
+
+                    # Guard against infinite tool loops
+                    tool_call_counts[tool_name] = (
+                        tool_call_counts.get(tool_name, 0) + 1
+                    )
+                    if tool_call_counts[tool_name] > MAX_SAME_TOOL_CALLS:
+                        logger.warning(
+                            f"Streaming: tool '{tool_name}' called "
+                            f"{tool_call_counts[tool_name]} times — breaking loop"
+                        )
+                        error_text = "\n\nI wasn't able to find what you were looking for. Could you provide more details?"
+                        reply_text += error_text
+                        yield {"event": "token", "text": error_text}
+                        should_break = True
+                        break
+
+                    logger.info(f"🔧 Streaming tool: {tool_name}")
+                    
+                    # Emit tool_start event
+                    yield {
+                        "event": "tool_start",
+                        "tool_name": tool_name,
+                        "tool_args": tool_args,
+                    }
+
+                    result = await self.registry.execute(tool_name, tool_args, ctx)
+                    
+                    # Emit tool_result event
+                    yield {
+                        "event": "tool_result",
+                        "tool_name": tool_name,
+                        "result": result,
+                    }
+
+                    await self.store.save_message(
+                        conversation_id=conv.id,
+                        role="tool",
+                        tool_name=tool_name,
+                        tool_input=tool_args,
+                        tool_output=result,
+                    )
+
+                    contents.append(
+                        types.Content(
+                            role="user",
+                            parts=[
+                                types.Part.from_function_response(
+                                    name=tool_name,
+                                    response=result,
+                                )
+                            ],
+                        )
+                    )
+
+                if should_break:
+                    break
+
+                turn += 1
+
+            if turn >= MAX_TOOL_TURNS and not reply_text:
+                reply_text = (
+                    "I reached my processing limit for this request. "
+                    "Please try a simpler or more specific question."
+                )
+                yield {"event": "token", "text": reply_text}
+                logger.warning(
+                    f"Streaming hit max turns ({MAX_TOOL_TURNS}) for conversation {conv.id}"
+                )
+
+            if reply_text:
+                await self.store.save_message(
+                    conversation_id=conv.id,
+                    role="assistant",
+                    content=reply_text,
+                )
+
+            await self.store.update_conversation_timestamp(conv.id)
+            await self.store.increment_message_count(conv.id)
+
+            # Summarize if needed (streaming mode)
+            if (
+                summarizer
+                and conv.message_count >= summarizer.MESSAGE_THRESHOLD
+                and not conv.summary
+            ):
+                logger.info(
+                    f"💾 Triggering conversation summarization (streaming) | conversation={conv.id}"
+                )
+                try:
+                    summary_result = await summarizer.summarize_conversation(conv.id)
+                    if summary_result["success"]:
+                        logger.info(f"✅ Summarization complete (streaming) | {summary_result}")
+                    else:
+                        logger.warning(f"⚠️ Summarization failed (streaming) | {summary_result}")
+                except Exception as exc:
+                    logger.warning(f"Error in summarization (streaming): {exc}")
+
+            await self.db.commit()
+
+            # Yield done event with conversation ID
+            yield {"event": "done", "conversation_id": str(conv.id)}
+            logger.info(f"✅ Streaming completed | conversation={conv.id}")
+
+        except Exception as exc:
+            logger.error(f"❌ Error in streaming generator: {exc}", exc_info=True)
+            try:
+                await self.db.rollback()
+            except Exception as rollback_error:
+                logger.debug(f"Error rolling back (non-fatal): {rollback_error}")
+            
+            yield {"event": "error", "message": "An error occurred while processing your request."}
+        finally:
+            if ctx is not None:
+                try:
+                    ctx.close()
+                except Exception as close_error:
+                    logger.debug(f"Error closing context (non-fatal): {close_error}")
+
     @staticmethod
     async def handle_streaming_background(
         user_id: UUID,
@@ -644,13 +965,53 @@ class AgentService:
                 workspace_id=payload.workspace_id,
             )
 
+            # Check token budget
+            if conv.total_token_count and conv.total_token_count >= MAX_TOKENS_PER_DAY_PER_USER:
+                logger.warning(
+                    f"❌ User {user_id} exceeded daily token budget in streaming (SSE) | "
+                    f"used={conv.total_token_count}/{MAX_TOKENS_PER_DAY_PER_USER}"
+                )
+                await publish_agent_event(
+                    user_id,
+                    {
+                        "event": "error",
+                        "message": "You have reached your daily AI interaction limit. Please try again tomorrow.",
+                    },
+                )
+                return
+
+            # Get conversation summarizer (non-fatal if unavailable)
+            summarizer = None
+            try:
+                summarizer = get_conversation_summarizer(self.db)
+            except Exception as exc:
+                logger.warning(f"Error creating summarizer (SSE streaming, non-fatal): {exc}")
+
+            # Load recent message history (sliding window)
             await self.store.get_recent_messages(conv.id, limit=MAX_CONVERSATION_HISTORY)
 
+            # Save user message
             await self.store.save_message(
                 conversation_id=conv.id,
                 role="user",
                 content=payload.message,
             )
+            await self.store.increment_message_count(conv.id)
+
+            # Build system prompt with conversation memory
+            system_prompt = SYSTEM_PROMPT
+            if summarizer and conv.summary:
+                try:
+                    summary_context = await summarizer.get_conversation_context(
+                        conv.id, include_summary=True
+                    )
+                    if summary_context:
+                        system_prompt = (
+                            f"{SYSTEM_PROMPT}\n\n"
+                            f"=== PREVIOUS CONVERSATION CONTEXT ===\n{summary_context}"
+                        )
+                except Exception as exc:
+                    logger.warning(f"Error getting summary context (SSE streaming): {exc}")
 
             ctx = ToolContext(
                 user_id=user_id,
@@ -670,14 +1031,14 @@ class AgentService:
             ]
 
             gen_config = types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
+                system_instruction=system_prompt,
                 tools=self.registry.get_gemini_tools(),
                 automatic_function_calling=types.AutomaticFunctionCallingConfig(
                     disable=True
                 ),
             )
 
-            models_to_try = [GEMINI_MODEL] + FALLBACK_MODELS
+            models_to_try = AVAILABLE_MODELS
 
             while turn < MAX_TOOL_TURNS:
                 logger.debug(
@@ -688,7 +1049,8 @@ class AgentService:
                 response = None
                 last_error = None
 
-                for model in models_to_try:
+                for idx, model in enumerate(models_to_try):
+                    is_primary = (idx == 0)
                     for attempt in range(1, RETRY_MAX_ATTEMPTS + 1):
                         try:
                             response = client.models.generate_content_stream(
@@ -696,6 +1058,8 @@ class AgentService:
                                 contents=contents,
                                 config=gen_config,
                             )
+                            if not is_primary:
+                                logger.info(f"Successfully used fallback model: {model}")
                             break  # Success
                         except Exception as api_error:
                             last_error = api_error
@@ -866,6 +1230,26 @@ class AgentService:
                 )
 
             await self.store.update_conversation_timestamp(conv.id)
+            await self.store.increment_message_count(conv.id)
+
+            # Summarize if needed (SSE streaming mode)
+            if (
+                summarizer
+                and conv.message_count >= summarizer.MESSAGE_THRESHOLD
+                and not conv.summary
+            ):
+                logger.info(
+                    f"💾 Triggering conversation summarization (SSE streaming) | conversation={conv.id}"
+                )
+                try:
+                    summary_result = await summarizer.summarize_conversation(conv.id)
+                    if summary_result["success"]:
+                        logger.info(f"✅ Summarization complete (SSE streaming) | {summary_result}")
+                    else:
+                        logger.warning(f"⚠️ Summarization failed (SSE streaming) | {summary_result}")
+                except Exception as exc:
+                    logger.warning(f"Error in summarization (SSE streaming): {exc}")
+
             await self.db.commit()
 
             elapsed_ms = (datetime.utcnow() - start_time).total_seconds() * 1000

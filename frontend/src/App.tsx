@@ -184,7 +184,14 @@ function App() {
 
   const [isCreateEventOpen, setIsCreateEventOpen] = useState<boolean>(false)
   const [isSearchOpen, setIsSearchOpen] = useState(false)
-  const [isAskAIOpen, setIsAskAIOpen] = useState(false)
+  const [isAskAIOpen, setIsAskAIOpen] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('cortex_askai_open')
+      return saved ? JSON.parse(saved) : false
+    } catch {
+      return false
+    }
+  })
   const [pendingSelection, setPendingSelection] = useState<string>('')
   const [isCreateWorkspaceOpen, setIsCreateWorkspaceOpen] = useState(false)
   const [managingMembersWorkspace, setManagingMembersWorkspace] = useState<{ id: string; name: string; is_personal: boolean } | null>(null)
@@ -214,6 +221,10 @@ function App() {
     applyThemeToDocument(theme)
     window.localStorage.setItem('cortex_theme', theme)
   }, [theme])
+
+  useEffect(() => {
+    window.localStorage.setItem('cortex_askai_open', JSON.stringify(isAskAIOpen))
+  }, [isAskAIOpen])
 
   useEffect(() => {
     if (isKnownRoute(location.pathname)) return

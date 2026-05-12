@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Bot, Send, X, Sparkles, RefreshCw, Copy, Check } from 'lucide-react'
-import { sendAgentMessage } from '../services/api'
+import { streamAgentMessage, listConversations, getConversation, type ConversationListItem } from '../services/api'
 import { useConversationStore } from '../stores/conversationStore'
 
 interface AskAIProps {
@@ -22,23 +22,30 @@ type Message = {
     role: 'user' | 'assistant'
     content: string
     loading?: boolean
+    thinkingOpen?: boolean
+    thinkingSteps?: Array<{
+        id: string
+        type: 'tool_start' | 'tool_result'
+        toolName: string
+        toolArgs?: Record<string, unknown>
+        result?: unknown
+    }>
 }
 
-const QUICK_PROMPTS = [
-    { label: 'Summarize', prompt: 'Summarize this note in 3 bullet points' },
-    { label: 'Improve writing', prompt: 'Improve the writing style and clarity of this note' },
-    { label: 'Find action items', prompt: 'Extract all action items and tasks from this note' },
-    { label: 'Generate outline', prompt: 'Create a structured outline based on this note' },
-    { label: 'Explain concepts', prompt: 'Explain the key concepts in this note simply' },
-]
-
 export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onInsert }: AskAIProps) {
+    const STORAGE_KEY = 'cortex_chatbot_state'
+
     const [messages, setMessages] = useState<Message[]>([])
     const [input, setInput] = useState('')
     const [isLoading, setIsLoading] = useState(false)
     const [copiedId, setCopiedId] = useState<string | null>(null)
     const [conversationId, setConversationId] = useState<string | null>(null)
     const [error, setError] = useState<string | null>(null)
+    const [sessions, setSessions] = useState<ConversationListItem[]>([])
+    const [sessionsLoading, setSessionsLoading] = useState(true)
+    const [sessionsLoadingMore, setSessionsLoadingMore] = useState(false)
+    const [sessionsOffset, setSessionsOffset] = useState(0)
+    const [isInitializing, setIsInitializing] = useState(true) // Track if we're loading from localStorage
     const [addedPills, setAddedPills] = useState<ContextPill[]>([
         ...(noteContent ? [{ id: 'note', text: noteContent, label: `📝 ${noteTitle || 'Note'}` }] : []),
     ])
@@ -49,6 +56,64 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
     useEffect(() => {
         inputRef.current?.focus()
     }, [])
+
+    // Load state from localStorage on mount
+    useEffect(() => {
+        try {
+            const savedState = localStorage.getItem(STORAGE_KEY)
+            if (savedState) {
+                const state = JSON.parse(savedState)
+                if (state.conversationId) {
+                    setConversationId(state.conversationId)
+                }
+                if (state.messages && Array.isArray(state.messages)) {
+                    setMessages(state.messages)
+                }
+            }
+        } catch (err) {
+            console.error('Failed to load chatbot state from localStorage:', err)
+        } finally {
+            // Mark initialization as complete
+            setIsInitializing(false)
+        }
+    }, [])
+
+    // Save state to localStorage whenever messages or conversationId changes
+    // But skip saving during initial load
+    useEffect(() => {
+        if (isInitializing) {
+            return
+        }
+
+        try {
+            const state = {
+                conversationId,
+                messages,
+            }
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+        } catch (err) {
+            console.error('Failed to save chatbot state to localStorage:', err)
+        }
+    }, [conversationId, messages, isInitializing])
+
+    // Fetch sessions on component mount
+    useEffect(() => {
+        const fetchSessions = async () => {
+            try {
+                setSessionsLoading(true)
+                const response = await listConversations(5, 0) // Limit to 5 recent sessions
+                setSessions(response.conversations)
+            } catch (err) {
+                console.error('❌ Failed to fetch sessions:', err)
+                setSessions([])
+            } finally {
+                setSessionsLoading(false)
+            }
+        }
+
+        fetchSessions()
+    }, [])
+
 
     // Build minimal runtime UI context (collected at send time)
     const buildRuntimeContextText = useCallback(() => {
@@ -78,6 +143,46 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
         }
     }, [pendingSelection, addedPills])
 
+    // Load a session/conversation
+    const loadSession = useCallback(async (sessionId: string) => {
+        try {
+            setIsLoading(true)
+            const conversation = await getConversation(sessionId)
+
+            // Convert conversation messages to Message format
+            const loadedMessages: Message[] = conversation.messages.map(msg => ({
+                id: msg.id,
+                role: msg.role as 'user' | 'assistant',
+                content: msg.content,
+            }))
+
+            setMessages(loadedMessages)
+            setConversationId(sessionId)
+            setSessions([]) // Clear sessions list after selection
+        } catch (err) {
+            setError(`Failed to load session: ${err instanceof Error ? err.message : 'Unknown error'}`)
+        } finally {
+            setIsLoading(false)
+        }
+    }, [])
+
+    // Load more sessions
+    const loadMoreSessions = useCallback(async () => {
+        try {
+            setSessionsLoadingMore(true)
+            const newOffset = sessionsOffset + 5
+            const response = await listConversations(10, newOffset)
+            if (response.conversations.length > 0) {
+                setSessions(prev => [...prev, ...response.conversations])
+                setSessionsOffset(newOffset)
+            }
+        } catch (err) {
+            console.error('Failed to load more sessions:', err)
+        } finally {
+            setSessionsLoadingMore(false)
+        }
+    }, [sessionsOffset])
+
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
     }, [messages])
@@ -106,6 +211,8 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
             role: 'assistant',
             content: '',
             loading: true,
+            thinkingOpen: false,
+            thinkingSteps: [],
         }
 
         setMessages(prev => [...prev, userMsgObj, loadingMsgObj])
@@ -121,21 +228,65 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
             if (runtimeText) parts.push(`Runtime UI Context:\n\n${runtimeText}`)
             if (parts.length > 0) finalMessage = `${parts.join('\n\n')}\n\n${userMsg}`
 
-            // Call backend agent API
-            const response = await sendAgentMessage(finalMessage, conversationId || undefined)
+            // Call streaming agent API
+            let fullReply = ''
+            let finalConversationId: string | null = null
+            let thinkingSteps: Message['thinkingSteps'] = []
+
+            for await (const event of streamAgentMessage(finalMessage, conversationId || undefined)) {
+                if (event.type === 'text' && event.text) {
+                    fullReply += event.text
+                    setMessages(prev =>
+                        prev.map(m => m.id === loadingMsgObj.id
+                            ? { ...m, content: fullReply, loading: false, thinkingSteps }
+                            : m
+                        )
+                    )
+                } else if (event.type === 'tool_start' && event.tool_name) {
+                    const stepId = `step-${Date.now()}-${Math.random()}`
+                    const step = {
+                        id: stepId,
+                        type: 'tool_start' as const,
+                        toolName: event.tool_name,
+                        toolArgs: event.tool_args,
+                    }
+                    thinkingSteps = [...thinkingSteps, step]
+                    setMessages(prev =>
+                        prev.map(m => m.id === loadingMsgObj.id
+                            ? { ...m, thinkingSteps, loading: true }
+                            : m
+                        )
+                    )
+                } else if (event.type === 'tool_result' && event.tool_name) {
+                    const step = {
+                        id: `result-${Date.now()}-${Math.random()}`,
+                        type: 'tool_result' as const,
+                        toolName: event.tool_name,
+                        result: event.result,
+                    }
+                    thinkingSteps = [...thinkingSteps, step]
+                    setMessages(prev =>
+                        prev.map(m => m.id === loadingMsgObj.id
+                            ? { ...m, thinkingSteps }
+                            : m
+                        )
+                    )
+                } else if (event.type === 'done' && event.conversation_id) {
+                    finalConversationId = event.conversation_id
+                }
+            }
 
             // Update conversation ID if this is the first message
-            if (!conversationId) {
-                setConversationId(response.conversation_id)
+            if (!conversationId && finalConversationId) {
+                setConversationId(finalConversationId)
             }
 
             // Update token usage in store
-            // Note: Backend will track this; we can fetch actual usage if needed
             updateTokenUsage(0) // Placeholder - real implementation would get actual usage
 
             setMessages(prev =>
                 prev.map(m => m.id === loadingMsgObj.id
-                    ? { ...m, content: response.reply, loading: false }
+                    ? { ...m, content: fullReply, loading: false, thinkingSteps }
                     : m
                 )
             )
@@ -152,6 +303,14 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
             setIsLoading(false)
         }
     }, [isLoading, conversationId, updateTokenUsage, addedPills, buildRuntimeContextText])
+
+    const toggleThinking = useCallback((messageId: string) => {
+        setMessages(prev => prev.map(m =>
+            m.id === messageId
+                ? { ...m, thinkingOpen: !m.thinkingOpen }
+                : m
+        ))
+    }, [])
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -227,22 +386,49 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                             </div>
                             <div className="ask-ai-empty-title">How can I help?</div>
                             <div className="ask-ai-empty-sub">
-                                {noteContent ? 'I have context from your current note.' : 'Ask anything or select a quick action.'}
+                                {noteContent ? 'I have context from your current note.' : 'Select a session or ask anything.'}
                             </div>
-                            {noteContent && (
-                                <div className="ask-ai-quick-actions">
-                                    {QUICK_PROMPTS.map(qp => (
+                            {/* Display Sessions */}
+                            <div className="ask-ai-quick-actions">
+                                {sessionsLoading ? (
+                                    <div style={{ padding: '12px', textAlign: 'center', color: '#888', fontSize: '14px' }}>
+                                        Loading sessions...
+                                    </div>
+                                ) : sessions.length > 0 ? (
+                                    sessions.map(session => (
                                         <button
-                                            key={qp.label}
+                                            key={session.id}
                                             type="button"
                                             className="ask-ai-quick-btn"
-                                            onClick={() => void sendMessage(qp.prompt)}
+                                            onClick={() => void loadSession(session.id)}
+                                            title={`Last updated: ${new Date(session.updated_at).toLocaleString()}`}
                                         >
-                                            {qp.label}
+                                            <div style={{ textAlign: 'left' }}>
+                                                <div style={{ fontWeight: 500, marginBottom: '2px' }}>
+                                                    {session.title || 'Untitled Session'}
+                                                </div>
+                                                <div style={{ fontSize: '12px', color: '#999' }}>
+                                                    {session.message_count} messages
+                                                </div>
+                                            </div>
                                         </button>
-                                    ))}
-                                </div>
-                            )}
+                                    ))
+                                ) : (
+                                    <div style={{ padding: '12px', textAlign: 'center', color: '#888', fontSize: '14px' }}>
+                                        No sessions yet
+                                    </div>
+                                )}
+                                {sessions.length > 0 && (
+                                    <button
+                                        type="button"
+                                        className="ask-ai-more-btn"
+                                        onClick={() => void loadMoreSessions()}
+                                        disabled={sessionsLoadingMore}
+                                    >
+                                        {sessionsLoadingMore ? 'Loading...' : 'More'}
+                                    </button>
+                                )}
+                            </div>
                         </div>
                     ) : (
                         messages.map(msg => (
@@ -254,8 +440,63 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                                 )}
                                 <div className="ask-ai-msg-bubble">
                                     {msg.loading ? (
-                                        <div className="ask-ai-thinking">
-                                            <span /><span /><span />
+                                        <div className="ask-ai-thinking-container">
+                                            <div className="ask-ai-thinking">
+                                                <span /><span /><span />
+                                            </div>
+                                            {msg.thinkingSteps && msg.thinkingSteps.length > 0 && (
+                                                <div className="ask-ai-thinking-wrapper">
+                                                    <button
+                                                        type="button"
+                                                        className="ask-ai-thinking-toggle"
+                                                        onClick={() => toggleThinking(msg.id)}
+                                                    >
+                                                        {msg.loading ? 'Thinking' : 'Thoughts'}
+                                                        <span className={`ask-ai-thinking-toggle-icon ${msg.thinkingOpen ? 'open' : ''}`}>
+                                                            ▾
+                                                        </span>
+                                                    </button>
+                                                    {msg.thinkingOpen && (
+                                                        <div className="ask-ai-thinking-steps">
+                                                            {msg.thinkingSteps.map(step => (
+                                                                <div key={step.id} className="ask-ai-thinking-step">
+                                                                    {step.type === 'tool_start' && (
+                                                                        <div className="ask-ai-step-item">
+                                                                            <span className="ask-ai-step-badge">📌</span>
+                                                                            <span className="ask-ai-step-text">
+                                                                                Using <strong>{step.toolName}</strong>
+                                                                                {step.toolArgs && Object.keys(step.toolArgs).length > 0 && (
+                                                                                    <code style={{ marginLeft: '4px', fontSize: '11px' }}>
+                                                                                        {JSON.stringify(step.toolArgs).slice(0, 60)}...
+                                                                                    </code>
+                                                                                )}
+                                                                            </span>
+                                                                        </div>
+                                                                    )}
+                                                                    {step.type === 'tool_result' && (
+                                                                        <div className="ask-ai-step-item">
+                                                                            <span className="ask-ai-step-badge">✓</span>
+                                                                            <span className="ask-ai-step-text">
+                                                                                Got result from <strong>{step.toolName}</strong>
+                                                                                {step.result ? (() => {
+                                                                                    const resultStr = typeof step.result === 'string' 
+                                                                                        ? step.result 
+                                                                                        : JSON.stringify(step.result);
+                                                                                    return (
+                                                                                        <code style={{ marginLeft: '4px', fontSize: '11px' }}>
+                                                                                            {resultStr.slice(0, 60)}...
+                                                                                        </code>
+                                                                                    );
+                                                                                })() : null}
+                                                                            </span>
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
                                         </div>
                                     ) : (
                                         <>
@@ -267,6 +508,7 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                                             ) : (
                                                 <div className="ask-ai-msg-content">{msg.content}</div>
                                             )}
+
                                             {msg.role === 'assistant' && !msg.loading && (
                                                 <div className="ask-ai-msg-actions">
                                                     <button

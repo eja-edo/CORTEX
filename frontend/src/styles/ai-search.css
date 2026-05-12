@@ -368,29 +368,59 @@
 
 .ask-ai-quick-actions {
     display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    justify-content: center;
-    margin-top: 4px;
+    flex-direction: column;
+    gap: 8px;
+    justify-content: flex-start;
+    margin-top: 12px;
+    width: 100%;
 }
 
 .ask-ai-quick-btn {
-    padding: 5px 10px;
+    padding: 8px 12px;
     border: 1px solid var(--border);
-    border-radius: 999px;
+    border-radius: 6px;
     background: var(--bg-secondary);
     color: var(--text-secondary);
-    font-size: 12px;
-    font-weight: 500;
+    font-size: 13px;
     cursor: pointer;
     transition: background 0.1s, border-color 0.1s, color 0.1s;
-    white-space: nowrap;
+    white-space: normal;
+    text-align: left;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
 }
 
 .ask-ai-quick-btn:hover {
     background: var(--bg-hover);
     border-color: var(--border-strong);
     color: var(--text-primary);
+}
+
+.ask-ai-more-btn {
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.1s, border-color 0.1s, color 0.1s;
+    width: 100%;
+    text-align: center;
+    min-height: 36px;
+}
+
+.ask-ai-more-btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+    border-color: var(--border-strong);
+    color: var(--text-primary);
+}
+
+.ask-ai-more-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
 }
 
 /* Message bubbles */
@@ -505,6 +535,13 @@
 }
 
 /* Loading dots */
+.ask-ai-thinking-container {
+    display: block;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 2px;
+}
+
 .ask-ai-thinking {
     display: flex;
     gap: 4px;
@@ -528,6 +565,105 @@
     animation-delay: 0.3s;
 }
 
+.ask-ai-thinking-text {
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 500;
+    animation: fadeInOut 1.5s ease-in-out infinite;
+}
+
+/* Thinking steps (reasoning display) */
+.ask-ai-thinking-steps {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.ask-ai-thinking-header {
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.ask-ai-thinking-wrapper {
+    margin-bottom: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+}
+
+.ask-ai-thinking-toggle {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+}
+
+.ask-ai-thinking-toggle:hover {
+    background: var(--bg-hover);
+}
+
+.ask-ai-thinking-toggle-icon {
+    transition: transform 0.15s ease;
+}
+
+.ask-ai-thinking-toggle-icon.open {
+    transform: rotate(180deg);
+}
+
+.ask-ai-thinking-steps {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.ask-ai-thinking-step {
+    margin-bottom: 6px;
+}
+
+.ask-ai-step-item {
+    display: flex;
+    gap: 6px;
+    align-items: flex-start;
+}
+
+.ask-ai-step-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+    font-size: 11px;
+}
+
+.ask-ai-step-text {
+    display: block;
+    flex: 1;
+    color: var(--text-secondary);
+    word-break: break-word;
+}
+
+.ask-ai-step-text code {
+    background: rgba(135, 131, 120, 0.1);
+    padding: 1px 3px;
+    border-radius: 2px;
+    color: #666;
+}
+
 @keyframes thinkingPulse {
 
     0%,
@@ -540,6 +676,18 @@
     40% {
         opacity: 1;
         transform: scale(1);
+    }
+}
+
+@keyframes fadeInOut {
+
+    0%,
+    100% {
+        opacity: 0.7;
+    }
+
+    50% {
+        opacity: 1;
     }
 }
 

@@ -1,9 +1,10 @@
 """Agent chat API endpoint for conversational AI interactions."""
 
-import asyncio
+import json
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database_async import get_async_db
@@ -12,12 +13,8 @@ from app.models import User
 from app.schemas import (
     AgentChatRequest, 
     AgentChatResponse,
-    AgentStreamingStartResponse
 )
 from app.services.agent.agent_service import AgentService
-from app.api.sse.sse_manager import SSEManager
-from app.api.sse.sse_base import event_generator, create_sse_response
-from app.api.sse.channels.agent_events import AGENT_CHANNEL_TYPE
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -68,134 +65,67 @@ async def chat(
         ) from exc
 
 
-@router.get("/stream")
-async def stream_agent_events(
-    current_user: User = Depends(get_current_active_user),
-):
-    """
-    SSE endpoint for receiving agent events in real-time.
-    
-    Streams:
-    - tool_start: Tool execution begins
-    - tool_result: Tool execution completes
-    - token: Streamed text tokens
-    - done: Agent response complete
-    - error: Error occurred
-    
-    Client should:
-    1. Open SSE connection: const eventSource = new EventSource('/api/agent/stream')
-    2. Send chat request: POST /api/agent/chat
-    3. Listen for events: eventSource.addEventListener('token', ...)
-    4. Close connection when done or on page unload
-    
-    Returns:
-        StreamingResponse with SSE formatted events
-    """
-    try:
-        manager = SSEManager()
-        context_key = f"user:{current_user.id}"
-        
-        # Generate unique connection ID and register with manager
-        connection_id = await manager.register_connection(
-            channel_type=AGENT_CHANNEL_TYPE,
-            context_key=context_key,
-            appid=str(current_user.id),
-        )
-        
-        # Disconnect any existing connection from this user to prevent duplicates
-        await manager.disconnect_existing_appid(
-            channel_type=AGENT_CHANNEL_TYPE,
-            context_key=context_key,
-            appid=str(current_user.id),
-        )
-        
-        # Create queue for this connection
-        connection_queue = await manager.create_connection_queue(
-            channel_type=AGENT_CHANNEL_TYPE,
-            context_key=context_key,
-            connection_id=connection_id,
-        )
-        
-        # Create event generator
-        gen = event_generator(
-            channel_type=AGENT_CHANNEL_TYPE,
-            context_key=context_key,
-            connection_id=connection_id,
-            connection_queue=connection_queue,
-            manager=manager,
-            heartbeat_interval=30,
-        )
-        
-        # Return SSE response
-        return create_sse_response(gen)
-        
-    except Exception as exc:
-        logger.error(f"Error in agent stream: {exc}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to establish streaming connection.",
-        ) from exc
-
-
-@router.post("/chat/stream", response_model=AgentStreamingStartResponse, status_code=status.HTTP_202_ACCEPTED)
-async def chat_streaming(
+@router.post("/stream/chat")
+async def stream_chat(
     payload: AgentChatRequest,
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_async_db),
-) -> AgentStreamingStartResponse:
+):
     """
-    Send a message to the AI agent and receive streaming response via SSE.
+    Send a message to the AI agent and stream response as SSE.
     
-    This endpoint returns immediately (HTTP 202) and triggers background processing.
-    The actual response is streamed via the /api/agent/stream endpoint.
-    
-    Client flow:
-    1. Open SSE connection: new EventSource('/api/agent/stream')
-    2. Send POST request to this endpoint
-    3. Listen for events: token, tool_start, tool_result, done, error
-    4. Close connection when done
+    Streams events in SSE format:
+    - data: {"event": "token", "text": "..."} - Text token from response
+    - data: {"event": "done", "conversation_id": "..."} - Stream complete
+    - data: {"event": "error", "message": "..."} - Error occurred
     
     Args:
         payload: Chat request with message and optional conversation_id
         current_user: Authenticated user
-        db: Async database session (used only to access user info before launching background task)
+        db: Async database session
         
     Returns:
-        AgentStreamingStartResponse indicating streaming has started
-        
-    Raises:
-        HTTPException: If background task cannot be started
+        StreamingResponse with SSE formatted events
     """
-    try:
-        # Start background streaming task (non-blocking)
-        # Note: We pass user_id and workspace_id instead of db/current_user
-        # because background task will create its own AsyncSession
-        asyncio.create_task(
-            AgentService.handle_streaming_background(
-                user_id=current_user.id,
+    async def stream_events():
+        try:
+            service = AgentService(user=current_user, db=db)
+            
+            # Process with streaming
+            reply_text = ""
+            result_conversation_id = None
+            
+            async for chunk in service.handle_streaming_generator(
                 message=payload.message,
                 conversation_id=payload.conversation_id,
                 workspace_id=payload.workspace_id,
-            )
-        )
-        
-        logger.info(
-            f"Started streaming agent task for user {current_user.id} | "
-            f"conversation_id={payload.conversation_id}"
-        )
-        
-        return AgentStreamingStartResponse(
-            status="streaming_started",
-            conversation_id=payload.conversation_id,
-            message="Response will be streamed via /api/agent/stream"
-        )
-        
-    except Exception as exc:
-        logger.error(f"Error starting streaming agent task: {exc}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to start streaming response processing.",
-        ) from exc
+            ):
+                if chunk.get("event") == "token" and chunk.get("text"):
+                    reply_text += chunk["text"]
+                    yield f'data: {json.dumps({"event": "token", "text": chunk["text"]})}\n\n'
+                elif chunk.get("event") == "tool_start":
+                    yield f'data: {json.dumps({"event": "tool_start", "tool_name": chunk.get("tool_name"), "tool_args": chunk.get("tool_args")})}\n\n'
+                elif chunk.get("event") == "tool_result":
+                    yield f'data: {json.dumps({"event": "tool_result", "tool_name": chunk.get("tool_name"), "result": chunk.get("result")})}\n\n'
+                elif chunk.get("event") == "done":
+                    result_conversation_id = chunk.get("conversation_id")
+                    yield f'data: {json.dumps({"event": "done", "conversation_id": str(result_conversation_id)})}\n\n'
+                elif chunk.get("event") == "error":
+                    yield f'data: {json.dumps({"event": "error", "message": chunk.get("message")})}\n\n'
+                    
+        except Exception as exc:
+            logger.error(f"Error in stream chat: {exc}", exc_info=True)
+            yield f'data: {json.dumps({"event": "error", "message": str(exc)})}\n\n'
+    
+    return StreamingResponse(
+        stream_events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 # ============================================================================

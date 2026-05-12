@@ -188,4 +188,147 @@ export async function sendAgentMessage(
     })
 }
 
+export interface StreamEvent {
+    type: 'text' | 'done' | 'tool_start' | 'tool_result' | 'thinking'
+    text?: string
+    conversation_id?: string
+    tool_name?: string
+    tool_args?: Record<string, unknown>
+    result?: unknown
+}
+
+export async function* streamAgentMessage(
+    message: string,
+    conversationId?: string,
+    workspaceId?: string,
+): AsyncGenerator<StreamEvent, void, undefined> {
+    let tokens = getCurrentTokens()
+    if (!tokens?.accessToken) {
+        throw new Error('No authentication token available')
+    }
+
+    const url = `${API_BASE_URL}/agent/stream/chat`
+    const body = JSON.stringify({
+        message,
+        conversation_id: conversationId,
+        workspace_id: workspaceId,
+    })
+    
+    let response = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${tokens.accessToken}`,
+        },
+        body,
+    })
+
+    // Handle 401 - token expired, refresh and retry
+    if (response.status === 401 && tokens.refreshToken) {
+        try {
+            tokens = await refreshToken(tokens.refreshToken)
+            setCurrentTokens(tokens)
+            response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${tokens.accessToken}`,
+                },
+                body,
+            })
+        } catch {
+            // Refresh failed, return original 401 error
+            const errorData = await response.json().catch(() => ({}))
+            throw new ApiError(errorData.detail || `Authentication failed: ${response.statusText}`, response.status)
+        }
+    }
+
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new ApiError(errorData.detail || `Stream request failed: ${response.statusText}`, response.status)
+    }
+
+    const reader = response.body?.getReader()
+    if (!reader) {
+        throw new Error('Response body is not readable')
+    }
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    try {
+        while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+
+            buffer += decoder.decode(value, { stream: true })
+            const lines = buffer.split('\n')
+            buffer = lines.pop() || ''
+
+            for (const line of lines) {
+                if (!line.trim()) continue
+
+                if (line.startsWith('data: ')) {
+                    try {
+                        const data = JSON.parse(line.slice(6))
+                        
+                        if (data.event === 'token' && data.text) {
+                            yield { type: 'text', text: data.text }
+                        } else if (data.event === 'done') {
+                            yield { type: 'done', conversation_id: data.conversation_id }
+                        } else if (data.event === 'tool_start') {
+                            yield { 
+                                type: 'tool_start', 
+                                tool_name: data.tool_name,
+                                tool_args: data.tool_args
+                            }
+                        } else if (data.event === 'tool_result') {
+                            yield { 
+                                type: 'tool_result', 
+                                tool_name: data.tool_name,
+                                result: data.result
+                            }
+                        } else if (data.event === 'thinking') {
+                            yield { 
+                                type: 'thinking', 
+                                text: data.content
+                            }
+                        }
+                    } catch (e) {
+                        // Ignore JSON parse errors
+                    }
+                }
+            }
+        }
+
+        // Process any remaining buffer
+        if (buffer.trim() && buffer.startsWith('data: ')) {
+            try {
+                const data = JSON.parse(buffer.slice(6))
+                if (data.event === 'token' && data.text) {
+                    yield { type: 'text', text: data.text }
+                } else if (data.event === 'done') {
+                    yield { type: 'done', conversation_id: data.conversation_id }
+                } else if (data.event === 'tool_start') {
+                    yield { 
+                        type: 'tool_start', 
+                        tool_name: data.tool_name,
+                        tool_args: data.tool_args
+                    }
+                } else if (data.event === 'tool_result') {
+                    yield { 
+                        type: 'tool_result', 
+                        tool_name: data.tool_name,
+                        result: data.result
+                    }
+                }
+            } catch (e) {
+                // Ignore JSON parse errors
+            }
+        }
+    } finally {
+        reader.releaseLock()
+    }
+}
+
 export { API_BASE_URL }
