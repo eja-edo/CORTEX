@@ -1,37 +1,24 @@
 """Main agent service for handling conversational AI requests with tool calling."""
 
 import asyncio
-import time
-from google import genai
 from google.genai import types
-from google.genai import errors as genai_errors
 from uuid import UUID
 from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.models import User
 from app.schemas import AgentChatRequest as ChatRequest
 from app.services.agent.conversation_store import ConversationStore
 from app.services.agent.conversation_summarizer import get_conversation_summarizer
+from app.services.agent.model_client import ModelClient, AllModelsExhaustedError, is_quota_error, is_fatal_error
 from app.services.agent.tool_context import ToolContext
 from app.services.agent.tool_registry import get_tool_registry
 from app.database_async import AsyncSessionLocal as DBAsyncSessionLocal
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
-
-# Create client (uses GEMINI_API_KEY env var)
-client = genai.Client(api_key=settings.GEMINI_API_KEY)
-
-# Available models in order of priority (first model is primary, rest are fallbacks)
-AVAILABLE_MODELS = [
-    "models/gemini-3.1-flash-lite",
-    "models/gemma-4-31b-it",
-    "models/gemma-4-26b-a4b-it",
-]
 
 # System prompt that prevents tool hallucination and sets context
 SYSTEM_PROMPT = """You are a helpful productivity assistant for the Cortex app. Your role is to help users organize their notes, schedules, and learning materials by using available tools.
@@ -67,157 +54,70 @@ MAX_TOOL_TURNS = 6             # Reduced: prevent infinite tool loops
 MAX_SAME_TOOL_CALLS = 2        # Max times the same tool can be called per turn
 MAX_TOKENS_PER_DAY_PER_USER = 100_000  # Daily token budget
 
-# Retry configuration for transient API errors
-RETRY_MAX_ATTEMPTS = 2         # Retry at most 2 times for 500/503
-RETRY_DELAY_SECONDS = 2.0      # Wait between retries
+# Module-level ModelClient — one round-robin cursor shared across all
+# AgentService instances so load is spread across models process-wide.
+_model_client = ModelClient()
 
-# Error codes that are RETRYABLE (server-side transient)
-RETRYABLE_STATUS_CODES = {500, 503}
-
-# Error codes that are NOT retryable (client-side, needs fallback or fix)
-FATAL_STATUS_CODES = {400, 401, 403, 404}
-
-
-def _is_retryable_error(error: Exception) -> bool:
-    """Return True if the error is a transient server error worth retrying."""
-    error_str = str(error)
-    # 429 rate limit: fallback to another model instead of retry
-    if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
-        return False
-    # 500/503: transient server errors, worth retrying briefly
-    if "500" in error_str or "503" in error_str:
-        return True
-    if "INTERNAL" in error_str or "UNAVAILABLE" in error_str:
-        return True
-    return False
-
-
-def _is_quota_error(error: Exception) -> bool:
-    """Return True if the error is a quota/rate-limit error → try fallback model."""
-    error_str = str(error)
-    return (
-        "429" in error_str
-        or "RESOURCE_EXHAUSTED" in error_str
-        or "quota" in error_str.lower()
-        or "rate" in error_str.lower()
-    )
-
-
-def _is_fatal_error(error: Exception) -> bool:
-    """Return True if the error is client-side and retrying/fallback won't help."""
-    error_str = str(error)
-    return any(str(code) in error_str for code in FATAL_STATUS_CODES)
-
-
-async def _call_with_retry(
-    model: str,
-    contents,
-    config,
-    max_attempts: int = RETRY_MAX_ATTEMPTS,
-    delay: float = RETRY_DELAY_SECONDS,
-):
+def _build_history_contents(messages: list) -> list[types.Content]:
     """
-    Call client.models.generate_content with retry for transient errors.
+    Convert stored AgentMessage records into Gemini Content objects for context.
 
-    - 500 / 503: retry up to max_attempts with delay
-    - 429 / quota: raise immediately (caller should try fallback model)
-    - 400 / 401 / 403 / 404: raise immediately (no point retrying)
+    FIX: Previously get_recent_messages() was called but the result was discarded.
+    Now we convert DB messages → types.Content so the model sees prior conversation.
 
-    Returns the response or raises the last exception.
+    Args:
+        messages: List of AgentMessage objects ordered by created_at asc
+
+    Returns:
+        List of types.Content objects representing prior turns
     """
-    last_exc: Exception | None = None
-
-    for attempt in range(1, max_attempts + 1):
-        try:
-            response = client.models.generate_content(
-                model=model,
-                contents=contents,
-                config=config,
+    contents = []
+    for msg in messages:
+        if msg.role == "user" and msg.content:
+            contents.append(
+                types.Content(
+                    role="user",
+                    parts=[types.Part.from_text(text=msg.content)],
+                )
             )
-            return response
-
-        except Exception as exc:
-            last_exc = exc
-
-            if _is_fatal_error(exc):
-                # Client error — don't retry, don't fallback
-                logger.error(
-                    f"Fatal API error (model={model}, attempt={attempt}): {str(exc)[:200]}"
-                )
-                raise
-
-            if _is_quota_error(exc):
-                # Quota/rate-limit — caller should switch model
-                logger.warning(
-                    f"Quota/rate-limit on model={model}: {str(exc)[:120]}"
-                )
-                raise
-
-            if _is_retryable_error(exc):
-                if attempt < max_attempts:
-                    logger.warning(
-                        f"Transient error on model={model} "
-                        f"(attempt {attempt}/{max_attempts}), "
-                        f"retrying in {delay}s: {str(exc)[:120]}"
+        elif msg.role == "assistant":
+            # Include assistant messages even if content is empty (function_call only)
+            if msg.content:
+                contents.append(
+                    types.Content(
+                        role="model",
+                        parts=[types.Part.from_text(text=msg.content)],
                     )
-                    await asyncio.sleep(delay)
-                    continue
-                else:
-                    logger.error(
-                        f"Transient error on model={model} "
-                        f"after {max_attempts} attempts: {str(exc)[:200]}"
-                    )
-                    raise
-
-            # Unknown error type — don't retry
-            logger.error(
-                f"Unknown API error on model={model}: {str(exc)[:200]}",
-                exc_info=True,
-            )
-            raise
-
-    raise last_exc  # Should not reach here
-
-
-async def _call_with_fallback(contents, config) -> tuple[str, object]:
-    """
-    Try each model in AVAILABLE_MODELS in order of priority.
-    Returns (model_name_used, response).
-
-    - Transient errors (500/503) are retried on the SAME model before moving on.
-    - Quota errors (429) immediately move to the next model.
-    - Fatal errors (4xx) stop immediately.
-    """
-    models_to_try = AVAILABLE_MODELS
-    last_exc: Exception | None = None
-
-    for idx, model in enumerate(models_to_try):
-        try:
-            response = await _call_with_retry(model, contents, config)
-            if idx > 0:  # idx=0 is primary model, >0 is fallback
-                logger.info(f"Successfully used fallback model: {model}")
-            return model, response
-
-        except Exception as exc:
-            last_exc = exc
-
-            if _is_fatal_error(exc):
-                # No point trying other models for client errors
-                raise
-
-            if _is_quota_error(exc) or _is_retryable_error(exc):
-                logger.warning(
-                    f"Model {model} unavailable, trying next fallback. "
-                    f"Error: {str(exc)[:120]}"
                 )
-                continue
-
-            # Unknown error — stop
-            raise
-
-    # All models exhausted
-    logger.error(f"All models exhausted. Last error: {str(last_exc)[:300]}")
-    raise last_exc
+            # Note: function_calls are stored in tool messages, not here
+        elif msg.role == "tool":
+            # Reconstruct tool call + result as a model/user pair so Gemini
+            # can correctly interpret the prior tool-use turns.
+            if msg.tool_name and msg.tool_input is not None:
+                contents.append(
+                    types.Content(
+                        role="model",
+                        parts=[
+                            types.Part.from_function_call(
+                                name=msg.tool_name,
+                                args=msg.tool_input or {},
+                            )
+                        ],
+                    )
+                )
+            if msg.tool_name and msg.tool_output is not None:
+                contents.append(
+                    types.Content(
+                        role="user",
+                        parts=[
+                            types.Part.from_function_response(
+                                name=msg.tool_name,
+                                response=msg.tool_output or {},
+                            )
+                        ],
+                    )
+                )
+    return contents
 
 
 class AgentService:
@@ -292,10 +192,15 @@ class AgentService:
             except Exception as exc:
                 logger.warning(f"Error getting summary context: {exc}")
 
-        # Load recent message history (sliding window)
-        await self.store.get_recent_messages(conv.id, limit=MAX_CONVERSATION_HISTORY)
+        # FIX: Load recent message history AND use it to seed contents
+        recent_messages = await self.store.get_recent_messages(
+            conv.id, limit=MAX_CONVERSATION_HISTORY
+        )
+        logger.info(
+            f"📜 Loaded {len(recent_messages)} historical messages for conversation {conv.id}"
+        )
 
-        # Save user message
+        # Save user message AFTER loading history so it's not included in history seed
         await self.store.save_message(
             conversation_id=conv.id,
             role="user",
@@ -331,35 +236,43 @@ class AgentService:
             # Agentic loop
             turn = 0
             reply_text = None
-            # Track tool call counts to prevent infinite loops
             tool_call_counts: dict[str, int] = {}
 
-            # Build initial contents
-            contents = [
+            # FIX: Build contents from history + current message
+            contents = _build_history_contents(recent_messages)
+            contents.append(
                 types.Content(
                     role="user",
                     parts=[types.Part.from_text(text=message)],
                 )
-            ]
+            )
+            logger.info(
+                f"📋 Contents seeded with {len(contents)} items "
+                f"({len(recent_messages)} history + 1 current)"
+            )
 
             while turn < MAX_TOOL_TURNS:
                 logger.debug(
                     f"Agent turn {turn + 1}/{MAX_TOOL_TURNS} | conversation={conv.id}"
                 )
 
-                # Call Gemini with retry + fallback
+                # Call Gemini via shared ModelClient (round-robin + retry + fallback)
                 try:
-                    _model_used, response = await _call_with_fallback(
+                    _model_used, response = await _model_client.generate(
                         contents, gen_config
                     )
+                except AllModelsExhaustedError as api_error:
+                    logger.warning(
+                        f"All models rate-limited: {str(api_error)[:200]}"
+                    )
+                    reply_text = (
+                        "All AI models are currently rate-limited. "
+                        "Please wait a moment and try again."
+                    )
+                    break
                 except Exception as api_error:
                     error_str = str(api_error)
-                    if _is_quota_error(api_error):
-                        reply_text = (
-                            "All AI models are currently busy. "
-                            "Please wait a moment and try again."
-                        )
-                    elif _is_fatal_error(api_error):
+                    if is_fatal_error(api_error):
                         logger.error(
                             f"Fatal Gemini API error: {error_str[:300]}", exc_info=True
                         )
@@ -383,7 +296,6 @@ class AgentService:
                     reply_text = "I'm unable to generate a response at this time."
                     break
 
-                # Debug: log response details
                 logger.debug(
                     f"Gemini response type: {type(response)} | "
                     f"has text: {hasattr(response, 'text')} | "
@@ -403,12 +315,10 @@ class AgentService:
                         logger.error(f"❌ Failed to extract response.text: {type(e).__name__}: {e}")
                         logger.debug(f"Response object: {response}")
                         reply_text = None
-                    
-                    # Log extraction result safely
+
                     if reply_text:
                         logger.info(f"✅ Response text extracted: '{reply_text[:80]}...' (len={len(reply_text)})")
-                    
-                    # Fallback if text extraction failed
+
                     if not reply_text:
                         logger.warning(
                             f"Empty reply_text after extraction | "
@@ -416,10 +326,30 @@ class AgentService:
                             f"response parts: {len(response.parts) if hasattr(response, 'parts') else 'N/A'} | "
                             f"response candidates: {len(response.candidates) if hasattr(response, 'candidates') else 'N/A'}"
                         )
-                    
+
                     reply_text = reply_text or "I couldn't process your request."
                     logger.info(f"✅ Agent finished at turn {turn + 1} (no tool calls)")
                     break
+
+                # IMPORTANT: Save model response immediately with function calls to maintain consistent history
+                # This prevents turn order violations when looping again
+                try:
+                    response_text = response.text if hasattr(response, 'text') else ""
+                    if response_text or tool_calls:
+                        await self.store.save_message(
+                            conversation_id=conv.id,
+                            role="assistant",
+                            content=response_text,  # May be empty if only function_calls
+                        )
+                except Exception as save_error:
+                    logger.warning(f"Could not save model response: {save_error}")
+
+                # FIX: Append model's response (with function calls) to contents
+                # so subsequent turns have full context of what the model decided.
+                if hasattr(response, "candidates") and response.candidates:
+                    candidate = response.candidates[0]
+                    if hasattr(candidate, "content") and candidate.content:
+                        contents.append(candidate.content)
 
                 # Execute tools
                 logger.info(f"🔧 Processing {len(tool_calls)} tool call(s) at turn {turn + 1}:")
@@ -427,7 +357,7 @@ class AgentService:
                     tc_name = getattr(tc, 'name', 'unknown')
                     tc_args = getattr(tc, 'args', {})
                     logger.info(f"  [{i}/{len(tool_calls)}] Tool: {tc_name} | Args: {tc_args}")
-                
+
                 for function_call in tool_calls:
                     tool_name = getattr(function_call, 'name', 'unknown')
                     tool_args = dict(getattr(function_call, 'args', {})) if getattr(function_call, 'args', None) else {}
@@ -579,7 +509,7 @@ class AgentService:
     ):
         """
         Process a user message with streaming response, yielding events.
-        
+
         Yields:
             dict with "event", "text", and "conversation_id" keys
         """
@@ -613,10 +543,15 @@ class AgentService:
             except Exception as exc:
                 logger.warning(f"Error creating summarizer (non-fatal): {exc}")
 
-            # Load recent message history (sliding window)
-            await self.store.get_recent_messages(conv.id, limit=MAX_CONVERSATION_HISTORY)
+            # FIX: Load recent message history BEFORE saving current message
+            recent_messages = await self.store.get_recent_messages(
+                conv.id, limit=MAX_CONVERSATION_HISTORY
+            )
+            logger.info(
+                f"📜 Loaded {len(recent_messages)} historical messages for streaming conversation {conv.id}"
+            )
 
-            # Save user message
+            # Save user message AFTER loading history
             await self.store.save_message(
                 conversation_id=conv.id,
                 role="user",
@@ -649,12 +584,18 @@ class AgentService:
             reply_text = ""
             tool_call_counts: dict[str, int] = {}
 
-            contents = [
+            # FIX: Build contents from history + current message
+            contents = _build_history_contents(recent_messages)
+            contents.append(
                 types.Content(
                     role="user",
                     parts=[types.Part.from_text(text=message)],
                 )
-            ]
+            )
+            logger.info(
+                f"📋 Streaming contents seeded with {len(contents)} items "
+                f"({len(recent_messages)} history + 1 current)"
+            )
 
             gen_config = types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -664,104 +605,79 @@ class AgentService:
                 ),
             )
 
-            models_to_try = AVAILABLE_MODELS
-
             while turn < MAX_TOOL_TURNS:
                 logger.debug(
                     f"Streaming turn {turn + 1}/{MAX_TOOL_TURNS} | conversation={conv.id}"
                 )
 
-                # Try each model with retry for streaming
-                response = None
-                last_error = None
                 stream_success = False
                 turn_text = ""
                 tool_calls = []
+                all_parts = []
+                last_error = None
 
-                for idx, model in enumerate(models_to_try):
-                    is_primary = (idx == 0)
-                    for attempt in range(1, RETRY_MAX_ATTEMPTS + 1):
-                        try:
-                            response = client.models.generate_content_stream(
-                                model=model,
-                                contents=contents,
-                                config=gen_config,
+                # Stream with automatic fallback to other models on transient errors
+                try:
+                    async for chunk in _model_client.stream_with_fallback(
+                        contents, gen_config
+                    ):
+                        if chunk.text:
+                            turn_text += chunk.text
+                            yield {"event": "token", "text": chunk.text}
+                        if hasattr(chunk, "function_calls") and chunk.function_calls:
+                            tool_calls.extend(chunk.function_calls)
+                        if hasattr(chunk, "candidates") and chunk.candidates:
+                            candidate = chunk.candidates[0]
+                            if hasattr(candidate, "content") and candidate.content:
+                                if hasattr(candidate.content, "parts"):
+                                    all_parts.extend(candidate.content.parts or [])
+
+                    stream_success = True
+                    reply_text += turn_text
+
+                    # IMPORTANT: Save model response immediately to maintain consistent history
+                    # This prevents turn order violations (e.g., consecutive model turns)
+                    if turn_text or tool_calls:
+                        await self.store.save_message(
+                            conversation_id=conv.id,
+                            role="assistant",
+                            content=turn_text,  # May be empty if only function_calls
+                        )
+
+                    # Append model turn to contents for multi-turn tool loop
+                    if all_parts:
+                        contents.append(
+                            types.Content(role="model", parts=all_parts)
+                        )
+                    elif turn_text:
+                        contents.append(
+                            types.Content(
+                                role="model",
+                                parts=[types.Part.from_text(text=turn_text)],
                             )
-                            if not is_primary:
-                                logger.info(f"Successfully used fallback model: {model}")
-                            break  # Success
-                        except Exception as api_error:
-                            last_error = api_error
+                        )
 
-                            if _is_fatal_error(api_error):
-                                logger.error(
-                                    f"Fatal streaming error (model={model}): "
-                                    f"{str(api_error)[:200]}"
-                                )
-                                model = None
-                                break
+                except AllModelsExhaustedError as api_error:
+                    logger.error(f"All models exhausted (streaming): {str(api_error)[:200]}")
+                    yield {
+                        "event": "error",
+                        "message": "All AI models are currently busy. Please try again.",
+                    }
+                    break
 
-                            if _is_quota_error(api_error):
-                                logger.warning(
-                                    f"Quota error on streaming model={model}, "
-                                    f"trying next: {str(api_error)[:120]}"
-                                )
-                                break  # Try next model
+                except Exception as stream_error:
+                    last_error = stream_error
+                    logger.error(
+                        f"Streaming error after fallback attempts: {str(stream_error)[:200]}",
+                        exc_info=True
+                    )
+                    yield {
+                        "event": "error",
+                        "message": "I encountered an error processing your request. Please try again.",
+                    }
+                    break
 
-                            if _is_retryable_error(api_error):
-                                if attempt < RETRY_MAX_ATTEMPTS:
-                                    logger.warning(
-                                        f"Transient streaming error model={model} "
-                                        f"attempt {attempt}/{RETRY_MAX_ATTEMPTS}, "
-                                        f"retrying in {RETRY_DELAY_SECONDS}s"
-                                    )
-                                    await asyncio.sleep(RETRY_DELAY_SECONDS)
-                                    continue
-                                else:
-                                    logger.warning(
-                                        f"Transient streaming error model={model} "
-                                        f"after {RETRY_MAX_ATTEMPTS} attempts, "
-                                        f"trying next model"
-                                    )
-                                    break  # Try next model
-
-                            logger.error(
-                                f"Unknown streaming error model={model}: "
-                                f"{str(api_error)[:200]}"
-                            )
-                            break  # Try next model
-
-                    if response is not None:
-                        # Attempt to collect from stream with this model
-                        try:
-                            turn_text = ""
-                            tool_calls = []
-
-                            for chunk in response:
-                                if chunk.text:
-                                    turn_text += chunk.text
-                                    yield {"event": "token", "text": chunk.text}
-                                if hasattr(chunk, "function_calls") and chunk.function_calls:
-                                    tool_calls.extend(chunk.function_calls)
-
-                            reply_text += turn_text
-                            stream_success = True
-                            break  # Success, exit models loop
-
-                        except Exception as stream_error:
-                            # Error during streaming iteration - try next model
-                            last_error = stream_error
-                            logger.warning(
-                                f"Error during streaming iteration with model={model}: "
-                                f"{str(stream_error)[:200]}"
-                            )
-                            response = None  # Reset, will try next model
-                            continue  # Try next model
-
-                if response is None or not stream_success:
-                    err_msg = str(last_error)[:200] if last_error else "unknown"
-                    logger.error(f"All streaming models exhausted. Last: {err_msg}")
-                    yield {"event": "error", "message": "All AI models are currently busy. Please try again."}
+                if not stream_success:
                     break
 
                 if not tool_calls:
@@ -792,7 +708,7 @@ class AgentService:
                         break
 
                     logger.info(f"🔧 Streaming tool: {tool_name}")
-                    
+
                     # Emit tool_start event
                     yield {
                         "event": "tool_start",
@@ -801,7 +717,7 @@ class AgentService:
                     }
 
                     result = await self.registry.execute(tool_name, tool_args, ctx)
-                    
+
                     # Emit tool_result event
                     yield {
                         "event": "tool_result",
@@ -884,7 +800,7 @@ class AgentService:
                 await self.db.rollback()
             except Exception as rollback_error:
                 logger.debug(f"Error rolling back (non-fatal): {rollback_error}")
-            
+
             yield {"event": "error", "message": "An error occurred while processing your request."}
         finally:
             if ctx is not None:
@@ -987,10 +903,15 @@ class AgentService:
             except Exception as exc:
                 logger.warning(f"Error creating summarizer (SSE streaming, non-fatal): {exc}")
 
-            # Load recent message history (sliding window)
-            await self.store.get_recent_messages(conv.id, limit=MAX_CONVERSATION_HISTORY)
+            # FIX: Load recent message history BEFORE saving current message
+            recent_messages = await self.store.get_recent_messages(
+                conv.id, limit=MAX_CONVERSATION_HISTORY
+            )
+            logger.info(
+                f"📜 Loaded {len(recent_messages)} historical messages for SSE streaming conversation {conv.id}"
+            )
 
-            # Save user message
+            # Save user message AFTER loading history
             await self.store.save_message(
                 conversation_id=conv.id,
                 role="user",
@@ -1023,12 +944,18 @@ class AgentService:
             reply_text = ""
             tool_call_counts: dict[str, int] = {}
 
-            contents = [
+            # FIX: Build contents from history + current message
+            contents = _build_history_contents(recent_messages)
+            contents.append(
                 types.Content(
                     role="user",
                     parts=[types.Part.from_text(text=payload.message)],
                 )
-            ]
+            )
+            logger.info(
+                f"📋 SSE streaming contents seeded with {len(contents)} items "
+                f"({len(recent_messages)} history + 1 current)"
+            )
 
             gen_config = types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -1038,76 +965,39 @@ class AgentService:
                 ),
             )
 
-            models_to_try = AVAILABLE_MODELS
-
             while turn < MAX_TOOL_TURNS:
                 logger.debug(
                     f"Streaming turn {turn + 1}/{MAX_TOOL_TURNS} | conversation={conv.id}"
                 )
 
-                # Try each model with retry for streaming
-                response = None
+                stream_iter = None
                 last_error = None
 
-                for idx, model in enumerate(models_to_try):
-                    is_primary = (idx == 0)
-                    for attempt in range(1, RETRY_MAX_ATTEMPTS + 1):
-                        try:
-                            response = client.models.generate_content_stream(
-                                model=model,
-                                contents=contents,
-                                config=gen_config,
-                            )
-                            if not is_primary:
-                                logger.info(f"Successfully used fallback model: {model}")
-                            break  # Success
-                        except Exception as api_error:
-                            last_error = api_error
+                # get stream iterator via ModelClient (round-robin + retry + fallback)
+                try:
+                    _model_used, stream_iter = await _model_client.generate_stream(
+                        contents, gen_config
+                    )
+                except AllModelsExhaustedError as api_error:
+                    logger.warning(
+                        f"All models rate-limited (SSE): {str(api_error)[:200]}"
+                    )
+                    await publish_agent_event(
+                        user_id,
+                        {
+                            "event": "error",
+                            "message": (
+                                "All AI models are currently rate-limited. "
+                                "Please wait a moment and try again."
+                            ),
+                        },
+                    )
+                    return
+                except Exception as api_error:
+                    last_error = api_error
+                    stream_iter = None
 
-                            if _is_fatal_error(api_error):
-                                logger.error(
-                                    f"Fatal streaming error (model={model}): "
-                                    f"{str(api_error)[:200]}"
-                                )
-                                # Break out of both loops
-                                model = None
-                                break
-
-                            if _is_quota_error(api_error):
-                                logger.warning(
-                                    f"Quota error on streaming model={model}, "
-                                    f"trying next: {str(api_error)[:120]}"
-                                )
-                                break  # Try next model
-
-                            if _is_retryable_error(api_error):
-                                if attempt < RETRY_MAX_ATTEMPTS:
-                                    logger.warning(
-                                        f"Transient streaming error model={model} "
-                                        f"attempt {attempt}/{RETRY_MAX_ATTEMPTS}, "
-                                        f"retrying in {RETRY_DELAY_SECONDS}s"
-                                    )
-                                    await asyncio.sleep(RETRY_DELAY_SECONDS)
-                                    continue
-                                else:
-                                    logger.warning(
-                                        f"Transient streaming error model={model} "
-                                        f"after {RETRY_MAX_ATTEMPTS} attempts, "
-                                        f"trying next model"
-                                    )
-                                    break  # Try next model
-
-                            # Unknown error
-                            logger.error(
-                                f"Unknown streaming error model={model}: "
-                                f"{str(api_error)[:200]}"
-                            )
-                            break  # Try next model
-
-                    if response is not None:
-                        break
-
-                if response is None:
+                if stream_iter is None:
                     err_msg = str(last_error)[:200] if last_error else "unknown"
                     logger.error(f"All streaming models exhausted. Last: {err_msg}")
                     await publish_agent_event(
@@ -1125,8 +1015,10 @@ class AgentService:
                 # Collect text and tool calls from stream
                 turn_text = ""
                 tool_calls = []
+                # FIX: Collect parts to reconstruct model Content for history
+                all_parts = []
 
-                for chunk in response:
+                for chunk in stream_iter:
                     if chunk.text:
                         turn_text += chunk.text
                         await publish_agent_event(
@@ -1134,8 +1026,26 @@ class AgentService:
                         )
                     if hasattr(chunk, "function_calls") and chunk.function_calls:
                         tool_calls.extend(chunk.function_calls)
+                    if hasattr(chunk, "candidates") and chunk.candidates:
+                        candidate = chunk.candidates[0]
+                        if hasattr(candidate, "content") and candidate.content:
+                            if hasattr(candidate.content, "parts"):
+                                all_parts.extend(candidate.content.parts or [])
 
                 reply_text += turn_text
+
+                # FIX: Append model's turn to contents for multi-turn tool loop
+                if all_parts:
+                    contents.append(
+                        types.Content(role="model", parts=all_parts)
+                    )
+                elif turn_text:
+                    contents.append(
+                        types.Content(
+                            role="model",
+                            parts=[types.Part.from_text(text=turn_text)],
+                        )
+                    )
 
                 if not tool_calls:
                     logger.info(
