@@ -8,11 +8,14 @@ Usage
 
     client = ModelClient()
     model_used, response = await client.generate(contents, config)
-    model_used, response = await client.generate_stream(contents, config)
+
+    # Streaming — yields (model_used, chunks_list) per turn
+    async for chunk in client.stream_with_fallback(contents, config):
+        ...
 
 Design
 ------
-Rate-limit budget tracking  (the main addition over the previous version)
+Rate-limit budget tracking
     Each model has hard quota limits supplied by Google (free tier):
 
         Model                    RPM   TPM      RPD
@@ -23,27 +26,25 @@ Rate-limit budget tracking  (the main addition over the previous version)
     RateLimitBudget tracks calls and tokens inside a sliding 60-second
     window (RPM / TPM) and a UTC-day window (RPD).  Before every call the
     client checks whether the target model has budget remaining.  If not,
-    it skips directly to the next model in the rotation — no wasted network
-    round-trip, no 429 to parse.
-
-    Token counts come from response.usage_metadata when available.  For
-    requests where we don't know upfront how many tokens will be consumed,
-    we record an *estimated* cost (EST_TOKENS_PER_REQUEST) before the call
-    and replace it with the real number afterwards.
-
-    On a real 429 / RESOURCE_EXHAUSTED the budget for the offending model is
-    penalised for 60 s so subsequent requests don't keep retrying it.
+    it skips directly to the next model in the rotation.
 
 Round-robin + fallback
-    The cursor advances after every *successful* call, spreading load evenly.
-    On error the cursor stays put and the next model in the ordered list is
-    tried.
+    The cursor advances after every *successful* call.
 
 Per-model retry
     500 / 503 / INTERNAL / UNAVAILABLE -> retry same model RETRY_MAX_ATTEMPTS
     times with RETRY_DELAY_SECONDS delay.
     429 / quota -> penalise budget, skip to next model immediately.
     4xx fatal   -> abort the whole rotation.
+
+stream_with_fallback changes (v2)
+    - Buffers ALL chunks internally before yielding so a mid-stream error
+      can still fall through to the next model cleanly.
+    - ALL failures (0 chunks or N chunks buffered) fall through to the next
+      model cleanly — the buffer is discarded, the caller never sees partial
+      data, and no StreamPartialError is needed.
+    - Fixes the `raise None` bug when all models are budget-skipped but
+      last_exc is still None.
 """
 
 from __future__ import annotations
@@ -54,7 +55,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Deque
+from typing import Deque, AsyncIterator
 
 from google import genai
 from google.genai import types
@@ -77,10 +78,6 @@ class ModelLimits:
     rpd: int            # requests per day
 
 
-# Free-tier limits as provided:
-#   gemini-3.1-flash-lite  RPM=15  TPM=250k   RPD=500
-#   gemma-4-31b-it         RPM=15  TPM=unlim  RPD=1500
-#   gemma-4-26b-a4b-it     RPM=15  TPM=unlim  RPD=1500
 MODEL_LIMITS: dict[str, ModelLimits] = {
     "models/gemini-3.1-flash-lite": ModelLimits(rpm=15, tpm=250_000, rpd=500),
     "models/gemma-4-31b-it":        ModelLimits(rpm=15, tpm=None,    rpd=1_500),
@@ -91,15 +88,17 @@ MODEL_LIMITS: dict[str, ModelLimits] = {
 AVAILABLE_MODELS: list[str] = list(MODEL_LIMITS.keys())
 
 # Conservative token estimate used *before* a call when real usage is unknown.
-# Replaced with actual usage_metadata afterwards.
 EST_TOKENS_PER_REQUEST: int = 1_500
 
 # Retry knobs for transient (5xx) errors
 RETRY_MAX_ATTEMPTS: int = 2
 RETRY_DELAY_SECONDS: float = 2.0
 
-# Safety margin: treat a model as exhausted when remaining budget < this
-# fraction.  Avoids racing right up to the hard wall.
+# How many times to retry the *full model rotation* on stream failure
+# before giving up entirely. Each attempt tries all available models.
+STREAM_ROTATION_RETRIES: int = 2
+
+# Safety margin: treat a model as exhausted when remaining budget < this fraction.
 BUDGET_SAFETY_MARGIN: float = 0.05   # 5 %
 
 
@@ -114,13 +113,67 @@ _gemini_client = genai.Client(api_key=settings.GEMINI_API_KEY)
 # Error classifiers
 # ---------------------------------------------------------------------------
 
-_FATAL_CODES: frozenset[str] = frozenset({"400", "401", "403", "404"})
+# These status codes mean the *entire request* is broken regardless of model.
+# Auth failures and missing resources cannot be fixed by switching models.
+_TRULY_FATAL_CODES: frozenset[str] = frozenset({"401", "403", "404"})
+
+# These 400 sub-statuses indicate a payload problem that no model can fix.
+# Anything NOT in this set (e.g. INVALID_ARGUMENT) may just mean the model
+# doesn't support a feature (tool calling, specific content type) — another
+# model in the rotation might handle it fine.
+_TRULY_FATAL_400_STATUSES: frozenset[str] = frozenset({
+    "API_KEY_INVALID",
+    "PERMISSION_DENIED",
+    "UNAUTHENTICATED",
+    "BILLING_DISABLED",
+    "PROJECT_DISABLED",
+})
+
+# These 400 sub-statuses mean the *specific model* rejected the request
+# (e.g. doesn't support function calling, content policy of that model)
+# but another model in the rotation may succeed.
+_MODEL_SKIP_400_STATUSES: frozenset[str] = frozenset({
+    "INVALID_ARGUMENT",
+    "FAILED_PRECONDITION",
+    "UNIMPLEMENTED",
+    "NOT_SUPPORTED",
+})
 
 
 def is_fatal_error(exc: Exception) -> bool:
-    """Client-side error — retrying or switching models will not help."""
+    """
+    True when NO model can ever succeed with this request.
+    - 401 / 403 / 404 — auth / key / endpoint problems
+    - 400 with auth/billing sub-status
+
+    Does NOT include 400 INVALID_ARGUMENT because that often means
+    "this specific model doesn't support function calling / this content
+    type" — another model in the rotation may handle it fine.
+    """
     s = str(exc)
-    return any(code in s for code in _FATAL_CODES)
+
+    # 401 / 403 / 404 are always fatal
+    if any(code in s for code in _TRULY_FATAL_CODES):
+        return True
+
+    # 400 — only fatal for specific sub-statuses
+    if "400" in s:
+        return any(status in s for status in _TRULY_FATAL_400_STATUSES)
+
+    return False
+
+
+def is_model_incompatible_error(exc: Exception) -> bool:
+    """
+    True when this *model* rejected the request but another model might
+    succeed.  Covers:
+    - 400 INVALID_ARGUMENT  — model doesn't support tool calling / content type
+    - 400 FAILED_PRECONDITION / UNIMPLEMENTED — feature not available on model
+    """
+    s = str(exc)
+    if "400" in s:
+        return any(status in s for status in _MODEL_SKIP_400_STATUSES)
+    return False
 
 
 def is_quota_error(exc: Exception) -> bool:
@@ -140,19 +193,23 @@ def is_retryable_error(exc: Exception) -> bool:
 def _validate_stream_chunk(chunk: object) -> bool:
     """
     Validate that a stream chunk has expected structure.
-    Returns True if valid, False if malformed (should trigger retry).
+    Returns True if valid, False if malformed.
     """
     if chunk is None:
         return False
-    
-    # Check for basic attributes that chunks should have
-    has_text_or_parts = (
+    return (
         hasattr(chunk, 'text') or
         hasattr(chunk, 'candidates') or
         hasattr(chunk, 'function_calls')
     )
-    
-    return has_text_or_parts
+
+
+# ---------------------------------------------------------------------------
+# Custom exceptions
+# ---------------------------------------------------------------------------
+
+class AllModelsExhaustedError(Exception):
+    """All models are over their rate-limit budget or otherwise unavailable."""
 
 
 # ---------------------------------------------------------------------------
@@ -161,16 +218,10 @@ def _validate_stream_chunk(chunk: object) -> bool:
 
 class RateLimitBudget:
     """
-    Sliding-window budget tracker for one model.
-
-    Thread-safe via a single lock.
+    Sliding-window budget tracker for one model.  Thread-safe via a single lock.
 
     RPM / TPM  — true sliding 60-second window using a deque of timestamps.
-                 Old entries are evicted on every read/write so the window
-                 always reflects the actual last 60 seconds, not a fixed bucket.
-
     RPD        — UTC calendar day counter, resets at midnight.
-
     Penalty    — when a real 429 is received, the model is hard-blocked for
                  the remainder of the current minute (monotonic clock).
     """
@@ -181,33 +232,19 @@ class RateLimitBudget:
         self._limits = limits
         self._lock = threading.Lock()
 
-        # RPM: deque of monotonic timestamps (one entry per request)
         self._rpm_window: Deque[float] = deque()
-
-        # TPM: deque of (monotonic_ts, token_count) pairs
         self._tpm_window: Deque[tuple[float, int]] = deque()
 
-        # RPD: (utc_date_str, count)
         self._rpd_date: str = ""
         self._rpd_count: int = 0
 
-        # Penalty timestamp
         self._blocked_until: float = 0.0
 
-    # ------------------------------------------------------------------
-    # Public interface
-    # ------------------------------------------------------------------
-
     def can_use(self, estimated_tokens: int = EST_TOKENS_PER_REQUEST) -> bool:
-        """
-        Return True if the model has sufficient budget for one more request.
-        Checks active penalty, RPM, TPM (if capped), and RPD.
-        """
         with self._lock:
             now = time.monotonic()
             today = _utc_date()
 
-            # Hard block from a recent 429
             if now < self._blocked_until:
                 secs = self._blocked_until - now
                 logger.debug(f"RateLimitBudget: hard-blocked for {secs:.1f}s more")
@@ -218,39 +255,23 @@ class RateLimitBudget:
             lim = self._limits
             margin = 1.0 - BUDGET_SAFETY_MARGIN
 
-            # RPM check
             if len(self._rpm_window) >= lim.rpm * margin:
-                logger.debug(
-                    f"RateLimitBudget: RPM near limit "
-                    f"{len(self._rpm_window)}/{lim.rpm}"
-                )
+                logger.debug(f"RateLimitBudget: RPM near limit {len(self._rpm_window)}/{lim.rpm}")
                 return False
 
-            # TPM check (only for models with a cap)
             if lim.tpm is not None:
                 used_tpm = sum(t for _, t in self._tpm_window)
                 if used_tpm + estimated_tokens >= lim.tpm * margin:
-                    logger.debug(
-                        f"RateLimitBudget: TPM near limit "
-                        f"{used_tpm}/{lim.tpm} (+{estimated_tokens} est.)"
-                    )
+                    logger.debug(f"RateLimitBudget: TPM near limit {used_tpm}/{lim.tpm}")
                     return False
 
-            # RPD check
             if self._rpd_count >= lim.rpd * margin:
-                logger.debug(
-                    f"RateLimitBudget: RPD near limit "
-                    f"{self._rpd_count}/{lim.rpd}"
-                )
+                logger.debug(f"RateLimitBudget: RPD near limit {self._rpd_count}/{lim.rpd}")
                 return False
 
             return True
 
     def record_request(self, estimated_tokens: int = EST_TOKENS_PER_REQUEST) -> None:
-        """
-        Register a request that is about to be sent.
-        Call this immediately *before* the API call.
-        """
         with self._lock:
             now = time.monotonic()
             today = _utc_date()
@@ -263,10 +284,6 @@ class RateLimitBudget:
             self._rpd_count += 1
 
     def update_tokens(self, actual_tokens: int) -> None:
-        """
-        Replace the most-recent TPM estimate with the real token count.
-        Call this after a successful response using usage_metadata.
-        """
         if self._limits.tpm is None:
             return
         with self._lock:
@@ -276,18 +293,11 @@ class RateLimitBudget:
             self._tpm_window[-1] = (ts, actual_tokens)
 
     def penalise(self) -> None:
-        """
-        Hard-block this model for 60 s after receiving a real 429.
-        Also bumps RPM window to reflect the failed attempt.
-        """
         with self._lock:
             self._blocked_until = time.monotonic() + self._WINDOW
-            logger.warning(
-                f"RateLimitBudget: penalised — blocked for {self._WINDOW:.0f}s"
-            )
+            logger.warning(f"RateLimitBudget: penalised — blocked for {self._WINDOW:.0f}s")
 
     def status(self) -> dict:
-        """Snapshot of current usage — useful for logging / metrics."""
         with self._lock:
             now = time.monotonic()
             today = _utc_date()
@@ -305,10 +315,6 @@ class RateLimitBudget:
                 "hard_blocked": now < self._blocked_until,
                 "blocked_secs_remaining": max(0.0, self._blocked_until - now),
             }
-
-    # ------------------------------------------------------------------
-    # Internal helpers  (must be called with self._lock held)
-    # ------------------------------------------------------------------
 
     def _evict(self, now: float) -> None:
         cutoff = now - self._WINDOW
@@ -328,14 +334,6 @@ def _utc_date() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Custom exception
-# ---------------------------------------------------------------------------
-
-class AllModelsExhaustedError(Exception):
-    """All models are over their rate-limit budget or otherwise unavailable."""
-
-
-# ---------------------------------------------------------------------------
 # ModelClient
 # ---------------------------------------------------------------------------
 
@@ -346,9 +344,7 @@ class ModelClient:
       - Round-robin cursor for even load distribution
       - Per-model retry for transient 5xx errors
       - Ordered fallback across all models
-
-    Each instance has an independent cursor and budget trackers so agent and
-    summarizer services don't interfere with each other's rotation.
+      - stream_with_fallback: buffers chunks, retries on failure, safe error surface
     """
 
     def __init__(
@@ -361,11 +357,9 @@ class ModelClient:
         self._retry_attempts = retry_attempts
         self._retry_delay = retry_delay
 
-        # Round-robin cursor (protected by lock)
         self._cursor: int = 0
         self._lock = threading.Lock()
 
-        # One budget tracker per model, using known limits or a safe default
         _default_limits = ModelLimits(rpm=15, tpm=None, rpd=1_500)
         self._budgets: dict[str, RateLimitBudget] = {
             m: RateLimitBudget(MODEL_LIMITS.get(m, _default_limits))
@@ -373,7 +367,7 @@ class ModelClient:
         }
 
     # ------------------------------------------------------------------
-    # Public API
+    # Public API — non-streaming
     # ------------------------------------------------------------------
 
     async def generate(
@@ -384,10 +378,8 @@ class ModelClient:
     ) -> tuple[str, object]:
         """
         Non-streaming generate_content with rate-limit awareness.
-
         Returns (model_name_used, response).
         Raises AllModelsExhaustedError if all models are budget-blocked.
-        Raises the last API exception if all models fail for other reasons.
         """
         return await self._run_with_rotation(
             call_fn=self._call_generate,
@@ -403,12 +395,8 @@ class ModelClient:
         estimated_tokens: int = EST_TOKENS_PER_REQUEST,
     ) -> tuple[str, object]:
         """
-        Streaming generate_content_stream with rate-limit awareness.
-
-        Returns (model_name_used, stream_iterator).
-        Token usage is NOT updated automatically for streaming calls because
-        usage_metadata arrives at the end of the stream which the caller
-        controls.  Call record_stream_tokens() after iteration.
+        Returns (model_name_used, stream_iterator) — caller iterates the stream.
+        NOTE: Prefer stream_with_fallback for production use.
         """
         return await self._run_with_rotation(
             call_fn=self._call_generate_stream,
@@ -418,138 +406,198 @@ class ModelClient:
         )
 
     def record_stream_tokens(self, model: str, actual_tokens: int) -> None:
-        """
-        Update the TPM budget with real token usage after streaming completes.
-        Call this when usage_metadata becomes available at end of stream.
-        """
         budget = self._budgets.get(model)
         if budget:
             budget.update_tokens(actual_tokens)
+
+    # ------------------------------------------------------------------
+    # Public API — streaming with fallback (v2, buffered)
+    # ------------------------------------------------------------------
 
     async def stream_with_fallback(
         self,
         contents,
         config: types.GenerateContentConfig,
         estimated_tokens: int = EST_TOKENS_PER_REQUEST,
-    ):
+    ) -> AsyncIterator[object]:
         """
-        Streaming generator with automatic fallback on any failure during iteration.
+        Streaming generator with automatic retry + model fallback.
 
-        Yields chunks from the stream. If ANY error occurs (5xx, format error, etc.),
-        automatically retries with the next model in the rotation.
+        Strategy
+        --------
+        Chunks are buffered internally before being yielded to the caller.
+        This means ANY failure — whether at chunk 0 or chunk N — can always
+        fall through to the next model cleanly because nothing has been sent
+        to the caller yet.
 
-        Yields:
-            Chunks from the stream iterator.
+        Decision tree per model per attempt:
+          Fatal 4xx         → raise immediately (no model can fix this)
+          429 / quota       → penalise budget, continue to next model
+          500/503 (5xx)     → discard buffer, continue to next model
+                              (regardless of how many chunks were buffered)
+          Format/ValueError → discard buffer, continue to next model
+          Success           → yield all buffered chunks, advance cursor, return
 
-        Raises:
-            AllModelsExhaustedError: All models are rate-limit blocked.
-            Last Exception: If all models fail with fatal errors (4xx).
+        After the inner model loop, if every model failed, retry the full
+        rotation up to STREAM_ROTATION_RETRIES times with exponential backoff.
+        This handles brief windows where all models are simultaneously 5xx.
+
+        Raises
+        ------
+        AllModelsExhaustedError  — every model is budget-blocked or exhausted.
+        Exception                — fatal 4xx from any model.
         """
-        ordered = self._model_order()
         last_exc: Exception | None = None
-        models_tried: dict[str, str] = {}  # model -> error_msg
+        budget_skipped_all: list[str] = []
 
-        for model in ordered:
-            budget = self._budgets[model]
-
-            # Proactive budget check
-            if not budget.can_use(estimated_tokens):
-                logger.debug(f"stream_with_fallback: skip {model} (budget exhausted)")
-                continue
-
-            budget.record_request(estimated_tokens)
-
-            stream_success = False
-            try:
-                # Call low-level SDK directly to get stream
-                stream_iter = _gemini_client.models.generate_content_stream(
-                    model=model,
-                    contents=contents,
-                    config=config,
+        for rotation_attempt in range(STREAM_ROTATION_RETRIES + 1):
+            if rotation_attempt > 0:
+                delay = self._retry_delay * (2 ** (rotation_attempt - 1))
+                logger.warning(
+                    f"stream_with_fallback: rotation attempt {rotation_attempt + 1}/"
+                    f"{STREAM_ROTATION_RETRIES + 1} — waiting {delay:.1f}s before retry"
                 )
-                
-                logger.debug(f"stream_with_fallback: got iterator from {model}")
+                await asyncio.sleep(delay)
 
-                # Iterate and yield chunks
-                chunk_count = 0
-                for chunk in stream_iter:
-                    # Validate chunk structure before yielding
-                    if not _validate_stream_chunk(chunk):
-                        raise ValueError(
-                            f"Stream chunk has invalid structure: {type(chunk).__name__}. "
-                            f"Expected text, candidates, or function_calls attributes."
-                        )
-                    
-                    chunk_count += 1
-                    yield chunk
-                    # Try to update tokens if available early
-                    _try_update_tokens(budget, chunk)
+            ordered = self._model_order()
+            models_tried: dict[str, str] = {}
+            budget_skipped: list[str] = []
 
-                # Successfully completed stream
-                stream_success = True
-                self._advance_cursor_to(model)
-                logger.info(
-                    f"✅ stream_with_fallback: {model} succeeded "
-                    f"({chunk_count} chunks) after {len(models_tried)} prior failures"
-                )
-                return
+            for model in ordered:
+                budget = self._budgets[model]
 
-            except Exception as error:
-                err_str = str(error)[:150]
-                last_exc = error
-                
-                # Check for fatal errors that should abort immediately
-                if is_fatal_error(error):
-                    logger.error(
-                        f"stream_with_fallback: FATAL error on {model}, aborting. {err_str}"
-                    )
-                    raise
-                
-                # Check for quota errors - penalise and continue
-                if is_quota_error(error):
-                    budget.penalise()
-                    models_tried[model] = f"QUOTA: {err_str}"
-                    logger.warning(
-                        f"stream_with_fallback: quota error on {model}, "
-                        f"penalised. Trying next model... {err_str}"
-                    )
+                # Proactive budget check
+                if not budget.can_use(estimated_tokens):
+                    budget_skipped.append(model)
+                    logger.debug(f"stream_with_fallback: skip {model} (budget exhausted)")
                     continue
-                
-                # Any other error during stream: format error, 5xx, etc.
-                if not stream_success:
+
+                budget.record_request(estimated_tokens)
+
+                # ── Buffer the entire stream for this model ───────────
+                # Because we buffer before yielding, ANY mid-stream error
+                # is recoverable — we simply discard the buffer and try
+                # the next model. The caller never sees partial data.
+                buffered_chunks: list = []
+                try:
+                    stream_iter = _gemini_client.models.generate_content_stream(
+                        model=model,
+                        contents=contents,
+                        config=config,
+                    )
+                    logger.debug(
+                        f"stream_with_fallback: started stream from {model} "
+                        f"(rotation_attempt={rotation_attempt})"
+                    )
+
+                    for chunk in stream_iter:
+                        if not _validate_stream_chunk(chunk):
+                            raise ValueError(
+                                f"Invalid stream chunk type={type(chunk).__name__} "
+                                f"from model={model}"
+                            )
+                        buffered_chunks.append(chunk)
+                        _try_update_tokens(budget, chunk)
+
+                    # ── Full stream collected successfully ────────────
+                    self._advance_cursor_to(model)
+                    logger.info(
+                        f"✅ stream_with_fallback: {model} OK "
+                        f"({len(buffered_chunks)} chunks, "
+                        f"rotation_attempt={rotation_attempt})"
+                    )
+                    for chunk in buffered_chunks:
+                        yield chunk
+                    return  # ← clean exit
+
+                except Exception as error:
+                    last_exc = error
+                    err_str = str(error)[:200]
+
+                    # ── Fatal: no model can fix this ─────────────────
+                    if is_fatal_error(error):
+                        logger.error(
+                            f"stream_with_fallback: FATAL on {model} → {err_str}"
+                        )
+                        raise
+
+                    # ── Model-incompatible 400: skip to next model ────
+                    # e.g. Gemma returning 400 INVALID_ARGUMENT because it
+                    # doesn't support function calling. Another model may work.
+                    if is_model_incompatible_error(error):
+                        models_tried[model] = f"MODEL_INCOMPATIBLE: {err_str}"
+                        logger.warning(
+                            f"stream_with_fallback: model-incompatible error on {model} "
+                            f"(400 sub-status). Trying next model... {err_str}"
+                        )
+                        continue
+
+                    # ── Quota / 429: penalise and try next model ──────
+                    if is_quota_error(error):
+                        budget.penalise()
+                        models_tried[model] = f"QUOTA: {err_str}"
+                        logger.warning(
+                            f"stream_with_fallback: quota on {model}, penalised. "
+                            f"buffered_chunks={len(buffered_chunks)} (discarded). "
+                            f"Trying next model... {err_str}"
+                        )
+                        continue
+
+                    # ── 5xx / format error / any other recoverable ────
+                    # Discard buffer and fall through to next model.
                     models_tried[model] = err_str
                     logger.warning(
-                        f"stream_with_fallback: error on {model} "
-                        f"(stream_success=False), trying next model... {err_str}"
+                        f"stream_with_fallback: recoverable error on {model} "
+                        f"after {len(buffered_chunks)} buffered chunks (discarded). "
+                        f"Trying next model... {err_str}"
                     )
                     continue
-                
-                # Should not reach here, but if stream_success=True and error occurs, re-raise
-                logger.error(
-                    f"stream_with_fallback: unexpected error after success on {model}. {err_str}",
-                    exc_info=True,
-                )
-                raise
 
-        # All models exhausted
-        if models_tried and last_exc is None:
+            # ── End of inner model loop ───────────────────────────────
+            budget_skipped_all.extend(budget_skipped)
+
+            if models_tried:
+                # At least one model was attempted — worth retrying rotation
+                logger.warning(
+                    f"stream_with_fallback: all models failed on rotation attempt "
+                    f"{rotation_attempt + 1}/{STREAM_ROTATION_RETRIES + 1}. "
+                    f"tried={list(models_tried.keys())} skipped={budget_skipped} "
+                    f"errors={models_tried}"
+                )
+                # Continue outer loop → sleep + retry rotation
+            else:
+                # Every model was budget-skipped — no point retrying immediately
+                logger.warning(
+                    f"stream_with_fallback: all models budget-skipped on rotation "
+                    f"{rotation_attempt + 1}, skipping further retries."
+                )
+                break
+
+        # ── All rotation attempts exhausted ──────────────────────────
+        if budget_skipped_all and last_exc is None:
             raise AllModelsExhaustedError(
-                f"All {len(models_tried)} models failed. "
-                f"Failures: {models_tried}"
+                f"All models over rate-limit budget. "
+                f"Skipped: {budget_skipped_all}. "
+                f"Status: {self.budget_status()}"
+            )
+
+        if last_exc is None:
+            raise AllModelsExhaustedError(
+                "All models exhausted — no specific error recorded."
             )
 
         logger.error(
-            f"stream_with_fallback: all models exhausted. "
-            f"Tried: {models_tried} | Last error: {str(last_exc)[:200]}"
+            f"stream_with_fallback: giving up after "
+            f"{STREAM_ROTATION_RETRIES + 1} rotation attempts. "
+            f"last_error={str(last_exc)[:300]}"
         )
-        raise last_exc  # type: ignore[misc]
+        raise last_exc
 
     def budget_status(self) -> dict[str, dict]:
-        """Snapshot of all models' current budget — for logging / health checks."""
         return {m: b.status() for m, b in self._budgets.items()}
 
     # ------------------------------------------------------------------
-    # Core rotation loop
+    # Core rotation loop (non-streaming)
     # ------------------------------------------------------------------
 
     async def _run_with_rotation(
@@ -559,18 +607,6 @@ class ModelClient:
         config,
         estimated_tokens: int,
     ) -> tuple[str, object]:
-        """
-        Iterate through models in round-robin order.
-
-        Per model:
-          1. Proactive budget check — skip if RPM / TPM / RPD exhausted.
-          2. Record request in budget window (optimistic).
-          3. Call API with per-model retry for 5xx.
-          4. Success  -> update real tokens, advance cursor, return.
-          5. 429      -> penalise budget, continue to next model.
-          6. 5xx      -> retries exhausted, continue to next model.
-          7. 4xx      -> abort rotation (no other model will fix it).
-        """
         ordered = self._model_order()
         last_exc: Exception | None = None
         budget_skipped: list[str] = []
@@ -578,24 +614,15 @@ class ModelClient:
         for idx, model in enumerate(ordered):
             budget = self._budgets[model]
 
-            # ── 1. Proactive budget gate ──────────────────────────────
             if not budget.can_use(estimated_tokens):
                 budget_skipped.append(model)
-                logger.info(
-                    f"ModelClient: skip {model} (budget) "
-                    f"| {budget.status()}"
-                )
+                logger.info(f"ModelClient: skip {model} (budget) | {budget.status()}")
                 continue
 
-            # ── 2. Optimistic budget record ───────────────────────────
             budget.record_request(estimated_tokens)
 
             try:
-                result = await self._call_with_retry(
-                    call_fn, model, contents, config
-                )
-
-                # ── 4. Success ────────────────────────────────────────
+                result = await self._call_with_retry(call_fn, model, contents, config)
                 _try_update_tokens(budget, result)
                 self._advance_cursor_to(model)
 
@@ -609,72 +636,58 @@ class ModelClient:
             except Exception as exc:
                 last_exc = exc
 
-                # ── 7. Fatal ──────────────────────────────────────────
                 if is_fatal_error(exc):
-                    logger.error(
-                        f"ModelClient: fatal error on {model}, aborting. "
-                        f"{str(exc)[:200]}"
-                    )
+                    logger.error(f"ModelClient: fatal error on {model}, aborting. {str(exc)[:200]}")
                     raise
 
-                # ── 5. Rate-limited ───────────────────────────────────
+                if is_model_incompatible_error(exc):
+                    logger.warning(
+                        f"ModelClient: model-incompatible 400 on {model}, trying next. {str(exc)[:120]}"
+                    )
+                    continue
+
                 if is_quota_error(exc):
                     budget.penalise()
-                    logger.warning(
-                        f"ModelClient: 429 on {model} — penalised 60s, "
-                        f"trying next. {str(exc)[:120]}"
-                    )
+                    logger.warning(f"ModelClient: 429 on {model} — penalised 60s. {str(exc)[:120]}")
                     continue
 
-                # ── 6. Transient ──────────────────────────────────────
                 if is_retryable_error(exc):
-                    logger.warning(
-                        f"ModelClient: transient error exhausted on {model}, "
-                        f"trying next. {str(exc)[:120]}"
-                    )
+                    logger.warning(f"ModelClient: transient error exhausted on {model}. {str(exc)[:120]}")
                     continue
 
-                # Unknown — don't try other models
-                logger.error(
-                    f"ModelClient: unknown error on {model}. {str(exc)[:200]}",
-                    exc_info=True,
-                )
+                logger.error(f"ModelClient: unknown error on {model}. {str(exc)[:200]}", exc_info=True)
                 raise
 
-        # All models exhausted
         if budget_skipped and last_exc is None:
-            # Every model was proactively blocked by budget — surface clearly
             raise AllModelsExhaustedError(
                 f"All models over rate-limit budget. "
                 f"Skipped: {budget_skipped}. "
                 f"Status: {self.budget_status()}"
             )
 
+        if last_exc is None:
+            raise AllModelsExhaustedError("All models exhausted — no specific error recorded.")
+
         logger.error(
             f"ModelClient: all models exhausted | "
-            f"budget_skipped={budget_skipped} | "
-            f"last_error={str(last_exc)[:300]}"
+            f"budget_skipped={budget_skipped} | last_error={str(last_exc)[:300]}"
         )
-        raise last_exc  # type: ignore[misc]
+        raise last_exc
 
     # ------------------------------------------------------------------
     # Per-model retry for transient errors
     # ------------------------------------------------------------------
 
-    async def _call_with_retry(
-        self, call_fn, model: str, contents, config
-    ) -> object:
+    async def _call_with_retry(self, call_fn, model: str, contents, config) -> object:
         last_exc: Exception | None = None
 
         for attempt in range(1, self._retry_attempts + 1):
             try:
                 return await call_fn(model, contents, config)
-
             except Exception as exc:
                 last_exc = exc
 
-                # Let the rotation loop handle these
-                if is_fatal_error(exc) or is_quota_error(exc):
+                if is_fatal_error(exc) or is_quota_error(exc) or is_model_incompatible_error(exc):
                     raise
 
                 if is_retryable_error(exc):
@@ -693,11 +706,7 @@ class ModelClient:
                         )
                         raise
 
-                # Unknown — don't retry
-                logger.error(
-                    f"ModelClient: unknown error on {model}: {str(exc)[:200]}",
-                    exc_info=True,
-                )
+                logger.error(f"ModelClient: unknown error on {model}: {str(exc)[:200]}", exc_info=True)
                 raise
 
         raise last_exc  # type: ignore[misc]
@@ -707,14 +716,12 @@ class ModelClient:
     # ------------------------------------------------------------------
 
     def _model_order(self) -> list[str]:
-        """Return all models starting from the current cursor (round-robin)."""
         with self._lock:
             start = self._cursor
         n = len(self._models)
         return [self._models[(start + i) % n] for i in range(n)]
 
     def _advance_cursor_to(self, model: str) -> None:
-        """Move cursor to the slot *after* model so the next call starts there."""
         try:
             idx = self._models.index(model)
         except ValueError:
@@ -742,14 +749,11 @@ class ModelClient:
 
 
 # ---------------------------------------------------------------------------
-# Module-level helper (used by RateLimitBudget, extracted to avoid closure)
+# Module-level helper
 # ---------------------------------------------------------------------------
 
 def _try_update_tokens(budget: RateLimitBudget, result: object) -> None:
-    """
-    If *result* has usage_metadata, update the budget with the real token count.
-    Silently skips on any error — estimation is acceptable as a fallback.
-    """
+    """Update budget with real token count from response metadata if available."""
     try:
         meta = getattr(result, "usage_metadata", None)
         if meta is None:

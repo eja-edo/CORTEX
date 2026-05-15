@@ -1,6 +1,6 @@
 """Create schedule tool — dùng ScheduleService thay vì query DB trực tiếp."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from pydantic import BaseModel, Field
 
@@ -15,16 +15,46 @@ logger = get_logger(__name__)
 class CreateScheduleInput(BaseModel):
     title: str = Field(..., min_length=1, max_length=255)
     type: str = Field(..., pattern="^(CLASS|DEADLINE|EXAM|PERSONAL)$")
-    start_time: str = Field(..., description="ISO 8601 datetime")
-    end_time: str = Field(..., description="ISO 8601 datetime")
+    start_time: str = Field(
+        ...,
+        description=(
+            "ISO 8601 datetime with timezone offset (e.g. 2026-05-20T10:00:00+07:00). "
+            "Do not use 'Z'."
+        ),
+    )
+    end_time: str = Field(
+        ...,
+        description=(
+            "ISO 8601 datetime with timezone offset (e.g. 2026-05-20T11:00:00+07:00). "
+            "Do not use 'Z'."
+        ),
+    )
     location: Optional[str] = Field(None, max_length=255)
     description: Optional[str] = Field(None, max_length=1000)
 
 
+def _parse_iso_with_tz(value: str, field_name: str) -> datetime:
+    if value.endswith("Z") or value.endswith("z"):
+        raise ValueError(
+            f"{field_name} must include a timezone offset like +07:00 (do not use 'Z')."
+        )
+    try:
+        dt = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"Invalid {field_name} format: {exc}")
+
+    if dt.tzinfo is None or dt.utcoffset() is None:
+        raise ValueError(
+            f"{field_name} must include a timezone offset like +07:00."
+        )
+
+    return dt.astimezone(timezone.utc)
+
+
 async def create_schedule_handler(args: dict, ctx: ToolContext) -> dict:
     try:
-        start_time = datetime.fromisoformat(args["start_time"])
-        end_time = datetime.fromisoformat(args["end_time"])
+        start_time = _parse_iso_with_tz(args["start_time"], "start_time")
+        end_time = _parse_iso_with_tz(args["end_time"], "end_time")
     except ValueError as exc:
         raise ValueError(f"Invalid datetime format: {exc}")
 
@@ -65,8 +95,14 @@ CREATE_SCHEDULE_SCHEMA = {
             "enum": ["CLASS", "DEADLINE", "EXAM", "PERSONAL"],
             "description": "Schedule type",
         },
-        "start_time": {"type": "string", "description": "ISO 8601 start time"},
-        "end_time": {"type": "string", "description": "ISO 8601 end time"},
+        "start_time": {
+            "type": "string",
+            "description": "ISO 8601 datetime with timezone offset (e.g. 2026-05-20T10:00:00+07:00). Do not use 'Z'.",
+        },
+        "end_time": {
+            "type": "string",
+            "description": "ISO 8601 datetime with timezone offset (e.g. 2026-05-20T11:00:00+07:00). Do not use 'Z'.",
+        },
         "location": {"type": "string", "description": "Location or meeting link (optional)"},
         "description": {"type": "string", "description": "Additional notes (optional)"},
     },

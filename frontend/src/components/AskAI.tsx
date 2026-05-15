@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Bot, Send, X, Sparkles, RefreshCw, Copy, Check } from 'lucide-react'
-import { streamAgentMessage, listConversations, getConversation, type ConversationListItem } from '../services/api'
+import { streamAgentMessage, listConversations, getConversation, type ConversationListItem, type StreamEvent } from '../services/api'
 import { useConversationStore } from '../stores/conversationStore'
+import { knowledgeRoute, noteRoute, scheduleRoute } from '../services/routes'
 
 interface AskAIProps {
     noteContent?: string
@@ -9,6 +11,8 @@ interface AskAIProps {
     pendingSelection?: string
     onClose: () => void
     onInsert?: (text: string) => void
+    workspaceId?: string
+    onToolNavigate?: (toolName: string) => Promise<void>
 }
 
 type ContextPill = {
@@ -32,7 +36,7 @@ type Message = {
     }>
 }
 
-export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onInsert }: AskAIProps) {
+export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onInsert, workspaceId, onToolNavigate }: AskAIProps) {
     const STORAGE_KEY = 'cortex_chatbot_state'
 
     const [messages, setMessages] = useState<Message[]>([])
@@ -52,6 +56,7 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
     const inputRef = useRef<HTMLTextAreaElement>(null)
     const messagesEndRef = useRef<HTMLDivElement>(null)
     const { updateTokenUsage } = useConversationStore()
+    const navigate = useNavigate()
 
     useEffect(() => {
         inputRef.current?.focus()
@@ -183,6 +188,20 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
         }
     }, [sessionsOffset])
 
+    const handleNewSession = useCallback(() => {
+        setMessages([])
+        setConversationId(null)
+        setError(null)
+        setIsLoading(false)
+        setCopiedId(null)
+
+        try {
+            localStorage.removeItem(STORAGE_KEY)
+        } catch (err) {
+            console.error('Failed to clear chatbot state from localStorage:', err)
+        }
+    }, [STORAGE_KEY])
+
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
     }, [messages])
@@ -233,7 +252,44 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
             let finalConversationId: string | null = null
             let thinkingSteps: Message['thinkingSteps'] = []
 
-            for await (const event of streamAgentMessage(finalMessage, conversationId || undefined)) {
+            const handleToolNavigation = (event: StreamEvent) => {
+                if (!event.tool_name) return
+                if (event.error) return
+
+                const isSuccess = event.success !== false
+                if (!isSuccess) return
+
+                const result = event.result as Record<string, unknown> | undefined
+
+                if (event.tool_name === 'create_note') {
+                    const noteId = result?.id as string | undefined
+                    const wsId = (result?.workspace_id as string | undefined) || workspaceId
+                    if (noteId && wsId) {
+                        console.debug('Tool navigation: create_note', { noteId, wsId })
+                        onToolNavigate?.('create_note').catch(() => {})
+                        navigate(noteRoute(wsId, noteId))
+                    }
+                    return
+                }
+
+                if (event.tool_name === 'create_schedule' || event.tool_name === 'update_schedule' || event.tool_name === 'get_schedules') {
+                    console.debug('Tool navigation: schedule', { tool: event.tool_name })
+                    onToolNavigate?.('schedule').catch(() => {})
+                    navigate(scheduleRoute())
+                    return
+                }
+
+                if (event.tool_name === 'summarize_asset') {
+                    const assetId = result?.id as string | undefined
+                    if (assetId && workspaceId) {
+                        console.debug('Tool navigation: summarize_asset', { assetId, workspaceId })
+                        onToolNavigate?.('knowledge').catch(() => {})
+                        navigate(knowledgeRoute(workspaceId, assetId))
+                    }
+                }
+            }
+
+            for await (const event of streamAgentMessage(finalMessage, conversationId || undefined, workspaceId)) {
                 if (event.type === 'text' && event.text) {
                     fullReply += event.text
                     setMessages(prev =>
@@ -271,6 +327,7 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                             : m
                         )
                     )
+                    handleToolNavigation(event)
                 } else if (event.type === 'done' && event.conversation_id) {
                     finalConversationId = event.conversation_id
                 }
@@ -302,7 +359,7 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
         } finally {
             setIsLoading(false)
         }
-    }, [isLoading, conversationId, updateTokenUsage, addedPills, buildRuntimeContextText])
+    }, [isLoading, conversationId, updateTokenUsage, addedPills, buildRuntimeContextText, navigate, workspaceId])
 
     const toggleThinking = useCallback((messageId: string) => {
         setMessages(prev => prev.map(m =>
@@ -363,7 +420,12 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                                 <RefreshCw size={13} />
                             </button>
                         )}
-                        <button type="button" className="ask-ai-icon-btn" onClick={onClose}>
+                        <button
+                            type="button"
+                            className="ask-ai-icon-btn"
+                            title="New session"
+                            onClick={handleNewSession}
+                        >
                             <X size={14} />
                         </button>
                     </div>

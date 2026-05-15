@@ -1078,11 +1078,21 @@ function App() {
                 noteContent={notes.activeWorkspaceNote?.contentMd}
                 noteTitle={notes.activeWorkspaceNote ? noteTitleFromMd(notes.activeWorkspaceNote.contentMd) : undefined}
                 pendingSelection={pendingSelection}
+                workspaceId={workspaces.currentWorkspace?.id}
                 onClose={() => setIsAskAIOpen(false)}
                 onInsert={(text) => {
                   if (!notes.activeWorkspaceNote) return
                   const newContent = notes.activeWorkspaceNote.contentMd + '\n\n' + text
                   handleNoteChange(notes.activeWorkspaceNote.id, newContent)
+                }}
+                onToolNavigate={async (toolName: string) => {
+                  if (toolName === 'create_note') {
+                    await notes.fetchNotes()
+                  } else if (toolName === 'schedule') {
+                    await schedules.fetchSchedules()
+                  } else if (toolName === 'knowledge') {
+                    await assets.refreshAssets()
+                  }
                 }}
               />
             </div>

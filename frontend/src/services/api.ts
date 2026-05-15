@@ -195,6 +195,8 @@ export interface StreamEvent {
     tool_name?: string
     tool_args?: Record<string, unknown>
     result?: unknown
+    success?: boolean
+    error?: string
 }
 
 export async function* streamAgentMessage(
@@ -286,7 +288,9 @@ export async function* streamAgentMessage(
                             yield {
                                 type: 'tool_result',
                                 tool_name: data.tool_name,
-                                result: data.result
+                                result: data.result,
+                                success: data.success,
+                                error: data.error,
                             }
                         } else if (data.event === 'thinking') {
                             yield {
@@ -319,7 +323,9 @@ export async function* streamAgentMessage(
                     yield {
                         type: 'tool_result',
                         tool_name: data.tool_name,
-                        result: data.result
+                        result: data.result,
+                        success: data.success,
+                        error: data.error,
                     }
                 }
             } catch (e) {

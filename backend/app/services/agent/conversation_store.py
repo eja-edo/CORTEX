@@ -6,7 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, and_, delete, func
 from sqlalchemy.orm import Session
 
+from app.utils.logger import get_logger
+
 from app.models import AgentConversation, AgentMessage, User
+
+logger = get_logger(__name__)
 
 
 class ConversationStore:
@@ -95,16 +99,61 @@ class ConversationStore:
         tool_input: dict | None = None,
         tool_output: dict | None = None,
         token_count: int | None = None,
-    ) -> AgentMessage:
+    ) -> AgentMessage | None:
         """Save a message to the conversation."""
+
+        normalized_role = role.strip().lower() if role else role
+        normalized_content = content.strip() if isinstance(content, str) else content
+
+        # Normalize non-tool messages
+        if normalized_role in {"user", "assistant"}:
+            if not normalized_content:
+                logger.info(
+                    f"⏭️ Skipping empty {normalized_role} message for conversation {conversation_id}"
+                )
+                return None
+            tool_name = None
+            tool_input = None
+            tool_output = None
+
+            # Collapse consecutive same-role messages to preserve alternation
+            last_stmt = (
+                select(AgentMessage)
+                .where(AgentMessage.conversation_id == conversation_id)
+                .order_by(AgentMessage.created_at.desc())
+                .limit(1)
+            )
+            last_result = await self.db.execute(last_stmt)
+            last_msg = last_result.scalar_one_or_none()
+            if last_msg and last_msg.role == normalized_role:
+                logger.info(
+                    f"⏭️ Collapsing consecutive '{normalized_role}' message in conversation {conversation_id}"
+                )
+                last_msg.content = normalized_content
+                last_msg.created_at = datetime.utcnow()
+                await self.db.flush()
+                return last_msg
+
+        elif normalized_role == "tool":
+            if not tool_name or tool_input is None or tool_output is None:
+                logger.info(
+                    f"⏭️ Skipping incomplete tool message for conversation {conversation_id}: "
+                    f"tool_name={tool_name}, input_present={tool_input is not None}, "
+                    f"output_present={tool_output is not None}"
+                )
+                return None
+        else:
+            logger.warning(
+                f"Unknown role '{role}' when saving message for conversation {conversation_id}"
+            )
 
         message = AgentMessage(
             conversation_id=conversation_id,
-            role=role,
-            content=content,
+            role=normalized_role,
+            content=normalized_content,
             tool_name=tool_name,
-            tool_input=tool_input or {},
-            tool_output=tool_output or {},
+            tool_input=tool_input,
+            tool_output=tool_output,
             token_count=token_count,
             created_at=datetime.utcnow(),
         )

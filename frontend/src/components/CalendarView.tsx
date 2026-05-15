@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Calendar as BigCalendar } from 'react-big-calendar'
 import { CheckCircle2, Clock3, MapPin, Tag, Trash2, X, Plus, RefreshCw, Repeat } from 'lucide-react'
 import { format, parseISO } from 'date-fns'
@@ -51,13 +51,23 @@ const TYPE_LABELS: Record<string, string> = {
 
 export function CalendarView({
     isGoogleCalendarConnected = false,
-    schedules, startDate,
+    schedules, startDate, endDate,
     onStartDateChange, onEndDateChange,
     onFetch, onOpenCreateEvent, onSlotSelect, onToggleComplete, onRemove,
 }: CalendarViewProps) {
     const [selectedSchedule, setSelectedSchedule] = useState<Schedule | null>(null)
     const [currentDate, setCurrentDate] = useState<Date>(() => new Date(startDate))
     const [currentView, setCurrentView] = useState<'week' | 'day' | 'month'>('week')
+
+    const onFetchRef = useRef(onFetch)
+    useEffect(() => {
+        onFetchRef.current = onFetch
+    }, [onFetch])
+
+    // Auto-fetch whenever the visible range changes
+    useEffect(() => {
+        onFetchRef.current()
+    }, [startDate, endDate])
 
     const calendarEvents = useMemo<CalendarEvent[]>(
         () => schedules.map((item) => ({
