@@ -5,114 +5,26 @@ Supports combined OCR + transcript input and produces timeline-based
 knowledge output where every insight is anchored to a specific time range.
 """
 
-import asyncio
 import json
 from dataclasses import dataclass
-from typing import Any, Optional, Callable, TypeVar, Awaitable
+from typing import Any, Optional
 
-try:
-    from google import genai
-except ImportError:
-    import google.genai as genai
 from google.genai import types
-from google.genai import errors as genai_errors
 
 from app.config import settings
+from app.services.agent.model_client import (
+    AllModelsExhaustedError,
+    ModelClient,
+    STRUCTURED_JSON_MODELS,
+)
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Revert to old SDK for llm_processing (needs separate update)
-client = None
+# Gemma models return HTTP 200 with truncated/invalid JSON for response_schema calls.
+_model_client = ModelClient(models=STRUCTURED_JSON_MODELS)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Retry helper for transient Gemini API errors
-# ─────────────────────────────────────────────────────────────────────────────
-
-T = TypeVar('T')
-
-
-def _is_retryable_genai_error(exc: Exception) -> bool:
-    """Check if error is retryable (transient/server error)."""
-    if not isinstance(exc, genai_errors.APIError):
-        return False
-    
-    # Check status attribute (for APIError)
-    status = getattr(exc, 'status_code', None) or getattr(exc, 'status', None)
-    
-    # For ServerError, status might be in HTTP status_code
-    if hasattr(exc, 'http_status'):
-        status = exc.http_status
-    
-    # Extract from error message if needed (fallback for 500 errors)
-    if status is None and '500' in str(exc):
-        status = 500
-    if status is None and '502' in str(exc):
-        status = 502
-    if status is None and '503' in str(exc):
-        status = 503
-    if status is None and '504' in str(exc):
-        status = 504
-    
-    return status in {429, 500, 502, 503, 504}
-
-async def _call_with_retry(
-    fn: Callable[..., Awaitable[T]],
-    *args,
-    max_retries: int = 3,
-    base_delay_sec: float = 1.0,
-    **kwargs
-) -> T:
-    """
-    Call async function with exponential backoff retry for transient errors.
-    
-    Retries on transient google-genai APIError statuses:
-    - 429 Too Many Requests
-    - 500/502/503/504 Server errors
-    
-    Args:
-        fn: Async function to call
-        args: Positional arguments to fn
-        max_retries: Max retry attempts (default 3 = 4 total calls)
-        base_delay_sec: Initial delay in seconds (1, 2, 4, ...)
-        kwargs: Keyword arguments to fn
-        
-    Returns:
-        Result from fn() if successful
-        
-    Raises:
-        Last exception if all retries exhausted
-    """
-    last_exc = None
-    
-    for attempt in range(max_retries + 1):
-        try:
-            return await fn(*args, **kwargs)
-        except Exception as e:
-            if not _is_retryable_genai_error(e):
-                logger.error(f"Non-retryable Gemini error: {e.__class__.__name__}: {e}")
-                raise
-            last_exc = e
-            
-            if attempt < max_retries:
-                delay = base_delay_sec * (2 ** attempt)  # Exponential: 1, 2, 4, ...
-                status = getattr(e, 'status_code', None) or getattr(e, 'status', None)
-                logger.warning(
-                    f"🔄 Gemini API transient error (attempt {attempt + 1}/{max_retries + 1}): "
-                    f"{e.__class__.__name__} status={status}. "
-                    f"Retrying in {delay}s..."
-                )
-                await asyncio.sleep(delay)
-            else:
-                status = getattr(e, 'status_code', None) or getattr(e, 'status', None)
-                logger.error(
-                    f"❌ Gemini API call failed after {max_retries + 1} attempts: "
-                    f"{e.__class__.__name__} status={status}: {e}"
-                )
-    
-    if last_exc:
-        raise last_exc
+PARSE_RETRY_ATTEMPTS = 2
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -126,6 +38,7 @@ class LLMResult:
     cost_usd: float = 0.0
     error_message: Optional[str] = None
     parsed_data: Optional[dict[str, Any]] = None
+    model_used: Optional[str] = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -887,6 +800,18 @@ Your output is the PERMANENT knowledge record of this session. It must be:
 # Service class
 # ─────────────────────────────────────────────────────────────────────────────
 
+class StructuredResponseParseError(ValueError):
+    """Model returned 200 OK but response is not valid structured JSON."""
+
+
+def _response_finish_reason(response: types.GenerateContentResponse) -> Optional[str]:
+    candidates = getattr(response, "candidates", None) or []
+    if not candidates:
+        return None
+    reason = getattr(candidates[0], "finish_reason", None)
+    return str(reason) if reason is not None else None
+
+
 def _parse_json_response(response: types.GenerateContentResponse) -> dict[str, Any]:
     parsed = getattr(response, "parsed", None)
     if isinstance(parsed, dict):
@@ -897,14 +822,25 @@ def _parse_json_response(response: types.GenerateContentResponse) -> dict[str, A
 
     response_text = (getattr(response, "text", "") or "").strip()
     if not response_text:
-        return {}
+        finish_reason = _response_finish_reason(response)
+        raise StructuredResponseParseError(
+            f"Empty model response (finish_reason={finish_reason})"
+        )
 
     start_idx = response_text.find("{")
     end_idx = response_text.rfind("}")
     if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
         response_text = response_text[start_idx : end_idx + 1]
 
-    return json.loads(response_text)
+    try:
+        return json.loads(response_text)
+    except json.JSONDecodeError as exc:
+        finish_reason = _response_finish_reason(response)
+        preview = response_text[:300].replace("\n", " ")
+        raise StructuredResponseParseError(
+            f"Invalid JSON (finish_reason={finish_reason}, len={len(response_text)}): {exc}. "
+            f"Preview: {preview!r}"
+        ) from exc
 
 
 def _extract_usage_and_cost(response: types.GenerateContentResponse) -> tuple[int, float]:
@@ -915,17 +851,72 @@ def _extract_usage_and_cost(response: types.GenerateContentResponse) -> tuple[in
     cost = (prompt_tokens * 0.075 + output_tokens * 0.30) / 1_000_000
     return total_tokens, cost
 
+
+def _prompt_to_contents(prompt: str) -> list[types.Content]:
+    return [
+        types.Content(
+            role="user",
+            parts=[types.Part.from_text(text=prompt)],
+        )
+    ]
+
+
 class GeminiProcessingService:
-    """Service for Gemini API-based LLM processing."""
+    """Gemini LLM processing via shared ModelClient (retry + model fallback)."""
 
-    def __init__(self) -> None:
-        self.api_key = settings.GEMINI_API_KEY
-        self.DEFAULT_MODEL = settings.GEMINI_DEFAULT_MODEL
-        self.SYNTHESIS_MODEL = settings.GEMINI_SYNTHESIS_MODEL
-        self.client: Optional[genai.Client] = None
+    async def _generate_structured(
+        self,
+        prompt: str,
+        config: types.GenerateContentConfig,
+        estimated_tokens: int,
+        log_label: str,
+    ) -> LLMResult:
+        if not settings.GEMINI_API_KEY:
+            return LLMResult(success=False, error_message="GEMINI_API_KEY not configured")
 
-        if self.api_key:
-            self.client = genai.Client(api_key=self.api_key)
+        last_parse_error: Optional[str] = None
+
+        for attempt in range(PARSE_RETRY_ATTEMPTS + 1):
+            try:
+                model_used, response = await _model_client.generate(
+                    _prompt_to_contents(prompt),
+                    config,
+                    estimated_tokens=estimated_tokens,
+                )
+                parsed = _parse_json_response(response)
+                total_tokens, cost = _extract_usage_and_cost(response)
+
+                return LLMResult(
+                    success=True,
+                    parsed_data=parsed,
+                    tokens_used=total_tokens,
+                    cost_usd=cost,
+                    model_used=model_used,
+                )
+
+            except StructuredResponseParseError as e:
+                last_parse_error = str(e)
+                if attempt < PARSE_RETRY_ATTEMPTS:
+                    logger.warning(
+                        f"{log_label}: structured JSON parse failed "
+                        f"(attempt {attempt + 1}/{PARSE_RETRY_ATTEMPTS + 1}), retrying — {e}"
+                    )
+                    continue
+                logger.error(f"{log_label}: structured JSON parse failed after retries — {e}")
+                return LLMResult(success=False, error_message=last_parse_error)
+
+            except AllModelsExhaustedError as e:
+                logger.error(f"{log_label}: all models exhausted — {e}")
+                return LLMResult(success=False, error_message=str(e))
+
+            except Exception as e:
+                logger.exception(f"{log_label} failed: {e}")
+                return LLMResult(success=False, error_message=str(e))
+
+        return LLMResult(
+            success=False,
+            error_message=last_parse_error or "Unknown structured output error",
+        )
 
     async def process_window(
         self,
@@ -944,9 +935,6 @@ class GeminiProcessingService:
           • OCR only               → silent screen recording prompt
           • Neither                → returns empty result immediately
         """
-        if not self.client:
-            return LLMResult(success=False, error_message="GEMINI_API_KEY not configured")
-
         has_ocr = bool(ocr_text and ocr_text.strip())
         has_transcript = bool(transcript_text and transcript_text.strip())
 
@@ -980,36 +968,19 @@ class GeminiProcessingService:
                 start_sec, end_sec, ocr_text, asset_context
             )
 
-        try:
-            response = await _call_with_retry(
-                self.client.aio.models.generate_content,
-                model=self.DEFAULT_MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.2,
-                    top_p=0.85,
-                    top_k=40,
-                    max_output_tokens=2000,
-                    response_mime_type="application/json",
-                    response_schema=_window_analysis_schema(start_sec, end_sec),
-                ),
-                max_retries=3,
-                base_delay_sec=1.0,
-            )
-
-            parsed = _parse_json_response(response)
-            total_tokens, cost = _extract_usage_and_cost(response)
-
-            return LLMResult(
-                success=True,
-                parsed_data=parsed,
-                tokens_used=total_tokens,
-                cost_usd=cost,
-            )
-
-        except Exception as e:
-            logger.exception(f"Gemini window analysis failed: {e}")
-            return LLMResult(success=False, error_message=str(e))
+        return await self._generate_structured(
+            prompt=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.2,
+                top_p=0.85,
+                top_k=40,
+                max_output_tokens=2000,
+                response_mime_type="application/json",
+                response_schema=_window_analysis_schema(start_sec, end_sec),
+            ),
+            estimated_tokens=2000,
+            log_label="Gemini window analysis",
+        )
 
     # Keep backward-compatible method name
     async def process_screen_segments(
@@ -1040,9 +1011,6 @@ class GeminiProcessingService:
         Extract structured knowledge units from OCR + transcript text.
         Now includes decisions as a first-class extraction category.
         """
-        if not self.client:
-            return LLMResult(success=False, error_message="GEMINI_API_KEY not configured")
-
         prompt = _knowledge_extraction_prompt(
             ocr_text=text,
             transcript_text=transcript_text,
@@ -1051,34 +1019,17 @@ class GeminiProcessingService:
             end_sec=end_sec,
         )
 
-        try:
-            response = await _call_with_retry(
-                self.client.aio.models.generate_content,
-                model=self.DEFAULT_MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.2,
-                    max_output_tokens=2000,
-                    response_mime_type="application/json",
-                    response_schema=_knowledge_extraction_schema(),
-                ),
-                max_retries=3,
-                base_delay_sec=1.0,
-            )
-
-            parsed = _parse_json_response(response)
-            total_tokens, cost = _extract_usage_and_cost(response)
-
-            return LLMResult(
-                success=True,
-                parsed_data=parsed,
-                tokens_used=total_tokens,
-                cost_usd=cost,
-            )
-
-        except Exception as e:
-            logger.exception(f"Knowledge extraction failed: {e}")
-            return LLMResult(success=False, error_message=str(e))
+        return await self._generate_structured(
+            prompt=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.2,
+                max_output_tokens=2000,
+                response_mime_type="application/json",
+                response_schema=_knowledge_extraction_schema(),
+            ),
+            estimated_tokens=2000,
+            log_label="Knowledge extraction",
+        )
 
     async def synthesize_session(
         self,
@@ -1093,9 +1044,6 @@ class GeminiProcessingService:
         Uses a dense, exhaustive prompt that pushes the model to capture
         everything rather than summarizing aggressively.
         """
-        if not self.client:
-            return LLMResult(success=False, error_message="GEMINI_API_KEY not configured")
-
         duration_sec = duration_ms / 1000.0
 
         prompt = _session_synthesis_prompt(
@@ -1106,34 +1054,17 @@ class GeminiProcessingService:
             has_audio=has_audio,
         )
 
-        try:
-            response = await _call_with_retry(
-                self.client.aio.models.generate_content,
-                model=self.SYNTHESIS_MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.3,
-                    max_output_tokens=4000,   # increased for exhaustive output
-                    response_mime_type="application/json",
-                    response_schema=_session_synthesis_schema(),
-                ),
-                max_retries=3,
-                base_delay_sec=1.0,
-            )
-
-            parsed = _parse_json_response(response)
-            total_tokens, cost = _extract_usage_and_cost(response)
-
-            return LLMResult(
-                success=True,
-                parsed_data=parsed,
-                tokens_used=total_tokens,
-                cost_usd=cost,
-            )
-
-        except Exception as e:
-            logger.exception(f"Session synthesis failed: {e}")
-            return LLMResult(success=False, error_message=str(e))
+        return await self._generate_structured(
+            prompt=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.2,
+                max_output_tokens=8192,
+                response_mime_type="application/json",
+                response_schema=_session_synthesis_schema(),
+            ),
+            estimated_tokens=8192,
+            log_label="Session synthesis",
+        )
 
 
 gemini_service = GeminiProcessingService()

@@ -656,7 +656,7 @@ function App() {
               <button
                 type="button"
                 className="topbar-btn ask-ai-topbar-btn"
-                onClick={() => setIsAskAIOpen(true)}
+                onClick={() => setIsAskAIOpen(prev => !prev)}
                 title="Ask AI"
               >
                 <span style={{ fontSize: 13 }}>✦</span>
@@ -1091,7 +1091,7 @@ function App() {
                   } else if (toolName === 'schedule') {
                     await schedules.fetchSchedules()
                   } else if (toolName === 'knowledge') {
-                    await assets.refreshAssets()
+                    await assets.loadSidebarAssets()
                   }
                 }}
               />

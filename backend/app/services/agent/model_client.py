@@ -87,6 +87,11 @@ MODEL_LIMITS: dict[str, ModelLimits] = {
 # Default model list (ordered by preference)
 AVAILABLE_MODELS: list[str] = list(MODEL_LIMITS.keys())
 
+# Models that reliably honor response_schema + application/json (exclude Gemma).
+STRUCTURED_JSON_MODELS: list[str] = [
+    "models/gemini-3.1-flash-lite",
+]
+
 # Conservative token estimate used *before* a call when real usage is unknown.
 EST_TOKENS_PER_REQUEST: int = 1_500
 

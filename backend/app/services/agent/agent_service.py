@@ -327,6 +327,68 @@ class AgentService:
         self.registry = get_tool_registry()
 
     # ------------------------------------------------------------------
+    # Helper methods
+    # ------------------------------------------------------------------
+
+    async def _generate_conversation_title(self, message: str) -> str:
+        """
+        Generate a conversation title based on the user's first message.
+        
+        Uses a simple, fast LLM call to create a concise title (max 10 words).
+        Returns a fallback title if generation fails.
+        """
+        try:
+            prompt = f"""Generate a very short conversation title (max 10 words) based on this message:
+
+"{message}"
+
+Return ONLY the title, no quotes or explanation."""
+
+            contents = [
+                types.Content(
+                    role="user",
+                    parts=[types.Part.from_text(text=prompt)],
+                )
+            ]
+            
+            gen_config = types.GenerateContentConfig(
+                system_instruction="You are a helpful assistant that creates concise, descriptive conversation titles.",
+                temperature=0.7,
+            )
+            
+            logger.info(f"🎯 Generating title for new conversation...")
+            model_used, response = await _model_client.generate(
+                contents,
+                gen_config,
+                estimated_tokens=100,  # Title generation uses fewer tokens
+            )
+            
+            title = response.text.strip() if response and hasattr(response, 'text') else ""
+            
+            # Clean up title (remove quotes if present)
+            title = title.strip('"\'')
+            
+            # Ensure title is not too long
+            if len(title) > 100:
+                title = title[:97] + "..."
+            
+            # Fallback if title is empty
+            if not title:
+                raise ValueError("Generated empty title")
+            
+            logger.info(f"✅ Generated title: {title}")
+            return title
+            
+        except Exception as exc:
+            logger.warning(f"⚠️ Failed to generate title (non-fatal): {exc}")
+            # Fallback to a generic title with first few words of message
+            words = message.split()[:5]
+            fallback_title = " ".join(words) if words else "New Conversation"
+            if len(fallback_title) > 100:
+                fallback_title = fallback_title[:97] + "..."
+            return fallback_title
+
+    # ------------------------------------------------------------------
     # Non-streaming handle (unchanged logic, kept for completeness)
     # ------------------------------------------------------------------
 
@@ -666,11 +728,12 @@ class AgentService:
 
         Event types
         -----------
-        token       — {"event": "token",       "text": str}
-        tool_start  — {"event": "tool_start",  "tool_name": str, "tool_args": dict}
-        tool_result — {"event": "tool_result", "tool_name": str, "result": dict}
-        error       — {"event": "error",       "message": str}
-        done        — {"event": "done",        "conversation_id": str}
+        title_generated — {"event": "title_generated", "conversation_id": str, "title": str}
+        token           — {"event": "token",           "text": str}
+        tool_start      — {"event": "tool_start",      "tool_name": str, "tool_args": dict}
+        tool_result     — {"event": "tool_result",     "tool_name": str, "result": dict}
+        error           — {"event": "error",           "message": str}
+        done            — {"event": "done",            "conversation_id": str}
 
         Error handling
         --------------
@@ -708,6 +771,22 @@ class AgentService:
                     conversation_id=None,
                     workspace_id=workspace_id,
                 )
+                
+                # Generate title for new conversation
+                try:
+                    new_title = await self._generate_conversation_title(message)
+                    await self.store.update_conversation_title(conv.id, new_title)
+                    conv.title = new_title
+                    
+                    # Notify frontend about the new title
+                    yield {
+                        "event": "title_generated",
+                        "conversation_id": str(conv.id),
+                        "title": new_title,
+                    }
+                    logger.info(f"✅ Generated and saved title for conversation {conv.id}: {new_title}")
+                except Exception as exc:
+                    logger.warning(f"⚠️ Title generation failed (non-fatal): {exc}")
 
             conversation_id_str = str(conv.id)  # Save conversation_id early
 

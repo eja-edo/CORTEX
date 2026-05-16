@@ -316,7 +316,7 @@ class LLMProcessorWorker:
                 "transcript_text": transcript_text,
                 "status": "completed" if result.success else "failed",
                 "error_message": result.error_message,
-                "llm_model": gemini_service.DEFAULT_MODEL,
+                "llm_model": result.model_used,
                 "tokens_used": result.tokens_used,
                 "cost_usd": result.cost_usd,
             }
@@ -623,7 +623,7 @@ class LLMProcessorWorker:
             "has_video": has_video,
             "has_audio": has_audio,
             "status": "completed" if result.success else "failed",
-            "llm_model": gemini_service.SYNTHESIS_MODEL,
+            "llm_model": result.model_used,
             "tokens_used": result.tokens_used + total_tokens,
             "cost_usd": result.cost_usd + total_cost,
             "synthesized_at": datetime.utcnow().isoformat(),

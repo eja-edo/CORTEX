@@ -44,6 +44,7 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
     const [isLoading, setIsLoading] = useState(false)
     const [copiedId, setCopiedId] = useState<string | null>(null)
     const [conversationId, setConversationId] = useState<string | null>(null)
+    const [conversationTitle, setConversationTitle] = useState<string | null>(null)
     const [error, setError] = useState<string | null>(null)
     const [sessions, setSessions] = useState<ConversationListItem[]>([])
     const [sessionsLoading, setSessionsLoading] = useState(true)
@@ -53,53 +54,124 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
     const [addedPills, setAddedPills] = useState<ContextPill[]>([
         ...(noteContent ? [{ id: 'note', text: noteContent, label: `📝 ${noteTitle || 'Note'}` }] : []),
     ])
+    const [displayIndex, setDisplayIndex] = useState(0)
+    const [fullReplyRef, setFullReplyRef] = useState('')
     const inputRef = useRef<HTMLTextAreaElement>(null)
     const messagesEndRef = useRef<HTMLDivElement>(null)
     const { updateTokenUsage } = useConversationStore()
     const navigate = useNavigate()
 
+    // Helper: Save conversationId synchronously to localStorage
+    const saveConversationIdToStorage = useCallback((id: string) => {
+        try {
+            const state = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')
+            state.conversationId = id
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+            console.debug(`💾 Saved conversationId to localStorage: ${id}`)
+        } catch (err) {
+            console.error('Failed to save conversationId to localStorage:', err)
+        }
+    }, [STORAGE_KEY])
+
+    // Helper: Clear conversationId from localStorage
+    const clearConversationIdFromStorage = useCallback(() => {
+        try {
+            localStorage.removeItem(STORAGE_KEY)
+            console.debug('🗑️ Cleared conversationId from localStorage')
+        } catch (err) {
+            console.error('Failed to clear conversationId from localStorage:', err)
+        }
+    }, [STORAGE_KEY])
+
     useEffect(() => {
         inputRef.current?.focus()
     }, [])
 
-    // Load state from localStorage on mount
+    // Typing effect animation
     useEffect(() => {
-        try {
-            const savedState = localStorage.getItem(STORAGE_KEY)
-            if (savedState) {
-                const state = JSON.parse(savedState)
-                if (state.conversationId) {
-                    setConversationId(state.conversationId)
+        if (displayIndex < fullReplyRef.length) {
+            const timer = setTimeout(() => {
+                setDisplayIndex(prev => prev + 1)
+            }, 10) // 20ms delay between each character
+            return () => clearTimeout(timer)
+        }
+    }, [displayIndex, fullReplyRef.length])
+
+    // Load state from localStorage on mount and restore conversation from backend
+    useEffect(() => {
+        let canceled = false
+
+        const restoreConversation = async (savedConversationId: string) => {
+            try {
+                console.debug(`📥 Restoring conversation: ${savedConversationId}`)
+                const conversation = await getConversation(savedConversationId)
+                if (canceled) return
+
+                console.info(`✅ Restored ${conversation.messages.length} messages for conversation ${savedConversationId}`)
+                setMessages(conversation.messages.map(msg => ({
+                    id: msg.id,
+                    role: msg.role as 'user' | 'assistant',
+                    content: msg.content,
+                })))
+                setConversationTitle(conversation.title ?? null)
+            } catch (err) {
+                console.error('❌ Failed to restore conversation from backend:', err)
+                // Clear localStorage if restoration fails to avoid infinite retry loop
+                clearConversationIdFromStorage()
+            }
+        }
+
+        const init = async () => {
+            try {
+                const savedState = localStorage.getItem(STORAGE_KEY)
+                if (savedState) {
+                    const state = JSON.parse(savedState)
+                    if (state.conversationId) {
+                        console.info(`🔄 Found saved conversationId in localStorage: ${state.conversationId}`)
+                        setConversationId(state.conversationId)
+                        if (state.conversationTitle) {
+                            setConversationTitle(state.conversationTitle)
+                        }
+                        // Restore messages from backend (single source of truth)
+                        await restoreConversation(state.conversationId)
+                    } else {
+                        console.debug('No conversationId in localStorage')
+                    }
+                } else {
+                    console.debug('No saved state in localStorage')
                 }
-                if (state.messages && Array.isArray(state.messages)) {
-                    setMessages(state.messages)
+            } catch (err) {
+                console.error('Failed to load chatbot state from localStorage:', err)
+            } finally {
+                if (!canceled) {
+                    setIsInitializing(false)
                 }
             }
-        } catch (err) {
-            console.error('Failed to load chatbot state from localStorage:', err)
-        } finally {
-            // Mark initialization as complete
-            setIsInitializing(false)
         }
-    }, [])
 
-    // Save state to localStorage whenever messages or conversationId changes
-    // But skip saving during initial load
+        void init()
+        return () => {
+            canceled = true
+        }
+    }, [clearConversationIdFromStorage])
+
+    // Save conversation title to localStorage (conversationId saved synchronously in stream handler)
     useEffect(() => {
-        if (isInitializing) {
+        if (isInitializing || !conversationId) {
             return
         }
 
         try {
-            const state = {
-                conversationId,
-                messages,
+            const state = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')
+            if (conversationTitle) {
+                state.conversationTitle = conversationTitle
             }
             localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+            console.debug(`💾 Saved conversationTitle to localStorage: ${conversationTitle}`)
         } catch (err) {
-            console.error('Failed to save chatbot state to localStorage:', err)
+            console.error('Failed to save conversationTitle to localStorage:', err)
         }
-    }, [conversationId, messages, isInitializing])
+    }, [conversationTitle, isInitializing])
 
     // Fetch sessions on component mount
     useEffect(() => {
@@ -119,6 +191,27 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
         fetchSessions()
     }, [])
 
+
+    useEffect(() => {
+        if (isInitializing || !conversationId || conversationTitle) return
+
+        let canceled = false
+        const fetchTitle = async () => {
+            try {
+                const conversation = await getConversation(conversationId)
+                if (!canceled) {
+                    setConversationTitle(conversation.title ?? null)
+                }
+            } catch (err) {
+                console.error('Failed to load conversation title:', err)
+            }
+        }
+
+        fetchTitle()
+        return () => {
+            canceled = true
+        }
+    }, [conversationId, conversationTitle, isInitializing])
 
     // Build minimal runtime UI context (collected at send time)
     const buildRuntimeContextText = useCallback(() => {
@@ -152,6 +245,7 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
     const loadSession = useCallback(async (sessionId: string) => {
         try {
             setIsLoading(true)
+            console.debug(`📥 Loading session: ${sessionId}`)
             const conversation = await getConversation(sessionId)
 
             // Convert conversation messages to Message format
@@ -163,13 +257,18 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
 
             setMessages(loadedMessages)
             setConversationId(sessionId)
+            // Save conversationId synchronously to localStorage
+            saveConversationIdToStorage(sessionId)
+            setConversationTitle(conversation.title ?? null)
             setSessions([]) // Clear sessions list after selection
+            console.info(`✅ Loaded session ${sessionId} with ${loadedMessages.length} messages`)
         } catch (err) {
             setError(`Failed to load session: ${err instanceof Error ? err.message : 'Unknown error'}`)
+            console.error('Failed to load session:', err)
         } finally {
             setIsLoading(false)
         }
-    }, [])
+    }, [saveConversationIdToStorage])
 
     // Load more sessions
     const loadMoreSessions = useCallback(async () => {
@@ -191,16 +290,12 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
     const handleNewSession = useCallback(() => {
         setMessages([])
         setConversationId(null)
+        setConversationTitle(null)
         setError(null)
         setIsLoading(false)
         setCopiedId(null)
-
-        try {
-            localStorage.removeItem(STORAGE_KEY)
-        } catch (err) {
-            console.error('Failed to clear chatbot state from localStorage:', err)
-        }
-    }, [STORAGE_KEY])
+        clearConversationIdFromStorage()
+    }, [clearConversationIdFromStorage])
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -219,6 +314,8 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
         const userMsg = text.trim()
         setInput('')
         setError(null)
+        setDisplayIndex(0)
+        setFullReplyRef('')
 
         const userMsgObj: Message = {
             id: Date.now().toString(),
@@ -266,7 +363,7 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                     const wsId = (result?.workspace_id as string | undefined) || workspaceId
                     if (noteId && wsId) {
                         console.debug('Tool navigation: create_note', { noteId, wsId })
-                        onToolNavigate?.('create_note').catch(() => {})
+                        onToolNavigate?.('create_note').catch(() => { })
                         navigate(noteRoute(wsId, noteId))
                     }
                     return
@@ -274,7 +371,7 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
 
                 if (event.tool_name === 'create_schedule' || event.tool_name === 'update_schedule' || event.tool_name === 'get_schedules') {
                     console.debug('Tool navigation: schedule', { tool: event.tool_name })
-                    onToolNavigate?.('schedule').catch(() => {})
+                    onToolNavigate?.('schedule').catch(() => { })
                     navigate(scheduleRoute())
                     return
                 }
@@ -283,7 +380,7 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                     const assetId = result?.id as string | undefined
                     if (assetId && workspaceId) {
                         console.debug('Tool navigation: summarize_asset', { assetId, workspaceId })
-                        onToolNavigate?.('knowledge').catch(() => {})
+                        onToolNavigate?.('knowledge').catch(() => { })
                         navigate(knowledgeRoute(workspaceId, assetId))
                     }
                 }
@@ -292,6 +389,7 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
             for await (const event of streamAgentMessage(finalMessage, conversationId || undefined, workspaceId)) {
                 if (event.type === 'text' && event.text) {
                     fullReply += event.text
+                    setFullReplyRef(fullReply)
                     setMessages(prev =>
                         prev.map(m => m.id === loadingMsgObj.id
                             ? { ...m, content: fullReply, loading: false, thinkingSteps }
@@ -328,13 +426,20 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                         )
                     )
                     handleToolNavigation(event)
+                } else if (event.type === 'title_generated' && event.title) {
+                    setConversationTitle(event.title)
                 } else if (event.type === 'done' && event.conversation_id) {
                     finalConversationId = event.conversation_id
+                    // Save conversationId to localStorage immediately (synchronously)
+                    // This prevents data loss if user reloads right after sending a message
+                    saveConversationIdToStorage(event.conversation_id)
+                    console.info(`✅ Received conversationId from stream and saved to localStorage: ${event.conversation_id}`)
                 }
             }
 
             // Update conversation ID if this is the first message
             if (!conversationId && finalConversationId) {
+                console.debug(`Setting conversationId state: ${finalConversationId}`)
                 setConversationId(finalConversationId)
             }
 
@@ -407,7 +512,12 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                         <div className="ask-ai-icon">
                             <Sparkles size={14} />
                         </div>
-                        <span className="ask-ai-title">Ask AI</span>
+                        <div className="ask-ai-title-container">
+                            <span className="ask-ai-title">Ask AI</span>
+                            <span className="ask-ai-subtitle">
+                                {conversationTitle ? conversationTitle : 'Chat with your AI assistant'}
+                            </span>
+                        </div>
                     </div>
                     <div className="ask-ai-header-actions">
                         {messages.length > 0 && (
@@ -493,7 +603,7 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                             </div>
                         </div>
                     ) : (
-                        messages.map(msg => (
+                        messages.map((msg, index) => (
                             <div key={msg.id} className={`ask-ai-msg ask-ai-msg--${msg.role}`}>
                                 {msg.role === 'assistant' && (
                                     <div className="ask-ai-msg-icon">
@@ -565,10 +675,21 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                                             {msg.role === 'assistant' ? (
                                                 <div
                                                     className="ask-ai-msg-content"
-                                                    dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }}
+                                                    dangerouslySetInnerHTML={{
+                                                        __html: renderMarkdown(
+                                                            index === messages.length - 1
+                                                                ? fullReplyRef.slice(0, displayIndex)
+                                                                : msg.content
+                                                        )
+                                                    }}
                                                 />
                                             ) : (
-                                                <div className="ask-ai-msg-content">{msg.content}</div>
+                                                <div className="ask-ai-msg-content">
+                                                    {index === messages.length - 1
+                                                        ? fullReplyRef.slice(0, displayIndex)
+                                                        : msg.content
+                                                    }
+                                                </div>
                                             )}
 
                                             {msg.role === 'assistant' && !msg.loading && (

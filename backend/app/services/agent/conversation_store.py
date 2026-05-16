@@ -196,6 +196,20 @@ class ConversationStore:
             conv.total_token_count = (conv.total_token_count or 0) + token_count
             await self.db.flush()
 
+    async def update_conversation_title(self, conversation_id: UUID, title: str) -> AgentConversation | None:
+        """Update conversation title."""
+
+        stmt = select(AgentConversation).where(
+            AgentConversation.id == conversation_id
+        )
+        result = await self.db.execute(stmt)
+        conv = result.scalar_one_or_none()
+        if conv:
+            conv.title = title
+            conv.updated_at = datetime.utcnow()
+            await self.db.flush()
+        return conv
+
     async def get_conversation_by_id(self, conversation_id: UUID, user_id: UUID) -> AgentConversation | None:
         """Get a specific conversation, verifying user ownership."""
 

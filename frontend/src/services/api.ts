@@ -189,9 +189,10 @@ export async function sendAgentMessage(
 }
 
 export interface StreamEvent {
-    type: 'text' | 'done' | 'tool_start' | 'tool_result' | 'thinking'
+    type: 'text' | 'done' | 'tool_start' | 'tool_result' | 'thinking' | 'title_generated'
     text?: string
     conversation_id?: string
+    title?: string
     tool_name?: string
     tool_args?: Record<string, unknown>
     result?: unknown
@@ -278,6 +279,12 @@ export async function* streamAgentMessage(
                             yield { type: 'text', text: data.text }
                         } else if (data.event === 'done') {
                             yield { type: 'done', conversation_id: data.conversation_id }
+                        } else if (data.event === 'title_generated') {
+                            yield {
+                                type: 'title_generated',
+                                conversation_id: data.conversation_id,
+                                title: data.title
+                            }
                         } else if (data.event === 'tool_start') {
                             yield {
                                 type: 'tool_start',
@@ -313,6 +320,12 @@ export async function* streamAgentMessage(
                     yield { type: 'text', text: data.text }
                 } else if (data.event === 'done') {
                     yield { type: 'done', conversation_id: data.conversation_id }
+                } else if (data.event === 'title_generated') {
+                    yield {
+                        type: 'title_generated',
+                        conversation_id: data.conversation_id,
+                        title: data.title
+                    }
                 } else if (data.event === 'tool_start') {
                     yield {
                         type: 'tool_start',

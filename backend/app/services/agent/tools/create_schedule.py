@@ -4,12 +4,22 @@ from datetime import datetime, timezone
 from typing import Optional
 from pydantic import BaseModel, Field
 
-from app.models import ScheduleType
+from app.models import ScheduleType, SyncOperation
 from app.services.agent.tool_context import ToolContext
 from app.services.schedule_service import ScheduleService
+from app.schemas import ScheduleCreate, RecurrenceRuleInput
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+class RecurrenceRuleInputData(BaseModel):
+    """Optional recurrence rule for repeating events."""
+    freq: str = Field(..., pattern="^(NONE|DAILY|WEEKLY|MONTHLY)$", description="Frequency: NONE, DAILY, WEEKLY, MONTHLY")
+    interval: int = Field(default=1, ge=1, le=365, description="Repeat every N days/weeks/months")
+    until: Optional[str] = Field(None, description="ISO 8601 datetime with timezone offset (stop recurrence on this date)")
+    count: Optional[int] = Field(None, ge=1, le=730, description="Number of occurrences")
+    tzid: str = Field(default="Asia/Ho_Chi_Minh", description="Timezone ID")
 
 
 class CreateScheduleInput(BaseModel):
@@ -31,6 +41,8 @@ class CreateScheduleInput(BaseModel):
     )
     location: Optional[str] = Field(None, max_length=255)
     description: Optional[str] = Field(None, max_length=1000)
+    recurrence_rule: Optional[RecurrenceRuleInputData] = Field(None, description="Optional recurrence rule for repeating events")
+
 
 
 def _parse_iso_with_tz(value: str, field_name: str) -> datetime:
@@ -52,6 +64,7 @@ def _parse_iso_with_tz(value: str, field_name: str) -> datetime:
 
 
 async def create_schedule_handler(args: dict, ctx: ToolContext) -> dict:
+    """Create schedule with optional recurrence and Google sync."""
     try:
         start_time = _parse_iso_with_tz(args["start_time"], "start_time")
         end_time = _parse_iso_with_tz(args["end_time"], "end_time")
@@ -59,23 +72,49 @@ async def create_schedule_handler(args: dict, ctx: ToolContext) -> dict:
         raise ValueError(f"Invalid datetime format: {exc}")
 
     from app.database import SessionLocal
+    from app.api.schedules import _enqueue_google_sync
 
     db = SessionLocal()
     try:
-        schedule = ScheduleService(db).create_schedule_simple(
-            user_id=ctx.user_id,
+        # Build ScheduleCreate input with optional recurrence
+        recurrence_data = None
+        if args.get("recurrence_rule"):
+            recurrence_input = args["recurrence_rule"]
+            # Parse until datetime if provided
+            until = None
+            if recurrence_input.get("until"):
+                until = _parse_iso_with_tz(recurrence_input["until"], "recurrence_rule.until")
+            
+            recurrence_data = RecurrenceRuleInput(
+                freq=recurrence_input["freq"],
+                interval=recurrence_input.get("interval", 1),
+                until=until,
+                count=recurrence_input.get("count"),
+                tzid=recurrence_input.get("tzid", "Asia/Ho_Chi_Minh"),
+            )
+
+        schedule_create = ScheduleCreate(
             title=args["title"],
-            schedule_type=ScheduleType[args["type"]],
+            type=ScheduleType[args["type"]],
             start_time=start_time,
             end_time=end_time,
             location=args.get("location"),
             description=args.get("description"),
+            recurrence=recurrence_data,
         )
+
+        svc = ScheduleService(db)
+        schedule = svc.create_schedule(user_id=ctx.user_id, data=schedule_create)
+        
+        # Sync with Google Calendar
+        await _enqueue_google_sync(schedule, SyncOperation.UPSERT)
+        
         return {
             "id": str(schedule.id),
             "title": schedule.title,
             "start_time": schedule.start_time.isoformat(),
             "end_time": schedule.end_time.isoformat(),
+            "recurrence": schedule.recurrence_rule,
             "created_at": schedule.created_at.isoformat() if schedule.created_at else None,
             "success": True,
         }
@@ -84,6 +123,7 @@ async def create_schedule_handler(args: dict, ctx: ToolContext) -> dict:
         raise
     finally:
         db.close()
+
 
 
 CREATE_SCHEDULE_SCHEMA = {
@@ -105,6 +145,40 @@ CREATE_SCHEDULE_SCHEMA = {
         },
         "location": {"type": "string", "description": "Location or meeting link (optional)"},
         "description": {"type": "string", "description": "Additional notes (optional)"},
+        "recurrence_rule": {
+            "type": "object",
+            "description": "Optional recurrence rule for repeating events",
+            "properties": {
+                "freq": {
+                    "type": "string",
+                    "enum": ["NONE", "DAILY", "WEEKLY", "MONTHLY"],
+                    "description": "Frequency of recurrence"
+                },
+                "interval": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 365,
+                    "default": 1,
+                    "description": "Repeat every N days/weeks/months"
+                },
+                "until": {
+                    "type": "string",
+                    "description": "ISO 8601 datetime with timezone offset when recurrence should stop"
+                },
+                "count": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 730,
+                    "description": "Number of occurrences"
+                },
+                "tzid": {
+                    "type": "string",
+                    "default": "Asia/Ho_Chi_Minh",
+                    "description": "Timezone ID"
+                }
+            },
+            "required": ["freq"]
+        }
     },
     "required": ["title", "type", "start_time", "end_time"],
 }

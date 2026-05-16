@@ -293,6 +293,22 @@
     flex-shrink: 0;
 }
 
+.ask-ai-title-container {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.ask-ai-subtitle {
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--text-secondary);
+    opacity: 0.8;
+    flex-shrink: 0;
+}
+
 .ask-ai-header-actions {
     display: flex;
     align-items: center;
