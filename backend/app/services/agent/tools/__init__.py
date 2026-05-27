@@ -5,6 +5,7 @@ from app.services.agent.tool_registry import get_tool_registry
 # Import tool definitions
 from app.services.agent.tools.search_notes import SEARCH_NOTES_DEFINITION
 from app.services.agent.tools.create_note import CREATE_NOTE_DEFINITION
+from app.services.agent.tools.update_note import UPDATE_NOTE_DEFINITION
 from app.services.agent.tools.get_schedules import GET_SCHEDULES_DEFINITION
 from app.services.agent.tools.create_schedule import CREATE_SCHEDULE_DEFINITION
 from app.services.agent.tools.update_schedule import UPDATE_SCHEDULE_DEFINITION
@@ -23,6 +24,7 @@ def register_all_tools() -> None:
     tools = [
         SEARCH_NOTES_DEFINITION,
         CREATE_NOTE_DEFINITION,
+        UPDATE_NOTE_DEFINITION,
         GET_SCHEDULES_DEFINITION,
         CREATE_SCHEDULE_DEFINITION,
         UPDATE_SCHEDULE_DEFINITION,

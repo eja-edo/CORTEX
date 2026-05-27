@@ -30,7 +30,7 @@ async def deep_research_handler(args: dict, ctx: ToolContext) -> dict:
                     "Content-Type": "application/json",
                 },
                 json={
-                    "topic": args["topic"],
+                    "query": args["topic"],
                     "depth": args.get("depth", "moderate"),
                     "focus_areas": args.get("focus_areas", []),
                 },

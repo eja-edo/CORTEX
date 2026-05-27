@@ -246,34 +246,6 @@ class NoteRevisionResponse(BaseModel):
     created_at: datetime
 
 
-class NotePartialUpdate(BaseModel):
-    content: str | None = Field(default=None, min_length=1, max_length=MAX_NOTE_CONTENT_LENGTH)
-    content_type: str | None = Field(default=None, max_length=20)
-    position: dict[str, Any] | None = None
-    size: dict[str, Any] | None = None
-    style: dict[str, Any] | None = None
-
-    @field_validator("content_type")
-    @classmethod
-    def validate_content_type(cls, value: str | None) -> str | None:
-        if value is None:
-            return value
-        if value.lower() != "markdown":
-            raise ValueError("Only markdown content_type is supported")
-        return "markdown"
-
-
-class BatchUpdateItem(BaseModel):
-    id: UUID
-    version: int = Field(..., ge=1)
-    updates: NotePartialUpdate
-
-
-class BatchUpdateResponse(BaseModel):
-    success: list[UUID]
-    failed: list[UUID]
-
-
 class NoteResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

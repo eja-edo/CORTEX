@@ -8,7 +8,7 @@ from app.database import get_db, SessionLocal
 from app.database_async import get_async_db
 from app.dependencies import get_current_active_user
 from app.models import User
-from app.schemas import BatchUpdateItem, BatchUpdateResponse, NoteCreate, NotePatchRequest, NoteResponse, NoteRevisionResponse, NoteUpdate
+from app.schemas import NoteCreate, NotePatchRequest, NoteResponse, NoteRevisionResponse, NoteUpdate
 from app.services.notes import NoteService
 from app.services.workspace_permission import WorkspacePermission
 
@@ -63,16 +63,6 @@ async def get_workspace_notes(
         content = await service.materialize_note_content(note)
         responses.append(service.to_response(note, render_html=render_html, content_override=content))
     return responses
-
-
-@router.patch("/batch", response_model=BatchUpdateResponse)
-async def batch_update_notes(
-    items: list[BatchUpdateItem],
-    current_user: User = Depends(get_current_active_user),
-    db: AsyncSession = Depends(get_async_db),
-):
-    service = NoteService(db)
-    return await service.batch_update(user_id=current_user.id, items=items)
 
 
 @router.patch("/{note_id}", response_model=NoteResponse)

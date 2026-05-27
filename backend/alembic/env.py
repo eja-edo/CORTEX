@@ -24,7 +24,7 @@ Base = migration_models.Base
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql+psycopg2://user:password@localhost:5433/cortex_db",
+    "postgresql+psycopg2://user:password@localhost:5434/cortex_db",
 )
 
 # this is the Alembic Config object, which provides

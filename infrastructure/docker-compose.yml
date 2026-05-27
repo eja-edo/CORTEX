@@ -8,7 +8,7 @@ services:
       POSTGRES_USER: cortex
       POSTGRES_PASSWORD: cortex
     ports:
-      - "5433:5432"
+      - "5434:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     mem_limit: 512m
@@ -62,27 +62,6 @@ services:
       - default
       - cortex
 
-  pgadmin:
-    image: dpage/pgadmin4:8
-    container_name: cortex-pgadmin
-    restart: unless-stopped
-    environment:
-      PGADMIN_DEFAULT_EMAIL: admin@cortex.com
-      PGADMIN_DEFAULT_PASSWORD: admin123
-      PGADMIN_CONFIG_SERVER_MODE: "False"
-    ports:
-      - "5050:80"
-    depends_on:
-      db:
-        condition: service_healthy
-    volumes:
-      - pgadmin_data:/var/lib/pgadmin
-    mem_limit: 256m
-    cpus: 0.2
-    networks:
-      - default
-      - cortex
-
   minio-cortex:
     image: minio/minio:latest
     container_name: minio-cortex
@@ -94,7 +73,7 @@ services:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin123
     volumes:
-      - E:/Cortex/infrastructure/minio-data:/data
+      - ./minio-data:/data
     command: server /data --console-address ":9001"
     mem_limit: 512m
     cpus: 0.5
@@ -186,10 +165,11 @@ services:
       - cortex
 
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:8080/healthz || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      retries: 10
+      start_period: 40s
 
 volumes:
   postgres_data:

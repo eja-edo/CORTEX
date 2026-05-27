@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import SessionLocal
 from app.models import Note
 from app.repositories.notes import NoteRepository
-from app.schemas import BatchUpdateItem, BatchUpdateResponse, NoteCreate, NotePatchRequest, NoteResponse, NoteUpdate
+from app.schemas import NoteCreate, NotePatchRequest, NoteResponse, NoteUpdate
 from app.services.workspace_permission import WorkspacePermission
 from app.utils.note_delta import apply_text_patch, build_text_patch
 
@@ -221,36 +221,6 @@ class NoteService:
             for target_id in to_delete:
                 deleted_any = await self.repository.soft_delete(target_id, user_id) or deleted_any
             return deleted_any
-
-    async def batch_update(self, user_id: UUID, items: list[BatchUpdateItem]) -> BatchUpdateResponse:
-        success: list[UUID] = []
-        failed: list[UUID] = []
-
-        async with self.session.begin():
-            for item in items:
-                existing = await self.repository.get_active_by_id_and_user(item.id, user_id)
-                if existing is None:
-                    failed.append(item.id)
-                    continue
-
-                update_payload = item.updates.model_dump(exclude_unset=True)
-                if not update_payload:
-                    success.append(item.id)
-                    continue
-
-                normalized_updates = self._normalize_partial_updates(existing, update_payload)
-                updated = await self.repository.update_with_version(
-                    note_id=item.id,
-                    user_id=user_id,
-                    expected_version=item.version,
-                    updates=normalized_updates,
-                )
-                if updated is None:
-                    failed.append(item.id)
-                else:
-                    success.append(item.id)
-
-        return BatchUpdateResponse(success=success, failed=failed)
 
     async def materialize_note_content(self, note: Note) -> str:
         return await self._materialize_note_content(note)

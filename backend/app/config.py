@@ -12,11 +12,11 @@ class Settings:
     # Database
     DATABASE_URL: str = os.getenv(
         "DATABASE_URL",
-        "postgresql+psycopg2://user:password@localhost:5433/cortex_db"
+        "postgresql+psycopg2://user:password@localhost:5434/cortex_db"
     )
     ASYNC_DATABASE_URL: str = os.getenv(
         "ASYNC_DATABASE_URL",
-        "postgresql+asyncpg://user:password@localhost:5433/cortex_db"
+        "postgresql+asyncpg://user:password@localhost:5434/cortex_db"
     )
 
     # Redis (pub/sub, distributed locks, cross-service signals)

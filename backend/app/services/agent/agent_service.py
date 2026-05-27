@@ -73,8 +73,9 @@ Then carry it out. Don't wait for approval on low-stakes plans.
 - Do not call the same tool with the same arguments more than once per turn.
 - If a tool returns empty results, accept it and respond directly — do not retry.
 - Chain tools intelligently: a single user request may require 2–3 tool calls to give a complete answer.
-- Available tools: search_notes, create_note, get_schedules, create_schedule,
-  update_schedule, search_knowledge, summarize_asset, get_notifications.
+- Available tools: search_notes, create_note, update_note, get_schedules,
+  create_schedule, update_schedule, search_knowledge, summarize_asset,
+  get_notifications.
 
 ## OUTPUT FORMAT
 - Lead with the result or action taken, not with what you're about to do.
