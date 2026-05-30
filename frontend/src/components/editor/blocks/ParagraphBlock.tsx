@@ -1,44 +1,58 @@
-import { useRef, useEffect, useCallback } from 'react'
+import { useCallback } from 'react'
 import type { BlockNode } from '../../../types/editor'
 import { useEditorStore } from '../../../stores/editorStore'
+import { useRichTextBlock } from '../../../hooks/useRichTextBlock'
 
 interface ParagraphBlockProps {
   block: BlockNode
 }
 
 export function ParagraphBlock({ block }: ParagraphBlockProps) {
-  const ref = useRef<HTMLDivElement>(null)
-  const updateBlockContent = useEditorStore(s => s.updateBlockContent)
-  const setFocusedBlock = useEditorStore(s => s.setFocusedBlock)
-  const focusedBlockId = useEditorStore(s => s.focusedBlockId)
   const splitBlock = useEditorStore(s => s.splitBlock)
   const mergeBlockBackward = useEditorStore(s => s.mergeBlockBackward)
   const openSlashMenu = useEditorStore(s => s.openSlashMenu)
-  const isFocused = focusedBlockId === block.id
 
-  useEffect(() => {
-    if (ref.current && ref.current.textContent !== block.content) {
-      ref.current.textContent = block.content
-    }
-  }, [block.content])
-
-  useEffect(() => {
-    if (isFocused && ref.current) {
-      ref.current.focus()
-    }
-  }, [isFocused])
-
-  const handleInput = useCallback((e: React.FormEvent<HTMLDivElement>) => {
-    const text = (e.target as HTMLDivElement).textContent ?? ''
-    updateBlockContent(block.id, text)
-  }, [block.id, updateBlockContent])
+  const {
+    ref,
+    isFocused,
+    handleInput,
+    handleCompositionStart,
+    handleCompositionEnd,
+    handleFocus,
+    handleBlur,
+    handleMouseUp,
+    handleKeyUp,
+    handlePaste,
+  } = useRichTextBlock({ block })
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
-    const text = ref.current?.textContent ?? ''
+    const el = e.currentTarget
+    const text = el.textContent ?? ''
+
+    // Slash menu: only when empty
+    if (e.key === '/' && text === '' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault()
+      const rect = el.getBoundingClientRect()
+      openSlashMenu(block.id, rect.left, rect.bottom)
+      return
+    }
 
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      splitBlock(block.id, text, '')
+      // Split at current cursor: get text before/after selection
+      const selection = window.getSelection()
+      if (selection && selection.rangeCount > 0) {
+        const range = selection.getRangeAt(0)
+        // Get text before cursor
+        const beforeRange = document.createRange()
+        beforeRange.setStart(el, 0)
+        beforeRange.setEnd(range.startContainer, range.startOffset)
+        const beforeText = beforeRange.toString()
+        const afterText = text.slice(beforeText.length)
+        splitBlock(block.id, beforeText, afterText)
+      } else {
+        splitBlock(block.id, text, '')
+      }
       return
     }
 
@@ -48,32 +62,60 @@ export function ParagraphBlock({ block }: ParagraphBlockProps) {
       return
     }
 
-    if (e.key === '/' && text === '' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
-      e.preventDefault()
-      const rect = ref.current?.getBoundingClientRect()
-      if (rect) {
-        openSlashMenu(block.id, rect.left, rect.bottom)
+    // Keyboard shortcuts for formatting
+    if (e.metaKey || e.ctrlKey) {
+      switch (e.key.toLowerCase()) {
+        case 'b':
+          e.preventDefault()
+          document.execCommand('bold', false)
+          break
+        case 'i':
+          e.preventDefault()
+          document.execCommand('italic', false)
+          break
+        case 'k': {
+          e.preventDefault()
+          const url = window.prompt('URL:', 'https://')
+          if (url) {
+            const sel = window.getSelection()
+            if (sel && !sel.isCollapsed) {
+              const a = document.createElement('a')
+              a.href = url
+              a.target = '_blank'
+              a.rel = 'noopener noreferrer'
+              const range = sel.getRangeAt(0)
+              try {
+                range.surroundContents(a)
+              } catch {
+                const fragment = range.extractContents()
+                a.appendChild(fragment)
+                range.insertNode(a)
+              }
+              sel.removeAllRanges()
+            }
+          }
+          break
+        }
       }
     }
   }, [block.id, splitBlock, mergeBlockBackward, openSlashMenu])
 
-  const handlePaste = useCallback((e: React.ClipboardEvent) => {
-    e.preventDefault()
-    const text = e.clipboardData.getData('text/plain')
-    document.execCommand('insertText', false, text)
-  }, [])
-
   return (
     <div
       ref={ref}
-      className={`block-paragraph block-editable ${isFocused ? 'block-editable--focused' : ''}`}
-      contentEditable="plaintext-only"
+      className={`block-paragraph block-editable block-richtext ${isFocused ? 'block-editable--focused' : ''}`}
+      contentEditable="true"
       suppressContentEditableWarning
       onInput={handleInput}
+      onCompositionStart={handleCompositionStart}
+      onCompositionEnd={handleCompositionEnd}
       onKeyDown={handleKeyDown}
-      onFocus={() => setFocusedBlock(block.id)}
-      onBlur={() => setFocusedBlock(null)}
+      onKeyUp={handleKeyUp}
+      onFocus={handleFocus}
+      onBlur={handleBlur}
+      onMouseUp={handleMouseUp}
       onPaste={handlePaste}
+      data-placeholder="Type something, or '/' for commands..."
     />
   )
 }

@@ -1,45 +1,37 @@
-import { useRef, useEffect, useCallback } from 'react'
+import { useCallback } from 'react'
 import { useEditorStore } from '../../../stores/editorStore'
 import { CheckSquare, Square } from 'lucide-react'
 import type { BlockNode } from '../../../types/editor'
+import { useRichTextBlock } from '../../../hooks/useRichTextBlock'
 
 interface ListBlockProps {
   block: BlockNode
 }
 
 export function ListBlock({ block }: ListBlockProps) {
-  const ref = useRef<HTMLDivElement>(null)
   const isTask = block.type === 'task_list'
   const isOrdered = block.type === 'ordered_list'
   const nesting = block.meta?.listNesting ?? 0
 
-  const updateBlockContent = useEditorStore(s => s.updateBlockContent)
-  const setFocusedBlock = useEditorStore(s => s.setFocusedBlock)
-  const focusedBlockId = useEditorStore(s => s.focusedBlockId)
   const splitBlock = useEditorStore(s => s.splitBlock)
   const mergeBlockBackward = useEditorStore(s => s.mergeBlockBackward)
   const blocks = useEditorStore(s => s.blocks)
-  const isFocused = focusedBlockId === block.id
 
-  useEffect(() => {
-    if (ref.current && ref.current.textContent !== block.content) {
-      ref.current.textContent = block.content
-    }
-  }, [block.content])
-
-  useEffect(() => {
-    if (isFocused && ref.current) {
-      ref.current.focus()
-    }
-  }, [isFocused])
-
-  const handleInput = useCallback((e: React.FormEvent<HTMLDivElement>) => {
-    const text = (e.target as HTMLDivElement).textContent ?? ''
-    updateBlockContent(block.id, text)
-  }, [block.id, updateBlockContent])
+  const {
+    ref,
+    isFocused,
+    handleInput,
+    handleCompositionStart,
+    handleCompositionEnd,
+    handleFocus,
+    handleBlur,
+    handleMouseUp,
+    handleKeyUp,
+    handlePaste,
+  } = useRichTextBlock({ block })
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
-    const text = ref.current?.textContent ?? ''
+    const text = e.currentTarget.textContent ?? ''
 
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
@@ -51,6 +43,17 @@ export function ListBlock({ block }: ListBlockProps) {
       e.preventDefault()
       mergeBlockBackward(block.id)
       return
+    }
+
+    // Keyboard shortcuts
+    if (e.metaKey || e.ctrlKey) {
+      if (e.key.toLowerCase() === 'b') {
+        e.preventDefault()
+        document.execCommand('bold', false)
+      } else if (e.key.toLowerCase() === 'i') {
+        e.preventDefault()
+        document.execCommand('italic', false)
+      }
     }
   }, [block.id, splitBlock, mergeBlockBackward])
 
@@ -81,7 +84,11 @@ export function ListBlock({ block }: ListBlockProps) {
       style={{ paddingLeft: nesting * 20 }}
     >
       {isTask && (
-        <span className="block-task-checkbox" onClick={handleToggle} contentEditable={false}>
+        <span
+          className="block-task-checkbox"
+          onClick={handleToggle}
+          contentEditable={false}
+        >
           {block.meta?.checked ? <CheckSquare size={16} /> : <Square size={16} />}
         </span>
       )}
@@ -92,13 +99,18 @@ export function ListBlock({ block }: ListBlockProps) {
       )}
       <div
         ref={ref}
-        className={`block-editable ${isFocused ? 'block-editable--focused' : ''}`}
-        contentEditable="plaintext-only"
+        className={`block-editable block-richtext ${isFocused ? 'block-editable--focused' : ''}`}
+        contentEditable="true"
         suppressContentEditableWarning
         onInput={handleInput}
+        onCompositionStart={handleCompositionStart}
+        onCompositionEnd={handleCompositionEnd}
         onKeyDown={handleKeyDown}
-        onFocus={() => setFocusedBlock(block.id)}
-        onBlur={() => setFocusedBlock(null)}
+        onKeyUp={handleKeyUp}
+        onFocus={handleFocus}
+        onBlur={handleBlur}
+        onMouseUp={handleMouseUp}
+        onPaste={handlePaste}
       />
     </div>
   )
