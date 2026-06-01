@@ -4,6 +4,7 @@ import { BlockWrapper } from './BlockWrapper'
 import { ParagraphBlock } from './blocks/ParagraphBlock'
 import { HeadingBlock } from './blocks/HeadingBlock'
 import { ListBlock } from './blocks/ListBlock'
+import { ListGroupBlock } from './blocks/ListGroupBlock'
 import { CodeBlock } from './blocks/CodeBlock'
 import { BlockquoteBlock } from './blocks/BlockquoteBlock'
 import { TableBlock } from './blocks/TableBlock'
@@ -33,6 +34,9 @@ export function BlockRenderer({ block, dragHandleListeners }: BlockRendererProps
       case 'ordered_list':
       case 'task_list':
         return <ListBlock block={block} />
+
+      case 'list_group':
+        return <ListGroupBlock block={block} />
 
       case 'code_block':
         return <CodeBlock block={block} />

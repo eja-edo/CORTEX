@@ -22,6 +22,7 @@ function serializeListItem(
 
 function serializeBlocks(blocks: BlockNode[], baseIndent: string = ''): string {
   const output: string[] = []
+  let orderedIndex = 0
 
   for (let i = 0; i < blocks.length; i++) {
     const block = blocks[i]
@@ -30,6 +31,10 @@ function serializeBlocks(blocks: BlockNode[], baseIndent: string = ''): string {
     // Skip empty paragraph blocks at the top level
     if (block.type === 'paragraph' && block.content === '' && baseIndent === '') {
       continue
+    }
+
+    if (block.type !== 'ordered_list') {
+      orderedIndex = 0
     }
 
     switch (block.type) {
@@ -55,7 +60,8 @@ function serializeBlocks(blocks: BlockNode[], baseIndent: string = ''): string {
       }
 
       case 'ordered_list': {
-        const prefix = '- '
+        orderedIndex += 1
+        const prefix = `${orderedIndex}. `
         output.push(serializeListItem(block, prefix, baseIndent))
         break
       }
@@ -64,6 +70,28 @@ function serializeBlocks(blocks: BlockNode[], baseIndent: string = ''): string {
         const checked = block.meta?.checked ?? false
         const prefix = `- [${checked ? 'x' : ' '}] `
         output.push(serializeListItem(block, prefix, baseIndent))
+        break
+      }
+
+      case 'list_group': {
+        orderedIndex = 0
+        if (block.children && block.children.length > 0) {
+          let groupOrderedIndex = 1
+          for (const child of block.children) {
+            if (!child) continue
+            if (child.type === 'ordered_list') {
+              output.push(serializeListItem(child, `${groupOrderedIndex}. `, baseIndent))
+              groupOrderedIndex++
+              continue
+            }
+            if (child.type === 'task_list') {
+              const checked = child.meta?.checked ?? false
+              output.push(serializeListItem(child, `- [${checked ? 'x' : ' '}] `, baseIndent))
+              continue
+            }
+            output.push(serializeListItem(child, '- ', baseIndent))
+          }
+        }
         break
       }
 

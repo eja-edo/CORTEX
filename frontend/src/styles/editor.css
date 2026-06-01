@@ -41,7 +41,6 @@
 
 .editor-block-gutter {
   display: flex;
-  flex-direction: column;
   align-items: center;
   gap: 0;
   position: absolute;
@@ -179,10 +178,15 @@
 
 .block-list-editable {
   display: flex;
-  align-items: flex-start;
   gap: 8px;
   font-size: 15px;
   line-height: 1.7;
+}
+
+.block-list-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .block-list-editable .block-editable {

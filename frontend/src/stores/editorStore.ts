@@ -19,6 +19,7 @@ interface EditorStore {
   splitBlock: (blockId: string, beforeContent: string, afterContent: string) => void
   deleteBlock: (blockId: string) => void
   mergeBlockBackward: (blockId: string) => void
+  exitListOnEmpty: (blockId: string) => void
 
   openSlashMenu: (blockId: string, x: number, y: number) => void
   closeSlashMenu: () => void
@@ -36,6 +37,10 @@ let blockIdCounter = 0
 function stableId(): string {
   blockIdCounter++
   return `block-${blockIdCounter}-${Date.now()}`
+}
+
+function isListItemType(type: BlockNode['type']): boolean {
+  return type === 'bullet_list' || type === 'ordered_list' || type === 'task_list'
 }
 
 export const useEditorStore = create<EditorStore>((set, get) => ({
@@ -81,20 +86,27 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 
   splitBlock: (blockId: string, beforeContent: string, afterContent: string) => {
-    const { blocks, focusedBlockId } = get()
-    const newBlock: BlockNode = {
-      id: stableId(),
-      type: 'paragraph',
-      content: afterContent,
-    }
+    const { blocks } = get()
+    let focusNextId: string | null = null
 
     const splitRecursive = (list: BlockNode[]): boolean => {
       for (let i = 0; i < list.length; i++) {
         const b = list[i]
         if (!b) continue
         if (b.id === blockId) {
+          const nextType = isListItemType(b.type) ? b.type : 'paragraph'
+          const nextMeta = isListItemType(b.type)
+            ? { ...b.meta, checked: b.type === 'task_list' ? false : b.meta?.checked }
+            : undefined
+          const newBlock: BlockNode = {
+            id: stableId(),
+            type: nextType,
+            content: afterContent,
+            meta: nextMeta,
+          }
           list[i] = { ...b, content: beforeContent }
           list.splice(i + 1, 0, newBlock)
+          focusNextId = newBlock.id
           return true
         }
         if (b.children && splitRecursive(b.children!)) return true
@@ -104,7 +116,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
     const newBlocks = structuredClone(blocks)
     splitRecursive(newBlocks)
-    set({ blocks: newBlocks, focusedBlockId: newBlock.id })
+    set({ blocks: newBlocks, focusedBlockId: focusNextId })
   },
 
   deleteBlock: (blockId: string) => {
@@ -156,6 +168,46 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     set({ blocks: newBlocks, focusedBlockId: focusPrevId })
   },
 
+  exitListOnEmpty: (blockId: string) => {
+    const { blocks } = get()
+    let focusNextId: string | null = null
+
+    const exitRecursive = (list: BlockNode[]): boolean => {
+      for (let i = 0; i < list.length; i++) {
+        const b = list[i]
+        if (!b) continue
+
+        if (b.type === 'list_group' && b.children) {
+          const itemIndex = b.children.findIndex(child => child.id === blockId)
+          if (itemIndex !== -1) {
+            b.children.splice(itemIndex, 1)
+            const paragraph: BlockNode = {
+              id: stableId(),
+              type: 'paragraph',
+              content: '',
+            }
+
+            if (b.children.length === 0) {
+              list.splice(i, 1, paragraph)
+            } else {
+              list.splice(i + 1, 0, paragraph)
+            }
+
+            focusNextId = paragraph.id
+            return true
+          }
+        }
+
+        if (b.children && exitRecursive(b.children)) return true
+      }
+      return false
+    }
+
+    const newBlocks = structuredClone(blocks)
+    exitRecursive(newBlocks)
+    set({ blocks: newBlocks, focusedBlockId: focusNextId })
+  },
+
   openSlashMenu: (blockId: string, x: number, y: number) => {
     set({ slashMenu: { open: true, search: '', position: { x, y }, anchorBlockId: blockId } })
   },
@@ -179,11 +231,25 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   insertBlockAfter: (afterId: string, type: BlockNode['type']) => {
     const { blocks } = get()
-    const newBlock: BlockNode = {
-      id: stableId(),
-      type,
-      content: '',
-    }
+    const newBlock: BlockNode = isListItemType(type)
+      ? {
+          id: stableId(),
+          type: 'list_group',
+          content: '',
+          children: [
+            {
+              id: stableId(),
+              type,
+              content: '',
+              meta: type === 'task_list' ? { checked: false } : undefined,
+            },
+          ],
+        }
+      : {
+          id: stableId(),
+          type,
+          content: '',
+        }
 
     const insertInList = (list: BlockNode[]): boolean => {
       for (let i = 0; i < list.length; i++) {
@@ -201,9 +267,13 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       newBlocks.push(newBlock)
     }
 
+    const focusId = newBlock.type === 'list_group'
+      ? newBlock.children?.[0]?.id ?? newBlock.id
+      : newBlock.id
+
     set({
       blocks: newBlocks,
-      focusedBlockId: newBlock.id,
+      focusedBlockId: focusId,
       slashMenu: { open: false, search: '', position: null, anchorBlockId: null },
     })
   },

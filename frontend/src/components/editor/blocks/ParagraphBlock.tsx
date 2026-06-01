@@ -115,7 +115,6 @@ export function ParagraphBlock({ block }: ParagraphBlockProps) {
       onBlur={handleBlur}
       onMouseUp={handleMouseUp}
       onPaste={handlePaste}
-      data-placeholder="Type something, or '/' for commands..."
     />
   )
 }

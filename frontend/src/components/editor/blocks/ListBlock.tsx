@@ -6,15 +6,17 @@ import { useRichTextBlock } from '../../../hooks/useRichTextBlock'
 
 interface ListBlockProps {
   block: BlockNode
+  order?: number
 }
 
-export function ListBlock({ block }: ListBlockProps) {
+export function ListBlock({ block, order }: ListBlockProps) {
   const isTask = block.type === 'task_list'
   const isOrdered = block.type === 'ordered_list'
   const nesting = block.meta?.listNesting ?? 0
 
   const splitBlock = useEditorStore(s => s.splitBlock)
   const mergeBlockBackward = useEditorStore(s => s.mergeBlockBackward)
+  const exitListOnEmpty = useEditorStore(s => s.exitListOnEmpty)
   const blocks = useEditorStore(s => s.blocks)
 
   const {
@@ -35,6 +37,10 @@ export function ListBlock({ block }: ListBlockProps) {
 
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
+      if (text.trim() === '') {
+        exitListOnEmpty(block.id)
+        return
+      }
       splitBlock(block.id, text, '')
       return
     }
@@ -94,7 +100,7 @@ export function ListBlock({ block }: ListBlockProps) {
       )}
       {!isTask && (
         <span className="block-list-marker" contentEditable={false}>
-          {isOrdered ? '1.' : '•'}
+          {isOrdered ? `${order ?? 1}.` : '•'}
         </span>
       )}
       <div

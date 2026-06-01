@@ -6,6 +6,7 @@ export type BlockType =
   | 'bullet_list'
   | 'ordered_list'
   | 'task_list'
+  | 'list_group'
   | 'blockquote'
   | 'code_block'
   | 'table'

@@ -21,7 +21,7 @@ function isCalloutBlock(content: string): { calloutType: BlockMeta['calloutType'
 }
 
 function isTaskItem(content: string): { checked: boolean; text: string } | null {
-  const match = content.match(/^-\s*\[\s*(x|X|\s)?\s*\]\s*/)
+  const match = content.match(/^(?:-\s*)?\[\s*(x|X|\s)?\s*\]\s*/)
   if (!match) return null
   const checked = match[1] === 'x' || match[1] === 'X'
   const text = content.slice(match[0].length)
@@ -31,6 +31,7 @@ function isTaskItem(content: string): { checked: boolean; text: string } | null 
 function extractListContent(
   tokens: Token[],
   startIdx: number,
+  listType: BlockType,
 ): { blocks: BlockNode[]; endIdx: number } {
   const blocks: BlockNode[] = []
   let i = startIdx
@@ -57,8 +58,16 @@ function extractListContent(
           while (j < tokens.length && tokens[j]?.type !== 'paragraph_close') j++
           j++
         } else if (ct.type === 'bullet_list_open' || ct.type === 'ordered_list_open') {
-          const nested = extractListContent(tokens, j)
-          itemChildren.push(...nested.blocks)
+          const nestedType: BlockType = ct.type === 'ordered_list_open' ? 'ordered_list' : 'bullet_list'
+          const nested = extractListContent(tokens, j, nestedType)
+          if (nested.blocks.length > 0) {
+            itemChildren.push({
+              id: generateBlockId(),
+              type: 'list_group',
+              content: '',
+              children: nested.blocks,
+            })
+          }
           j = nested.endIdx
         } else if (ct.type === 'blockquote_open') {
           const nested = extractBlockquoteContent(tokens, j)
@@ -70,7 +79,7 @@ function extractListContent(
       }
 
       const taskMatch = isTaskItem(content)
-      const type: BlockType = taskMatch ? 'task_list' : 'bullet_list'
+      const type: BlockType = taskMatch ? 'task_list' : listType
 
       blocks.push({
         id: generateBlockId(),
@@ -129,8 +138,17 @@ function extractBlockquoteContent(
       while (i < tokens.length && tokens[i]?.type !== 'heading_close') i++
       i++
     } else if (t.type === 'bullet_list_open' || t.type === 'ordered_list_open') {
-      const nested = extractListContent(tokens, i)
-      blocks.push(...nested.blocks)
+      const listType: BlockType = t.type === 'ordered_list_open' ? 'ordered_list' : 'bullet_list'
+      const nested = extractListContent(tokens, i, listType)
+      const listItems = nested.blocks
+      if (listItems.length > 0) {
+        blocks.push({
+          id: generateBlockId(),
+          type: 'list_group',
+          content: '',
+          children: listItems,
+        })
+      }
       i = nested.endIdx
     } else if (t.type === 'blockquote_close') {
       i++
@@ -158,6 +176,148 @@ function insertBlankLineBlocks(blocks: BlockNode[], currentLineStart: number, la
     }
   }
   lastLineEndRef.value = currentLineStart
+}
+
+function pushPlainTextLines(blocks: BlockNode[], content: string): void {
+  const lines = content.split(/\r?\n/)
+  for (const line of lines) {
+    if (line.trim() === '') continue
+    blocks.push({
+      id: generateBlockId(),
+      type: 'paragraph',
+      content: line,
+    })
+  }
+}
+
+type ListLineMatch = {
+  kind: 'ordered' | 'bullet' | 'task'
+  content: string
+  checked?: boolean
+}
+
+function parseListLine(line: string): ListLineMatch | null {
+  const orderedMatch = line.match(/^\s*(\d+)\.\s*(.*)$/)
+  if (orderedMatch) {
+    return { kind: 'ordered', content: orderedMatch[2] ?? '' }
+  }
+
+  const taskMatch = line.match(/^\s*[-*]\s*\[\s*(x|X)?\s*\]\s*(.*)$/)
+  if (taskMatch) {
+    return { kind: 'task', content: taskMatch[2] ?? '', checked: Boolean(taskMatch[1]) }
+  }
+
+  const bulletMatch = line.match(/^\s*[-*]\s*(.*)$/)
+  if (bulletMatch) {
+    return { kind: 'bullet', content: bulletMatch[1] ?? '' }
+  }
+
+  return null
+}
+
+interface FlatListItem {
+  indent: number
+  node: BlockNode
+}
+
+function buildNestedList(items: FlatListItem[], levelIndent: number): BlockNode[] {
+  if (items.length === 0) return []
+
+  const result: BlockNode[] = []
+  let i = 0
+
+  while (i < items.length) {
+    const item = items[i]
+    if (item.indent < levelIndent) break
+
+    if (item.indent === levelIndent) {
+      const children: FlatListItem[] = []
+      let j = i + 1
+      while (j < items.length && items[j].indent > levelIndent) {
+        children.push(items[j])
+        j++
+      }
+
+      const node: BlockNode = { ...item.node }
+      if (children.length > 0) {
+        const nextLevel = children[0].indent
+        node.children = [{
+          id: generateBlockId(),
+          type: 'list_group',
+          content: '',
+          children: buildNestedList(children, nextLevel),
+        }]
+      }
+
+      result.push(node)
+      i = j
+    } else {
+      i++
+    }
+  }
+
+  return result
+}
+
+function normalizeListParagraphs(blocks: BlockNode[]): BlockNode[] {
+  const result: BlockNode[] = []
+  let i = 0
+
+  while (i < blocks.length) {
+    const block = blocks[i]
+    if (block?.type === 'paragraph') {
+      const parsed = parseListLine(block.content)
+      if (parsed) {
+        const items: FlatListItem[] = []
+        const targetKind = parsed.kind
+
+        while (i < blocks.length) {
+          const current = blocks[i]
+          if (!current || current.type !== 'paragraph') break
+          const currentIndent = current.content.match(/^\s*/)?.[0]?.length ?? 0
+          const match = parseListLine(current.content)
+          if (!match || match.kind !== targetKind) break
+
+          const itemType: BlockType = match.kind === 'ordered'
+            ? 'ordered_list'
+            : match.kind === 'task'
+              ? 'task_list'
+              : 'bullet_list'
+
+          items.push({
+            indent: currentIndent,
+            node: {
+              id: generateBlockId(),
+              type: itemType,
+              content: match.content,
+              meta: match.kind === 'task' ? { checked: match.checked } : undefined,
+            },
+          })
+          i++
+        }
+
+        const firstIndent = items[0]?.indent ?? 0
+        const children = buildNestedList(items, firstIndent)
+
+        result.push({
+          id: generateBlockId(),
+          type: 'list_group',
+          content: '',
+          children,
+        })
+        continue
+      }
+    }
+
+    if (block?.children) {
+      result.push({ ...block, children: normalizeListParagraphs(block.children) })
+    } else {
+      result.push(block)
+    }
+    i++
+  }
+
+  return result
 }
 
 export function parseMarkdownToBlocks(source: string): BlockNode[] {
@@ -219,11 +379,7 @@ export function parseMarkdownToBlocks(source: string): BlockNode[] {
             meta: { calloutType: calloutMatch.calloutType },
           })
         } else {
-          blocks.push({
-            id: generateBlockId(),
-            type: 'paragraph',
-            content,
-          })
+          pushPlainTextLines(blocks, content)
         }
 
         i += 2
@@ -237,23 +393,21 @@ export function parseMarkdownToBlocks(source: string): BlockNode[] {
           const sourceLines = source.split('\n')
           content = sourceLines.slice(token.map[0], token.map[1]).join('\n')
         }
-        blocks.push({
-          id: generateBlockId(),
-          type: 'paragraph',
-          content,
-        })
+        pushPlainTextLines(blocks, content)
         break
       }
 
       case 'bullet_list_open':
       case 'ordered_list_open': {
         const listType: BlockType = token.type === 'ordered_list_open' ? 'ordered_list' : 'bullet_list'
-        const listResult = extractListContent(tokens, i)
-        for (const item of listResult.blocks) {
-          const itemType = item.type === 'task_list' ? 'task_list' : listType
+        const listResult = extractListContent(tokens, i, listType)
+        const listItems = listResult.blocks
+        if (listItems.length > 0) {
           blocks.push({
-            ...item,
-            type: itemType,
+            id: generateBlockId(),
+            type: 'list_group',
+            content: '',
+            children: listItems,
           })
         }
         i = listResult.endIdx
@@ -388,5 +542,5 @@ export function parseMarkdownToBlocks(source: string): BlockNode[] {
     }
   }
 
-  return blocks
+  return normalizeListParagraphs(blocks)
 }

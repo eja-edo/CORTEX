@@ -107,6 +107,61 @@ export function WorkspaceNoteEditor({
         }
     })
 
+    // Tab key handler for raw textarea
+    const handleTextareaKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        if (e.key !== 'Tab') return
+
+        e.preventDefault()
+
+        const el = e.currentTarget
+        const start = el.selectionStart
+        const end = el.selectionEnd
+        const value = el.value
+
+        // Get line boundaries
+        const lineStart = value.lastIndexOf('\n', start - 1) + 1
+        let lineEnd = value.indexOf('\n', lineStart)
+        if (lineEnd === -1) lineEnd = value.length
+
+        let newValue: string
+        let newStart: number
+        let newEnd: number
+
+        if (e.shiftKey) {
+            // Outdent: remove 2 leading spaces from current line
+            const currentLine = value.slice(lineStart, lineEnd)
+            const indentMatch = currentLine.match(/^ {1,2}/)
+            if (indentMatch) {
+                const removeLen = indentMatch[0].length
+                newValue = value.slice(0, lineStart) + currentLine.slice(removeLen) + value.slice(lineEnd)
+                newStart = Math.max(start - removeLen, lineStart)
+                newEnd = Math.max(end - removeLen, lineStart)
+            } else {
+                return
+            }
+        } else {
+            // Check if cursor is on a list line
+            const currentLine = value.slice(lineStart, lineEnd)
+            const listMatch = currentLine.match(/^(\s*)([-*+]|\d+\.)\s/)
+
+            if (listMatch) {
+                // Indent list item: add 2 spaces before the list marker
+                const markerStart = lineStart + listMatch[1].length
+                newValue = value.slice(0, markerStart) + '  ' + value.slice(markerStart)
+                newStart = start + 2
+                newEnd = end + 2
+            } else {
+                // Insert 2 spaces at cursor
+                newValue = value.slice(0, start) + '  ' + value.slice(end)
+                newStart = start + 2
+                newEnd = newStart
+            }
+        }
+
+        selectionRef.current = { start: newStart, end: newEnd }
+        applyValue(newValue)
+    }, [applyValue])
+
     // Raw markdown textarea change
     const handleTextareaChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
         selectionRef.current = {
@@ -163,6 +218,7 @@ export function WorkspaceNoteEditor({
                             className="wne-textarea"
                             value={localMd}
                             onChange={handleTextareaChange}
+                            onKeyDown={handleTextareaKeyDown}
                             placeholder="Raw markdown..."
                             spellCheck={false}
                         />
