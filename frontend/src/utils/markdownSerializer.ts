@@ -14,7 +14,7 @@ function serializeListItem(
   let result = header
 
   if (item.children && item.children.length > 0) {
-    result += '\n' + serializeBlocks(item.children, indent + '  ')
+    result += '\n' + serializeBlocks(item.children, indent + '    ')
   }
 
   return result

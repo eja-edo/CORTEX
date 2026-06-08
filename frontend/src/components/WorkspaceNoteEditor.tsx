@@ -60,11 +60,32 @@ export function WorkspaceNoteEditor({
     onChange,
 }: WorkspaceNoteEditorProps) {
     const [localMd, setLocalMd] = useState(note.contentMd)
+    const [debouncedMd, setDebouncedMd] = useState(note.contentMd)
     const [viewMode, setViewMode] = useState<ViewMode>('split')
     const timerRef = useRef<number | null>(null)
+    const debounceTimerRef = useRef<number | null>(null)
     const lastNoteIdRef = useRef<string | null>(null)
     const textareaRef = useRef<HTMLTextAreaElement>(null)
     const selectionRef = useRef<{ start: number; end: number } | null>(null)
+
+    // Debounce raw → blocks: wait 2s after last textarea change
+    useEffect(() => {
+        if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current)
+        debounceTimerRef.current = window.setTimeout(() => {
+            setDebouncedMd(localMd)
+        }, 2000)
+        return () => { if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current) }
+    }, [localMd])
+
+    // Sync blocks immediately when switching to a view that shows them
+    const syncBlocks = useCallback(() => {
+        setDebouncedMd(localMd)
+    }, [localMd])
+
+    // Force sync on view mode change if blocks pane will show
+    useEffect(() => {
+        if (viewMode !== 'edit') syncBlocks()
+    }, [viewMode, syncBlocks])
 
     const wordCount = useMemo(() => {
         const text = plainTextFromMarkdown(localMd)
@@ -78,7 +99,10 @@ export function WorkspaceNoteEditor({
         setLocalMd(note.contentMd)
     }, [note.id, note.contentMd])
 
-    useEffect(() => () => { if (timerRef.current) window.clearTimeout(timerRef.current) }, [])
+    useEffect(() => () => {
+        if (timerRef.current) window.clearTimeout(timerRef.current)
+        if (debounceTimerRef.current) window.clearTimeout(debounceTimerRef.current)
+    }, [])
 
     const flush = useCallback((value: string) => {
         onChange(note.id, value)
@@ -109,6 +133,13 @@ export function WorkspaceNoteEditor({
 
     // Tab key handler for raw textarea
     const handleTextareaKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        // Ctrl+S → sync blocks immediately
+        if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+            e.preventDefault()
+            syncBlocks()
+            return
+        }
+
         if (e.key !== 'Tab') return
 
         e.preventDefault()
@@ -160,7 +191,7 @@ export function WorkspaceNoteEditor({
 
         selectionRef.current = { start: newStart, end: newEnd }
         applyValue(newValue)
-    }, [applyValue])
+    }, [applyValue, syncBlocks])
 
     // Raw markdown textarea change
     const handleTextareaChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -175,6 +206,7 @@ export function WorkspaceNoteEditor({
     // Block editor save → sync markdown
     const handleBlockEditorSave = useCallback((md: string) => {
         setLocalMd(md)
+        setDebouncedMd(md)
         queueFlush(md)
     }, [queueFlush])
 
@@ -233,7 +265,7 @@ export function WorkspaceNoteEditor({
                         {viewMode === 'split' && <div className="wne-pane-label">Blocks</div>}
                         <div className="wne-preview-content">
                             <EditorSurface
-                                initialMd={localMd}
+                                initialMd={debouncedMd}
                                 onSave={handleBlockEditorSave}
                             />
                         </div>

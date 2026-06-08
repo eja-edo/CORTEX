@@ -91,7 +91,6 @@ function extractListContent(
 
       i = j + 1
     } else if (t.type === 'bullet_list_close' || t.type === 'ordered_list_close') {
-      i++
       break
     } else {
       i++
