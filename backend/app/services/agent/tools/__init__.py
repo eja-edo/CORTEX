@@ -15,6 +15,7 @@ from app.services.agent.tools.get_notifications import GET_NOTIFICATIONS_DEFINIT
 from app.services.agent.tools.web_search import WEB_SEARCH_DEFINITION
 from app.services.agent.tools.neural_search import NEURAL_SEARCH_DEFINITION
 from app.services.agent.tools.deep_research import DEEP_RESEARCH_DEFINITION
+from app.services.agent.tools.revert_action import REVERT_ACTION_DEFINITION
 
 def register_all_tools() -> None:
     """Register all tools with the global registry."""
@@ -34,6 +35,7 @@ def register_all_tools() -> None:
         WEB_SEARCH_DEFINITION,
         NEURAL_SEARCH_DEFINITION,
         DEEP_RESEARCH_DEFINITION,
+        REVERT_ACTION_DEFINITION,
     ]
 
     for tool_def in tools:

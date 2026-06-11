@@ -56,6 +56,52 @@ class MinIOMultipartService:
         now = datetime.utcnow()
         return f"videos/{user_id}/{now:%Y/%m/%d}/{uuid4()}.{suffix}"
 
+    def build_image_key(self, user_id: UUID, filename: str | None = None) -> str:
+        suffix = "png"
+        if filename and "." in filename:
+            suffix = filename.rsplit(".", 1)[-1].lower()[:10] or "png"
+        now = datetime.utcnow()
+        return f"images/{user_id}/{now:%Y/%m/%d}/{uuid4()}.{suffix}"
+
+    def put_object(self, object_key: str, data: bytes, content_type: str) -> None:
+        try:
+            self.client.put_object(
+                Bucket=self.bucket,
+                Key=object_key,
+                Body=data,
+                ContentType=content_type,
+            )
+        except ClientError as exc:
+            if self._is_no_such_bucket(exc):
+                if settings.MINIO_AUTO_CREATE_BUCKET:
+                    logger.warning("Bucket '%s' not found, creating automatically", self.bucket)
+                    try:
+                        self._ensure_bucket()
+                        self.client.put_object(
+                            Bucket=self.bucket,
+                            Key=object_key,
+                            Body=data,
+                            ContentType=content_type,
+                        )
+                    except ClientError as retry_exc:
+                        logger.exception("Failed to upload object after bucket auto-create")
+                        raise MultipartStorageError(
+                            f"Failed to upload object to bucket '{self.bucket}'"
+                        ) from retry_exc
+                else:
+                    raise MultipartStorageError(
+                        f"Bucket '{self.bucket}' does not exist. Set MINIO_BUCKET correctly."
+                    ) from exc
+            else:
+                logger.exception("Failed to upload object")
+                raise MultipartStorageError("Failed to upload object") from exc
+
+    def delete_object(self, object_key: str) -> None:
+        try:
+            self.client.delete_object(Bucket=self.bucket, Key=object_key)
+        except ClientError:
+            logger.warning("Failed to delete object key=%s", object_key)
+
     def create_multipart_upload(self, object_key: str, content_type: str | None = None) -> str:
         params = {"Bucket": self.bucket, "Key": object_key}
         if content_type:

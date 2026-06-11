@@ -4,6 +4,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from app.schemas import MAX_NOTE_CONTENT_LENGTH, NotePatchRequest
+from app.services.agent.action_snapshot_store import ActionSnapshot, get_snapshot_store
 from app.services.agent.tool_context import ToolContext
 from app.services.notes import NoteService
 from app.utils.logger import get_logger
@@ -50,6 +51,11 @@ async def update_note_handler(args: dict, ctx: ToolContext) -> dict:
                     "success": True,
                 }
 
+            # --- CAPTURE PREV STATE ---
+            prev_content = current_content
+            prev_version = current.version
+            # --------------------------
+
             patch = build_text_patch(current_content, content)
             if not patch:
                 return {
@@ -64,11 +70,28 @@ async def update_note_handler(args: dict, ctx: ToolContext) -> dict:
             if updated is None:
                 raise ValueError("Version conflict, please retry")
 
+            # --- REVERT SNAPSHOT ---
+            snapshot = ActionSnapshot(
+                tool_name="update_note",
+                user_id=str(ctx.user_id),
+                conversation_id=str(getattr(ctx, "conversation_id", "")),
+                snapshot={
+                    "op": "update_note",
+                    "note_id": str(note_id),
+                    "prev_content": prev_content,
+                    "prev_version": prev_version,
+                },
+            )
+            action_id = await get_snapshot_store().save(snapshot)
+            # -----------------------
+
             return {
                 "id": str(updated.id),
                 "version": updated.version,
                 "updated_at": updated.updated_at.isoformat() if updated.updated_at else None,
                 "updated": True,
+                "action_id": action_id,
+                "revert_hint": "Bạn có thể hoàn tác cập nhật này bằng action_id trên.",
                 "success": True,
             }
 

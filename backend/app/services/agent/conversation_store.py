@@ -99,6 +99,7 @@ class ConversationStore:
         tool_input: dict | None = None,
         tool_output: dict | None = None,
         token_count: int | None = None,
+        context: dict | None = None,
     ) -> AgentMessage | None:
         """Save a message to the conversation."""
 
@@ -130,6 +131,7 @@ class ConversationStore:
                     f"⏭️ Collapsing consecutive '{normalized_role}' message in conversation {conversation_id}"
                 )
                 last_msg.content = normalized_content
+                last_msg.context = context
                 last_msg.created_at = datetime.utcnow()
                 await self.db.flush()
                 return last_msg
@@ -151,6 +153,7 @@ class ConversationStore:
             conversation_id=conversation_id,
             role=normalized_role,
             content=normalized_content,
+            context=context,
             tool_name=tool_name,
             tool_input=tool_input,
             tool_output=tool_output,

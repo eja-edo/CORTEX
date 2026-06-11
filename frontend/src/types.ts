@@ -117,6 +117,7 @@ export type AgentMessage = {
   id: string
   role: AgentMessageRole
   content: string
+  context?: Record<string, unknown> | null
   tool_name?: string
   tool_input?: string
   tool_output?: string

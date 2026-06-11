@@ -66,7 +66,9 @@ export function WorkspaceNoteEditor({
     const debounceTimerRef = useRef<number | null>(null)
     const lastNoteIdRef = useRef<string | null>(null)
     const textareaRef = useRef<HTMLTextAreaElement>(null)
+    const previewRef = useRef<HTMLDivElement>(null)
     const selectionRef = useRef<{ start: number; end: number } | null>(null)
+    const syncingScroll = useRef<'left' | 'right' | null>(null)
 
     // Debounce raw → blocks: wait 2s after last textarea change
     useEffect(() => {
@@ -98,6 +100,38 @@ export function WorkspaceNoteEditor({
         lastNoteIdRef.current = note.id
         setLocalMd(note.contentMd)
     }, [note.id, note.contentMd])
+
+    // Sync scroll between textarea and preview in split mode
+    useEffect(() => {
+        if (viewMode !== 'split') return
+
+        const textarea = textareaRef.current
+        const preview = previewRef.current
+        if (!textarea || !preview) return
+
+        const onScroll = (source: 'left' | 'right') => {
+            if (syncingScroll.current) return
+            syncingScroll.current = source
+
+            const el = source === 'left' ? textarea : preview
+            const target = source === 'left' ? preview : textarea
+            const ratio = el.scrollTop / (el.scrollHeight - el.clientHeight)
+            target.scrollTop = ratio * (target.scrollHeight - target.clientHeight)
+
+            syncingScroll.current = null
+        }
+
+        const onScrollLeft = () => onScroll('left')
+        const onScrollRight = () => onScroll('right')
+
+        textarea.addEventListener('scroll', onScrollLeft, { passive: true })
+        preview.addEventListener('scroll', onScrollRight, { passive: true })
+
+        return () => {
+            textarea.removeEventListener('scroll', onScrollLeft)
+            preview.removeEventListener('scroll', onScrollRight)
+        }
+    }, [viewMode])
 
     useEffect(() => () => {
         if (timerRef.current) window.clearTimeout(timerRef.current)
@@ -263,9 +297,10 @@ export function WorkspaceNoteEditor({
                 {(viewMode === 'preview' || viewMode === 'split') && (
                     <div className="wne-pane wne-pane--preview">
                         {viewMode === 'split' && <div className="wne-pane-label">Blocks</div>}
-                        <div className="wne-preview-content">
+                        <div ref={previewRef} className="wne-preview-content">
                             <EditorSurface
                                 initialMd={debouncedMd}
+                                noteId={note.id}
                                 onSave={handleBlockEditorSave}
                             />
                         </div>

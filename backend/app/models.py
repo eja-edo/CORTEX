@@ -411,6 +411,24 @@ class NoteRevision(Base):
     )
 
 
+class NoteImage(Base):
+    """Track images uploaded for a note."""
+    __tablename__ = "note_images"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    object_key = Column(String(1024), nullable=False)
+    original_filename = Column(String(255), nullable=True)
+    content_type = Column(String(100), nullable=False, default="image/png")
+    file_size = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, server_default=text("NOW()"))
+
+    __table_args__ = (
+        Index("ix_note_images_note_id", "note_id"),
+    )
+
+
 class UploadStatus(str, Enum):
     """Multipart upload lifecycle status."""
     INITIATED = "initiated"
@@ -525,6 +543,7 @@ class AgentMessage(Base):
     conversation_id = Column(UUID(as_uuid=True), ForeignKey("agent_conversations.id", ondelete="CASCADE"), nullable=False, index=True)
     role = Column(String(20), nullable=False)  # "user" | "assistant" | "tool"
     content = Column(Text, nullable=True)
+    context = Column(JSONB, nullable=True)
     tool_name = Column(String(100), nullable=True)
     tool_input = Column(JSONB, nullable=True, default=dict, server_default=text("'{}'::jsonb"))
     tool_output = Column(JSONB, nullable=True, default=dict, server_default=text("'{}'::jsonb"))

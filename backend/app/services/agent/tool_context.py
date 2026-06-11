@@ -33,10 +33,12 @@ class ToolContext:
         user_id: UUID,
         async_db: AsyncSession,
         workspace_id: Optional[UUID] = None,
+        conversation_id: Optional[UUID] = None,
     ):
         """Initialize tool context with user and database access."""
         self.user_id = user_id
         self.workspace_id = workspace_id
+        self.conversation_id = conversation_id
         self._async_db = async_db
         self._sync_db: Optional[Session] = None
 

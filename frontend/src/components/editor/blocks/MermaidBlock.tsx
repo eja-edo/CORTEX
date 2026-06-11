@@ -47,6 +47,20 @@ export function MermaidBlock({ block }: MermaidBlockProps) {
     }
   }, [block.content])
 
+  useEffect(() => {
+    if (isFocused && editorRef.current) {
+      editorRef.current.focus()
+      const sel = window.getSelection()
+      if (sel) {
+        const range = document.createRange()
+        range.selectNodeContents(editorRef.current)
+        range.collapse(false)
+        sel.removeAllRanges()
+        sel.addRange(range)
+      }
+    }
+  }, [isFocused])
+
   const handleInput = useCallback((e: React.FormEvent<HTMLDivElement>) => {
     const text = (e.target as HTMLDivElement).textContent ?? ''
     updateBlockContent(block.id, text)

@@ -335,14 +335,12 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
         setIsLoading(true)
 
         try {
-            // Prepare combined message: include user-selected context (pills) and runtime UI context
+            // Build structured context dict (pills + runtime) instead of concatenating into message
             const runtimeText = buildRuntimeContextText()
-            const pillsText = addedPills.length > 0 ? addedPills.map(p => p.text).join('\n\n---\n\n') : ''
-            let finalMessage = userMsg
-            const parts: string[] = []
-            if (pillsText) parts.push(`Context:\n\n${pillsText}`)
-            if (runtimeText) parts.push(`Runtime UI Context:\n\n${runtimeText}`)
-            if (parts.length > 0) finalMessage = `${parts.join('\n\n')}\n\n${userMsg}`
+            const pillsArray = addedPills.map(p => ({ id: p.id, text: p.text, label: p.label }))
+            const context: Record<string, unknown> = {}
+            if (pillsArray.length > 0) context.pills = pillsArray
+            if (runtimeText) context.runtime = runtimeText
 
             // Call streaming agent API
             let fullReply = ''
@@ -378,15 +376,16 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
 
                 if (event.tool_name === 'summarize_asset') {
                     const assetId = result?.id as string | undefined
-                    if (assetId && workspaceId) {
-                        console.debug('Tool navigation: summarize_asset', { assetId, workspaceId })
+                    const wsId = (result?.workspace_id as string | undefined) || workspaceId
+                    if (assetId && wsId) {
+                        console.debug('Tool navigation: summarize_asset', { assetId, wsId })
                         onToolNavigate?.('knowledge').catch(() => { })
-                        navigate(knowledgeRoute(workspaceId, assetId))
+                        navigate(knowledgeRoute(wsId, assetId))
                     }
                 }
             }
 
-            for await (const event of streamAgentMessage(finalMessage, conversationId || undefined, workspaceId)) {
+            for await (const event of streamAgentMessage(userMsg, conversationId || undefined, workspaceId, context)) {
                 if (event.type === 'text' && event.text) {
                     fullReply += event.text
                     setFullReplyRef(fullReply)
@@ -677,7 +676,7 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                                                     className="ask-ai-msg-content"
                                                     dangerouslySetInnerHTML={{
                                                         __html: renderMarkdown(
-                                                            index === messages.length - 1
+                                                            index === messages.length - 1 && fullReplyRef
                                                                 ? fullReplyRef.slice(0, displayIndex)
                                                                 : msg.content
                                                         )
@@ -685,7 +684,7 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                                                 />
                                             ) : (
                                                 <div className="ask-ai-msg-content">
-                                                    {index === messages.length - 1
+                                                    {index === messages.length - 1 && fullReplyRef
                                                         ? fullReplyRef.slice(0, displayIndex)
                                                         : msg.content
                                                     }

@@ -378,7 +378,21 @@ export function parseMarkdownToBlocks(source: string): BlockNode[] {
             meta: { calloutType: calloutMatch.calloutType },
           })
         } else {
-          pushPlainTextLines(blocks, content)
+          const lines = content.split(/\r?\n/)
+          for (const line of lines) {
+            if (line.trim() === '') continue
+            const imgMatch = line.match(/^!\[(.*?)\]\((.*?)\)$/)
+            if (imgMatch) {
+              blocks.push({
+                id: generateBlockId(),
+                type: 'image',
+                content: line,
+                meta: { language: imgMatch[2] },
+              })
+            } else {
+              pushPlainTextLines(blocks, line)
+            }
+          }
         }
 
         i += 2
@@ -392,7 +406,21 @@ export function parseMarkdownToBlocks(source: string): BlockNode[] {
           const sourceLines = source.split('\n')
           content = sourceLines.slice(token.map[0], token.map[1]).join('\n')
         }
-        pushPlainTextLines(blocks, content)
+        const lines = content.split(/\r?\n/)
+        for (const line of lines) {
+          if (line.trim() === '') continue
+          const imgMatch = line.match(/^!\[(.*?)\]\((.*?)\)$/)
+          if (imgMatch) {
+            blocks.push({
+              id: generateBlockId(),
+              type: 'image',
+              content: line,
+              meta: { language: imgMatch[2] },
+            })
+          } else {
+            pushPlainTextLines(blocks, line)
+          }
+        }
         break
       }
 

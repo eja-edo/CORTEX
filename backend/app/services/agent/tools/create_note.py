@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.models import Note
+from app.services.agent.action_snapshot_store import ActionSnapshot, get_snapshot_store
 from app.services.agent.tool_context import ToolContext
 from app.services.notes import NoteService
 from app.services.workspace_permission import WorkspacePermission
@@ -58,10 +59,26 @@ async def create_note_handler(args: dict, ctx: ToolContext) -> dict:
             )
             note = await service.create_note(payload, ctx.user_id)
 
+            # --- REVERT SNAPSHOT ---
+            snapshot = ActionSnapshot(
+                tool_name="create_note",
+                user_id=str(ctx.user_id),
+                conversation_id=str(getattr(ctx, "conversation_id", "")),
+                snapshot={
+                    "op": "create_note",
+                    "note_id": str(note.id),
+                    "workspace_id": str(note.workspace_id),
+                },
+            )
+            action_id = await get_snapshot_store().save(snapshot)
+            # -----------------------
+
             return {
                 "id": str(note.id),
                 "workspace_id": str(note.workspace_id),
                 "created_at": note.created_at.isoformat(),
+                "action_id": action_id,
+                "revert_hint": "Bạn có thể yêu cầu hoàn tác hành động này bằng action_id trên.",
                 "success": True,
             }
 

@@ -454,6 +454,7 @@ class AgentChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=5000, description="User message")
     conversation_id: UUID | None = Field(default=None, description="Existing conversation ID, or null to start new")
     workspace_id: UUID | None = Field(default=None, description="Optional workspace context")
+    context: dict | None = Field(default=None, description="Structured context (pills, runtime info) to include for LLM but not display as user text")
 
 
 class AgentChatResponse(BaseModel):

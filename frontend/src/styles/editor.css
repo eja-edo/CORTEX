@@ -406,6 +406,50 @@
   background: var(--bg-secondary);
   border-radius: var(--radius);
   margin-top: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.block-image-uploading {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-tertiary);
+  background: var(--bg-secondary);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+
+.block-image-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.block-image-upload-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.block-image-upload-btn:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+}
+
+.block-image-upload-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* ── Callout ── */

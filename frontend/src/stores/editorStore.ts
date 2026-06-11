@@ -8,9 +8,11 @@ interface EditorStore {
   focusedBlockId: string | null
   slashMenu: SlashMenuState
   bubbleToolbar: BubbleToolbarState
+  noteId: string | null
 
-  initializeFromMarkdown: (md: string) => void
+  initializeFromMarkdown: (md: string, noteId?: string) => void
   setBlocks: (blocks: BlockNode[]) => void
+  setNoteId: (noteId: string | null) => void
 
   setFocusedBlock: (blockId: string | null) => void
   updateBlockContent: (blockId: string, content: string) => void
@@ -48,14 +50,19 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   focusedBlockId: null,
   slashMenu: { open: false, search: '', position: null, anchorBlockId: null },
   bubbleToolbar: { open: false, position: null, selection: null },
+  noteId: null,
 
-  initializeFromMarkdown: (md: string) => {
+  initializeFromMarkdown: (md: string, noteId?: string) => {
     const blocks = parseMarkdownToBlocks(md)
-    set({ blocks, focusedBlockId: null })
+    set({ blocks, focusedBlockId: null, noteId: noteId ?? null })
   },
 
   setBlocks: (blocks: BlockNode[]) => {
     set({ blocks })
+  },
+
+  setNoteId: (noteId: string | null) => {
+    set({ noteId })
   },
 
   setFocusedBlock: (blockId: string | null) => {
@@ -267,9 +274,12 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       newBlocks.push(newBlock)
     }
 
-    const focusId = newBlock.type === 'list_group'
-      ? newBlock.children?.[0]?.id ?? newBlock.id
-      : newBlock.id
+    const canFocus = type !== 'divider'
+    const focusId = canFocus
+      ? newBlock.type === 'list_group'
+        ? newBlock.children?.[0]?.id ?? newBlock.id
+        : newBlock.id
+      : null
 
     set({
       blocks: newBlocks,

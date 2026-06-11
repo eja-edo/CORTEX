@@ -10,6 +10,7 @@ import { BubbleToolbar } from './BubbleToolbar'
 
 interface EditorSurfaceProps {
   initialMd: string
+  noteId?: string
   onSave: (md: string) => void
 }
 
@@ -36,7 +37,7 @@ function SortableBlock({ block }: { block: BlockNode }) {
   )
 }
 
-export function EditorSurface({ initialMd, onSave }: EditorSurfaceProps) {
+export function EditorSurface({ initialMd, noteId, onSave }: EditorSurfaceProps) {
   const blocks = useEditorStore(s => s.blocks)
   const initializeFromMarkdown = useEditorStore(s => s.initializeFromMarkdown)
   const focusedBlockId = useEditorStore(s => s.focusedBlockId)
@@ -62,9 +63,9 @@ export function EditorSurface({ initialMd, onSave }: EditorSurfaceProps) {
       }
       prevMdRef.current = initialMd
       suppressAutoSaveRef.current = true
-      initializeFromMarkdown(initialMd)
+      initializeFromMarkdown(initialMd, noteId)
     }
-  }, [initialMd, initializeFromMarkdown, focusedBlockId])
+  }, [initialMd, initializeFromMarkdown, focusedBlockId, noteId])
 
   const onSaveRef = useRef(onSave)
   onSaveRef.current = onSave

@@ -50,6 +50,7 @@ async def chat(
             message=payload.message,
             conversation_id=payload.conversation_id,
             workspace_id=payload.workspace_id,
+            context=payload.context,
         )
         
         return AgentChatResponse(
@@ -99,6 +100,7 @@ async def stream_chat(
                 message=payload.message,
                 conversation_id=payload.conversation_id,
                 workspace_id=payload.workspace_id,
+                context=payload.context,
             ):
                 if chunk.get("event") == "token" and chunk.get("text"):
                     reply_text += chunk["text"]
@@ -241,6 +243,7 @@ async def get_conversation(
                 "id": str(msg.id),
                 "role": msg.role,
                 "content": msg.content if msg.role != "tool" else None,
+                "context": msg.context if msg.role == "user" else None,
                 "tool_name": msg.tool_name if msg.role == "tool" else None,
                 "tool_input": msg.tool_input if msg.role == "tool" else None,
                 "tool_output": msg.tool_output if msg.role == "tool" else None,

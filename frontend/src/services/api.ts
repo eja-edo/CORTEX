@@ -111,6 +111,7 @@ export interface AgentMessage {
     id: string
     role: 'user' | 'assistant' | 'tool'
     content: string
+    context?: Record<string, unknown> | null
     tool_name?: string
     tool_input?: string
     tool_output?: string
@@ -176,6 +177,7 @@ export async function sendAgentMessage(
     message: string,
     conversationId?: string,
     workspaceId?: string,
+    context?: Record<string, unknown>,
 ): Promise<{ conversation_id: string; reply: string }> {
     return requestWithAuth('/agent/chat', {
         method: 'POST',
@@ -184,6 +186,7 @@ export async function sendAgentMessage(
             message,
             conversation_id: conversationId,
             workspace_id: workspaceId,
+            context,
         }),
     })
 }
@@ -204,6 +207,7 @@ export async function* streamAgentMessage(
     message: string,
     conversationId?: string,
     workspaceId?: string,
+    context?: Record<string, unknown>,
 ): AsyncGenerator<StreamEvent, void, undefined> {
     let tokens = getCurrentTokens()
     if (!tokens?.accessToken) {
@@ -215,6 +219,7 @@ export async function* streamAgentMessage(
         message,
         conversation_id: conversationId,
         workspace_id: workspaceId,
+        context,
     })
 
     let response = await fetch(url, {
@@ -348,6 +353,43 @@ export async function* streamAgentMessage(
     } finally {
         reader.releaseLock()
     }
+}
+
+export async function uploadNoteImage(
+    noteId: string,
+    file: File,
+): Promise<{ id: string; url: string; original_filename: string; content_type: string; file_size: number }> {
+    const tokens = getCurrentTokens()
+    if (!tokens?.accessToken) {
+        throw new Error('No authentication token available')
+    }
+
+    const formData = new FormData()
+    formData.append('file', file)
+
+    const response = await fetch(`${API_BASE_URL}/notes/${noteId}/images`, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${tokens.accessToken}`,
+        },
+        body: formData,
+    })
+
+    if (!response.ok) {
+        throw new ApiError('Failed to upload image', response.status)
+    }
+
+    return response.json()
+}
+
+export async function listNoteImages(noteId: string): Promise<Array<{
+    id: string; url: string; original_filename: string; content_type: string; file_size: number; created_at: string
+}>> {
+    return requestWithAuth(`/notes/${noteId}/images`)
+}
+
+export async function deleteNoteImage(noteId: string, imageId: string): Promise<void> {
+    await requestWithAuth(`/notes/${noteId}/images/${imageId}`, { method: 'DELETE' })
 }
 
 export { API_BASE_URL }

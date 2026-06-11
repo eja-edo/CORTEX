@@ -5,6 +5,7 @@ from typing import Optional
 from uuid import UUID
 from pydantic import BaseModel, Field
 
+from app.services.agent.action_snapshot_store import ActionSnapshot, get_snapshot_store
 from app.services.agent.tool_context import ToolContext
 from app.services.schedule_service import ScheduleService
 from app.utils.logger import get_logger
@@ -44,8 +45,26 @@ async def update_schedule_handler(args: dict, ctx: ToolContext) -> dict:
     from app.database import SessionLocal
 
     db = SessionLocal()
+    result_data = {}
+    schedule = None
     try:
-        schedule = ScheduleService(db).update_schedule_fields(
+        svc = ScheduleService(db)
+
+        # --- CAPTURE PREV STATE ---
+        existing = svc.get_schedule_by_id(schedule_id=schedule_id, user_id=ctx.user_id)
+        if not existing:
+            raise ValueError("Schedule not found or permission denied")
+
+        prev_fields = {
+            "title": existing.title,
+            "start_time": existing.start_time.isoformat(),
+            "end_time": existing.end_time.isoformat(),
+            "description": existing.description,
+            "is_completed": existing.is_completed,
+        }
+        # --------------------------
+
+        schedule = svc.update_schedule_fields(
             schedule_id=schedule_id,
             user_id=ctx.user_id,
             title=args.get("title"),
@@ -54,20 +73,40 @@ async def update_schedule_handler(args: dict, ctx: ToolContext) -> dict:
             description=args.get("description"),
             is_completed=args.get("is_completed"),
         )
-        return {
+
+        result_data = {
             "id": str(schedule.id),
             "title": schedule.title,
             "start_time": schedule.start_time.isoformat(),
             "end_time": schedule.end_time.isoformat(),
             "is_completed": schedule.is_completed,
             "updated_at": schedule.updated_at.isoformat() if schedule.updated_at else None,
-            "success": True,
+            "prev_fields": prev_fields,
         }
     except Exception as exc:
         logger.error("update_schedule failed: %s", exc, exc_info=True)
         raise
     finally:
         db.close()
+
+    # --- REVERT SNAPSHOT (outside sync DB context) ---
+    snapshot = ActionSnapshot(
+        tool_name="update_schedule",
+        user_id=str(ctx.user_id),
+        conversation_id=str(getattr(ctx, "conversation_id", "")),
+        snapshot={
+            "op": "update_schedule",
+            "schedule_id": str(schedule_id),
+            "prev_fields": prev_fields,
+        },
+    )
+    action_id = await get_snapshot_store().save(snapshot)
+    # --------------------------------------------------
+
+    result_data["action_id"] = action_id
+    result_data["revert_hint"] = "Bạn có thể hoàn tác cập nhật lịch này bằng action_id trên."
+    result_data["success"] = True
+    return result_data
 
 
 UPDATE_SCHEDULE_SCHEMA = {

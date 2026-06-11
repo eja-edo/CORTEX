@@ -464,7 +464,6 @@
 }
 
 .ask-ai-msg-bubble {
-    max-width: 84%;
     display: flex;
     flex-direction: column;
     gap: 4px;
@@ -482,17 +481,17 @@
 }
 
 .ask-ai-msg--user .ask-ai-msg-content {
-    background: var(--text-primary);
-    color: #fff;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
     border-radius: var(--radius-lg) var(--radius-lg) 3px var(--radius-lg);
 }
 
-.ask-ai-msg--assistant .ask-ai-msg-content {
+/* .ask-ai-msg--assistant .ask-ai-msg-content {
     background: var(--bg-secondary);
     color: var(--text-primary);
     border: 1px solid var(--border);
     border-radius: 3px var(--radius-lg) var(--radius-lg) var(--radius-lg);
-}
+} */
 
 /* Markdown in AI responses */
 .ask-ai-msg-content h1,

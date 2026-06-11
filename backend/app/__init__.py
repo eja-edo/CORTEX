@@ -16,6 +16,7 @@ from app.api.agent import router as agent_router
 from app.api.google_calendar import router as google_calendar_router
 from app.api.assets import router as assets_router
 from app.api.notes import router as notes_router
+from app.api.images import router as images_router
 from app.api.notifications import router as notifications_router
 from app.api.schedules import router as schedules_router
 from app.api.upload import router as upload_router
@@ -197,6 +198,7 @@ app.include_router(google_calendar_router, prefix=settings.API_STR)
 app.include_router(schedules_router, prefix=settings.API_STR)
 app.include_router(notes_router, prefix=settings.API_STR)
 app.include_router(assets_router, prefix=settings.API_STR)
+app.include_router(images_router, prefix=settings.API_STR)
 app.include_router(notifications_router, prefix=settings.API_STR)
 app.include_router(upload_router, prefix=settings.API_STR)
 app.include_router(knowledge_router, prefix=settings.API_STR)

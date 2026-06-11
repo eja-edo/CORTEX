@@ -5,6 +5,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from app.models import ScheduleType, SyncOperation
+from app.services.agent.action_snapshot_store import ActionSnapshot, get_snapshot_store
 from app.services.agent.tool_context import ToolContext
 from app.services.schedule_service import ScheduleService
 from app.schemas import ScheduleCreate, RecurrenceRuleInput
@@ -75,6 +76,8 @@ async def create_schedule_handler(args: dict, ctx: ToolContext) -> dict:
     from app.api.schedules import _enqueue_google_sync
 
     db = SessionLocal()
+    result_data = {}
+    schedule = None
     try:
         # Build ScheduleCreate input with optional recurrence
         recurrence_data = None
@@ -84,7 +87,7 @@ async def create_schedule_handler(args: dict, ctx: ToolContext) -> dict:
             until = None
             if recurrence_input.get("until"):
                 until = _parse_iso_with_tz(recurrence_input["until"], "recurrence_rule.until")
-            
+
             recurrence_data = RecurrenceRuleInput(
                 freq=recurrence_input["freq"],
                 interval=recurrence_input.get("interval", 1),
@@ -105,24 +108,41 @@ async def create_schedule_handler(args: dict, ctx: ToolContext) -> dict:
 
         svc = ScheduleService(db)
         schedule = svc.create_schedule(user_id=ctx.user_id, data=schedule_create)
-        
+
         # Sync with Google Calendar
         await _enqueue_google_sync(schedule, SyncOperation.UPSERT)
-        
-        return {
+
+        result_data = {
             "id": str(schedule.id),
             "title": schedule.title,
             "start_time": schedule.start_time.isoformat(),
             "end_time": schedule.end_time.isoformat(),
             "recurrence": schedule.recurrence_rule,
             "created_at": schedule.created_at.isoformat() if schedule.created_at else None,
-            "success": True,
         }
     except Exception as exc:
         logger.error("create_schedule failed: %s", exc, exc_info=True)
         raise
     finally:
         db.close()
+
+    # --- REVERT SNAPSHOT (outside sync DB context) ---
+    snapshot = ActionSnapshot(
+        tool_name="create_schedule",
+        user_id=str(ctx.user_id),
+        conversation_id=str(getattr(ctx, "conversation_id", "")),
+        snapshot={
+            "op": "create_schedule",
+            "schedule_id": str(schedule.id) if schedule else result_data.get("id", ""),
+        },
+    )
+    action_id = await get_snapshot_store().save(snapshot)
+    # --------------------------------------------------
+
+    result_data["action_id"] = action_id
+    result_data["revert_hint"] = "Bạn có thể hoàn tác tạo lịch này bằng action_id trên. Lưu ý: Google Calendar sync đã chạy, cần xóa thủ công trên Google."
+    result_data["success"] = True
+    return result_data
 
 
 
