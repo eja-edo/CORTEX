@@ -65,6 +65,8 @@ export function WorkspaceNoteEditor({
     const timerRef = useRef<number | null>(null)
     const debounceTimerRef = useRef<number | null>(null)
     const lastNoteIdRef = useRef<string | null>(null)
+    const lastContentMdRef = useRef<string>(note.contentMd)
+    const pendingFlushValueRef = useRef<string | null>(null)
     const textareaRef = useRef<HTMLTextAreaElement>(null)
     const previewRef = useRef<HTMLDivElement>(null)
     const selectionRef = useRef<{ start: number; end: number } | null>(null)
@@ -94,12 +96,27 @@ export function WorkspaceNoteEditor({
         return text.trim().split(/\s+/).filter(Boolean).length
     }, [localMd])
 
-    // Sync when switching notes
+    // Sync when switching notes — handles both new-note-switch and async content load
     useEffect(() => {
-        if (lastNoteIdRef.current === note.id) return
-        lastNoteIdRef.current = note.id
-        setLocalMd(note.contentMd)
-    }, [note.id, note.contentMd])
+        if (lastNoteIdRef.current !== note.id) {
+            // Switching to a different note: flush pending content for the old note first
+            if (timerRef.current && pendingFlushValueRef.current !== null) {
+                window.clearTimeout(timerRef.current)
+                timerRef.current = null
+                onChange(lastNoteIdRef.current, pendingFlushValueRef.current)
+                pendingFlushValueRef.current = null
+            }
+
+            lastNoteIdRef.current = note.id
+            lastContentMdRef.current = note.contentMd
+            setLocalMd(note.contentMd)
+        } else if (note.contentMd !== lastContentMdRef.current) {
+            // Same note, content updated externally (e.g. fetchFullNote completed)
+            const prevSynced = lastContentMdRef.current
+            lastContentMdRef.current = note.contentMd
+            setLocalMd((current) => (current === prevSynced ? note.contentMd : current))
+        }
+    }, [note.id, note.contentMd, onChange])
 
     // Sync scroll between textarea and preview in split mode
     useEffect(() => {
@@ -144,8 +161,13 @@ export function WorkspaceNoteEditor({
 
     const AUTOSAVE_INTERVAL = Number(import.meta.env.VITE_AUTOSAVE_INTERVAL) || 350
     const queueFlush = useCallback((value: string) => {
+        pendingFlushValueRef.current = value
         if (timerRef.current) window.clearTimeout(timerRef.current)
-        timerRef.current = window.setTimeout(() => { flush(value); timerRef.current = null }, AUTOSAVE_INTERVAL)
+        timerRef.current = window.setTimeout(() => {
+            flush(value)
+            timerRef.current = null
+            pendingFlushValueRef.current = null
+        }, AUTOSAVE_INTERVAL)
     }, [flush, AUTOSAVE_INTERVAL])
 
     const applyValue = useCallback((value: string) => {

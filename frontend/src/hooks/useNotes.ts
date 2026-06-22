@@ -99,7 +99,10 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
     const recentNotesRef = useRef<AppNote[]>([])
     const noteSyncTimersRef = useRef<Record<string, number>>({})
     const noteSyncStatesRef = useRef<Record<string, NoteSyncState>>({})
+    // FIX: Track which note id each pending timer belongs to, to cancel stale saves on switch
     const noteLoadInFlightRef = useRef<Set<string>>(new Set())
+    // FIX: Track the activeNoteId in a ref so persist callbacks can check if they're still relevant
+    const activeNoteIdRef = useRef<string | null>(activeNoteId)
 
     const [workspaceDraggingNoteId, setWorkspaceDraggingNoteId] = useState<string | null>(null)
     const [workspaceDropTargetParentId, setWorkspaceDropTargetParentId] = useState<string | null>(null)
@@ -107,6 +110,11 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
     useEffect(() => {
         recentNotesRef.current = recentNotes
     }, [recentNotes])
+
+    // FIX: Keep activeNoteIdRef in sync
+    useEffect(() => {
+        activeNoteIdRef.current = activeNoteId
+    }, [activeNoteId])
 
     const handleNoteChange = useCallback((id: string, contentMd: string) => {
         setRecentNotes((prev) => prev.map((n) => (n.id === id ? { ...n, contentMd } : n)))
@@ -214,8 +222,10 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
             const data = await requestWithAuth<ApiNoteSummary[]>(`/notes/workspaces/${currentWorkspace.id}`)
             const mappedNotes = data.map(mapApiNoteSummaryToAppNote)
             setRecentNotes(mappedNotes)
-            // Sync states are NOT set here — content is empty.
-            // They will be set lazily when fetchFullNote() is called for each note.
+            // FIX: Reset sync states when fetching fresh note list — prevents stale
+            // sync state from a previous workspace or old note list
+            noteSyncStatesRef.current = {}
+            noteLoadInFlightRef.current = new Set()
         } catch (error) {
             console.error('Cannot load notes:', error)
         }
@@ -225,6 +235,7 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
         try {
             const data = await requestWithAuth<ApiNote>(`/notes/${noteId}`)
             const mapped = mapApiNoteToAppNote(data)
+
             setRecentNotes((prev) => prev.map((n) => (n.id === noteId ? mapped : n)))
             noteSyncStatesRef.current[noteId] = {
                 baseContent: mapped.contentMd,
@@ -237,11 +248,22 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
         }
     }
 
-    // Lazy-load full content when the active note changes.
     useEffect(() => {
         if (!activeNoteId) return
-        if (noteSyncStatesRef.current[activeNoteId]) return
+
+        // Flush any pending persist for the previously active note (Bug 3)
+        const prevActiveId = activeNoteIdRef.current
+        if (prevActiveId && prevActiveId !== activeNoteId) {
+            const prevTimerId = noteSyncTimersRef.current[prevActiveId]
+            if (prevTimerId) {
+                window.clearTimeout(prevTimerId)
+                delete noteSyncTimersRef.current[prevActiveId]
+                void persistNoteContent(prevActiveId)
+            }
+        }
+
         if (noteLoadInFlightRef.current.has(activeNoteId)) return
+
         noteLoadInFlightRef.current.add(activeNoteId)
         void fetchFullNote(activeNoteId).finally(() => {
             noteLoadInFlightRef.current.delete(activeNoteId)
@@ -385,6 +407,12 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
             setRecentNotes((prev) => prev.filter((n) => !removedSet.has(n.id)))
             for (const removedId of removedIds) {
                 delete noteSyncStatesRef.current[removedId]
+                // FIX: Also cancel any pending save timers for deleted notes
+                const timer = noteSyncTimersRef.current[removedId]
+                if (timer) {
+                    window.clearTimeout(timer)
+                    delete noteSyncTimersRef.current[removedId]
+                }
             }
             return removedIds
         } catch (error) {
