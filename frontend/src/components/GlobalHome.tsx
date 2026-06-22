@@ -3,8 +3,6 @@ import { Calendar, Clock, FileText, Plus, Zap } from 'lucide-react'
 import type { Workspace } from '../types'
 import type { AppNote } from '../hooks/useNotes'
 import type { Schedule } from '../types'
-import { noteTitleFromMd } from '../hooks/useNotes'
-
 interface GlobalHomeProps {
   user: { full_name?: string | null; email?: string | null } | null
   workspaces: Workspace[]
@@ -57,7 +55,7 @@ export function GlobalHome({
       .slice(0, 10)
       .map(note => ({
         ...note,
-        title: noteTitleFromMd(note.contentMd),
+        title: note.title || 'Untitled',
       }))
   }, [recentNotes])
 

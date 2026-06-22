@@ -1,40 +1,31 @@
-"""Service for summarizing long conversations to maintain context efficiency."""
+"""Service for summarizing conversations using Layer 2 rolling summaries."""
 
 from uuid import UUID
 from datetime import datetime
 
 from google.genai import types
-from sqlalchemy import select, update
+from sqlalchemy import select, update, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AgentConversation, AgentMessage
 from app.services.agent.model_client import ModelClient
+from app.memory.layers.summaries import ConversationSummarizer as Layer2Summarizer
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Module-level ModelClient shared across all summarizer instances.
-# Uses the same AVAILABLE_MODELS + round-robin rotation as the agent service.
 _model_client = ModelClient()
 
 
 class ConversationSummarizer:
-    """Summarizes conversations when they exceed a threshold length."""
+    """Summarizes conversations with rolling versioned summaries (Layer 2)."""
 
-    # Trigger summarization when conversation exceeds this many messages
     MESSAGE_THRESHOLD = 20
-
-    # Keep this many recent messages in context after summarization.
-    # Must be kept in sync with MAX_CONVERSATION_HISTORY in agent_service so
-    # the sliding window covers exactly what the summary does not.
     KEEP_RECENT_MESSAGES = 10
 
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
-
-    # ------------------------------------------------------------------
-    # Prompt
-    # ------------------------------------------------------------------
+        self._layer2 = Layer2Summarizer()
 
     @staticmethod
     def _get_summarizer_prompt() -> str:
@@ -53,15 +44,7 @@ IMPORTANT RULES:
 Output format:
 Provide a natural language summary that captures the essence of the conversation so far."""
 
-    # ------------------------------------------------------------------
-    # Public interface
-    # ------------------------------------------------------------------
-
     async def should_summarize(self, conversation_id: UUID) -> bool:
-        """
-        Return True if the conversation has exceeded MESSAGE_THRESHOLD and
-        does not yet have a summary stored.
-        """
         stmt = select(AgentConversation).where(
             AgentConversation.id == conversation_id
         )
@@ -69,35 +52,21 @@ Provide a natural language summary that captures the essence of the conversation
         conv = result.scalar_one_or_none()
         if not conv:
             return False
-        return conv.message_count > self.MESSAGE_THRESHOLD and not conv.summary
+
+        token_total = conv.total_token_count or 0
+        return await self._layer2.should_summarize(str(conversation_id), token_total, self.db)
 
     async def summarize_conversation(self, conversation_id: UUID) -> dict:
-        """
-        Generate and persist a summary for the given conversation.
-
-        Summarizes all messages *except* the most recent KEEP_RECENT_MESSAGES
-        so the sliding context window in agent_service always has fresh turns
-        and the summary covers everything older.
-
-        Returns
-        -------
-        dict with keys: success, summary_length, messages_summarized
-                     or success=False, error/reason.
-        """
         logger.info(f"Starting summarization for conversation {conversation_id}")
 
-        stmt = select(AgentConversation).where(
-            AgentConversation.id == conversation_id
+        conv_result = await self.db.execute(
+            select(AgentConversation).where(AgentConversation.id == conversation_id)
         )
-        result = await self.db.execute(stmt)
-        conv = result.scalar_one_or_none()
+        conv = conv_result.scalar_one_or_none()
 
         if not conv:
-            logger.warning(f"Conversation {conversation_id} not found")
             return {"success": False, "error": "Conversation not found"}
 
-        # Fetch user/assistant messages only — tool rows are too noisy for a
-        # human-readable summary and inflate token count unnecessarily.
         msg_stmt = (
             select(AgentMessage)
             .where(
@@ -109,18 +78,25 @@ Provide a natural language summary that captures the essence of the conversation
         result = await self.db.execute(msg_stmt)
         all_messages = result.scalars().all()
 
-        # Only summarize messages older than the recent window so the two
-        # layers (summary + recent window) cover the full history without
-        # overlap or gap.
         messages_to_summarize = all_messages[: -self.KEEP_RECENT_MESSAGES]
 
         if len(messages_to_summarize) < 5:
-            logger.debug(
-                f"Too few messages to summarize ({len(messages_to_summarize)})"
-            )
             return {"success": False, "reason": "Not enough messages"}
 
         conversation_text = self._build_conversation_text(messages_to_summarize)
+        first_msg_id = str(messages_to_summarize[0].id)
+        last_msg_id = str(messages_to_summarize[-1].id)
+
+        # Get latest version if exists
+        version_result = await self.db.execute(
+            text("""
+                SELECT MAX(summary_version) FROM conversation_summaries
+                WHERE conversation_id = :cid
+            """),
+            {"cid": str(conversation_id)},
+        )
+        max_version = version_result.scalar() or 0
+        new_version = max_version + 1
 
         config = types.GenerateContentConfig(
             system_instruction=self._get_summarizer_prompt(),
@@ -133,26 +109,32 @@ Provide a natural language summary that captures the essence of the conversation
             )
 
             if not response or not response.text:
-                logger.error(
-                    f"Empty summarization response from model={model_used}"
-                )
                 return {"success": False, "error": "Empty summarization response"}
 
             summary_text = response.text.strip()
             summary_length = len(summary_text)
+
+            await self._layer2.store_summary(
+                conversation_id=str(conversation_id),
+                user_id=str(conv.user_id),
+                previous_summary_id=None,
+                summary_text=summary_text,
+                version=new_version,
+                message_start_id=first_msg_id,
+                message_end_id=last_msg_id,
+                message_count=len(messages_to_summarize),
+                model_used=model_used,
+                tokens_used=summary_length // 4,
+                db=self.db,
+            )
+
+            await self.db.commit()
 
             logger.info(
                 f"✅ Summarization complete via model={model_used}: "
                 f"{len(messages_to_summarize)} messages → {summary_length} chars | "
                 f"conversation={conversation_id}"
             )
-
-            await self.db.execute(
-                update(AgentConversation)
-                .where(AgentConversation.id == conversation_id)
-                .values(summary=summary_text, updated_at=datetime.utcnow())
-            )
-            await self.db.commit()
 
             return {
                 "success": True,
@@ -162,10 +144,7 @@ Provide a natural language summary that captures the essence of the conversation
             }
 
         except Exception as exc:
-            logger.error(
-                f"Error summarizing conversation {conversation_id}: {exc}",
-                exc_info=True,
-            )
+            logger.error(f"Error summarizing conversation {conversation_id}: {exc}", exc_info=True)
             return {"success": False, "error": str(exc)}
 
     async def get_conversation_context(
@@ -173,34 +152,19 @@ Provide a natural language summary that captures the essence of the conversation
         conversation_id: UUID,
         include_summary: bool = True,
     ) -> str:
-        """
-        Return a formatted context string to prepend to the system prompt.
-        Contains the stored summary when available.
-        """
-        stmt = select(AgentConversation).where(
-            AgentConversation.id == conversation_id
-        )
-        result = await self.db.execute(stmt)
-        conv = result.scalar_one_or_none()
+        summaries = await self._layer2.get_summary_chain(str(conversation_id), self.db)
 
-        if not conv:
+        if not summaries:
             return ""
 
-        parts: list[str] = []
-        if include_summary and conv.summary:
-            parts.append("=== CONVERSATION SUMMARY ===")
-            parts.append(conv.summary)
-            parts.append("")
-
+        parts = []
+        parts.append("=== CONVERSATION SUMMARY ===")
+        parts.append(summaries[-1])
+        parts.append("")
         return "\n".join(parts)
-
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _build_conversation_text(messages: list) -> str:
-        """Convert a list of AgentMessage objects to a plain-text transcript."""
         parts = ["Conversation history to summarize:\n"]
 
         for msg in messages:
@@ -211,11 +175,10 @@ Provide a natural language summary that captures the essence of the conversation
             elif msg.role == "tool":
                 count = (msg.tool_output or {}).get("count", "?")
                 parts.append(f"Tool result: [{msg.tool_name} → {count} results]")
-            parts.append("")  # blank line between turns
+            parts.append("")
 
         return "\n".join(parts)
 
 
 def get_conversation_summarizer(db: AsyncSession) -> ConversationSummarizer:
-    """Factory function — returns a ConversationSummarizer bound to *db*."""
     return ConversationSummarizer(db)

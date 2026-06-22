@@ -246,6 +246,24 @@ class NoteRevisionResponse(BaseModel):
     created_at: datetime
 
 
+class NoteSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    user_id: UUID
+    workspace_id: UUID | None
+    parent_note_id: UUID | None
+    title: str
+    content_type: str
+    position: dict[str, Any]
+    size: dict[str, Any]
+    style: dict[str, Any]
+    version: int
+    is_deleted: bool
+    created_at: datetime
+    updated_at: datetime
+
+
 class NoteResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

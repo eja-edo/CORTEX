@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Bot, Send, X, Sparkles, RefreshCw, Copy, Check } from 'lucide-react'
-import { streamAgentMessage, listConversations, getConversation, type ConversationListItem, type StreamEvent } from '../services/api'
+import { streamAgentMessage, listConversations, getConversation, revertAction, ApiError, type ConversationListItem, type StreamEvent, type PendingChange } from '../services/api'
 import { useConversationStore } from '../stores/conversationStore'
 import { knowledgeRoute, noteRoute, scheduleRoute } from '../services/routes'
 
@@ -36,6 +36,85 @@ type Message = {
     }>
 }
 
+const DISMISSED_KEY = 'cortex_dismissed_actions'
+
+function getDismissedActionIds(): string[] {
+    try {
+        const raw = localStorage.getItem(DISMISSED_KEY)
+        return raw ? JSON.parse(raw) : []
+    } catch { return [] }
+}
+
+function persistDismissedActionId(actionId: string): void {
+    try {
+        const ids = getDismissedActionIds()
+        if (!ids.includes(actionId)) {
+            ids.push(actionId)
+            localStorage.setItem(DISMISSED_KEY, JSON.stringify(ids))
+        }
+    } catch (err) {
+        console.error('Failed to persist dismissed action:', err)
+    }
+}
+
+function clearDismissedActionIds(): void {
+    try {
+        localStorage.removeItem(DISMISSED_KEY)
+    } catch (err) {
+        console.error('Failed to clear dismissed actions:', err)
+    }
+}
+
+function buildPendingChange(
+    toolName: string,
+    result: unknown,
+    toolArgs?: Record<string, unknown>,
+): PendingChange | null {
+    const resultData = result as Record<string, unknown> | undefined
+    const actionId = resultData?.action_id as string | undefined
+    const entityId = resultData?.id as string | undefined
+    if (!actionId) return null
+
+    let title = ''
+    let description = ''
+
+    switch (toolName) {
+        case 'create_note': {
+            const content = (toolArgs?.content as string) || ''
+            title = content.split('\n')[0]?.slice(0, 50) || 'Untitled'
+            description = 'Created note'
+            break
+        }
+        case 'update_note': {
+            const content = (toolArgs?.content as string) || ''
+            title = content.split('\n')[0]?.slice(0, 50) || 'Untitled'
+            description = 'Updated note'
+            break
+        }
+        case 'create_schedule': {
+            title = (resultData?.title as string) || 'Untitled'
+            description = 'Created schedule'
+            break
+        }
+        case 'update_schedule': {
+            title = (resultData?.title as string) || 'Untitled'
+            description = 'Updated schedule'
+            break
+        }
+        default:
+            return null
+    }
+
+    return {
+        id: `change-${Date.now()}-${Math.random()}`,
+        toolName,
+        actionId,
+        entityId: entityId || '',
+        title: title.slice(0, 60),
+        description,
+    }
+}
+
 export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onInsert, workspaceId, onToolNavigate }: AskAIProps) {
     const STORAGE_KEY = 'cortex_chatbot_state'
 
@@ -56,6 +135,8 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
     ])
     const [displayIndex, setDisplayIndex] = useState(0)
     const [fullReplyRef, setFullReplyRef] = useState('')
+    const [pendingChanges, setPendingChanges] = useState<PendingChange[]>([])
+    const [pendingChangesOpen, setPendingChangesOpen] = useState(true)
     const inputRef = useRef<HTMLTextAreaElement>(null)
     const messagesEndRef = useRef<HTMLDivElement>(null)
     const { updateTokenUsage } = useConversationStore()
@@ -114,6 +195,31 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                     content: msg.content,
                 })))
                 setConversationTitle(conversation.title ?? null)
+
+                // Restore pending changes from tool messages
+                const dismissedIds = getDismissedActionIds()
+                const restoredChanges: PendingChange[] = []
+                for (const msg of conversation.messages) {
+                    if (msg.role === 'tool' && msg.tool_name && msg.tool_output) {
+                        const output = msg.tool_output as Record<string, unknown>
+                        const result = output?.result as Record<string, unknown> | undefined
+                        const actionId = result?.action_id as string | undefined
+                        if (actionId && !dismissedIds.includes(actionId)) {
+                            const change = buildPendingChange(
+                                msg.tool_name,
+                                result,
+                                msg.tool_input as Record<string, unknown> | undefined,
+                            )
+                            if (change) {
+                                change.id = `restored-${actionId}`
+                                restoredChanges.push(change)
+                            }
+                        }
+                    }
+                }
+                if (restoredChanges.length > 0) {
+                    setPendingChanges(restoredChanges)
+                }
             } catch (err) {
                 console.error('❌ Failed to restore conversation from backend:', err)
                 // Clear localStorage if restoration fails to avoid infinite retry loop
@@ -261,6 +367,29 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
             saveConversationIdToStorage(sessionId)
             setConversationTitle(conversation.title ?? null)
             setSessions([]) // Clear sessions list after selection
+
+            // Restore pending changes from tool messages
+            const dismissedIds = getDismissedActionIds()
+            const loadedChanges: PendingChange[] = []
+            for (const msg of conversation.messages) {
+                if (msg.role === 'tool' && msg.tool_name && msg.tool_output) {
+                    const output = msg.tool_output as Record<string, unknown>
+                    const result = output?.result as Record<string, unknown> | undefined
+                    const actionId = result?.action_id as string | undefined
+                    if (actionId && !dismissedIds.includes(actionId)) {
+                        const change = buildPendingChange(
+                            msg.tool_name,
+                            result,
+                            msg.tool_input as Record<string, unknown> | undefined,
+                        )
+                        if (change) {
+                            change.id = `restored-${actionId}`
+                            loadedChanges.push(change)
+                        }
+                    }
+                }
+            }
+            setPendingChanges(loadedChanges)
             console.info(`✅ Loaded session ${sessionId} with ${loadedMessages.length} messages`)
         } catch (err) {
             setError(`Failed to load session: ${err instanceof Error ? err.message : 'Unknown error'}`)
@@ -294,6 +423,8 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
         setError(null)
         setIsLoading(false)
         setCopiedId(null)
+        setPendingChanges([])
+        clearDismissedActionIds()
         clearConversationIdFromStorage()
     }, [clearConversationIdFromStorage])
 
@@ -346,6 +477,7 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
             let fullReply = ''
             let finalConversationId: string | null = null
             let thinkingSteps: Message['thinkingSteps'] = []
+            let currentToolArgs: Record<string, unknown> | undefined
 
             const handleToolNavigation = (event: StreamEvent) => {
                 if (!event.tool_name) return
@@ -396,6 +528,7 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                         )
                     )
                 } else if (event.type === 'tool_start' && event.tool_name) {
+                    currentToolArgs = event.tool_args
                     const stepId = `step-${Date.now()}-${Math.random()}`
                     const step = {
                         id: stepId,
@@ -425,6 +558,19 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                         )
                     )
                     handleToolNavigation(event)
+
+                    // Track pending change for mutating tools
+                    if (currentToolArgs) {
+                        const resultData = event.result as Record<string, unknown> | undefined
+                        const actionId = resultData?.action_id as string | undefined
+                        if (actionId) {
+                            const change = buildPendingChange(event.tool_name, event.result, currentToolArgs)
+                            if (change) {
+                                setPendingChanges(prev => [...prev, change])
+                            }
+                        }
+                    }
+                    currentToolArgs = undefined
                 } else if (event.type === 'title_generated' && event.title) {
                     setConversationTitle(event.title)
                 } else if (event.type === 'done' && event.conversation_id) {
@@ -485,6 +631,50 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
         setCopiedId(id)
         setTimeout(() => setCopiedId(null), 2000)
     }
+
+    const acceptChange = useCallback((changeId: string, actionId: string) => {
+        persistDismissedActionId(actionId)
+        setPendingChanges(prev => prev.filter(c => c.id !== changeId))
+    }, [])
+
+    const undoChange = useCallback(async (change: PendingChange) => {
+        try {
+            await revertAction(change.actionId)
+            persistDismissedActionId(change.actionId)
+            setPendingChanges(prev => prev.filter(c => c.id !== change.id))
+        } catch (err) {
+            if (err instanceof ApiError && err.status === 400) {
+                persistDismissedActionId(change.actionId)
+                setPendingChanges(prev => prev.filter(c => c.id !== change.id))
+            } else {
+                console.error('Failed to revert action:', err)
+            }
+        }
+    }, [])
+
+    const acceptAllChanges = useCallback(() => {
+        for (const change of pendingChanges) {
+            persistDismissedActionId(change.actionId)
+        }
+        setPendingChanges([])
+    }, [pendingChanges])
+
+    const undoAllChanges = useCallback(async () => {
+        const changes = [...pendingChanges]
+        for (const change of changes) {
+            try {
+                await revertAction(change.actionId)
+                persistDismissedActionId(change.actionId)
+            } catch (err) {
+                if (err instanceof ApiError && err.status === 400) {
+                    persistDismissedActionId(change.actionId)
+                } else {
+                    console.error(`Failed to revert ${change.actionId}:`, err)
+                }
+            }
+        }
+        setPendingChanges([])
+    }, [pendingChanges])
 
     const renderMarkdown = (text: string): string => {
         return text
@@ -604,11 +794,6 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                     ) : (
                         messages.map((msg, index) => (
                             <div key={msg.id} className={`ask-ai-msg ask-ai-msg--${msg.role}`}>
-                                {msg.role === 'assistant' && (
-                                    <div className="ask-ai-msg-icon">
-                                        <Sparkles size={12} />
-                                    </div>
-                                )}
                                 <div className="ask-ai-msg-bubble">
                                     {msg.loading ? (
                                         <div className="ask-ai-thinking-container">
@@ -789,6 +974,58 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                             </div>
                         </div>
                     ) : null}
+                    {pendingChanges.length > 0 && (
+                        <div className="ask-ai-changes-area">
+                            <button
+                                type="button"
+                                className="ask-ai-changes-toggle"
+                                onClick={() => setPendingChangesOpen(!pendingChangesOpen)}
+                            >
+                                <span>Pending Changes ({pendingChanges.length})</span>
+                                <span className={`ask-ai-changes-toggle-icon ${pendingChangesOpen ? 'open' : ''}`}>▾</span>
+                            </button>
+                            {pendingChangesOpen && (
+                                <div className="ask-ai-changes-list">
+                                    <div className="ask-ai-changes-bulk-actions">
+                                        <button type="button" className="ask-ai-changes-bulk-btn accept-all" onClick={acceptAllChanges}>
+                                            Accept All
+                                        </button>
+                                        <button type="button" className="ask-ai-changes-bulk-btn undo-all" onClick={() => void undoAllChanges()}>
+                                            Undo All
+                                        </button>
+                                    </div>
+                                    {pendingChanges.map(change => (
+                                        <div key={change.id} className="ask-ai-changes-item">
+                                            <div className="ask-ai-changes-item-info">
+                                                <span className="ask-ai-changes-item-icon">
+                                                    {change.toolName.includes('note') ? '📝' : '📅'}
+                                                </span>
+                                                <span className="ask-ai-changes-item-text">
+                                                    <strong>{change.description}</strong>: {change.title}
+                                                </span>
+                                            </div>
+                                            <div className="ask-ai-changes-item-actions">
+                                                <button
+                                                    type="button"
+                                                    className="ask-ai-changes-item-btn accept"
+                                                    onClick={() => acceptChange(change.id, change.actionId)}
+                                                >
+                                                    Accept
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    className="ask-ai-changes-item-btn undo"
+                                                    onClick={() => void undoChange(change)}
+                                                >
+                                                    Undo
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
                     <div className="ask-ai-input-wrapper">
                         <textarea
                             ref={inputRef}

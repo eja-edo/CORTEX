@@ -8,7 +8,7 @@ from app.database import get_db, SessionLocal
 from app.database_async import get_async_db
 from app.dependencies import get_current_active_user
 from app.models import User
-from app.schemas import NoteCreate, NotePatchRequest, NoteResponse, NoteRevisionResponse, NoteUpdate
+from app.schemas import NoteCreate, NotePatchRequest, NoteResponse, NoteRevisionResponse, NoteSummary, NoteUpdate
 from app.services.notes import NoteService
 from app.services.workspace_permission import WorkspacePermission
 
@@ -44,10 +44,9 @@ async def get_notes(
     return responses
 
 
-@router.get("/workspaces/{workspace_id}", response_model=list[NoteResponse])
+@router.get("/workspaces/{workspace_id}", response_model=list[NoteSummary])
 async def get_workspace_notes(
     workspace_id: UUID,
-    render_html: bool = Query(False, description="Render markdown to sanitized HTML"),
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_async_db),
 ):
@@ -58,11 +57,22 @@ async def get_workspace_notes(
 
     service = NoteService(db)
     notes = await service.get_notes_by_workspace(workspace_id)
-    responses: list[NoteResponse] = []
-    for note in notes:
-        content = await service.materialize_note_content(note)
-        responses.append(service.to_response(note, render_html=render_html, content_override=content))
-    return responses
+    return [service.to_summary_response(note) for note in notes]
+
+
+@router.get("/{note_id}", response_model=NoteResponse)
+async def get_note(
+    note_id: UUID,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Get a single note with full materialized content."""
+    service = NoteService(db)
+    note = await service.get_note(note_id=note_id, user_id=current_user.id)
+    if note is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
+    content = await service.materialize_note_content(note)
+    return service.to_response(note, content_override=content)
 
 
 @router.patch("/{note_id}", response_model=NoteResponse)

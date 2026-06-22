@@ -1,3 +1,4 @@
+import re
 from typing import Any
 from datetime import datetime
 from uuid import UUID
@@ -9,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import SessionLocal
 from app.models import Note
 from app.repositories.notes import NoteRepository
-from app.schemas import NoteCreate, NotePatchRequest, NoteResponse, NoteUpdate
+from app.schemas import NoteCreate, NotePatchRequest, NoteResponse, NoteSummary, NoteUpdate
 from app.services.workspace_permission import WorkspacePermission
 from app.utils.note_delta import apply_text_patch, build_text_patch
 
@@ -249,6 +250,31 @@ class NoteService:
             created_at=note.created_at,
             updated_at=note.updated_at,
             rendered_html=rendered_html,
+        )
+
+    @staticmethod
+    def extract_title(content: str) -> str:
+        for line in content.split("\n"):
+            text = re.sub(r"^#+\s*", "", line).strip()
+            if text:
+                return text
+        return "Untitled"
+
+    def to_summary_response(self, note: Note) -> NoteSummary:
+        return NoteSummary(
+            id=note.id,
+            user_id=note.user_id,
+            workspace_id=note.workspace_id,
+            parent_note_id=getattr(note, "parent_note_id", None),
+            title=self.extract_title(note.content),
+            content_type=note.content_type,
+            position=note.position,
+            size=note.size,
+            style=note.style,
+            version=note.version,
+            is_deleted=note.is_deleted,
+            created_at=note.created_at,
+            updated_at=note.updated_at,
         )
 
     def _normalize_partial_updates(self, current: Note, updates: dict[str, Any]) -> dict[str, Any]:

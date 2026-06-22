@@ -1,6 +1,6 @@
 import type { TokenPair } from '../types'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api'
+const API_BASE_URL = import.meta.env.VITE_APIhash_BASE_URL ?? 'http://localhost:8000/api'
 const TOKEN_STORAGE_KEY = 'cortex_tokens'
 
 export class ApiError extends Error {
@@ -390,6 +390,19 @@ export async function listNoteImages(noteId: string): Promise<Array<{
 
 export async function deleteNoteImage(noteId: string, imageId: string): Promise<void> {
     await requestWithAuth(`/notes/${noteId}/images/${imageId}`, { method: 'DELETE' })
+}
+
+export interface PendingChange {
+    id: string
+    toolName: string
+    actionId: string
+    entityId: string
+    title: string
+    description: string
+}
+
+export async function revertAction(actionId: string): Promise<{ success: boolean; message: string }> {
+    return requestWithAuth(`/agent/actions/${actionId}/revert`, { method: 'POST' })
 }
 
 export { API_BASE_URL }

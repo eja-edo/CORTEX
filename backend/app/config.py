@@ -122,4 +122,26 @@ class Settings:
 
     UNSEARCH_URL: str = os.getenv("UNSEARCH_URL", "http://localhost:8009")
 
+    # ── Memory System ─────────────────────────────────────────────────────────
+    MEMORY_REDIS_HOST: str = os.getenv("MEMORY_REDIS_HOST", "localhost")
+    MEMORY_REDIS_PORT: int = int(os.getenv("MEMORY_REDIS_PORT", "6379"))
+    MEMORY_REDIS_DB: int = int(os.getenv("MEMORY_REDIS_DB", "1"))
+
+    @property
+    def MEMORY_REDIS_URL(self) -> str:
+        explicit = os.getenv("MEMORY_REDIS_URL")
+        if explicit:
+            return explicit
+        return f"redis://{self.MEMORY_REDIS_HOST}:{self.MEMORY_REDIS_PORT}/{self.MEMORY_REDIS_DB}"
+
+    EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "text-embedding-004")
+    EMBEDDING_DIMENSIONS: int = int(os.getenv("EMBEDDING_DIMENSIONS", "768"))
+    EMBEDDING_BATCH_SIZE: int = int(os.getenv("EMBEDDING_BATCH_SIZE", "16"))
+
+    WORKING_MEMORY_DEFAULT_TOKENS: int = int(os.getenv("WORKING_MEMORY_DEFAULT_TOKENS", "32000"))
+    SUMMARY_TRIGGER_TOKEN_COUNT: int = int(os.getenv("SUMMARY_TRIGGER_TOKEN_COUNT", "8000"))
+    MEMORY_EXTRACTION_ENABLED: bool = os.getenv("MEMORY_EXTRACTION_ENABLED", "true").lower() == "true"
+    OCR_SERVICE_MODE: str = os.getenv("OCR_SERVICE_MODE", "EXTERNAL")
+
+
 settings = Settings()

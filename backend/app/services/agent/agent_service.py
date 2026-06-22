@@ -23,8 +23,17 @@ from app.services.agent.tool_context import ToolContext
 from app.services.agent.tool_registry import get_tool_registry
 from app.database_async import AsyncSessionLocal as DBAsyncSessionLocal
 from app.utils.logger import get_logger
+from app.memory.retriever import MemoryRetriever
+from app.memory.assembler import ContextAssembler
+from app.memory.detector import MemoryCandidateDetector
+from app.memory.jobs.manager import MemoryJobManager
 
 logger = get_logger(__name__)
+
+_memory_retriever = MemoryRetriever()
+_context_assembler = ContextAssembler()
+_memory_detector = MemoryCandidateDetector()
+_memory_jobs = MemoryJobManager()
 
 # System prompt that prevents tool hallucination and sets context
 SYSTEM_PROMPT = """You are Cortex, an intelligent productivity assistant embedded in the Cortex app.
@@ -270,7 +279,7 @@ when the distinction improves clarity.
 
 
 MAX_CONVERSATION_HISTORY = 10  # Load last N messages for context
-MAX_TOOL_TURNS = 6             # Prevent infinite tool loops
+MAX_TOOL_TURNS = 12             # Prevent infinite tool loops
 MAX_SAME_TOOL_CALLS = 2        # Max times the same tool can be called per turn
 MAX_TOKENS_PER_DAY_PER_USER = 100_000  # Daily token budget
 
@@ -655,6 +664,14 @@ Return ONLY the title, no quotes or explanation."""
             logger.warning(f"Error creating summarizer (non-fatal): {exc}")
             summarizer = None
 
+        # ── Memory retrieval ──────────────────────────────────────────────
+        memory_context = ""
+        try:
+            retrieval = await _memory_retriever.retrieve(message, str(self.user.id), self.db)
+            memory_context = _context_assembler.assemble(retrieval)
+        except Exception as exc:
+            logger.warning(f"Memory retrieval failed (non-fatal): {exc}")
+
         system_prompt = SYSTEM_PROMPT
         if summarizer and conv.summary:
             try:
@@ -668,6 +685,12 @@ Return ONLY the title, no quotes or explanation."""
                     )
             except Exception as exc:
                 logger.warning(f"Error getting summary context: {exc}")
+
+        if memory_context:
+            system_prompt = (
+                f"{system_prompt}\n\n"
+                f"=== MEMORY CONTEXT ===\n{memory_context}"
+            )
 
         recent_messages = await self.store.get_recent_messages(
             conv.id, limit=MAX_CONVERSATION_HISTORY
@@ -917,6 +940,21 @@ Return ONLY the title, no quotes or explanation."""
 
             await self.db.commit()
 
+            # ── Async memory extraction (fire-and-forget via RQ) ──────────────
+            try:
+                detection = _memory_detector.detect(message)
+                if detection.should_extract:
+                    await _memory_jobs.enqueue_extraction(
+                        message_id=str(conv.id),
+                        user_id=str(self.user.id),
+                        conversation_id=str(conv.id),
+                        content=message,
+                        signals=detection.signals,
+                        priority=detection.priority,
+                    )
+            except Exception as exc:
+                logger.warning(f"Memory extraction enqueue failed (non-fatal): {exc}")
+
             return {
                 "conversation_id": str(conv.id),
                 "reply": reply_text or "No response generated.",
@@ -1051,6 +1089,14 @@ Return ONLY the title, no quotes or explanation."""
                     )
                 logger.info(f"📨 Raw DB messages (streaming):\n  " + "\n  ".join(msg_summary))
 
+            # ── Memory retrieval ──────────────────────────────────────────────
+            memory_context = ""
+            try:
+                retrieval = _memory_retriever.retrieve(message, str(user_id), self.db)
+                memory_context = _context_assembler.assemble(retrieval)
+            except Exception as exc:
+                logger.warning(f"Memory retrieval failed (non-fatal): {exc}")
+
             await self.store.save_message(
                 conversation_id=conv.id,
                 role="user",
@@ -1073,6 +1119,12 @@ Return ONLY the title, no quotes or explanation."""
                         )
                 except Exception as exc:
                     logger.warning(f"Error getting summary context (streaming): {exc}")
+
+            if memory_context:
+                system_prompt = (
+                    f"{system_prompt}\n\n"
+                    f"=== MEMORY CONTEXT ===\n{memory_context}"
+                )
 
             ctx = ToolContext(
                 user_id=user_id,
@@ -1399,6 +1451,21 @@ Return ONLY the title, no quotes or explanation."""
                     logger.warning(f"Error in summarization (streaming): {exc}")
 
             await self.db.commit()
+
+            # ── Async memory extraction (fire-and-forget via RQ) ──────────────
+            try:
+                detection = _memory_detector.detect(message)
+                if detection.should_extract:
+                    await _memory_jobs.enqueue_extraction(
+                        message_id=str(conv.id),
+                        user_id=str(user_id),
+                        conversation_id=str(conv.id),
+                        content=message,
+                        signals=detection.signals,
+                        priority=detection.priority,
+                    )
+            except Exception as exc:
+                logger.warning(f"Memory extraction enqueue failed (non-fatal): {exc}")
 
             # Always yield done — even after an error event — so the FE
             # can close the stream and get the conversation_id.

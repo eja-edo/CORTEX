@@ -108,7 +108,7 @@ async def stream_chat(
                 elif chunk.get("event") == "tool_start":
                     yield f'data: {json.dumps({"event": "tool_start", "tool_name": chunk.get("tool_name"), "tool_args": chunk.get("tool_args")})}\n\n'
                 elif chunk.get("event") == "tool_result":
-                    yield f'data: {json.dumps({"event": "tool_result", "tool_name": chunk.get("tool_name"), "result": chunk.get("result")})}\n\n'
+                    yield f'data: {json.dumps({"event": "tool_result", "tool_name": chunk.get("tool_name"), "result": chunk.get("result"), "success": chunk.get("success"), "error": chunk.get("error")})}\n\n'
                 elif chunk.get("event") == "done":
                     result_conversation_id = chunk.get("conversation_id")
                     yield f'data: {json.dumps({"event": "done", "conversation_id": str(result_conversation_id)})}\n\n'
@@ -251,6 +251,89 @@ async def get_conversation(
             }
             for msg in messages
         ],
+    }
+
+
+@router.post("/actions/{action_id}/revert")
+async def revert_action(
+    action_id: str,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Revert a mutating action performed by the agent (undo).
+    
+    Uses the same revert logic as the revert_action tool, but callable
+    directly via REST API (no LLM needed).
+    
+    Args:
+        action_id: UUID of the action to revert
+        
+    Returns:
+        Revert result with success status and message
+        
+    Raises:
+        HTTPException: 400 if revert fails
+    """
+    from app.services.agent.action_snapshot_store import get_snapshot_store
+    from app.services.agent.tools.revert_action import (
+        _revert_create_note,
+        _revert_update_note,
+        _revert_create_schedule,
+        _revert_update_schedule,
+    )
+    from app.services.agent.tool_context import ToolContext
+
+    store = get_snapshot_store()
+    user_id_str = str(current_user.id)
+    
+    snapshot = await store.get(user_id_str, action_id)
+    if snapshot is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Action '{action_id}' not found or expired.",
+        )
+    
+    if snapshot.reverted_at is not None:
+        from datetime import datetime, timezone
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Action already reverted at {datetime.fromtimestamp(snapshot.reverted_at, tz=timezone.utc).isoformat()}.",
+        )
+    
+    op = snapshot.snapshot.get("op")
+    ctx = ToolContext(user_id=current_user.id, async_db=db)
+    
+    try:
+        if op == "create_note":
+            result = await _revert_create_note(snapshot.snapshot, ctx)
+        elif op == "update_note":
+            result = await _revert_update_note(snapshot.snapshot, ctx)
+        elif op == "create_schedule":
+            result = await _revert_create_schedule(snapshot.snapshot, ctx)
+        elif op == "update_schedule":
+            result = await _revert_update_schedule(snapshot.snapshot, ctx)
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unsupported revert operation: '{op}'.",
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Revert failed: {str(exc)}",
+        )
+    
+    await store.mark_reverted(user_id_str, snapshot.action_id)
+    
+    return {
+        "success": True,
+        "action_id": snapshot.action_id,
+        "tool_name": snapshot.tool_name,
+        "op": op,
+        "message": result.get("message", f"Reverted {op} successfully"),
     }
 
 

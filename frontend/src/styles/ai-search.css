@@ -938,3 +938,152 @@
 .ask-ai-error-close:hover {
     background: rgba(0, 0, 0, 0.1);
 }
+
+/* ── Pending Changes List ─────────────────────────────────────── */
+
+.ask-ai-changes-area {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.ask-ai-changes-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-active);
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.1s;
+}
+
+.ask-ai-changes-toggle:hover {
+    background: var(--bg-hover);
+}
+
+.ask-ai-changes-toggle-icon {
+    font-size: 10px;
+    transition: transform 0.15s;
+    margin-left: 6px;
+}
+
+.ask-ai-changes-toggle-icon.open {
+    transform: rotate(180deg);
+}
+
+.ask-ai-changes-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+}
+
+.ask-ai-changes-bulk-actions {
+    display: flex;
+    gap: 6px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 4px;
+}
+
+.ask-ai-changes-bulk-btn {
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg-active);
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s;
+}
+
+.ask-ai-changes-bulk-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.ask-ai-changes-bulk-btn.accept-all:hover {
+    background: rgba(34, 197, 94, 0.15);
+    border-color: rgba(34, 197, 94, 0.3);
+    color: #22c55e;
+}
+
+.ask-ai-changes-bulk-btn.undo-all:hover {
+    background: rgba(239, 68, 68, 0.15);
+    border-color: rgba(239, 68, 68, 0.3);
+    color: #ef4444;
+}
+
+.ask-ai-changes-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 5px 6px;
+    border-radius: 4px;
+    gap: 8px;
+    transition: background 0.1s;
+}
+
+.ask-ai-changes-item:hover {
+    background: var(--bg-active);
+}
+
+.ask-ai-changes-item-info {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    flex: 1;
+}
+
+.ask-ai-changes-item-icon {
+    font-size: 14px;
+    flex-shrink: 0;
+}
+
+.ask-ai-changes-item-text {
+    font-size: 12px;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ask-ai-changes-item-actions {
+    display: flex;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.ask-ai-changes-item-btn {
+    padding: 3px 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 11px;
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s;
+}
+
+.ask-ai-changes-item-btn.accept:hover {
+    background: rgba(34, 197, 94, 0.12);
+    border-color: rgba(34, 197, 94, 0.25);
+    color: #22c55e;
+}
+
+.ask-ai-changes-item-btn.undo:hover {
+    background: rgba(239, 68, 68, 0.12);
+    border-color: rgba(239, 68, 68, 0.25);
+    color: #ef4444;
+}

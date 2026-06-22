@@ -26,6 +26,7 @@ export type AppNote = NoteItem & {
     version: number
     updatedAt: string
     parentNoteId: string | null
+    title: string
 }
 
 type NoteSyncState = {
@@ -40,6 +41,22 @@ export type NoteSummary = {
     date: string
     title: string
     parentNoteId: string | null
+}
+
+export type ApiNoteSummary = {
+    id: string
+    user_id: string
+    workspace_id: string | null
+    parent_note_id: string | null
+    title: string
+    content_type: string
+    position: { x: number; y: number }
+    size: { width: number; height: number }
+    style: { color: string }
+    version: number
+    is_deleted: boolean
+    created_at: string
+    updated_at: string
 }
 
 export function noteTitleFromMd(md: string): string {
@@ -61,6 +78,19 @@ function mapApiNoteToAppNote(note: ApiNote): AppNote {
         version: note.version,
         updatedAt: note.updated_at,
         parentNoteId: note.parent_note_id,
+        title: noteTitleFromMd(note.content),
+    }
+}
+
+function mapApiNoteSummaryToAppNote(note: ApiNoteSummary): AppNote {
+    return {
+        id: note.id,
+        contentMd: '',
+        date: formatNoteDate(note.updated_at),
+        version: note.version,
+        updatedAt: note.updated_at,
+        parentNoteId: note.parent_note_id,
+        title: note.title,
     }
 }
 
@@ -69,6 +99,7 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
     const recentNotesRef = useRef<AppNote[]>([])
     const noteSyncTimersRef = useRef<Record<string, number>>({})
     const noteSyncStatesRef = useRef<Record<string, NoteSyncState>>({})
+    const noteLoadInFlightRef = useRef<Set<string>>(new Set())
 
     const [workspaceDraggingNoteId, setWorkspaceDraggingNoteId] = useState<string | null>(null)
     const [workspaceDropTargetParentId, setWorkspaceDropTargetParentId] = useState<string | null>(null)
@@ -86,7 +117,7 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
         () => recentNotes.map((note) => ({
             id: note.id,
             date: note.date,
-            title: noteTitleFromMd(note.contentMd),
+            title: note.title || noteTitleFromMd(note.contentMd),
             parentNoteId: note.parentNoteId ?? null,
         })),
         [recentNotes],
@@ -174,43 +205,56 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
     const clearNotes = useCallback(() => {
         setRecentNotes([])
         noteSyncStatesRef.current = {}
+        noteLoadInFlightRef.current = new Set()
     }, [])
 
     async function fetchNotes(): Promise<void> {
         if (!currentWorkspace) return
         try {
-            const data = await requestWithAuth<ApiNote[]>(`/notes/workspaces/${currentWorkspace.id}`)
-            const mappedNotes = data.map(mapApiNoteToAppNote)
+            const data = await requestWithAuth<ApiNoteSummary[]>(`/notes/workspaces/${currentWorkspace.id}`)
+            const mappedNotes = data.map(mapApiNoteSummaryToAppNote)
             setRecentNotes(mappedNotes)
-            const nextSyncStates: Record<string, NoteSyncState> = {}
-            for (const note of mappedNotes) {
-                nextSyncStates[note.id] = {
-                    baseContent: note.contentMd,
-                    baseVersion: note.version,
-                    inFlight: false,
-                    queued: false,
-                }
-            }
-            noteSyncStatesRef.current = nextSyncStates
+            // Sync states are NOT set here — content is empty.
+            // They will be set lazily when fetchFullNote() is called for each note.
         } catch (error) {
             console.error('Cannot load notes:', error)
         }
     }
 
+    async function fetchFullNote(noteId: string): Promise<void> {
+        try {
+            const data = await requestWithAuth<ApiNote>(`/notes/${noteId}`)
+            const mapped = mapApiNoteToAppNote(data)
+            setRecentNotes((prev) => prev.map((n) => (n.id === noteId ? mapped : n)))
+            noteSyncStatesRef.current[noteId] = {
+                baseContent: mapped.contentMd,
+                baseVersion: mapped.version,
+                inFlight: false,
+                queued: false,
+            }
+        } catch (error) {
+            console.error('Cannot load note:', error)
+        }
+    }
+
+    // Lazy-load full content when the active note changes.
+    useEffect(() => {
+        if (!activeNoteId) return
+        if (noteSyncStatesRef.current[activeNoteId]) return
+        if (noteLoadInFlightRef.current.has(activeNoteId)) return
+        noteLoadInFlightRef.current.add(activeNoteId)
+        void fetchFullNote(activeNoteId).finally(() => {
+            noteLoadInFlightRef.current.delete(activeNoteId)
+        })
+    }, [activeNoteId])
+
     async function persistNoteContent(noteId: string): Promise<void> {
         const target = recentNotesRef.current.find((note) => note.id === noteId)
         if (!target) return
 
-        let syncState = noteSyncStatesRef.current[noteId]
-        if (!syncState) {
-            syncState = {
-                baseContent: target.contentMd,
-                baseVersion: target.version,
-                inFlight: false,
-                queued: false,
-            }
-            noteSyncStatesRef.current[noteId] = syncState
-        }
+        const syncState = noteSyncStatesRef.current[noteId]
+        // If the full content has not been loaded yet, skip persist.
+        if (!syncState) return
 
         if (syncState.inFlight) {
             syncState.queued = true
@@ -249,7 +293,6 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
                 prev.map((note) => {
                     if (note.id !== noteId) return note
 
-                    // Keep unsaved local typing if user changed content while request was in-flight.
                     if (note.contentMd !== requestContent) {
                         return {
                             ...note,
@@ -278,7 +321,7 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
             if (error instanceof Error && 'status' in error && (error as { status: number }).status === 409) {
                 console.error('Note update conflict. Reloading latest version.')
                 delete noteSyncStatesRef.current[noteId]
-                await fetchNotes()
+                await fetchFullNote(noteId)
                 return
             }
             console.error('Cannot save note:', error)
@@ -384,7 +427,8 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
         } catch (error) {
             if (error instanceof Error && 'status' in error && (error as { status: number }).status === 409) {
                 console.error('Note update conflict. Reloading latest version.')
-                await fetchNotes()
+                delete noteSyncStatesRef.current[noteId]
+                await fetchFullNote(noteId)
                 return
             }
             console.error('Cannot move note:', error)
@@ -408,6 +452,7 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
         activeWorkspaceNote,
         handleNoteChange,
         fetchNotes,
+        fetchFullNote,
         handleCreateNote,
         handleDeleteNote,
         handleMoveNote,
