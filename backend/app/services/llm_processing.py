@@ -9,20 +9,21 @@ import json
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from google.genai import types
+from google import genai
+from google.genai import types as gemini_types
 
 from app.config import settings
 from app.services.agent.model_client import (
-    AllModelsExhaustedError,
-    ModelClient,
     STRUCTURED_JSON_MODELS,
 )
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Gemma models return HTTP 200 with truncated/invalid JSON for response_schema calls.
-_model_client = ModelClient(models=STRUCTURED_JSON_MODELS)
+# Direct Gemini client for structured JSON processing.
+# This pipeline always uses Gemini directly (not through the provider abstraction),
+# because it uses Gemini-specific features like response_schema with types.Schema.
+_gemini_client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
 PARSE_RETRY_ATTEMPTS = 2
 
@@ -45,69 +46,69 @@ class LLMResult:
 # Schema helpers (unchanged from original — keep them compact)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _entity_schema() -> types.Schema:
-    return types.Schema(
-        type=types.Type.OBJECT,
+def _entity_schema() -> gemini_types.Schema:
+    return gemini_types.Schema(
+        type=gemini_types.Type.OBJECT,
         properties={
-            "type": types.Schema(
-                type=types.Type.STRING,
+            "type": gemini_types.Schema(
+                type=gemini_types.Type.STRING,
                 enum=["url", "code", "error", "person", "tool", "file"],
             ),
-            "value": types.Schema(type=types.Type.STRING),
-            "confidence": types.Schema(type=types.Type.NUMBER),
+            "value": gemini_types.Schema(type=gemini_types.Type.STRING),
+            "confidence": gemini_types.Schema(type=gemini_types.Type.NUMBER),
         },
         required=["type", "value", "confidence"],
     )
 
 
-def _timeline_event_schema(start_sec: float, end_sec: float) -> types.Schema:
-    return types.Schema(
-        type=types.Type.OBJECT,
+def _timeline_event_schema(start_sec: float, end_sec: float) -> gemini_types.Schema:
+    return gemini_types.Schema(
+        type=gemini_types.Type.OBJECT,
         properties={
-            "start_sec": types.Schema(
-                type=types.Type.NUMBER,
+            "start_sec": gemini_types.Schema(
+                type=gemini_types.Type.NUMBER,
                 description=f"Start time in seconds (>= {start_sec:.1f})",
             ),
-            "end_sec": types.Schema(
-                type=types.Type.NUMBER,
+            "end_sec": gemini_types.Schema(
+                type=gemini_types.Type.NUMBER,
                 description=f"End time in seconds (<= {end_sec:.1f})",
             ),
-            "activity_summary": types.Schema(
-                type=types.Type.STRING,
+            "activity_summary": gemini_types.Schema(
+                type=gemini_types.Type.STRING,
                 description="2-3 sentences describing exactly what happened at this moment",
             ),
-            "spoken_content": types.Schema(
-                type=types.Type.STRING,
+            "spoken_content": gemini_types.Schema(
+                type=gemini_types.Type.STRING,
                 description="Verbatim or near-verbatim transcript excerpt for this moment",
             ),
-            "screen_content": types.Schema(
-                type=types.Type.STRING,
+            "screen_content": gemini_types.Schema(
+                type=gemini_types.Type.STRING,
                 description="Key text or UI elements visible on screen at this moment",
             ),
-            "screen_type": types.Schema(
-                type=types.Type.STRING,
+            "screen_type": gemini_types.Schema(
+                type=gemini_types.Type.STRING,
                 enum=["browser", "editor", "terminal", "settings", "document", "other"],
             ),
-            "application": types.Schema(type=types.Type.STRING),
-            "event_type": types.Schema(
-                type=types.Type.STRING,
+            "application": gemini_types.Schema(type=gemini_types.Type.STRING),
+            "event_type": gemini_types.Schema(
+                type=gemini_types.Type.STRING,
                 enum=["activity", "error", "solution", "decision", "explanation"],
             ),
-            "knowledge_value": types.Schema(
-                type=types.Type.NUMBER,
+            "knowledge_value": gemini_types.Schema(
+                type=gemini_types.Type.NUMBER,
                 description="0.0 = trivial/idle, 1.0 = critical learning moment",
             ),
-            "topics": types.Schema(
-                type=types.Type.ARRAY,
-                items=types.Schema(type=types.Type.STRING),
+            "topics": gemini_types.Schema(
+                type=gemini_types.Type.ARRAY,
+                items=gemini_types.Schema(type=gemini_types.Type.STRING),
             ),
-            "entities": types.Schema(
-                type=types.Type.ARRAY,
+            "entities": gemini_types.Schema(
+                type=gemini_types.Type.ARRAY,
                 items=_entity_schema(),
             ),
-            "keywords": types.Schema(
-                type=types.Type.ARRAY,
-                items=types.Schema(type=types.Type.STRING),
+            "keywords": gemini_types.Schema(
+                type=gemini_types.Type.ARRAY,
+                items=gemini_types.Schema(type=gemini_types.Type.STRING),
             ),
         },
         required=[
@@ -117,45 +118,45 @@ def _timeline_event_schema(start_sec: float, end_sec: float) -> types.Schema:
     )
 
 
-def _window_analysis_schema(start_sec: float, end_sec: float) -> types.Schema:
-    return types.Schema(
-        type=types.Type.OBJECT,
+def _window_analysis_schema(start_sec: float, end_sec: float) -> gemini_types.Schema:
+    return gemini_types.Schema(
+        type=gemini_types.Type.OBJECT,
         properties={
-            "screen_type": types.Schema(
-                type=types.Type.STRING,
+            "screen_type": gemini_types.Schema(
+                type=gemini_types.Type.STRING,
                 enum=["browser", "editor", "terminal", "settings", "document", "other"],
             ),
-            "application": types.Schema(type=types.Type.STRING),
-            "user_intent": types.Schema(
-                type=types.Type.STRING,
+            "application": gemini_types.Schema(type=gemini_types.Type.STRING),
+            "user_intent": gemini_types.Schema(
+                type=gemini_types.Type.STRING,
                 description="Detailed description of the user's goal in this window",
             ),
-            "knowledge_value": types.Schema(
-                type=types.Type.NUMBER,
+            "knowledge_value": gemini_types.Schema(
+                type=gemini_types.Type.NUMBER,
                 description="Overall knowledge value 0.0-1.0 for this window",
             ),
-            "summary": types.Schema(
-                type=types.Type.STRING,
+            "summary": gemini_types.Schema(
+                type=gemini_types.Type.STRING,
                 description=(
                     "4-6 sentence summary covering: what was on screen, "
                     "what the user was trying to do, what they actually did, "
                     "and any problems or insights that occurred."
                 ),
             ),
-            "topics": types.Schema(
-                type=types.Type.ARRAY,
-                items=types.Schema(type=types.Type.STRING),
+            "topics": gemini_types.Schema(
+                type=gemini_types.Type.ARRAY,
+                items=gemini_types.Schema(type=gemini_types.Type.STRING),
             ),
-            "entities": types.Schema(
-                type=types.Type.ARRAY,
+            "entities": gemini_types.Schema(
+                type=gemini_types.Type.ARRAY,
                 items=_entity_schema(),
             ),
-            "searchable_keywords": types.Schema(
-                type=types.Type.ARRAY,
-                items=types.Schema(type=types.Type.STRING),
+            "searchable_keywords": gemini_types.Schema(
+                type=gemini_types.Type.ARRAY,
+                items=gemini_types.Schema(type=gemini_types.Type.STRING),
             ),
-            "timeline_events": types.Schema(
-                type=types.Type.ARRAY,
+            "timeline_events": gemini_types.Schema(
+                type=gemini_types.Type.ARRAY,
                 description=(
                     "Fine-grained events within this window, ordered by start_sec. "
                     "Each event covers a distinct action, topic shift, or moment of interest. "
@@ -171,104 +172,104 @@ def _window_analysis_schema(start_sec: float, end_sec: float) -> types.Schema:
     )
 
 
-def _knowledge_extraction_schema() -> types.Schema:
-    confidence_field = types.Schema(type=types.Type.NUMBER)
-    return types.Schema(
-        type=types.Type.OBJECT,
+def _knowledge_extraction_schema() -> gemini_types.Schema:
+    confidence_field = gemini_types.Schema(type=gemini_types.Type.NUMBER)
+    return gemini_types.Schema(
+        type=gemini_types.Type.OBJECT,
         properties={
-            "facts": types.Schema(
-                type=types.Type.ARRAY,
-                items=types.Schema(
-                    type=types.Type.OBJECT,
+            "facts": gemini_types.Schema(
+                type=gemini_types.Type.ARRAY,
+                items=gemini_types.Schema(
+                    type=gemini_types.Type.OBJECT,
                     properties={
-                        "content": types.Schema(type=types.Type.STRING),
+                        "content": gemini_types.Schema(type=gemini_types.Type.STRING),
                         "confidence": confidence_field,
-                        "context": types.Schema(type=types.Type.STRING),
-                        "start_sec": types.Schema(type=types.Type.NUMBER),
-                        "end_sec": types.Schema(type=types.Type.NUMBER),
+                        "context": gemini_types.Schema(type=gemini_types.Type.STRING),
+                        "start_sec": gemini_types.Schema(type=gemini_types.Type.NUMBER),
+                        "end_sec": gemini_types.Schema(type=gemini_types.Type.NUMBER),
                     },
                     required=["content", "confidence", "start_sec", "end_sec"],
                 ),
             ),
-            "errors": types.Schema(
-                type=types.Type.ARRAY,
-                items=types.Schema(
-                    type=types.Type.OBJECT,
+            "errors": gemini_types.Schema(
+                type=gemini_types.Type.ARRAY,
+                items=gemini_types.Schema(
+                    type=gemini_types.Type.OBJECT,
                     properties={
-                        "message": types.Schema(type=types.Type.STRING),
-                        "error_type": types.Schema(
-                            type=types.Type.STRING,
+                        "message": gemini_types.Schema(type=gemini_types.Type.STRING),
+                        "error_type": gemini_types.Schema(
+                            type=gemini_types.Type.STRING,
                             enum=["connection", "syntax", "runtime", "logic", "other"],
                         ),
-                        "resolution": types.Schema(type=types.Type.STRING),
+                        "resolution": gemini_types.Schema(type=gemini_types.Type.STRING),
                         "confidence": confidence_field,
-                        "start_sec": types.Schema(type=types.Type.NUMBER),
-                        "end_sec": types.Schema(type=types.Type.NUMBER),
+                        "start_sec": gemini_types.Schema(type=gemini_types.Type.NUMBER),
+                        "end_sec": gemini_types.Schema(type=gemini_types.Type.NUMBER),
                     },
                     required=["message", "resolution", "confidence", "start_sec", "end_sec"],
                 ),
             ),
-            "code_patterns": types.Schema(
-                type=types.Type.ARRAY,
-                items=types.Schema(
-                    type=types.Type.OBJECT,
+            "code_patterns": gemini_types.Schema(
+                type=gemini_types.Type.ARRAY,
+                items=gemini_types.Schema(
+                    type=gemini_types.Type.OBJECT,
                     properties={
-                        "snippet": types.Schema(type=types.Type.STRING),
-                        "language": types.Schema(
-                            type=types.Type.STRING,
+                        "snippet": gemini_types.Schema(type=gemini_types.Type.STRING),
+                        "language": gemini_types.Schema(
+                            type=gemini_types.Type.STRING,
                             enum=["python", "javascript", "typescript", "bash", "sql", "other"],
                         ),
-                        "purpose": types.Schema(type=types.Type.STRING),
+                        "purpose": gemini_types.Schema(type=gemini_types.Type.STRING),
                         "confidence": confidence_field,
-                        "start_sec": types.Schema(type=types.Type.NUMBER),
-                        "end_sec": types.Schema(type=types.Type.NUMBER),
+                        "start_sec": gemini_types.Schema(type=gemini_types.Type.NUMBER),
+                        "end_sec": gemini_types.Schema(type=gemini_types.Type.NUMBER),
                     },
                     required=["snippet", "language", "purpose", "confidence", "start_sec", "end_sec"],
                 ),
             ),
-            "commands": types.Schema(
-                type=types.Type.ARRAY,
-                items=types.Schema(
-                    type=types.Type.OBJECT,
+            "commands": gemini_types.Schema(
+                type=gemini_types.Type.ARRAY,
+                items=gemini_types.Schema(
+                    type=gemini_types.Type.OBJECT,
                     properties={
-                        "command": types.Schema(type=types.Type.STRING),
-                        "platform": types.Schema(
-                            type=types.Type.STRING,
+                        "command": gemini_types.Schema(type=gemini_types.Type.STRING),
+                        "platform": gemini_types.Schema(
+                            type=gemini_types.Type.STRING,
                             enum=["docker", "bash", "powershell", "npm", "pip", "git", "other"],
                         ),
-                        "purpose": types.Schema(type=types.Type.STRING),
-                        "start_sec": types.Schema(type=types.Type.NUMBER),
-                        "end_sec": types.Schema(type=types.Type.NUMBER),
+                        "purpose": gemini_types.Schema(type=gemini_types.Type.STRING),
+                        "start_sec": gemini_types.Schema(type=gemini_types.Type.NUMBER),
+                        "end_sec": gemini_types.Schema(type=gemini_types.Type.NUMBER),
                     },
                     required=["command", "platform", "purpose", "start_sec", "end_sec"],
                 ),
             ),
-            "explanations": types.Schema(
-                type=types.Type.ARRAY,
-                items=types.Schema(
-                    type=types.Type.OBJECT,
+            "explanations": gemini_types.Schema(
+                type=gemini_types.Type.ARRAY,
+                items=gemini_types.Schema(
+                    type=gemini_types.Type.OBJECT,
                     properties={
-                        "topic": types.Schema(type=types.Type.STRING),
-                        "explanation": types.Schema(type=types.Type.STRING),
+                        "topic": gemini_types.Schema(type=gemini_types.Type.STRING),
+                        "explanation": gemini_types.Schema(type=gemini_types.Type.STRING),
                         "confidence": confidence_field,
-                        "start_sec": types.Schema(type=types.Type.NUMBER),
-                        "end_sec": types.Schema(type=types.Type.NUMBER),
+                        "start_sec": gemini_types.Schema(type=gemini_types.Type.NUMBER),
+                        "end_sec": gemini_types.Schema(type=gemini_types.Type.NUMBER),
                     },
                     required=["topic", "explanation", "confidence", "start_sec", "end_sec"],
                 ),
             ),
-            "decisions": types.Schema(
-                type=types.Type.ARRAY,
+            "decisions": gemini_types.Schema(
+                type=gemini_types.Type.ARRAY,
                 description="Key decisions made by the user with their reasoning",
-                items=types.Schema(
-                    type=types.Type.OBJECT,
+                items=gemini_types.Schema(
+                    type=gemini_types.Type.OBJECT,
                     properties={
-                        "decision": types.Schema(type=types.Type.STRING),
-                        "rationale": types.Schema(type=types.Type.STRING),
-                        "alternatives_considered": types.Schema(type=types.Type.STRING),
+                        "decision": gemini_types.Schema(type=gemini_types.Type.STRING),
+                        "rationale": gemini_types.Schema(type=gemini_types.Type.STRING),
+                        "alternatives_considered": gemini_types.Schema(type=gemini_types.Type.STRING),
                         "confidence": confidence_field,
-                        "start_sec": types.Schema(type=types.Type.NUMBER),
-                        "end_sec": types.Schema(type=types.Type.NUMBER),
+                        "start_sec": gemini_types.Schema(type=gemini_types.Type.NUMBER),
+                        "end_sec": gemini_types.Schema(type=gemini_types.Type.NUMBER),
                     },
                     required=["decision", "rationale", "confidence", "start_sec", "end_sec"],
                 ),
@@ -277,130 +278,130 @@ def _knowledge_extraction_schema() -> types.Schema:
     )
 
 
-def _session_synthesis_schema() -> types.Schema:
-    return types.Schema(
-        type=types.Type.OBJECT,
+def _session_synthesis_schema() -> gemini_types.Schema:
+    return gemini_types.Schema(
+        type=gemini_types.Type.OBJECT,
         properties={
-            "session_title": types.Schema(type=types.Type.STRING),
-            "primary_technology": types.Schema(type=types.Type.STRING),
-            "secondary_technologies": types.Schema(
-                type=types.Type.ARRAY,
-                items=types.Schema(type=types.Type.STRING),
+            "session_title": gemini_types.Schema(type=gemini_types.Type.STRING),
+            "primary_technology": gemini_types.Schema(type=gemini_types.Type.STRING),
+            "secondary_technologies": gemini_types.Schema(
+                type=gemini_types.Type.ARRAY,
+                items=gemini_types.Schema(type=gemini_types.Type.STRING),
             ),
-            "difficulty_level": types.Schema(
-                type=types.Type.STRING,
+            "difficulty_level": gemini_types.Schema(
+                type=gemini_types.Type.STRING,
                 enum=["beginner", "intermediate", "advanced"],
             ),
-            "overall_summary": types.Schema(
-                type=types.Type.STRING,
+            "overall_summary": gemini_types.Schema(
+                type=gemini_types.Type.STRING,
                 description=(
                     "5-8 sentence executive summary covering: what was the goal, "
                     "what approach was taken, what worked, what didn't, and what "
                     "the end state was."
                 ),
             ),
-            "tags": types.Schema(
-                type=types.Type.ARRAY,
-                items=types.Schema(type=types.Type.STRING),
+            "tags": gemini_types.Schema(
+                type=gemini_types.Type.ARRAY,
+                items=gemini_types.Schema(type=gemini_types.Type.STRING),
             ),
-            "workflow": types.Schema(
-                type=types.Type.ARRAY,
+            "workflow": gemini_types.Schema(
+                type=gemini_types.Type.ARRAY,
                 description="Ordered list of high-level steps taken in this session",
-                items=types.Schema(
-                    type=types.Type.OBJECT,
+                items=gemini_types.Schema(
+                    type=gemini_types.Type.OBJECT,
                     properties={
-                        "step": types.Schema(type=types.Type.INTEGER),
-                        "description": types.Schema(type=types.Type.STRING),
-                        "start_sec": types.Schema(type=types.Type.NUMBER),
-                        "end_sec": types.Schema(type=types.Type.NUMBER),
+                        "step": gemini_types.Schema(type=gemini_types.Type.INTEGER),
+                        "description": gemini_types.Schema(type=gemini_types.Type.STRING),
+                        "start_sec": gemini_types.Schema(type=gemini_types.Type.NUMBER),
+                        "end_sec": gemini_types.Schema(type=gemini_types.Type.NUMBER),
                     },
                     required=["step", "description", "start_sec", "end_sec"],
                 ),
             ),
-            "problems_encountered": types.Schema(
-                type=types.Type.ARRAY,
-                items=types.Schema(
-                    type=types.Type.OBJECT,
+            "problems_encountered": gemini_types.Schema(
+                type=gemini_types.Type.ARRAY,
+                items=gemini_types.Schema(
+                    type=gemini_types.Type.OBJECT,
                     properties={
-                        "problem": types.Schema(type=types.Type.STRING),
-                        "context": types.Schema(type=types.Type.STRING),
-                        "resolution": types.Schema(type=types.Type.STRING),
-                        "time_to_resolve_sec": types.Schema(type=types.Type.NUMBER),
-                        "start_sec": types.Schema(type=types.Type.NUMBER),
-                        "end_sec": types.Schema(type=types.Type.NUMBER),
+                        "problem": gemini_types.Schema(type=gemini_types.Type.STRING),
+                        "context": gemini_types.Schema(type=gemini_types.Type.STRING),
+                        "resolution": gemini_types.Schema(type=gemini_types.Type.STRING),
+                        "time_to_resolve_sec": gemini_types.Schema(type=gemini_types.Type.NUMBER),
+                        "start_sec": gemini_types.Schema(type=gemini_types.Type.NUMBER),
+                        "end_sec": gemini_types.Schema(type=gemini_types.Type.NUMBER),
                     },
                     required=["problem", "start_sec", "end_sec"],
                 ),
             ),
-            "solutions_found": types.Schema(
-                type=types.Type.ARRAY,
-                items=types.Schema(
-                    type=types.Type.OBJECT,
+            "solutions_found": gemini_types.Schema(
+                type=gemini_types.Type.ARRAY,
+                items=gemini_types.Schema(
+                    type=gemini_types.Type.OBJECT,
                     properties={
-                        "problem": types.Schema(type=types.Type.STRING),
-                        "solution": types.Schema(type=types.Type.STRING),
-                        "generalizability": types.Schema(type=types.Type.NUMBER),
-                        "start_sec": types.Schema(type=types.Type.NUMBER),
-                        "end_sec": types.Schema(type=types.Type.NUMBER),
+                        "problem": gemini_types.Schema(type=gemini_types.Type.STRING),
+                        "solution": gemini_types.Schema(type=gemini_types.Type.STRING),
+                        "generalizability": gemini_types.Schema(type=gemini_types.Type.NUMBER),
+                        "start_sec": gemini_types.Schema(type=gemini_types.Type.NUMBER),
+                        "end_sec": gemini_types.Schema(type=gemini_types.Type.NUMBER),
                     },
                     required=["problem", "solution", "start_sec", "end_sec"],
                 ),
             ),
-            "knowledge_gained": types.Schema(
-                type=types.Type.ARRAY,
+            "knowledge_gained": gemini_types.Schema(
+                type=gemini_types.Type.ARRAY,
                 description=(
                     "Exhaustive list of distinct things learned or demonstrated in "
                     "this session — every concept, technique, and insight, stated as "
                     "a complete sentence."
                 ),
-                items=types.Schema(type=types.Type.STRING),
+                items=gemini_types.Schema(type=gemini_types.Type.STRING),
             ),
-            "key_quotes": types.Schema(
-                type=types.Type.ARRAY,
+            "key_quotes": gemini_types.Schema(
+                type=gemini_types.Type.ARRAY,
                 description="Most important verbatim or near-verbatim spoken statements",
-                items=types.Schema(
-                    type=types.Type.OBJECT,
+                items=gemini_types.Schema(
+                    type=gemini_types.Type.OBJECT,
                     properties={
-                        "quote": types.Schema(type=types.Type.STRING),
-                        "context": types.Schema(type=types.Type.STRING),
-                        "start_sec": types.Schema(type=types.Type.NUMBER),
+                        "quote": gemini_types.Schema(type=gemini_types.Type.STRING),
+                        "context": gemini_types.Schema(type=gemini_types.Type.STRING),
+                        "start_sec": gemini_types.Schema(type=gemini_types.Type.NUMBER),
                     },
                     required=["quote", "start_sec"],
                 ),
             ),
-            "knowledge_timeline": types.Schema(
-                type=types.Type.ARRAY,
+            "knowledge_timeline": gemini_types.Schema(
+                type=gemini_types.Type.ARRAY,
                 description=(
                     "Complete ordered timeline of ALL notable moments across the "
                     "session. Include every event_type. Order by start_sec. "
                     "Be exhaustive — the user should be able to understand the "
                     "full session from this timeline alone."
                 ),
-                items=types.Schema(
-                    type=types.Type.OBJECT,
+                items=gemini_types.Schema(
+                    type=gemini_types.Type.OBJECT,
                     properties={
-                        "start_sec": types.Schema(type=types.Type.NUMBER),
-                        "end_sec": types.Schema(type=types.Type.NUMBER),
-                        "activity_summary": types.Schema(type=types.Type.STRING),
-                        "spoken_content": types.Schema(type=types.Type.STRING),
-                        "screen_content": types.Schema(type=types.Type.STRING),
-                        "screen_type": types.Schema(
-                            type=types.Type.STRING,
+                        "start_sec": gemini_types.Schema(type=gemini_types.Type.NUMBER),
+                        "end_sec": gemini_types.Schema(type=gemini_types.Type.NUMBER),
+                        "activity_summary": gemini_types.Schema(type=gemini_types.Type.STRING),
+                        "spoken_content": gemini_types.Schema(type=gemini_types.Type.STRING),
+                        "screen_content": gemini_types.Schema(type=gemini_types.Type.STRING),
+                        "screen_type": gemini_types.Schema(
+                            type=gemini_types.Type.STRING,
                             enum=["browser", "editor", "terminal", "settings", "document", "other"],
                         ),
-                        "application": types.Schema(type=types.Type.STRING),
-                        "event_type": types.Schema(
-                            type=types.Type.STRING,
+                        "application": gemini_types.Schema(type=gemini_types.Type.STRING),
+                        "event_type": gemini_types.Schema(
+                            type=gemini_types.Type.STRING,
                             enum=["activity", "error", "solution", "decision", "explanation"],
                         ),
-                        "knowledge_value": types.Schema(type=types.Type.NUMBER),
-                        "topics": types.Schema(
-                            type=types.Type.ARRAY,
-                            items=types.Schema(type=types.Type.STRING),
+                        "knowledge_value": gemini_types.Schema(type=gemini_types.Type.NUMBER),
+                        "topics": gemini_types.Schema(
+                            type=gemini_types.Type.ARRAY,
+                            items=gemini_types.Schema(type=gemini_types.Type.STRING),
                         ),
-                        "keywords": types.Schema(
-                            type=types.Type.ARRAY,
-                            items=types.Schema(type=types.Type.STRING),
+                        "keywords": gemini_types.Schema(
+                            type=gemini_types.Type.ARRAY,
+                            items=gemini_types.Schema(type=gemini_types.Type.STRING),
                         ),
                     },
                     required=[
@@ -804,23 +805,12 @@ class StructuredResponseParseError(ValueError):
     """Model returned 200 OK but response is not valid structured JSON."""
 
 
-def _response_finish_reason(response: types.GenerateContentResponse) -> Optional[str]:
-    candidates = getattr(response, "candidates", None) or []
-    if not candidates:
-        return None
-    reason = getattr(candidates[0], "finish_reason", None)
-    return str(reason) if reason is not None else None
+def _response_finish_reason(response) -> Optional[str]:
+    return getattr(response, "finish_reason", None) or None
 
 
-def _parse_json_response(response: types.GenerateContentResponse) -> dict[str, Any]:
-    parsed = getattr(response, "parsed", None)
-    if isinstance(parsed, dict):
-        return parsed
-
-    if parsed is not None and hasattr(parsed, "model_dump"):
-        return parsed.model_dump()
-
-    response_text = (getattr(response, "text", "") or "").strip()
+def _parse_json_response(response) -> dict[str, Any]:
+    response_text = (getattr(response, "content", None) or "").strip()
     if not response_text:
         finish_reason = _response_finish_reason(response)
         raise StructuredResponseParseError(
@@ -843,22 +833,13 @@ def _parse_json_response(response: types.GenerateContentResponse) -> dict[str, A
         ) from exc
 
 
-def _extract_usage_and_cost(response: types.GenerateContentResponse) -> tuple[int, float]:
-    usage = getattr(response, "usage_metadata", None)
-    prompt_tokens = getattr(usage, "prompt_token_count", 0) or 0
-    output_tokens = getattr(usage, "candidates_token_count", 0) or 0
-    total_tokens = getattr(usage, "total_token_count", 0) or (prompt_tokens + output_tokens)
+def _extract_usage_and_cost(response) -> tuple[int, float]:
+    usage = getattr(response, "usage", None) or {}
+    prompt_tokens = usage.get("prompt_tokens", 0) or 0
+    output_tokens = usage.get("completion_tokens", 0) or 0
+    total_tokens = usage.get("total_tokens", 0) or (prompt_tokens + output_tokens)
     cost = (prompt_tokens * 0.075 + output_tokens * 0.30) / 1_000_000
     return total_tokens, cost
-
-
-def _prompt_to_contents(prompt: str) -> list[types.Content]:
-    return [
-        types.Content(
-            role="user",
-            parts=[types.Part.from_text(text=prompt)],
-        )
-    ]
 
 
 class GeminiProcessingService:
@@ -867,7 +848,7 @@ class GeminiProcessingService:
     async def _generate_structured(
         self,
         prompt: str,
-        config: types.GenerateContentConfig,
+        config: gemini_types.GenerateContentConfig,
         estimated_tokens: int,
         log_label: str,
     ) -> LLMResult:
@@ -876,42 +857,47 @@ class GeminiProcessingService:
 
         last_parse_error: Optional[str] = None
 
+        # Try models in order with fallback
+        models_to_try = STRUCTURED_JSON_MODELS or ["models/gemini-3.1-flash-lite"]
+
         for attempt in range(PARSE_RETRY_ATTEMPTS + 1):
-            try:
-                model_used, response = await _model_client.generate(
-                    _prompt_to_contents(prompt),
-                    config,
-                    estimated_tokens=estimated_tokens,
-                )
-                parsed = _parse_json_response(response)
-                total_tokens, cost = _extract_usage_and_cost(response)
-
-                return LLMResult(
-                    success=True,
-                    parsed_data=parsed,
-                    tokens_used=total_tokens,
-                    cost_usd=cost,
-                    model_used=model_used,
-                )
-
-            except StructuredResponseParseError as e:
-                last_parse_error = str(e)
-                if attempt < PARSE_RETRY_ATTEMPTS:
-                    logger.warning(
-                        f"{log_label}: structured JSON parse failed "
-                        f"(attempt {attempt + 1}/{PARSE_RETRY_ATTEMPTS + 1}), retrying — {e}"
+            for model in models_to_try:
+                try:
+                    response = _gemini_client.models.generate_content(
+                        model=model,
+                        contents=prompt,
+                        config=config,
                     )
-                    continue
-                logger.error(f"{log_label}: structured JSON parse failed after retries — {e}")
-                return LLMResult(success=False, error_message=last_parse_error)
+                    parsed = _parse_json_response(response)
+                    total_tokens, cost = _extract_usage_and_cost(response)
 
-            except AllModelsExhaustedError as e:
-                logger.error(f"{log_label}: all models exhausted — {e}")
-                return LLMResult(success=False, error_message=str(e))
+                    return LLMResult(
+                        success=True,
+                        parsed_data=parsed,
+                        tokens_used=total_tokens,
+                        cost_usd=cost,
+                        model_used=model,
+                    )
 
-            except Exception as e:
-                logger.exception(f"{log_label} failed: {e}")
-                return LLMResult(success=False, error_message=str(e))
+                except StructuredResponseParseError as e:
+                    last_parse_error = str(e)
+                    if attempt < PARSE_RETRY_ATTEMPTS:
+                        logger.warning(
+                            f"{log_label}: structured JSON parse failed "
+                            f"(attempt {attempt + 1}/{PARSE_RETRY_ATTEMPTS + 1}), retrying — {e}"
+                        )
+                        continue
+                    logger.error(f"{log_label}: structured JSON parse failed after retries — {e}")
+                    return LLMResult(success=False, error_message=last_parse_error)
+
+                except Exception as e:
+                    if "429" in str(e) or "quota" in str(e).lower():
+                        logger.warning(f"{log_label}: quota error on {model}, trying next — {e}")
+                        continue
+                    logger.exception(f"{log_label} failed on {model}: {e}")
+                    return LLMResult(success=False, error_message=str(e))
+
+        return LLMResult(success=False, error_message=last_parse_error or "All models failed")
 
         return LLMResult(
             success=False,
@@ -970,7 +956,7 @@ class GeminiProcessingService:
 
         return await self._generate_structured(
             prompt=prompt,
-            config=types.GenerateContentConfig(
+            config=gemini_types.GenerateContentConfig(
                 temperature=0.2,
                 top_p=0.85,
                 top_k=40,
@@ -1021,7 +1007,7 @@ class GeminiProcessingService:
 
         return await self._generate_structured(
             prompt=prompt,
-            config=types.GenerateContentConfig(
+            config=gemini_types.GenerateContentConfig(
                 temperature=0.2,
                 max_output_tokens=2000,
                 response_mime_type="application/json",
@@ -1056,7 +1042,7 @@ class GeminiProcessingService:
 
         return await self._generate_structured(
             prompt=prompt,
-            config=types.GenerateContentConfig(
+            config=gemini_types.GenerateContentConfig(
                 temperature=0.2,
                 max_output_tokens=8192,
                 response_mime_type="application/json",

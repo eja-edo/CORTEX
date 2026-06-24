@@ -1,9 +1,7 @@
 """Main agent service for handling conversational AI requests with tool calling."""
 
 import asyncio
-from google.genai import types
 from uuid import UUID
-from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +16,12 @@ from app.services.agent.model_client import (
     is_quota_error,
     is_fatal_error,
     is_model_incompatible_error,
+)
+from app.services.agent.provider_types import (
+    Message,
+    GenerationConfig,
+    ToolCall,
+    ToolResult,
 )
 from app.services.agent.tool_context import ToolContext
 from app.services.agent.tool_registry import get_tool_registry
@@ -294,108 +298,79 @@ MAX_TURN_RETRIES = 2
 _model_client = ModelClient()
 
 
-def _validate_contents_ordering(contents: list[types.Content]) -> tuple[bool, str]:
-    """
-    Validate that contents array follows Gemini API ordering rules:
-    - user → model → user (function_response) → model → ...
-    - function_call parts must only appear in model role
-    - function_response parts must only appear in user role
-    - No two consecutive contents with same role
-    """
-    if not contents:
-        return True, "Contents array is empty"
-    
+def _validate_contents_ordering(messages: list[Message]) -> tuple[bool, str]:
+    if not messages:
+        return True, "Messages array is empty"
+
     prev_role = None
-    for i, content in enumerate(contents):
-        curr_role = content.role if hasattr(content, "role") else "unknown"
-        
-        # Check role alternation
+    for i, msg in enumerate(messages):
+        curr_role = msg.role
+
         if prev_role is not None and prev_role == curr_role:
             return False, (
-                f"❌ Role violation at index {i}: two consecutive '{curr_role}' roles. "
-                f"Expected alternation: user→model→user→model..."
+                f"Role violation at index {i}: two consecutive '{curr_role}' roles. "
+                f"Expected alternation: user\u2192model\u2192user\u2192model..."
             )
-        
-        # Check function parts are in correct roles
-        if hasattr(content, "parts") and content.parts:
-            for part in content.parts:
-                part_type = type(part).__name__
-                if "function_call" in str(part_type).lower():
-                    if curr_role != "model":
-                        return False, (
-                            f"❌ Function call part at index {i} in role '{curr_role}'. "
-                            f"function_call parts must be in 'model' role."
-                        )
-                if "function_response" in str(part_type).lower():
-                    if curr_role != "user":
-                        return False, (
-                            f"❌ Function response part at index {i} in role '{curr_role}'. "
-                            f"function_response parts must be in 'user' role."
-                        )
-        
+
+        if curr_role == "tool":
+            if prev_role != "assistant":
+                return False, (
+                    f"Tool message at index {i} without preceding assistant. "
+                    f"tool messages must follow an assistant response."
+                )
+
+        if msg.tool_calls and curr_role != "assistant":
+            return False, (
+                f"Tool calls at index {i} in role '{curr_role}'. "
+                f"tool_calls must be in 'assistant' role."
+            )
+
+        if msg.tool_result and curr_role != "tool":
+            return False, (
+                f"Tool result at index {i} in role '{curr_role}'. "
+                f"tool_result must be in 'tool' role."
+            )
+
         prev_role = curr_role
-    
-    return True, f"✅ Contents ordering valid ({len(contents)} items)"
+
+    return True, f"Messages ordering valid ({len(messages)} items)"
 
 
-def _log_contents_structure(contents: list[types.Content], label: str = "Contents") -> None:
-    """Debug log the structure of contents array for troubleshooting."""
-    if not contents:
-        logger.info(f"📋 {label}: empty")
+def _log_contents_structure(messages: list[Message], label: str = "Messages") -> None:
+    if not messages:
+        logger.info(f"{label}: empty")
         return
-    
+
     structure = []
-    for i, content in enumerate(contents):
-        role = content.role if hasattr(content, "role") else "unknown"
-        parts_info = []
-        if hasattr(content, "parts") and content.parts:
-            for part in content.parts:
-                part_type = type(part).__name__
-                if "function_call" in str(part_type).lower() or getattr(part, "function_call", None) is not None:
-                    fn_name = getattr(part, "name", None)
-                    if not fn_name and getattr(part, "function_call", None):
-                        fn_name = getattr(part.function_call, "name", None)
-                    fn_name = fn_name or "unknown"
-                    parts_info.append(f"function_call[{fn_name}]")
-                elif "function_response" in str(part_type).lower() or getattr(part, "function_response", None) is not None:
-                    fn_name = getattr(part, "name", None)
-                    if not fn_name and getattr(part, "function_response", None):
-                        fn_name = getattr(part.function_response, "name", None)
-                    fn_name = fn_name or "unknown"
-                    parts_info.append(f"function_response[{fn_name}]")
-                elif hasattr(part, "text"):
-                    if part.text is not None:
-                        parts_info.append(f"text[{len(part.text)} chars]")
-                    else:
-                        parts_info.append(f"text[None]")
-                else:
-                    parts_info.append(part_type)
-        structure.append(f"[{i}] {role}: {', '.join(parts_info)}")
-    
-    logger.info(f"📋 {label} structure ({len(contents)} items):\n  " + "\n  ".join(structure))
+    for i, msg in enumerate(messages):
+        parts_info = [f"role={msg.role}"]
+        if msg.content:
+            parts_info.append(f"text[{len(msg.content)} chars]")
+        if msg.tool_calls:
+            for tc in msg.tool_calls:
+                parts_info.append(f"tool_call[{tc.name}]")
+        if msg.tool_result:
+            parts_info.append(f"tool_result[{msg.tool_result.name}]")
+        structure.append(f"[{i}] " + ", ".join(parts_info))
+
+    logger.info(f"{label} ({len(messages)} items):\n  " + "\n  ".join(structure))
 
 
-def _content_has_function_call(content: types.Content) -> bool:
-    if not hasattr(content, "parts") or not content.parts:
-        return False
-    for part in content.parts:
-        part_type = type(part).__name__
-        if "function_call" in str(part_type).lower() or getattr(part, "function_call", None) is not None:
-            return True
-    return False
+def _message_has_function_call(msg: Message) -> bool:
+    return bool(msg.tool_calls)
 
 
-def _trim_incomplete_tail(contents: list[types.Content], label: str) -> None:
+def _trim_incomplete_tail(messages: list[Message], label: str) -> None:
     removed = 0
-    while contents and contents[-1].role == "user":
-        contents.pop()
+    while messages and messages[-1].role in ("user", "tool"):
+        messages.pop()
         removed += 1
-        if contents and contents[-1].role == "model" and _content_has_function_call(contents[-1]):
-            contents.pop()
+        if messages and messages[-1].role == "assistant" and _message_has_function_call(messages[-1]):
+            messages.pop()
             removed += 1
     if removed:
         logger.info(
-            f"⏭️ Trimmed {removed} trailing history item(s) before appending current user ({label})"
+            f"Trimmed {removed} trailing history item(s) before appending current user ({label})"
         )
 
 
@@ -432,114 +407,76 @@ def _message_full_text(msg) -> str:
     return content
 
 
-def _build_history_contents(messages: list) -> list[types.Content]:
+def _build_history_contents(records: list) -> list[Message]:
     """
-    Convert stored AgentMessage records into Gemini Content objects for context.
+    Convert stored AgentMessage records into internal Message objects.
 
-    Args:
-        messages: List of AgentMessage objects ordered by created_at asc
-
-    Returns:
-        List of types.Content objects representing prior turns
-        
     Ordering logic:
-        - Enforces strict user → model → user → model alternation
-        - Skips out-of-order messages to avoid invalid Gemini payloads
-        - Skips empty/None content messages
-        - Skips incomplete tool messages (missing input or output)
-        - Tool messages emit function_call + function_response pair when model turn is expected
+        - Enforces strict user \u2192 assistant \u2192 user \u2192 assistant alternation
+        - Skips out-of-order messages
+        - Tool messages emit (assistant with tool_calls) + (tool result) pair
     """
-    contents = []
+    messages: list[Message] = []
     expected_role = "user"
-    
-    for msg in messages:
-        role = getattr(msg, 'role', None)
-        content = getattr(msg, 'content', None)
-        tool_name = getattr(msg, 'tool_name', None)
-        tool_input = getattr(msg, 'tool_input', None)
-        tool_output = getattr(msg, 'tool_output', None)
-        
+
+    for record in records:
+        role = getattr(record, 'role', None)
+        content = getattr(record, 'content', None)
+        tool_name = getattr(record, 'tool_name', None)
+        tool_input = getattr(record, 'tool_input', None)
+        tool_output = getattr(record, 'tool_output', None)
+
         if role == "user":
-            user_text = _message_full_text(msg)
+            user_text = _message_full_text(record)
             if not user_text:
                 continue
             if expected_role != "user":
-                logger.info(
-                    f"⏭️ Skipping out-of-order user message (expected {expected_role})"
-                )
+                logger.info(f"Skipping out-of-order user message (expected {expected_role})")
                 continue
-            contents.append(
-                types.Content(
-                    role="user",
-                    parts=[types.Part.from_text(text=user_text)],
-                )
-            )
-            expected_role = "model"
-            
+            messages.append(Message(role="user", content=user_text))
+            expected_role = "assistant"
+
         elif role == "assistant":
-            if expected_role != "model":
-                logger.info(
-                    f"⏭️ Skipping out-of-order assistant message (expected {expected_role})"
-                )
+            if expected_role != "assistant":
+                logger.info(f"Skipping out-of-order assistant message (expected {expected_role})")
                 continue
-            # Skip empty assistant messages
             if not content:
-                logger.info(
-                    f"⏭️ Skipping empty assistant message (content is {content!r})"
-                )
+                logger.info(f"Skipping empty assistant message (content is {content!r})")
                 continue
-            contents.append(
-                types.Content(
-                    role="model",
-                    parts=[types.Part.from_text(text=content)],
-                )
-            )
+            messages.append(Message(role="assistant", content=content))
             expected_role = "user"
-            
+
         elif role == "tool":
-            if expected_role != "model":
-                logger.info(
-                    f"⏭️ Skipping out-of-order tool message (expected {expected_role})"
-                )
+            if expected_role != "assistant":
+                logger.info(f"Skipping out-of-order tool message (expected {expected_role})")
                 continue
-            # Tool messages must have BOTH input and output
             if tool_name and tool_input is not None and tool_output is not None:
-                # Add function_call (from model)
-                contents.append(
-                    types.Content(
-                        role="model",
-                        parts=[
-                            types.Part.from_function_call(
-                                name=tool_name,
-                                args=tool_input or {},
-                            )
-                        ],
+                messages.append(
+                    Message(
+                        role="assistant",
+                        tool_calls=[ToolCall(id=tool_name, name=tool_name, args=tool_input or {})],
                     )
                 )
-                
-                # Add function_response (from user)
-                contents.append(
-                    types.Content(
-                        role="user",
-                        parts=[
-                            types.Part.from_function_response(
-                                name=tool_name,
-                                response=tool_output or {},
-                            )
-                        ],
+                messages.append(
+                    Message(
+                        role="tool",
+                        tool_result=ToolResult(
+                            tool_call_id=tool_name,
+                            name=tool_name,
+                            content=tool_output or {},
+                        ),
                     )
                 )
-                expected_role = "model"
+                expected_role = "assistant"
             else:
-                # Log warning if tool message is incomplete
                 logger.info(
-                    f"⏭️ Skipping incomplete tool message: tool_name={tool_name}, "
+                    f"Skipping incomplete tool message: tool_name={tool_name}, "
                     f"input_present={tool_input is not None}, output_present={tool_output is not None}"
                 )
         else:
-            logger.info(f"⏭️ Skipping unknown role message: {role}")
-    
-    return contents
+            logger.info(f"Skipping unknown role message: {role}")
+
+    return messages
 
 
 class AgentService:
@@ -556,12 +493,6 @@ class AgentService:
     # ------------------------------------------------------------------
 
     async def _generate_conversation_title(self, message: str) -> str:
-        """
-        Generate a conversation title based on the user's first message.
-        
-        Uses a simple, fast LLM call to create a concise title (max 10 words).
-        Returns a fallback title if generation fails.
-        """
         try:
             prompt = f"""Generate a very short conversation title (max 10 words) based on this message:
 
@@ -569,44 +500,36 @@ class AgentService:
 
 Return ONLY the title, no quotes or explanation."""
 
-            contents = [
-                types.Content(
-                    role="user",
-                    parts=[types.Part.from_text(text=prompt)],
-                )
+            messages = [
+                Message(role="user", content=prompt),
             ]
-            
-            gen_config = types.GenerateContentConfig(
+
+            gen_config = GenerationConfig(
                 system_instruction="You are a helpful assistant that creates concise, descriptive conversation titles.",
                 temperature=0.7,
             )
-            
-            logger.info(f"🎯 Generating title for new conversation...")
+
+            logger.info(f"Generating title for new conversation...")
             model_used, response = await _model_client.generate(
-                contents,
+                messages,
                 gen_config,
-                estimated_tokens=100,  # Title generation uses fewer tokens
+                estimated_tokens=100,
             )
-            
-            title = response.text.strip() if response and hasattr(response, 'text') else ""
-            
-            # Clean up title (remove quotes if present)
+
+            title = response.content.strip() if response and response.content else ""
+
             title = title.strip('"\'')
-            
-            # Ensure title is not too long
             if len(title) > 100:
                 title = title[:97] + "..."
-            
-            # Fallback if title is empty
+
             if not title:
                 raise ValueError("Generated empty title")
-            
-            logger.info(f"✅ Generated title: {title}")
+
+            logger.info(f"Generated title: {title}")
             return title
-            
+
         except Exception as exc:
-            logger.warning(f"⚠️ Failed to generate title (non-fatal): {exc}")
-            # Fallback to a generic title with first few words of message
+            logger.warning(f"Failed to generate title (non-fatal): {exc}")
             words = message.split()[:5]
             fallback_title = " ".join(words) if words else "New Conversation"
             if len(fallback_title) > 100:
@@ -722,21 +645,13 @@ Return ONLY the title, no quotes or explanation."""
         )
         await self.store.increment_message_count(conv.id)
 
-        gen_config = types.GenerateContentConfig(
+        tools = self.registry.get_provider_tools()
+        gen_config = GenerationConfig(
             system_instruction=system_prompt,
-            tools=self.registry.get_gemini_tools(),
-            automatic_function_calling=types.AutomaticFunctionCallingConfig(
-                disable=True
-            ),
         )
 
-        tools_list = self.registry.get_gemini_tools()
-        tool_names = []
-        if tools_list:
-            for tool in tools_list:
-                if hasattr(tool, 'function_declarations') and tool.function_declarations:
-                    tool_names.extend([fd.name for fd in tool.function_declarations])
-        logger.info(f"📚 Available tools for Gemini: {tool_names if tool_names else 'None'}")
+        tool_names = [t.name for t in tools]
+        logger.info(f"Available tools: {tool_names if tool_names else 'None'}")
 
         try:
             ctx = ToolContext(
@@ -749,35 +664,30 @@ Return ONLY the title, no quotes or explanation."""
             turn = 0
             reply_text = None
             tool_call_counts: dict[str, int] = {}
+            tool_call_id_counter = 0
 
-            contents = _build_history_contents(recent_messages)
-            _trim_incomplete_tail(contents, "handle")
-            contents.append(
-                types.Content(
-                    role="user",
-                    parts=[types.Part.from_text(text=message)],
-                )
-            )
+            messages = _build_history_contents(recent_messages)
+            _trim_incomplete_tail(messages, "handle")
+            messages.append(Message(role="user", content=message))
             logger.info(
-                f"📋 Contents seeded with {len(contents)} items "
+                f"Messages seeded with {len(messages)} items "
                 f"({len(recent_messages)} history + 1 current)"
             )
 
-            # Validate contents ordering before first request
-            is_valid, validation_msg = _validate_contents_ordering(contents)
+            is_valid, validation_msg = _validate_contents_ordering(messages)
             logger.info(validation_msg)
             if not is_valid:
-                logger.error(f"❌ Contents ordering validation failed before first turn")
-                _log_contents_structure(contents, "Invalid contents")
-                raise ValueError(f"Invalid contents structure: {validation_msg}")
-            _log_contents_structure(contents, "Valid contents for turn 1")
+                logger.error(f"Messages ordering validation failed before first turn")
+                _log_contents_structure(messages, "Invalid messages")
+                raise ValueError(f"Invalid messages structure: {validation_msg}")
+            _log_contents_structure(messages, "Valid messages for turn 1")
 
             while turn < MAX_TOOL_TURNS:
                 logger.debug(f"Agent turn {turn + 1}/{MAX_TOOL_TURNS} | conversation={conv.id}")
 
                 try:
                     _model_used, response = await _model_client.generate(
-                        contents, gen_config
+                        messages, gen_config, tools=tools,
                     )
                 except AllModelsExhaustedError as api_error:
                     logger.warning(f"All models rate-limited: {str(api_error)[:200]}")
@@ -789,63 +699,55 @@ Return ONLY the title, no quotes or explanation."""
                 except Exception as api_error:
                     error_str = str(api_error)
                     if is_fatal_error(api_error):
-                        logger.error(f"Fatal Gemini API error: {error_str[:300]}", exc_info=True)
+                        logger.error(f"Fatal API error: {error_str[:300]}", exc_info=True)
                         reply_text = (
                             "There was a configuration error. "
                             "Please contact support if this persists."
                         )
                     else:
-                        logger.error(f"Gemini API error after retries: {error_str[:300]}", exc_info=True)
+                        logger.error(f"API error after retries: {error_str[:300]}", exc_info=True)
                         reply_text = "I encountered an error processing your request. Please try again."
                     break
 
                 if not response:
-                    logger.warning("Gemini returned empty response")
+                    logger.warning("API returned empty response")
                     reply_text = "I'm unable to generate a response at this time."
                     break
 
-                tool_calls = response.function_calls or []
+                tool_calls = response.tool_calls or []
 
                 if not tool_calls:
-                    try:
-                        reply_text = response.text
-                    except (ValueError, AttributeError, TypeError) as e:
-                        logger.error(f"❌ Failed to extract response.text: {type(e).__name__}: {e}")
-                        reply_text = None
-
-                    reply_text = reply_text or "I couldn't process your request."
-                    logger.info(f"✅ Agent finished at turn {turn + 1} (no tool calls)")
+                    reply_text = response.content or "I couldn't process your request."
+                    logger.info(f"Agent finished at turn {turn + 1} (no tool calls)")
                     break
 
-                try:
-                    response_text = response.text if hasattr(response, 'text') else ""
-                    if response_text:
-                        await self.store.save_message(
-                            conversation_id=conv.id,
-                            role="assistant",
-                            content=response_text,
-                        )
-                except Exception as save_error:
-                    logger.warning(f"Could not save model response: {save_error}")
+                if response.content:
+                    await self.store.save_message(
+                        conversation_id=conv.id,
+                        role="assistant",
+                        content=response.content,
+                    )
 
-                if hasattr(response, "candidates") and response.candidates:
-                    candidate = response.candidates[0]
-                    if hasattr(candidate, "content") and candidate.content:
-                        contents.append(candidate.content)
-                        logger.debug(f"Appended response content at turn {turn + 1}")
+                messages.append(
+                    Message(
+                        role="assistant",
+                        tool_calls=[
+                            ToolCall(id=tc.id, name=tc.name, args=tc.args)
+                            for tc in tool_calls
+                        ],
+                    )
+                )
 
-                        # Validate after appending model response
-                        is_valid, validation_msg = _validate_contents_ordering(contents)
-                        if not is_valid:
-                            logger.error(f"❌ Contents invalid after appending model response at turn {turn + 1}")
-                            _log_contents_structure(contents, f"Invalid handle() contents after turn {turn + 1}")
-                            raise ValueError(f"Invalid contents structure: {validation_msg}")
+                is_valid, validation_msg = _validate_contents_ordering(messages)
+                if not is_valid:
+                    logger.error(f"Messages invalid after assistant tool_calls at turn {turn + 1}: {validation_msg}")
+                    raise ValueError(f"Invalid messages structure: {validation_msg}")
 
-                function_response_parts = []
+                tool_results: list[Message] = []
 
-                for function_call in tool_calls:
-                    tool_name = getattr(function_call, 'name', 'unknown')
-                    tool_args = dict(getattr(function_call, 'args', {})) if getattr(function_call, 'args', None) else {}
+                for tc in tool_calls:
+                    tool_name = tc.name
+                    tool_args = tc.args
 
                     tool_call_counts[tool_name] = tool_call_counts.get(tool_name, 0) + 1
                     if tool_call_counts[tool_name] > MAX_SAME_TOOL_CALLS:
@@ -860,9 +762,9 @@ Return ONLY the title, no quotes or explanation."""
                         turn = MAX_TOOL_TURNS
                         break
 
-                    logger.info(f"🔧 Executing tool: {tool_name} with args: {tool_args}")
+                    logger.info(f"Executing tool: {tool_name} with args: {tool_args}")
                     result = await self.registry.execute(tool_name, tool_args, ctx)
-                    logger.info(f"✅ Tool '{tool_name}' executed | result: {str(result)[:200]}")
+                    logger.info(f"Tool '{tool_name}' executed | result: {str(result)[:200]}")
 
                     await self._check_proactive_triggers(
                         tool_name=tool_name,
@@ -879,27 +781,25 @@ Return ONLY the title, no quotes or explanation."""
                         tool_output=result,
                     )
 
-                    function_response_parts.append(
-                        types.Part.from_function_response(
-                            name=tool_name,
-                            response=result,
+                    tool_results.append(
+                        Message(
+                            role="tool",
+                            tool_result=ToolResult(
+                                tool_call_id=tc.id,
+                                name=tool_name,
+                                content=result,
+                            ),
                         )
                     )
 
-                if function_response_parts:
-                    contents.append(
-                        types.Content(
-                            role="user",
-                            parts=function_response_parts,
-                        )
-                    )
+                if tool_results:
+                    messages.extend(tool_results)
 
-                    # Validate after appending aggregated function_responses
-                    is_valid, validation_msg = _validate_contents_ordering(contents)
+                    is_valid, validation_msg = _validate_contents_ordering(messages)
                     if not is_valid:
-                        logger.error("❌ Contents invalid after appending tool responses at turn %s", turn + 1)
-                        _log_contents_structure(contents, "Invalid handle() after tool responses")
-                        raise ValueError(f"Invalid contents structure: {validation_msg}")
+                        logger.error(f"Messages invalid after appending tool responses at turn {turn + 1}: {validation_msg}")
+                        _log_contents_structure(messages, "Invalid messages after tool responses")
+                        raise ValueError(f"Invalid messages structure: {validation_msg}")
 
                 if reply_text is not None:
                     break
@@ -1139,28 +1039,22 @@ Return ONLY the title, no quotes or explanation."""
             hard_error_occurred = False  # Track if we hit a hard error
             saved_assistant_count = 0
 
-            contents = _build_history_contents(recent_messages)
-            _trim_incomplete_tail(contents, "streaming")
-            contents.append(
-                types.Content(
-                    role="user",
-                    parts=[types.Part.from_text(text=message)],
-                )
-            )
+            messages = _build_history_contents(recent_messages)
+            _trim_incomplete_tail(messages, "streaming")
+            messages.append(Message(role="user", content=message))
             logger.info(
-                f"📋 Streaming contents seeded with {len(contents)} items "
+                f"Streaming messages seeded with {len(messages)} items "
                 f"({len(recent_messages)} history + 1 current)"
             )
-            
-            # Validate contents ordering before first request
-            is_valid, validation_msg = _validate_contents_ordering(contents)
+
+            is_valid, validation_msg = _validate_contents_ordering(messages)
             logger.info(validation_msg)
             if not is_valid:
-                logger.error(f"❌ Streaming: Contents ordering validation failed before first turn")
+                logger.error(f"Streaming: Messages ordering validation failed before first turn")
                 try:
-                    _log_contents_structure(contents, "Invalid streaming contents")
+                    _log_contents_structure(messages, "Invalid streaming messages")
                 except Exception as log_err:
-                    logger.error(f"Error logging contents structure: {log_err}")
+                    logger.error(f"Error logging messages structure: {log_err}")
                 yield {
                     "event": "error",
                     "message": "Internal error: Invalid conversation structure. Please start a new conversation.",
@@ -1168,14 +1062,11 @@ Return ONLY the title, no quotes or explanation."""
                 if conversation_id_str:
                     yield {"event": "done", "conversation_id": conversation_id_str}
                 return
-            _log_contents_structure(contents, "Valid streaming contents for turn 1")
+            _log_contents_structure(messages, "Valid streaming messages for turn 1")
 
-            gen_config = types.GenerateContentConfig(
+            tools = self.registry.get_provider_tools()
+            gen_config = GenerationConfig(
                 system_instruction=system_prompt,
-                tools=self.registry.get_gemini_tools(),
-                automatic_function_calling=types.AutomaticFunctionCallingConfig(
-                    disable=True
-                ),
             )
 
             while turn < MAX_TOOL_TURNS:
@@ -1185,33 +1076,23 @@ Return ONLY the title, no quotes or explanation."""
 
                 turn_text = ""
                 tool_calls = []
-                all_parts = []
 
                 # ── Stream one turn with full fallback/retry ──────────────
                 try:
                     async for chunk in _model_client.stream_with_fallback(
-                        contents, gen_config
+                        messages, gen_config, tools=tools,
                     ):
-                        # Extract text
-                        if chunk.text:
-                            turn_text += chunk.text
-                            yield {"event": "token", "text": chunk.text}
+                        if chunk.content:
+                            turn_text += chunk.content
+                            yield {"event": "token", "text": chunk.content}
 
-                        # Extract tool calls
-                        if hasattr(chunk, "function_calls") and chunk.function_calls:
-                            tool_calls.extend(chunk.function_calls)
-
-                        # Collect parts for contents update
-                        if hasattr(chunk, "candidates") and chunk.candidates:
-                            candidate = chunk.candidates[0]
-                            if hasattr(candidate, "content") and candidate.content:
-                                if hasattr(candidate.content, "parts"):
-                                    all_parts.extend(candidate.content.parts or [])
+                        if chunk.tool_calls:
+                            tool_calls.extend(chunk.tool_calls)
 
                     # Stream completed successfully for this turn
                     reply_text += turn_text
                     logger.info(
-                        f"✅ Stream turn {turn + 1} complete | "
+                        f"Stream turn {turn + 1} complete | "
                         f"text_len={len(turn_text)} tool_calls={len(tool_calls)}"
                     )
 
@@ -1274,22 +1155,24 @@ Return ONLY the title, no quotes or explanation."""
                     except Exception as save_err:
                         logger.warning(f"Could not save assistant message (non-fatal): {save_err}")
 
-                # ── Append model turn to contents for next iteration ──────
-                if all_parts:
-                    contents.append(types.Content(role="model", parts=all_parts))
-                elif turn_text:
-                    contents.append(
-                        types.Content(
-                            role="model",
-                            parts=[types.Part.from_text(text=turn_text)],
+                # ── Append model turn to messages for next iteration ──────
+                if tool_calls:
+                    messages.append(
+                        Message(
+                            role="assistant",
+                            tool_calls=[
+                                ToolCall(id=tc.id, name=tc.name, args=tc.args)
+                                for tc in tool_calls
+                            ],
                         )
                     )
-                
-                # Validate after appending model response
-                is_valid, validation_msg = _validate_contents_ordering(contents)
+                elif turn_text:
+                    messages.append(Message(role="assistant", content=turn_text))
+
+                is_valid, validation_msg = _validate_contents_ordering(messages)
                 if not is_valid:
-                    logger.error(f"❌ Contents invalid after appending model response at turn {turn + 1}")
-                    _log_contents_structure(contents, f"Invalid after turn {turn + 1} model response")
+                    logger.error(f"Messages invalid after appending model response at turn {turn + 1}: {validation_msg}")
+                    _log_contents_structure(messages, f"Invalid after turn {turn + 1} model response")
                     yield {
                         "event": "error",
                         "message": "Internal error: Conversation structure became invalid. Please start a new conversation.",
@@ -1299,18 +1182,17 @@ Return ONLY the title, no quotes or explanation."""
 
                 # ── No tool calls → done ──────────────────────────────────
                 if not tool_calls:
-                    logger.info(f"✅ Streaming finished at turn {turn + 1} (no tool calls)")
+                    logger.info(f"Streaming finished at turn {turn + 1} (no tool calls)")
                     break
 
                 # ── Execute tools ─────────────────────────────────────────
                 should_break = False
-                function_response_parts = []
+                tool_result_messages: list[Message] = []
 
-                for function_call in tool_calls:
-                    tool_name = function_call.name
-                    tool_args = dict(function_call.args) if function_call.args else {}
+                for tc in tool_calls:
+                    tool_name = tc.name
+                    tool_args = tc.args
 
-                    # Guard against infinite tool loops
                     tool_call_counts[tool_name] = tool_call_counts.get(tool_name, 0) + 1
                     if tool_call_counts[tool_name] > MAX_SAME_TOOL_CALLS:
                         logger.warning(
@@ -1326,7 +1208,7 @@ Return ONLY the title, no quotes or explanation."""
                         should_break = True
                         break
 
-                    logger.info(f"🔧 Streaming tool: {tool_name} | args: {tool_args}")
+                    logger.info(f"Streaming tool: {tool_name} | args: {tool_args}")
 
                     yield {
                         "event": "tool_start",
@@ -1338,7 +1220,7 @@ Return ONLY the title, no quotes or explanation."""
                         result = await self.registry.execute(tool_name, tool_args, ctx)
                     except Exception as tool_exc:
                         logger.error(
-                            f"❌ Tool '{tool_name}' raised exception: {tool_exc}",
+                            f"Tool '{tool_name}' raised exception: {tool_exc}",
                             exc_info=True,
                         )
                         yield {
@@ -1368,26 +1250,24 @@ Return ONLY the title, no quotes or explanation."""
                     except Exception as save_err:
                         logger.warning(f"Could not save tool message (non-fatal): {save_err}")
 
-                    function_response_parts.append(
-                        types.Part.from_function_response(
-                            name=tool_name,
-                            response=result,
+                    tool_result_messages.append(
+                        Message(
+                            role="tool",
+                            tool_result=ToolResult(
+                                tool_call_id=tc.id,
+                                name=tool_name,
+                                content=result,
+                            ),
                         )
                     )
 
-                if function_response_parts:
-                    contents.append(
-                        types.Content(
-                            role="user",
-                            parts=function_response_parts,
-                        )
-                    )
+                if tool_result_messages:
+                    messages.extend(tool_result_messages)
 
-                    # Validate after appending aggregated function_responses
-                    is_valid, validation_msg = _validate_contents_ordering(contents)
+                    is_valid, validation_msg = _validate_contents_ordering(messages)
                     if not is_valid:
-                        logger.error("❌ Contents invalid after appending tool responses at turn %s", turn + 1)
-                        _log_contents_structure(contents, "Invalid after tool responses")
+                        logger.error(f"Messages invalid after appending tool responses at turn {turn + 1}: {validation_msg}")
+                        _log_contents_structure(messages, "Invalid after tool responses")
                         yield {
                             "event": "error",
                             "message": "Internal error: Tool response created invalid conversation structure. Please try again.",

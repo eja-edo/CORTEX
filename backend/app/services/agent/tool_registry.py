@@ -7,6 +7,7 @@ from pydantic import BaseModel, ValidationError
 
 from google.genai import types
 
+from app.services.agent.provider_types import ToolDefinition as ProviderToolDef
 from app.services.agent.tool_context import ToolContext
 from app.utils.logger import get_logger
 
@@ -38,6 +39,14 @@ class ToolDefinition:
             "description": self.description,
             "parameters": self.schema,
         }
+
+    def to_provider_format(self) -> ProviderToolDef:
+        """Convert to provider-agnostic ToolDefinition format."""
+        return ProviderToolDef(
+            name=self.name,
+            description=self.description,
+            parameters=self.schema,
+        )
 
     async def validate_and_execute(
         self,
@@ -188,6 +197,10 @@ class ToolRegistry:
             List of tool definitions (dict format for old SDK)
         """
         return [tool.to_gemini_format() for tool in self.tools.values()]
+
+    def get_provider_tools(self) -> list[ProviderToolDef]:
+        """Get all tools in provider-agnostic format for the new provider system."""
+        return [tool.to_provider_format() for tool in self.tools.values()]
 
     def list_tools(self) -> list[str]:
         """Get list of registered tool names."""

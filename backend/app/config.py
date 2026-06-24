@@ -110,10 +110,19 @@ class Settings:
     UPLOAD_STALE_AFTER_HOURS: int = int(os.getenv("UPLOAD_STALE_AFTER_HOURS", "24"))
     UPLOAD_RATE_LIMIT_PER_MINUTE: int = int(os.getenv("UPLOAD_RATE_LIMIT_PER_MINUTE", "120"))
 
+    # LLM Provider selection: "gemini" or "openai"
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "gemini")
+
     # Gemini API Configuration
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     GEMINI_DEFAULT_MODEL: str = os.getenv("GEMINI_DEFAULT_MODEL", "gemini-1.5-flash")
     GEMINI_SYNTHESIS_MODEL: str = os.getenv("GEMINI_SYNTHESIS_MODEL", "gemini-1.5-pro")
+
+    # OpenAI / 9Router Configuration
+    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+    OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "http://localhost:20128/v1")
+    OPENAI_DEFAULT_MODEL: str = os.getenv("OPENAI_DEFAULT_MODEL", "oc/qwen3.6-plus-free")
+
     LLM_WINDOW_SECONDS: float = float(os.getenv("LLM_WINDOW_SECONDS", "30.0"))
     LLM_MIN_KNOWLEDGE_VALUE: float = float(os.getenv("LLM_MIN_KNOWLEDGE_VALUE", "0.3"))
 

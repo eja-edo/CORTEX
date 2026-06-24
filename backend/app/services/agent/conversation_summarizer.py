@@ -1,14 +1,13 @@
 """Service for summarizing conversations using Layer 2 rolling summaries."""
 
 from uuid import UUID
-from datetime import datetime
 
-from google.genai import types
-from sqlalchemy import select, update, text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AgentConversation, AgentMessage
 from app.services.agent.model_client import ModelClient
+from app.services.agent.provider_types import Message, GenerationConfig
 from app.memory.layers.summaries import ConversationSummarizer as Layer2Summarizer
 from app.utils.logger import get_logger
 
@@ -98,20 +97,22 @@ Provide a natural language summary that captures the essence of the conversation
         max_version = version_result.scalar() or 0
         new_version = max_version + 1
 
-        config = types.GenerateContentConfig(
+        config = GenerationConfig(
             system_instruction=self._get_summarizer_prompt(),
         )
 
+        summarizer_messages = [Message(role="user", content=conversation_text)]
+
         try:
             model_used, response = await _model_client.generate(
-                contents=conversation_text,
+                messages=summarizer_messages,
                 config=config,
             )
 
-            if not response or not response.text:
+            if not response or not response.content:
                 return {"success": False, "error": "Empty summarization response"}
 
-            summary_text = response.text.strip()
+            summary_text = response.content.strip()
             summary_length = len(summary_text)
 
             await self._layer2.store_summary(
