@@ -277,7 +277,7 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
         } catch (err) {
             console.error('Failed to save conversationTitle to localStorage:', err)
         }
-    }, [conversationTitle, isInitializing])
+    }, [conversationTitle, isInitializing, conversationId])
 
     // Fetch sessions on component mount
     useEffect(() => {
@@ -329,7 +329,7 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
             const now = new Date()
             const timeIso = now.toISOString()
             return `URL: ${url}\nTime: ${timeIso}\nTimezone: ${tz}\nLocale: ${locale}`
-        } catch (e) {
+        } catch {
             return ''
         }
     }, [])
@@ -609,7 +609,7 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
         } finally {
             setIsLoading(false)
         }
-    }, [isLoading, conversationId, updateTokenUsage, addedPills, buildRuntimeContextText, navigate, workspaceId])
+    }, [isLoading, conversationId, updateTokenUsage, addedPills, buildRuntimeContextText, navigate, workspaceId, onToolNavigate, saveConversationIdToStorage])
 
     const toggleThinking = useCallback((messageId: string) => {
         setMessages(prev => prev.map(m =>

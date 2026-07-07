@@ -20,6 +20,7 @@ class ScheduleType(str, Enum):
     DEADLINE = "DEADLINE"    # Hạn nộp bài
     EXAM = "EXAM"            # Lịch thi
     PERSONAL = "PERSONAL"    # Cá nhân
+    CRON_EVENT = "CRON_EVENT"  # Workflow cron schedule (liên kết với workflow)
 
 
 class CalendarProvider(str, Enum):
@@ -145,6 +146,8 @@ class Notification(Base):
     type = Column(String(64), nullable=False)
     title = Column(String(255), nullable=False)
     body = Column(Text, nullable=True)
+    content = Column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
+    actions = Column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
     payload = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
     read_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -209,6 +212,9 @@ class Schedule(Base):
     description = Column(String(1000), nullable=True)  # Optional: notes
     is_completed = Column(Boolean, default=False)  # For DEADLINE type
     
+    # Workflow link
+    workflow_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+
     # Recurrence fields
     recurrence_rule = Column(JSONB, nullable=True)
     recurrence_id = Column(UUID(as_uuid=True), ForeignKey("schedules.id", ondelete="CASCADE"), nullable=True, index=True)

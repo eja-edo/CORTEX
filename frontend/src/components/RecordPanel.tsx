@@ -116,16 +116,113 @@ export function RecordPanel({ requestWithAuth, isVisible, workspaceId, onAssetCh
     useEffect(() => { screenDurationRef.current = screenDuration }, [screenDuration])
 
     useEffect(() => {
+        const audioEl = audioElRef.current
+        const videoEl = videoElRef.current
         return () => {
             if (audioTimerRef.current) clearInterval(audioTimerRef.current)
             if (screenTimerRef.current) clearInterval(screenTimerRef.current)
             audioStreamRef.current?.getTracks().forEach(t => t.stop())
             screenStreamRef.current?.getTracks().forEach(t => t.stop())
-            audioElRef.current?.pause()
-            videoElRef.current?.pause()
+            audioEl?.pause()
+            videoEl?.pause()
             recordings.forEach(r => URL.revokeObjectURL(r.url))
         }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
+
+    const initLiveUpload = useCallback(async (filenamePrefix: string, contentType: string) => {
+        const initPayload = await requestWithAuth<UploadInitResponse>('/upload/init', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                filename: `${filenamePrefix}-${Date.now()}.webm`,
+                content_type: contentType || 'video/webm',
+                total_parts: 0,
+                total_size: 0,
+            }),
+        })
+        const context: LiveUploadContext = {
+            uploadId: initPayload.upload_id,
+            objectKey: initPayload.object_key,
+            nextPartNumber: 1,
+            bufferedChunks: [],
+            bufferedBytes: 0,
+            flushChain: Promise.resolve(),
+        }
+        return context
+    }, [requestWithAuth])
+
+    const uploadPartWithRetry = useCallback(async (
+        uploadId: string,
+        partNumber: number,
+        chunk: Blob,
+        isLastPart: boolean,
+    ) => {
+        const tryOnce = async () => {
+            const signed = await requestWithAuth<UploadPresignedResponse>(
+                `/upload/presigned?upload_id=${uploadId}&part_number=${partNumber}`,
+                { method: 'GET' },
+            )
+            const putResponse = await fetch(signed.url, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/octet-stream' },
+                body: chunk,
+            })
+            if (!putResponse.ok) throw new Error(`Upload part ${partNumber} failed (${putResponse.status})`)
+            const etag = putResponse.headers.get('ETag')
+            if (!etag) throw new Error(`Missing ETag for part ${partNumber}`)
+            await requestWithAuth('/upload/part/confirm', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ upload_id: uploadId, part_number: partNumber, etag, size: chunk.size, is_last_part: isLastPart }),
+            })
+        }
+        try { await tryOnce() } catch { await tryOnce() }
+    }, [requestWithAuth])
+
+    const enqueueBufferedUpload = useCallback((ctx: LiveUploadContext, flushLast: boolean) => {
+        const run = async () => {
+            while (ctx.bufferedBytes >= MIN_PART_SIZE || (flushLast && ctx.bufferedBytes > 0)) {
+                const blob = new Blob(ctx.bufferedChunks, { type: 'video/webm' })
+                const partNumber = ctx.nextPartNumber
+                const isLastPart = flushLast
+                ctx.nextPartNumber += 1
+                ctx.bufferedChunks = []
+                ctx.bufferedBytes = 0
+                await uploadPartWithRetry(ctx.uploadId, partNumber, blob, isLastPart)
+            }
+        }
+        ctx.flushChain = ctx.flushChain.then(run).catch((err) => {
+            ctx.lastError = err instanceof Error ? err.message : 'Upload chunk failed'
+            throw err
+        })
+        return ctx.flushChain
+    }, [uploadPartWithRetry])
+
+    const appendLiveChunk = useCallback((ctx: LiveUploadContext | null, chunk: Blob) => {
+        if (!ctx || chunk.size === 0) return
+        ctx.bufferedChunks.push(chunk)
+        ctx.bufferedBytes += chunk.size
+        if (ctx.bufferedBytes >= MIN_PART_SIZE) void enqueueBufferedUpload(ctx, false)
+    }, [enqueueBufferedUpload])
+
+    const finalizeLiveUpload = useCallback(async (ctx: LiveUploadContext | null, totalSize: number) => {
+        if (!ctx) return { status: 'failed' as const, objectKey: undefined, assetId: undefined, error: 'Missing upload context' }
+        try {
+            await enqueueBufferedUpload(ctx, true)
+            const uploadedParts = ctx.nextPartNumber - 1
+            if (uploadedParts <= 0) return { status: 'failed' as const, objectKey: undefined, assetId: undefined, error: 'No data uploaded' }
+            const complete = await requestWithAuth<UploadCompleteResponse>('/upload/complete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ upload_id: ctx.uploadId, workspace_id: effectiveWorkspaceId, total_parts: uploadedParts, total_size: totalSize }),
+            })
+            return { status: 'uploaded' as const, objectKey: complete.object_key, assetId: complete.asset_id, error: undefined }
+        } catch (err) {
+            const message = err instanceof Error ? err.message : 'Live upload failed'
+            return { status: 'failed' as const, objectKey: undefined, assetId: undefined, error: message }
+        }
+    }, [enqueueBufferedUpload, requestWithAuth, effectiveWorkspaceId])
 
     const startAudioRecording = useCallback(async () => {
         setError('')
@@ -181,12 +278,18 @@ export function RecordPanel({ requestWithAuth, isVisible, workspaceId, onAssetCh
             setActiveStream(null)
             setRecordingType(null)
         }
-    }, [])
+    }, []) /* eslint-disable-line react-hooks/exhaustive-deps */
 
     const stopAudioRecording = useCallback(() => {
         if (audioTimerRef.current) { clearInterval(audioTimerRef.current); audioTimerRef.current = null }
         audioRecorderRef.current?.stop()
         setIsRecordingAudio(false)
+    }, [])
+
+    const stopScreenRecording = useCallback(() => {
+        if (screenTimerRef.current) { clearInterval(screenTimerRef.current); screenTimerRef.current = null }
+        screenRecorderRef.current?.stop()
+        setIsRecordingScreen(false)
     }, [])
 
     const startScreenRecording = useCallback(async () => {
@@ -247,13 +350,7 @@ export function RecordPanel({ requestWithAuth, isVisible, workspaceId, onAssetCh
             setActiveStream(null)
             setRecordingType(null)
         }
-    }, [])
-
-    const stopScreenRecording = useCallback(() => {
-        if (screenTimerRef.current) { clearInterval(screenTimerRef.current); screenTimerRef.current = null }
-        screenRecorderRef.current?.stop()
-        setIsRecordingScreen(false)
-    }, [])
+    }, []) /* eslint-disable-line react-hooks/exhaustive-deps */
 
     const handlePlay = useCallback((rec: Recording) => {
         if (rec.type === 'audio') {
@@ -408,100 +505,6 @@ export function RecordPanel({ requestWithAuth, isVisible, workspaceId, onAssetCh
         }
         return chunks
     }, [])
-
-    const uploadPartWithRetry = useCallback(async (
-        uploadId: string,
-        partNumber: number,
-        chunk: Blob,
-        isLastPart: boolean,
-    ) => {
-        const tryOnce = async () => {
-            const signed = await requestWithAuth<UploadPresignedResponse>(
-                `/upload/presigned?upload_id=${uploadId}&part_number=${partNumber}`,
-                { method: 'GET' },
-            )
-            const putResponse = await fetch(signed.url, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/octet-stream' },
-                body: chunk,
-            })
-            if (!putResponse.ok) throw new Error(`Upload part ${partNumber} failed (${putResponse.status})`)
-            const etag = putResponse.headers.get('ETag')
-            if (!etag) throw new Error(`Missing ETag for part ${partNumber}`)
-            await requestWithAuth('/upload/part/confirm', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ upload_id: uploadId, part_number: partNumber, etag, size: chunk.size, is_last_part: isLastPart }),
-            })
-        }
-        try { await tryOnce() } catch { await tryOnce() }
-    }, [requestWithAuth])
-
-    const initLiveUpload = useCallback(async (filenamePrefix: string, contentType: string) => {
-        const initPayload = await requestWithAuth<UploadInitResponse>('/upload/init', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                filename: `${filenamePrefix}-${Date.now()}.webm`,
-                content_type: contentType || 'video/webm',
-                total_parts: 0,
-                total_size: 0,
-            }),
-        })
-        const context: LiveUploadContext = {
-            uploadId: initPayload.upload_id,
-            objectKey: initPayload.object_key,
-            nextPartNumber: 1,
-            bufferedChunks: [],
-            bufferedBytes: 0,
-            flushChain: Promise.resolve(),
-        }
-        return context
-    }, [requestWithAuth])
-
-    const enqueueBufferedUpload = useCallback((ctx: LiveUploadContext, flushLast: boolean) => {
-        const run = async () => {
-            while (ctx.bufferedBytes >= MIN_PART_SIZE || (flushLast && ctx.bufferedBytes > 0)) {
-                const blob = new Blob(ctx.bufferedChunks, { type: 'video/webm' })
-                const partNumber = ctx.nextPartNumber
-                const isLastPart = flushLast
-                ctx.nextPartNumber += 1
-                ctx.bufferedChunks = []
-                ctx.bufferedBytes = 0
-                await uploadPartWithRetry(ctx.uploadId, partNumber, blob, isLastPart)
-            }
-        }
-        ctx.flushChain = ctx.flushChain.then(run).catch((err) => {
-            ctx.lastError = err instanceof Error ? err.message : 'Upload chunk failed'
-            throw err
-        })
-        return ctx.flushChain
-    }, [uploadPartWithRetry])
-
-    const appendLiveChunk = useCallback((ctx: LiveUploadContext | null, chunk: Blob) => {
-        if (!ctx || chunk.size === 0) return
-        ctx.bufferedChunks.push(chunk)
-        ctx.bufferedBytes += chunk.size
-        if (ctx.bufferedBytes >= MIN_PART_SIZE) void enqueueBufferedUpload(ctx, false)
-    }, [enqueueBufferedUpload])
-
-    const finalizeLiveUpload = useCallback(async (ctx: LiveUploadContext | null, totalSize: number) => {
-        if (!ctx) return { status: 'failed' as const, objectKey: undefined, assetId: undefined, error: 'Missing upload context' }
-        try {
-            await enqueueBufferedUpload(ctx, true)
-            const uploadedParts = ctx.nextPartNumber - 1
-            if (uploadedParts <= 0) return { status: 'failed' as const, objectKey: undefined, assetId: undefined, error: 'No data uploaded' }
-            const complete = await requestWithAuth<UploadCompleteResponse>('/upload/complete', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ upload_id: ctx.uploadId, workspace_id: effectiveWorkspaceId, total_parts: uploadedParts, total_size: totalSize }),
-            })
-            return { status: 'uploaded' as const, objectKey: complete.object_key, assetId: complete.asset_id, error: undefined }
-        } catch (err) {
-            const message = err instanceof Error ? err.message : 'Live upload failed'
-            return { status: 'failed' as const, objectKey: undefined, assetId: undefined, error: message }
-        }
-    }, [enqueueBufferedUpload, requestWithAuth, effectiveWorkspaceId])
 
     const handleUpload = useCallback(async (recordingId: string) => {
         const recording = recordingsRef.current.find(r => r.id === recordingId)

@@ -117,6 +117,15 @@ def _schedule_to_dict(schedule: Schedule, is_virtual: bool = False) -> dict:
 # ScheduleService
 # ---------------------------------------------------------------------------
 
+def _serialize_recurrence_rule(rule) -> dict | None:
+    """Convert RecurrenceRuleInput to JSON-serializable dict.
+    The model_dump() keeps datetime objects which break JSON columns."""
+    data = rule.model_dump()
+    if isinstance(data.get("until"), datetime):
+        data["until"] = data["until"].isoformat()
+    return data
+
+
 class ScheduleService:
     """Toàn bộ business logic cho Schedule.
 
@@ -146,8 +155,9 @@ class ScheduleService:
             description=data.description,
             is_completed=False,
             recurrence_rule=(
-                data.recurrence.model_dump() if data.recurrence else None
+                _serialize_recurrence_rule(data.recurrence) if data.recurrence else None
             ),
+            workflow_id=UUID(data.workflow_id) if data.workflow_id else None,
         )
         self.db.add(db_schedule)
         self.db.flush()
@@ -332,7 +342,7 @@ class ScheduleService:
         if "recurrence" in update_data:
             recurrence_val = update_data.pop("recurrence")
             schedule.recurrence_rule = (
-                recurrence_val.model_dump()
+                _serialize_recurrence_rule(recurrence_val)
                 if recurrence_val and hasattr(recurrence_val, "model_dump")
                 else recurrence_val
             )
@@ -635,7 +645,7 @@ class ScheduleService:
         if "recurrence" in update_data:
             recurrence_val = update_data.pop("recurrence")
             root.recurrence_rule = (
-                recurrence_val.model_dump()
+                _serialize_recurrence_rule(recurrence_val)
                 if recurrence_val and hasattr(recurrence_val, "model_dump")
                 else recurrence_val
             )

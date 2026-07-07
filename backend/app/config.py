@@ -143,7 +143,7 @@ class Settings:
             return explicit
         return f"redis://{self.MEMORY_REDIS_HOST}:{self.MEMORY_REDIS_PORT}/{self.MEMORY_REDIS_DB}"
 
-    EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "text-embedding-004")
+    EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "gemini/gemini-embedding-2-preview")
     EMBEDDING_DIMENSIONS: int = int(os.getenv("EMBEDDING_DIMENSIONS", "768"))
     EMBEDDING_BATCH_SIZE: int = int(os.getenv("EMBEDDING_BATCH_SIZE", "16"))
 

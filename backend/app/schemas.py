@@ -14,6 +14,7 @@ class ScheduleType(str, Enum):
     DEADLINE = "DEADLINE"
     EXAM = "EXAM"
     PERSONAL = "PERSONAL"
+    CRON_EVENT = "CRON_EVENT"
 
 
 class EditScope(str, Enum):
@@ -66,6 +67,7 @@ class ScheduleCreate(BaseModel):
     description: Optional[str] = Field(None, max_length=1000, description="Additional notes")
     recurrence: Optional[RecurrenceRuleInput] = Field(default=None, description="Recurrence rule")
     reminders: Optional[List[ReminderConfig]] = Field(default=None, max_length=5, description="Reminder configurations")
+    workflow_id: Optional[str] = Field(default=None, description="Linked workflow ID")
 
 class ScheduleUpdate(BaseModel):
     """Schema for updating a schedule"""
@@ -78,6 +80,7 @@ class ScheduleUpdate(BaseModel):
     is_completed: Optional[bool] = None
     recurrence: Optional[RecurrenceRuleInput] = None
     reminders: Optional[List[ReminderConfig]] = None
+    workflow_id: Optional[str] = None
 
 class ScheduleResponse(BaseModel):
     """Schema for schedule response"""
@@ -92,6 +95,7 @@ class ScheduleResponse(BaseModel):
     is_completed: bool
     recurrence: Optional[RecurrenceRuleInput] = None
     reminders: List[ReminderResponse] = []
+    workflow_id: Optional[UUID] = None
     is_recurring: bool = False
     is_exception: bool = False
     is_cancelled: bool = False
@@ -449,6 +453,22 @@ class SearchResponse(BaseModel):
     total: int
 
 
+class NotificationBlock(BaseModel):
+    type: str  # text, image, html, code, markdown, etc.
+    text: str | None = None
+    url: str | None = None
+    html: str | None = None
+    language: str | None = None
+    content: str | None = None
+
+
+class NotificationAction(BaseModel):
+    label: str
+    action: str = "navigate"  # navigate, dismiss, callback
+    url: str | None = None
+    payload: dict[str, Any] | None = None
+
+
 class NotificationResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -457,6 +477,8 @@ class NotificationResponse(BaseModel):
     type: str
     title: str
     body: str | None
+    content: list[NotificationBlock] = []
+    actions: list[NotificationAction] = []
     payload: dict[str, Any]
     read_at: datetime | None
     created_at: datetime

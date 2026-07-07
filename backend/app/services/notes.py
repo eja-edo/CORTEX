@@ -260,13 +260,14 @@ class NoteService:
                 return text
         return "Untitled"
 
-    def to_summary_response(self, note: Note) -> NoteSummary:
+    def to_summary_response(self, note: Note, content_override: str | None = None) -> NoteSummary:
+        content = content_override if content_override is not None else note.content
         return NoteSummary(
             id=note.id,
             user_id=note.user_id,
             workspace_id=note.workspace_id,
             parent_note_id=getattr(note, "parent_note_id", None),
-            title=self.extract_title(note.content),
+            title=self.extract_title(content),
             content_type=note.content_type,
             position=note.position,
             size=note.size,

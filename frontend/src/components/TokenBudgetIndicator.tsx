@@ -20,7 +20,6 @@ export function TokenBudgetIndicator({ budgetStatus, isLoading = false, classNam
     const percentage = budgetStatus.percentage
     const isWarning = percentage >= 80 && percentage < 100
     const isExceeded = percentage >= 100
-    const isHealthy = percentage < 80
 
     const statusClass = isExceeded ? 'exceeded' : isWarning ? 'warning' : 'healthy'
     const statusLabel = isExceeded ? 'Limit reached' : isWarning ? 'Warning' : 'Healthy'

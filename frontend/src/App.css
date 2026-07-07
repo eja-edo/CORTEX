@@ -16,3 +16,5 @@
 @import './styles/workspace-switcher.css';
 @import './styles/workspace-settings.css';
 @import './styles/editor-richtext.css';
+@import './styles/workflow-tokens.css';
+@import './styles/workflow-builder.css';

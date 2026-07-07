@@ -36,6 +36,7 @@ class GoogleSyncWorker:
     def __init__(self) -> None:
         self._running = False
         self._redis_service: Optional[RedisStreamService] = None
+        self._consume_task: Optional[asyncio.Task] = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -70,10 +71,24 @@ class GoogleSyncWorker:
             GOOGLE_SYNC_CONSUMER_GROUP,
             self._redis_service._consumer_id,
         )
-        await self._consume_loop()
+        # Run consume loop as a cancellable task
+        self._consume_task = asyncio.create_task(self._consume_loop())
+        try:
+            await self._consume_task
+        except asyncio.CancelledError:
+            logger.info("GoogleSyncWorker: consume task cancelled during shutdown")
+            raise
 
     async def stop(self) -> None:
         self._running = False
+        # Cancel consume task first, wait for it to exit blocking call
+        if self._consume_task and not self._consume_task.done():
+            self._consume_task.cancel()
+            try:
+                await self._consume_task
+            except asyncio.CancelledError:
+                pass
+        # Now safe to disconnect Redis
         if self._redis_service:
             await self._redis_service.stop_background_tasks()
             await self._redis_service.disconnect(release_pending=True)
@@ -85,57 +100,61 @@ class GoogleSyncWorker:
     # ------------------------------------------------------------------
 
     async def _consume_loop(self) -> None:
-        while self._running:
-            try:
-                tasks = await self._redis_service.read_tasks(count=10, block_ms=5000)
-
-                # Khi stream idle, thử claim orphaned tasks từ worker cũ crash
-                if not tasks:
-                    claimed = await self._redis_service.claim_orphaned_tasks(count=5)
-                    if claimed:
-                        logger.info(
-                            "GoogleSyncWorker: claimed %d orphaned task(s)", len(claimed)
-                        )
-                        tasks = claimed
-
-                for task in tasks:
-                    try:
-                        logger.info(
-                            "Processing sync task: task_id=%s schedule_id=%s op=%s retry=%d",
-                            task.task_id,
-                            task.schedule_id,
-                            task.operation,
-                            task.retry_count,
-                        )
-                        await self._process_task(task)
-                        await self._redis_service.acknowledge(task)
-                        logger.info("Sync task done: task_id=%s", task.task_id)
-
-                    except Exception as exc:
-                        logger.exception(
-                            "Sync task failed: task_id=%s — %s", task.task_id, exc
-                        )
-                        try:
-                            await self._redis_service.reject(
-                                task, error=str(exc)[:500], retry=True
-                            )
-                        except Exception as reject_err:
-                            logger.error(
-                                "Failed to reject task %s: %s", task.task_id, reject_err
-                            )
-
-            except ConnectionError as exc:
-                logger.error("GoogleSyncWorker: Redis connection lost: %s", exc)
-                await asyncio.sleep(5)
+        try:
+            while self._running:
                 try:
-                    await self._redis_service.connect()
-                    logger.info("GoogleSyncWorker: reconnected to Redis")
-                except Exception as reconnect_err:
-                    logger.error("GoogleSyncWorker: reconnect failed: %s", reconnect_err)
+                    tasks = await self._redis_service.read_tasks(count=10, block_ms=5000)
 
-            except Exception as exc:
-                logger.error("GoogleSyncWorker: loop error: %s", exc, exc_info=True)
-                await asyncio.sleep(2)
+                    # Khi stream idle, thử claim orphaned tasks từ worker cũ crash
+                    if not tasks:
+                        claimed = await self._redis_service.claim_orphaned_tasks(count=5)
+                        if claimed:
+                            logger.info(
+                                "GoogleSyncWorker: claimed %d orphaned task(s)", len(claimed)
+                            )
+                            tasks = claimed
+
+                    for task in tasks:
+                        try:
+                            logger.info(
+                                "Processing sync task: task_id=%s schedule_id=%s op=%s retry=%d",
+                                task.task_id,
+                                task.schedule_id,
+                                task.operation,
+                                task.retry_count,
+                            )
+                            await self._process_task(task)
+                            await self._redis_service.acknowledge(task)
+                            logger.info("Sync task done: task_id=%s", task.task_id)
+
+                        except Exception as exc:
+                            logger.exception(
+                                "Sync task failed: task_id=%s — %s", task.task_id, exc
+                            )
+                            try:
+                                await self._redis_service.reject(
+                                    task, error=str(exc)[:500], retry=True
+                                )
+                            except Exception as reject_err:
+                                logger.error(
+                                    "Failed to reject task %s: %s", task.task_id, reject_err
+                                )
+
+                except ConnectionError as exc:
+                    logger.error("GoogleSyncWorker: Redis connection lost: %s", exc)
+                    await asyncio.sleep(5)
+                    try:
+                        await self._redis_service.connect()
+                        logger.info("GoogleSyncWorker: reconnected to Redis")
+                    except Exception as reconnect_err:
+                        logger.error("GoogleSyncWorker: reconnect failed: %s", reconnect_err)
+
+                except Exception as exc:
+                    logger.error("GoogleSyncWorker: loop error: %s", exc, exc_info=True)
+                    await asyncio.sleep(2)
+        except asyncio.CancelledError:
+            logger.info("GoogleSyncWorker: consume loop cancelled, exiting cleanly")
+            raise
 
     # ------------------------------------------------------------------
     # Task processing

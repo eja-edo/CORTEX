@@ -171,11 +171,105 @@ services:
       retries: 10
       start_period: 40s
 
+  # --- TEMPORAL STACK ---
+  temporal-postgresql:
+    image: postgres:13
+    container_name: temporal-postgresql
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+      POSTGRES_DB: temporal
+    ports:
+    - "5435:5432"
+    volumes:
+      - temporal-postgres-data:/var/lib/postgresql/data
+    mem_limit: 256m
+    cpus: 0.5
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - cortex
+
+  temporal:
+    image: temporalio/auto-setup:1.29.7
+    container_name: temporal
+    restart: unless-stopped
+    depends_on:
+      temporal-postgresql:
+        condition: service_healthy
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=temporal-postgresql
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
+    ports:
+      - "7233:7233"
+    volumes:
+      - ./temporal/dynamicconfig:/etc/temporal/config/dynamicconfig
+    mem_limit: 512m
+    cpus: 0.5
+    networks:
+      - cortex
+
+  temporal-ui:
+    image: temporalio/ui:2.51.0
+    container_name: temporal-ui
+    restart: unless-stopped
+    depends_on:
+      - temporal
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CORS_ORIGINS=http://localhost:3000
+    ports:
+      - "8088:8080"
+    mem_limit: 256m
+    cpus: 0.3
+    networks:
+      - cortex
+
+  # --- WORKFLOW SERVICE ---
+  workflow_service:
+    build:
+      context: ../workflow_service
+      dockerfile: Dockerfile
+    container_name: workflow_service
+    restart: unless-stopped
+    depends_on:
+      temporal:
+        condition: service_started
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://cortex:cortex@db:5432/cortex_db
+      - TEMPORAL_HOST=temporal:7233
+      - CORTEX_BACKEND_URL=http://host.docker.internal:8000
+      - CORTEX_INTERNAL_API_KEY=cortex-internal-key-2024
+      - REDIS_URL=redis://redis:6379
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8001:8001"
+    volumes:
+      - ../workflow_service/app:/app/app
+    mem_limit: 256m
+    cpus: 0.3
+    networks:
+      - cortex
+
 volumes:
   postgres_data:
   pgadmin_data:
   redis_data:
   mongo_data:
+  temporal-postgres-data:
 
 networks:
   cortex:

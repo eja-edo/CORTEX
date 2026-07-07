@@ -1,9 +1,9 @@
-import { useEffect, useCallback, useRef, useMemo } from 'react'
+import { useEffect, useCallback, useRef, useMemo, useLayoutEffect } from 'react'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { useEditorStore } from '../../stores/editorStore'
-import type { BlockNode } from '../../types/editor'
+import type { BlockNode, SyntheticListenerMap } from '../../types/editor'
 import { BlockRenderer } from './BlockRenderer'
 import { SlashMenu } from './SlashMenu'
 import { BubbleToolbar } from './BubbleToolbar'
@@ -32,7 +32,7 @@ function SortableBlock({ block }: { block: BlockNode }) {
 
   return (
     <div ref={setNodeRef} style={style} {...attributes}>
-      <BlockRenderer block={block} dragHandleListeners={listeners} />
+      <BlockRenderer block={block} dragHandleListeners={listeners as SyntheticListenerMap} />
     </div>
   )
 }
@@ -41,11 +41,9 @@ export function EditorSurface({ initialMd, noteId, onSave }: EditorSurfaceProps)
   const blocks = useEditorStore(s => s.blocks)
   const initializeFromMarkdown = useEditorStore(s => s.initializeFromMarkdown)
   const focusedBlockId = useEditorStore(s => s.focusedBlockId)
-  const slashMenu = useEditorStore(s => s.slashMenu)
+  const serializeAndNotify = useEditorStore(s => s.serializeAndNotify)
   const closeSlashMenu = useEditorStore(s => s.closeSlashMenu)
   const reorderBlock = useEditorStore(s => s.reorderBlock)
-  const closeBubbleToolbar = useEditorStore(s => s.closeBubbleToolbar)
-  const serializeAndNotify = useEditorStore(s => s.serializeAndNotify)
 
   const surfaceRef = useRef<HTMLDivElement>(null)
   const prevMdRef = useRef<string | null>(null)
@@ -68,7 +66,9 @@ export function EditorSurface({ initialMd, noteId, onSave }: EditorSurfaceProps)
   }, [initialMd, initializeFromMarkdown, focusedBlockId, noteId])
 
   const onSaveRef = useRef(onSave)
-  onSaveRef.current = onSave
+  useLayoutEffect(() => {
+    onSaveRef.current = onSave
+  })
 
   // Ctrl+S to save
   useEffect(() => {

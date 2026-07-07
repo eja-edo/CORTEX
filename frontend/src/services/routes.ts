@@ -26,6 +26,8 @@ export const ROUTES = {
   WORKSPACE_NOTE: '/w/:workspaceId/notes/:noteId',
   WORKSPACE_RECORDS: '/w/:workspaceId/records',
   WORKSPACE_RECORD_KNOWLEDGE: '/w/:workspaceId/records/:assetId/knowledge',
+  WORKSPACE_WORKFLOWS: '/w/:workspaceId/workflows',
+  WORKSPACE_WORKFLOW: '/w/:workspaceId/workflows/:workflowId',
 } as const
 
 export type RoutePath = typeof ROUTES[keyof typeof ROUTES]
@@ -33,7 +35,7 @@ export type RoutePath = typeof ROUTES[keyof typeof ROUTES]
 /**
  * Helper to build workspace-scoped URLs
  */
-export function workspaceRoute(workspaceId: string, path: '/notes' | '/records' | '' = ''): string {
+export function workspaceRoute(workspaceId: string, path: '/notes' | '/records' | '/workflows' | '' = ''): string {
   if (!workspaceId) {
     console.warn('workspaceRoute called with empty workspaceId')
     return '/'
@@ -68,6 +70,20 @@ export function knowledgeRoute(workspaceId: string, assetId: string): string {
     return '/'
   }
   return `/w/${workspaceId}/records/${assetId}/knowledge`
+}
+
+/**
+ * Helper to build workflow URL within workspace
+ */
+export function workflowRoute(workspaceId: string, workflowId?: string): string {
+  if (!workspaceId) {
+    console.warn('workflowRoute called with empty workspaceId')
+    return '/'
+  }
+  if (workflowId) {
+    return `/w/${workspaceId}/workflows/${workflowId}`
+  }
+  return `/w/${workspaceId}/workflows`
 }
 
 /**

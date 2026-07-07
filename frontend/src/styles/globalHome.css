@@ -1,26 +1,43 @@
-/* Global Home Dashboard */
+/* Global Home Dashboard — redesigned to match Kinetic Flow example */
 .global-home {
   max-width: 1200px;
   margin: 0 auto;
-  padding: 32px 40px;
+  padding: 48px 40px;
 }
 
+/* Dot-grid background on the parent container (.flex-1.overflow-y-auto) */
+.global-home-wrapper {
+  background-image: radial-gradient(var(--border) 1px, transparent 1px);
+  background-size: 20px 20px;
+  flex: 1;
+  overflow-y: auto;
+  position: relative;
+}
+
+/* Welcome Header */
 .global-home-header {
-  margin-bottom: 32px;
+  margin-bottom: 40px;
+  text-align: center;
 }
 
 .global-home-greeting {
-  font-size: 28px;
+  font-size: 32px;
   font-weight: 700;
   color: var(--text-primary);
-  margin: 0;
+  margin: 0 0 8px;
+}
+
+.global-home-subtitle {
+  font-size: 16px;
+  color: var(--text-secondary);
+  opacity: 0.7;
 }
 
 /* Grid Layout */
 .global-home-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 32px;
+  gap: 24px;
 }
 
 .global-home-left,
@@ -30,61 +47,87 @@
   gap: 24px;
 }
 
-/* Sections */
-.home-section {
-  background: var(--bg-secondary);
-  border-radius: 8px;
-  padding: 20px;
+/* Cards */
+.home-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
 }
 
-.home-section-title {
+/* Section header with icon + uppercase label */
+.home-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.home-card-header-left {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.home-card-header-icon {
+  color: var(--accent);
+}
+
+.home-card-header-label {
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--text-secondary);
-  margin: 0 0 16px 0;
 }
 
-.home-section-subtitle {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  margin: 12px 0 8px 0;
-}
-
-.home-section-group {
-  margin-bottom: 16px;
+.home-card-header-action {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent);
+  background: none;
+  border: none;
+  cursor: pointer;
 }
 
 /* Schedule Items */
 .home-schedule-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 16px;
 }
 
 .home-schedule-item {
   display: flex;
-  gap: 12px;
-  padding: 12px;
-  background: var(--bg-primary);
-  border-radius: 6px;
-  transition: background 0.15s;
+  gap: 16px;
+  align-items: flex-start;
 }
 
-.home-schedule-item:hover {
-  background: var(--bg-tertiary);
-}
-
-.home-schedule-time {
-  font-size: 12px;
-  font-weight: 600;
+.home-schedule-time-block {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
   color: var(--accent);
-  min-width: 60px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  text-align: center;
+  min-width: 80px;
+}
+
+.home-schedule-time-value {
+  font-size: 11px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.home-schedule-time-label {
+  font-size: 10px;
+  margin: 0;
+  opacity: 0.7;
+}
+
+.home-schedule-item-dim .home-schedule-time-block {
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
 }
 
 .home-schedule-content {
@@ -93,31 +136,86 @@
 
 .home-schedule-title {
   font-size: 14px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--text-primary);
 }
 
 .home-schedule-location {
-  font-size: 12px;
+  font-size: 14px;
   color: var(--text-secondary);
-  margin-top: 2px;
+}
+
+/* Quick Actions */
+.home-quick-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.home-quick-action-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  border: 2px dashed var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: transparent;
+  color: var(--text-primary);
+}
+
+.home-quick-action-btn:hover {
+  background: var(--bg-secondary);
+  border-color: var(--accent);
+}
+
+.home-quick-action-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.2s;
+}
+
+.home-quick-action-btn:hover .home-quick-action-icon {
+  transform: scale(1.1);
+}
+
+.home-quick-action-icon--primary {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+}
+
+.home-quick-action-icon--secondary {
+  background: color-mix(in srgb, var(--purple) 10%, transparent);
+  color: var(--purple);
+}
+
+.home-quick-action-btn span {
+  font-size: 14px;
+  font-weight: 700;
 }
 
 /* Workspace Items */
 .home-workspace-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 16px;
 }
 
 .home-workspace-item {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 16px;
   padding: 12px;
-  background: var(--bg-primary);
+  background: transparent;
   border: none;
-  border-radius: 6px;
+  border-radius: 12px;
   cursor: pointer;
   transition: background 0.15s;
   width: 100%;
@@ -125,20 +223,20 @@
 }
 
 .home-workspace-item:hover {
-  background: var(--bg-tertiary);
+  background: var(--bg-secondary);
 }
 
-.home-workspace-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: 6px;
-  background: var(--accent);
-  color: white;
+.home-workspace-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 700;
+  color: white;
+  flex-shrink: 0;
 }
 
 .home-workspace-info {
@@ -147,7 +245,7 @@
 
 .home-workspace-name {
   font-size: 14px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--text-primary);
 }
 
@@ -157,36 +255,35 @@
   text-transform: capitalize;
 }
 
-/* Quick Actions */
-.home-quick-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
+.home-workspace-chevron {
+  color: var(--text-secondary);
+  opacity: 0;
+  transition: opacity 0.15s;
 }
 
-.home-quick-action-btn {
+.home-workspace-item:hover .home-workspace-chevron {
+  opacity: 1;
+}
+
+/* Create workspace button */
+.home-create-workspace-btn {
+  width: 100%;
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 14px;
   display: flex;
-  flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 8px;
-  padding: 20px;
-  background: var(--bg-primary);
-  border: 1px solid var(--border);
-  border-radius: 8px;
   cursor: pointer;
-  transition: all 0.15s;
-  color: var(--text-primary);
+  transition: background 0.15s;
 }
 
-.home-quick-action-btn:hover {
-  background: var(--accent);
-  color: white;
-  border-color: var(--accent);
-}
-
-.home-quick-action-btn span {
-  font-size: 13px;
-  font-weight: 500;
+.home-create-workspace-btn:hover {
+  background: var(--bg-secondary);
 }
 
 /* Activity List */
@@ -203,7 +300,7 @@
   padding: 12px;
   background: transparent;
   border: none;
-  border-radius: 6px;
+  border-radius: 8px;
   cursor: pointer;
   transition: background 0.15s;
   width: 100%;
@@ -211,7 +308,7 @@
 }
 
 .home-activity-item:hover {
-  background: var(--bg-primary);
+  background: var(--bg-secondary);
 }
 
 .home-activity-icon {
@@ -241,20 +338,34 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  padding: 40px 20px;
+  padding: 48px 20px;
+  text-align: center;
+  opacity: 0.4;
+}
+
+.home-empty-state-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
   color: var(--text-secondary);
 }
 
-.home-empty-state p {
-  font-size: 13px;
+.home-empty-state-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 4px;
+}
+
+.home-empty-state-desc {
+  font-size: 11px;
+  color: var(--text-secondary);
   margin: 0;
 }
 
 /* Responsive */
 @media (max-width: 900px) {
   .global-home {
-    padding: 24px 20px;
+    padding: 32px 20px;
   }
 
   .global-home-grid {

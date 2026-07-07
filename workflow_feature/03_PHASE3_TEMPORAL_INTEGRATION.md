@@ -1,10 +1,11 @@
 # PHASE 3 — TEMPORAL INTEGRATION
+
 ## Temporal Workers + Workflow Definitions + State Management
 
-> **Thời gian**: Tuần 5–6 (10 ngày làm việc)  
-> **Prerequisite**: Phase 2 hoàn thành — CRUD API + Trigger Engine + Action Registry  
-> **Mục tiêu**: Workflow thực sự chạy được trong Temporal, có execution history, có thể pause/resume  
-> **Output cuối phase**: Tạo workflow, trigger event → Temporal chạy → log history hiện trong Temporal UI
+> **Thời gian**: Tuần 5–6 (10 ngày làm việc)\
+> \*\***Prerequisite**: Phase 2 hoàn thành — CRUD API + Trigger Engine + Action Registry\
+> \*\***Mục tiêu**: Workflow thực sự chạy được trong Temporal, có execution history, có thể pause/resume\
+> \*\***Output cuối phase**: Tạo workflow, trigger event → Temporal chạy → log history hiện trong Temporal UI
 
 ---
 
@@ -212,7 +213,7 @@ async def update_instance_status(input: UpdateInstanceStatusInput) -> None:
 
 Đây là trái tim của Phase 3. Một Temporal Workflow Definition đủ linh hoạt để chạy **bất kỳ** workflow nào được định nghĩa trong DB.
 
-**`app/temporal/workflows/cortex_workflow.py`**
+`app/temporal/workflows/cortex_workflow.py`
 
 ```python
 from temporalio import workflow
@@ -413,7 +414,7 @@ class CortexWorkflow:
 
 ## 5. Worker Setup
 
-**`app/temporal/worker.py`** (mở rộng từ Phase 1)
+`app/temporal/worker.py` (mở rộng từ Phase 1)
 
 ```python
 from temporalio.client import Client
@@ -451,7 +452,7 @@ def start_worker_background():
     asyncio.ensure_future(run_worker())
 ```
 
-**Cập nhật `app/main.py`** — thêm worker startup:
+**Cập nhật** `app/main.py` — thêm worker startup:
 
 ```python
 @app.on_event("startup")
@@ -523,7 +524,7 @@ async def _trigger_workflow_instance(workflow_def: WorkflowDefinition, trigger_d
 
 ## 7. Execution API
 
-**`app/api/v1/executions.py`**
+`app/api/v1/executions.py`
 
 ```python
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -667,13 +668,16 @@ async def manual_trigger(
 
 ### Temporal Worker
 
-- [ ] Worker khởi động không có error: `[TemporalWorker] Starting worker on task queue: cortex-workflow-queue`
-- [ ] Worker hiện trong Temporal UI (`http://localhost:8080`) tab "Workers"
-- [ ] `CortexWorkflow` và tất cả activities được list trong Temporal UI
+- [x] Worker khởi động không có error: `[TemporalWorker] Starting worker on task queue: cortex-workflow-queue`
+
+- [x] Worker hiện trong Temporal UI (`http://localhost:8080`) tab "Workers"
+
+- [x] `CortexWorkflow` và tất cả activities được list trong Temporal UI
 
 ### End-to-End Flow
 
-- [ ] **Test 1 — Manual trigger**:
+- [x] **Test 1 — Manual trigger**:
+
   1. Tạo workflow với trigger_type=`manual`, 1 action `action.send_notification`
   2. Activate workflow
   3. `POST /api/v1/workflows/{id}/trigger`
@@ -681,44 +685,53 @@ async def manual_trigger(
   5. DB có `workflow_instances` row với status "completed"
   6. DB có `workflow_step_executions` row với status "completed"
 
-- [ ] **Test 2 — Internal event trigger**:
+- [x] **Test 2 — Internal event trigger**:
+
   1. Tạo workflow với trigger_type=`internal_event`, event=`note.created`
   2. Activate workflow
   3. Publish event vào Redis: `redis-cli publish cortex:workflow:events '{"event":"note.created","note_id":"test-123","user_id":"your-user-id"}'`
   4. Workflow tự động trigger và chạy
 
-- [ ] **Test 3 — Webhook trigger**:
+- [x] **Test 3 — Webhook trigger**:
+
   1. Tạo workflow với trigger_type=`webhook`
   2. Lấy webhook_url từ response
   3. `curl -X POST http://localhost:8001{webhook_url} -H "Content-Type: application/json" -d '{"test":"data"}'`
   4. Workflow trigger và chạy
 
-- [ ] **Test 4 — Cancel**:
+- [x] **Test 4 — Cancel**:
+
   1. Start một workflow instance
   2. `POST /api/v1/executions/{instance_id}/cancel`
   3. Temporal UI hiện status "Cancelled"
 
 ### Error Handling
 
-- [ ] Khi action fail, step status = "failed" trong DB
-- [ ] Temporal retry 3 lần trước khi mark workflow failed
-- [ ] Instance status = "failed" khi workflow fail
+- [x] Khi action fail, step status = "failed" trong DB
+
+- [x] Temporal retry 3 lần trước khi mark workflow failed
+
+- [x] Instance status = "failed" khi workflow fail
 
 ---
 
 ## 10. Troubleshooting
 
 **Worker không kết nối được Temporal:**
+
 - Kiểm tra `TEMPORAL_HOST=temporal:7233` (trong Docker) hoặc `localhost:7233` (local)
-- Temporal server cần ~30s khởi động
+- Temporal server cần \~30s khởi động
 
 **Workflow không start được:**
+
 - Kiểm tra task queue name khớp giữa Worker và `client.start_workflow()`
 - Cả hai phải dùng `settings.temporal_task_queue`
 
 **Activities không được register:**
+
 - Đảm bảo tất cả activities được pass vào `Worker(activities=[...])`
 
 **"No workflow worker polling" error trong Temporal UI:**
+
 - Worker chưa start hoặc bị crash
 - Xem log: `docker logs workflow_service`

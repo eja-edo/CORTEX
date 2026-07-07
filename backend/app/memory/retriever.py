@@ -70,7 +70,7 @@ class MemoryRetriever:
             ORDER BY created_at DESC
             LIMIT 5
         """), {"uid": user_id})
-        return [r[0] for r in await result.fetchall()]
+        return [r[0] for r in result.fetchall()]
 
     async def _search_semantic_with_fallback(self, query: str, user_id: str,
                                               db) -> List[Dict[str, Any]]:
@@ -85,7 +85,7 @@ class MemoryRetriever:
                         WHERE id = :mid AND is_active = TRUE
                         AND (expires_at IS NULL OR expires_at > NOW())
                     """), {"mid": mid})
-                    row = await r.fetchone()
+                    row = r.fetchone()
                     if row:
                         rows.append(dict(row._mapping))
                 return rows
@@ -104,7 +104,7 @@ class MemoryRetriever:
             ORDER BY importance_score DESC, confidence_score DESC
             LIMIT 15
         """), {"uid": user_id, "q": f"%{query[:100]}%"})
-        return [dict(r._mapping) for r in await result.fetchall()]
+        return [dict(r._mapping) for r in result.fetchall()]
 
     async def _get_preferences(self, user_id: str, db) -> Dict[str, Any]:
         result = await db.execute(text("""
@@ -115,7 +115,7 @@ class MemoryRetriever:
             LIMIT 30
         """), {"uid": user_id})
         prefs: Dict[str, Any] = {}
-        for r in await result.fetchall():
+        for r in result.fetchall():
             cat = r[0]
             if cat not in prefs:
                 prefs[cat] = {}
@@ -135,7 +135,7 @@ class MemoryRetriever:
                         SELECT * FROM episodic_memories
                         WHERE id = :mid AND is_active = TRUE
                     """), {"mid": mid})
-                    row = await r.fetchone()
+                    row = r.fetchone()
                     if row:
                         rows.append(dict(row._mapping))
                 return rows
@@ -151,7 +151,7 @@ class MemoryRetriever:
             ORDER BY importance_score DESC, last_seen_at DESC
             LIMIT 10
         """), {"uid": user_id})
-        return [dict(r._mapping) for r in await result.fetchall()]
+        return [dict(r._mapping) for r in result.fetchall()]
 
     async def _search_knowledge_with_fallback(self, query: str, user_id: str,
                                                db) -> List[Dict[str, Any]]:
@@ -173,4 +173,4 @@ class MemoryRetriever:
             ORDER BY chunk_index ASC
             LIMIT 10
         """), {"uid": user_id, "q": f"%{query[:100]}%"})
-        return [dict(r._mapping) for r in await result.fetchall()]
+        return [dict(r._mapping) for r in result.fetchall()]

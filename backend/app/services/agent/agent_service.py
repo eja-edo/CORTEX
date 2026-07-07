@@ -412,10 +412,20 @@ def _build_history_contents(records: list) -> list[Message]:
     Convert stored AgentMessage records into internal Message objects.
 
     Ordering logic:
-        - Enforces strict user \u2192 assistant \u2192 user \u2192 assistant alternation
+        - Enforces strict user → assistant → user → assistant alternation
         - Skips out-of-order messages
         - Tool messages emit (assistant with tool_calls) + (tool result) pair
+        - Strips leading non-user records (dangling mid-turn tool/assistant
+          when the conversation window starts mid-conversation)
     """
+    # Strip leading non-user records — a valid conversation always starts with user
+    records = list(records)
+    while records and records[0].role != "user":
+        records.pop(0)
+
+    if not records:
+        return []
+
     messages: list[Message] = []
     expected_role = "user"
 
@@ -447,32 +457,34 @@ def _build_history_contents(records: list) -> list[Message]:
             expected_role = "user"
 
         elif role == "tool":
-            if expected_role != "assistant":
-                logger.info(f"Skipping out-of-order tool message (expected {expected_role})")
-                continue
-            if tool_name and tool_input is not None and tool_output is not None:
-                messages.append(
-                    Message(
-                        role="assistant",
-                        tool_calls=[ToolCall(id=tool_name, name=tool_name, args=tool_input or {})],
-                    )
-                )
-                messages.append(
-                    Message(
-                        role="tool",
-                        tool_result=ToolResult(
-                            tool_call_id=tool_name,
-                            name=tool_name,
-                            content=tool_output or {},
-                        ),
-                    )
-                )
-                expected_role = "assistant"
-            else:
+            if not (tool_name and tool_input is not None and tool_output is not None):
                 logger.info(
                     f"Skipping incomplete tool message: tool_name={tool_name}, "
                     f"input_present={tool_input is not None}, output_present={tool_output is not None}"
                 )
+                continue
+
+            if expected_role != "assistant":
+                logger.info(f"Skipping out-of-order tool message (expected {expected_role})")
+                continue
+
+            messages.append(
+                Message(
+                    role="assistant",
+                    tool_calls=[ToolCall(id=tool_name, name=tool_name, args=tool_input or {})],
+                )
+            )
+            messages.append(
+                Message(
+                    role="tool",
+                    tool_result=ToolResult(
+                        tool_call_id=tool_name,
+                        name=tool_name,
+                        content=tool_output or {},
+                    ),
+                )
+            )
+            expected_role = "assistant"
         else:
             logger.info(f"Skipping unknown role message: {role}")
 
@@ -593,7 +605,7 @@ Return ONLY the title, no quotes or explanation."""
             retrieval = await _memory_retriever.retrieve(message, str(self.user.id), self.db)
             memory_context = _context_assembler.assemble(retrieval)
         except Exception as exc:
-            logger.warning(f"Memory retrieval failed (non-fatal): {exc}")
+            logger.warning(f"Memory retrieval failed (non-fatal): {exc}", exc_info=True)
 
         system_prompt = SYSTEM_PROMPT
         if summarizer and conv.summary:
@@ -747,6 +759,9 @@ Return ONLY the title, no quotes or explanation."""
 
                 for tc in tool_calls:
                     tool_name = tc.name
+                    if not tool_name:
+                        logger.warning(f"Skipping tool call with empty name (id={tc.id})")
+                        continue
                     tool_args = tc.args
 
                     tool_call_counts[tool_name] = tool_call_counts.get(tool_name, 0) + 1
@@ -992,10 +1007,10 @@ Return ONLY the title, no quotes or explanation."""
             # ── Memory retrieval ──────────────────────────────────────────────
             memory_context = ""
             try:
-                retrieval = _memory_retriever.retrieve(message, str(user_id), self.db)
+                retrieval = await _memory_retriever.retrieve(message, str(user_id), self.db)
                 memory_context = _context_assembler.assemble(retrieval)
             except Exception as exc:
-                logger.warning(f"Memory retrieval failed (non-fatal): {exc}")
+                logger.warning(f"Memory retrieval failed (non-fatal): {exc}", exc_info=True)
 
             await self.store.save_message(
                 conversation_id=conv.id,
@@ -1191,6 +1206,9 @@ Return ONLY the title, no quotes or explanation."""
 
                 for tc in tool_calls:
                     tool_name = tc.name
+                    if not tool_name:
+                        logger.warning(f"Streaming: skipping tool call with empty name (id={tc.id})")
+                        continue
                     tool_args = tc.args
 
                     tool_call_counts[tool_name] = tool_call_counts.get(tool_name, 0) + 1

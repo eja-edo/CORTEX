@@ -550,29 +550,29 @@ async def close_temporal_client():
 
 ---
 
-## 7. Verification Checklist — Cuối Phase 1
+## 7. Verification Checklist — Cuối Phase 1 ✅
 
 Trước khi chuyển sang Phase 2, xác nhận tất cả các điểm sau:
 
 ### Infrastructure
 
-- [ ] `docker-compose up` khởi động không có error
-- [ ] Temporal UI accessible tại `http://localhost:8080`
-- [ ] `workflow_service` health check trả về 200: `curl http://localhost:8001/health`
-- [ ] `workflow_service` có thể connect đến Temporal: kiểm tra log không có connection error
-- [ ] PostgreSQL có schema `workflow` với các tables: `workflow_definitions`, `workflow_instances`, `workflow_step_executions`, `workflow_trigger_webhooks`
+- [x] `docker-compose up` khởi động không có error
+- [x] Temporal UI accessible tại `http://localhost:8088` (searxng đã dùng 8080)
+- [x] `workflow_service` health check trả về 200: `curl http://localhost:8001/health`
+- [x] `workflow_service` có thể connect đến Temporal: kiểm tra log không có connection error
+- [x] PostgreSQL có schema `workflow` với các tables: `workflow_definitions`, `workflow_instances`, `workflow_step_executions`, `workflow_trigger_webhooks`
 
 ### Code
 
-- [ ] Alembic migration chạy thành công (`alembic upgrade head`)
-- [ ] FastAPI docs accessible tại `http://localhost:8001/docs`
-- [ ] Không có import error khi start service
+- [x] Alembic migration chạy thành công (`alembic upgrade head`)
+- [x] FastAPI docs accessible tại `http://localhost:8001/docs`
+- [x] Không có import error khi start service
 
 ### Connectivity
 
-- [ ] `workflow_service` có thể gọi được `http://backend:8000/health` (Cortex backend)
-- [ ] `workflow_service` có thể connect Redis
-- [ ] Temporal server log không có error
+- [ ] `workflow_service` có thể gọi được `http://backend:8000/health` (Cortex backend) — cần add backend vào docker-compose hoặc dùng host gateway
+- [x] `workflow_service` có thể connect Redis
+- [x] Temporal server log không có error
 
 ---
 
@@ -593,3 +593,25 @@ Trước khi chuyển sang Phase 2, xác nhận tất cả các điểm sau:
 **Temporal UI hiện "Unable to connect":**
 - Temporal server cần ~30 giây để fully initialize
 - Kiểm tra `TEMPORAL_ADDRESS` trong temporal-ui environment
+
+---
+
+## 9. Issues đã fix trong Phase 1
+
+### Docker Image Tags
+- `temporalio/ui:2.26` → `2.51.0` (tag cũ không tồn tại)
+- `temporalio/auto-setup:1.24` → `1.29.7` (tag cũ không tồn tại)
+
+### DB Driver
+- `DB=postgresql` → `DB=postgres12` (auto-setup only supports: `mysql8`, `postgres12`, `postgres12_pgx`, `cassandra`)
+
+### Port Conflict
+- Temporal UI port `8080` → `8088` (searxng đã dùng 8080)
+
+### Alembic Version Table Conflict
+- Cortex backend đã chiếm `public.alembic_version` trong cùng DB
+- Fix: dùng `version_table="workflow_alembic_version"` + `version_table_schema="workflow"`
+
+### Schema Creation Order
+- Alembic cần schema `workflow` tồn tại trước khi tạo version table
+- Fix: `CREATE SCHEMA IF NOT EXISTS workflow` trong `run_async_migrations()` trước `run_sync()`

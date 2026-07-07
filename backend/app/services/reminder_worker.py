@@ -26,22 +26,38 @@ class ReminderWorker:
     async def start(self):
         """Start the reminder worker."""
         self._running = True
+        self._task = asyncio.create_task(self._run_loop())
         logger.info("ReminderWorker started with poll interval=%ds", self.POLL_INTERVAL_SECONDS)
-
-        while self._running:
-            try:
-                await self._process_due_reminders()
-            except Exception as e:
-                logger.exception("Error in reminder worker loop: %s", e)
-
-            await asyncio.sleep(self.POLL_INTERVAL_SECONDS)
+        try:
+            await self._task
+        except asyncio.CancelledError:
+            logger.info("ReminderWorker: task cancelled during shutdown")
+            raise
 
     async def stop(self):
         """Stop the reminder worker."""
         self._running = False
         logger.info("ReminderWorker stopping...")
-        if self._task:
+        if self._task and not self._task.done():
             self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+
+    async def _run_loop(self):
+        """Main loop with proper cancellation handling."""
+        try:
+            while self._running:
+                try:
+                    await self._process_due_reminders()
+                except Exception as e:
+                    logger.exception("Error in reminder worker loop: %s", e)
+
+                await asyncio.sleep(self.POLL_INTERVAL_SECONDS)
+        except asyncio.CancelledError:
+            logger.info("ReminderWorker: run loop cancelled, exiting cleanly")
+            raise
 
     async def _process_due_reminders(self):
         """Fetch and process reminders that are due within the next poll window."""
@@ -125,11 +141,14 @@ class ReminderWorker:
 
         if reminder.method == "push":
             # Create notification record
+            body_text = f"Starts at {schedule.start_time.strftime('%H:%M')}"
             notification = Notification(
                 user_id=reminder.user_id,
                 type="reminder",
                 title=f"Reminder: {schedule.title}",
-                body=f"Starts at {schedule.start_time.strftime('%H:%M')}",
+                body=body_text,
+                content=[{"type": "text", "text": body_text}],
+                actions=[{"label": "View", "action": "navigate", "url": "/schedule"}],
                 payload={
                     "schedule_id": str(schedule.id),
                     "start_time": schedule.start_time.isoformat(),

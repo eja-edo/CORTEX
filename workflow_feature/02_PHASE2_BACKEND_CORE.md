@@ -1,10 +1,11 @@
 # PHASE 2 — BACKEND CORE
+
 ## Workflow CRUD API + Trigger Engine + Action Engine
 
-> **Thời gian**: Tuần 3–4 (10 ngày làm việc)  
-> **Prerequisite**: Phase 1 hoàn thành — Temporal chạy được, DB schema có sẵn  
-> **Mục tiêu**: Có thể tạo/đọc/sửa/xóa workflow qua API, trigger gửi được event, action thực thi được  
-> **Output cuối phase**: API endpoints hoạt động đầy đủ, test được bằng curl hoặc Postman
+> **Thời gian**: Tuần 3–4 (10 ngày làm việc)\
+****Prerequisite**: Phase 1 hoàn thành — Temporal chạy được, DB schema có sẵn\
+****Mục tiêu**: Có thể tạo/đọc/sửa/xóa workflow qua API, trigger gửi được event, action thực thi được\
+****Output cuối phase**: API endpoints hoạt động đầy đủ, test được bằng curl hoặc Postman
 
 ---
 
@@ -22,7 +23,7 @@ Day 5:   Auth middleware            Day 10: Integration test toàn bộ API
 
 ## 2. Pydantic Schemas (Request/Response)
 
-**`app/schemas/workflow.py`**
+`app/schemas/workflow.py`
 
 ```python
 from pydantic import BaseModel, Field, UUID4
@@ -121,7 +122,7 @@ class WorkflowListResponse(BaseModel):
     page_size: int
 ```
 
-**`app/schemas/execution.py`**
+`app/schemas/execution.py`
 
 ```python
 from pydantic import BaseModel, UUID4
@@ -179,7 +180,7 @@ class ManualTriggerRequest(BaseModel):
 
 Workflow service cần xác thực user. Chiến lược: **dùng lại JWT secret của Cortex backend** — decode JWT token và lấy user_id từ đó.
 
-**`app/core/security.py`**
+`app/core/security.py`
 
 ```python
 from fastapi import Depends, HTTPException, status
@@ -232,7 +233,7 @@ async def get_current_user(
 
 ## 4. Workflow CRUD API
 
-**`app/api/v1/workflows.py`**
+`app/api/v1/workflows.py`
 
 ```python
 from fastapi import APIRouter, Depends, HTTPException, status, Query
@@ -453,7 +454,7 @@ Trigger Engine lắng nghe các sự kiện và khởi động Workflow Instance
 
 Cortex backend sẽ publish events lên Redis khi có sự kiện xảy ra (note tạo, schedule tạo...). Workflow service lắng nghe Redis channel này.
 
-**`app/triggers/internal_event_listener.py`**
+`app/triggers/internal_event_listener.py`
 
 ```python
 """
@@ -552,7 +553,7 @@ async def _trigger_workflow_instance(workflow: WorkflowDefinition, trigger_data:
 
 ### 5.2 Webhook Trigger Endpoint
 
-**`app/api/v1/webhooks.py`** (file mới, thêm vào router trong main.py)
+`app/api/v1/webhooks.py` (file mới, thêm vào router trong main.py)
 
 ```python
 from fastapi import APIRouter, Request, HTTPException, Depends
@@ -632,7 +633,7 @@ async def receive_webhook(
 
 Action Engine cho phép thêm action mới dễ dàng mà không cần sửa core logic.
 
-**`app/actions/base.py`**
+`app/actions/base.py`
 
 ```python
 from abc import ABC, abstractmethod
@@ -724,7 +725,7 @@ class BaseAction(ABC):
         return re.sub(r'\{\{(.+?)\}\}', replace_var, template)
 ```
 
-**`app/actions/registry.py`**
+`app/actions/registry.py`
 
 ```python
 from app.actions.base import BaseAction
@@ -765,7 +766,7 @@ class ActionRegistry:
 action_registry = ActionRegistry()
 ```
 
-**`app/actions/builtin/create_note.py`** — Action đầu tiên
+`app/actions/builtin/create_note.py` — Action đầu tiên
 
 ```python
 from app.actions.base import BaseAction, ActionContext, ActionResult
@@ -846,7 +847,7 @@ class CreateNoteAction(BaseAction):
                 )
 ```
 
-**`app/actions/builtin/send_notification.py`**
+`app/actions/builtin/send_notification.py`
 
 ```python
 from app.actions.base import BaseAction, ActionContext, ActionResult
@@ -911,7 +912,7 @@ class SendNotificationAction(BaseAction):
                 return ActionResult(success=False, output={}, error=str(e))
 ```
 
-**`app/actions/__init__.py`** — Đăng ký tất cả actions
+`app/actions/__init__.py` — Đăng ký tất cả actions
 
 ```python
 from app.actions.registry import action_registry
@@ -931,7 +932,7 @@ action_registry.register(SendNotificationAction())
 
 Thêm endpoint để frontend biết có những actions nào:
 
-**`app/api/v1/actions.py`**
+`app/api/v1/actions.py`
 
 ```python
 from fastapi import APIRouter, Depends
@@ -986,30 +987,41 @@ async def list_actions(current_user: CurrentUser = Depends(get_current_user)):
 
 ### API hoạt động
 
-- [ ] `POST /api/v1/workflows` tạo workflow thành công, trả về 201
-- [ ] `GET /api/v1/workflows` trả về danh sách có phân trang
-- [ ] `GET /api/v1/workflows/{id}` trả về chi tiết
-- [ ] `PATCH /api/v1/workflows/{id}` cập nhật thành công
-- [ ] `DELETE /api/v1/workflows/{id}` soft-delete (is_deleted=true)
-- [ ] `POST /api/v1/workflows/{id}/activate` chuyển status sang "active"
-- [ ] `POST /api/v1/workflows/{id}/pause` chuyển status sang "paused"
-- [ ] `POST /api/v1/webhooks/{path}` nhận webhook và log ra
+- [x] `POST /api/v1/workflows` tạo workflow thành công, trả về 201
+
+- [x] `GET /api/v1/workflows` trả về danh sách có phân trang
+
+- [x] `GET /api/v1/workflows/{id}` trả về chi tiết
+
+- [x] `PATCH /api/v1/workflows/{id}` cập nhật thành công
+
+- [x] `DELETE /api/v1/workflows/{id}` soft-delete (is_deleted=true)
+
+- [x] `POST /api/v1/workflows/{id}/activate` chuyển status sang "active"
+
+- [x] `POST /api/v1/workflows/{id}/pause` chuyển status sang "paused"
+
+- [x] `POST /api/v1/webhooks/{path}` nhận webhook và log ra
 
 ### Auth
 
-- [ ] Endpoint không có JWT trả về 401
-- [ ] JWT của Cortex được decode đúng, lấy được user_id
-- [ ] User không thể truy cập workflow của user khác (trả về 404)
+- [x] Endpoint không có JWT trả về 401
+
+- [x] JWT của Cortex được decode đúng, lấy được user_id
+
+- [x] User không thể truy cập workflow của user khác (trả về 404)
 
 ### Action Registry
 
-- [ ] `GET /api/v1/actions` trả về danh sách actions và triggers
-- [ ] `CreateNoteAction` và `SendNotificationAction` được đăng ký
+- [x] `GET /api/v1/actions` trả về danh sách actions và triggers
+
+- [x] `CreateNoteAction` và `SendNotificationAction` được đăng ký
 
 ### Trigger Engine
 
-- [ ] Internal event listener start không có error
-- [ ] Khi publish event vào Redis channel `cortex:workflow:events`, log hiện ra đúng workflow
+- [x] Internal event listener start không có error
+
+- [x] Khi publish event vào Redis channel `cortex:workflow:events`, log hiện ra đúng workflow
 
 ---
 

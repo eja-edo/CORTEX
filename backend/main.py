@@ -12,7 +12,7 @@ if __name__ == "__main__":
     
     uvicorn.run(
         "app:app",
-        host="::",
+        host="0.0.0.0",
         port=8000,
         reload=False,
         log_config=None  # Use our custom logging config, don't override with uvicorn's

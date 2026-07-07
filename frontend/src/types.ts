@@ -19,7 +19,7 @@ export type User = {
   updated_at: string
 }
 
-export type ScheduleType = 'CLASS' | 'DEADLINE' | 'EXAM' | 'PERSONAL'
+export type ScheduleType = 'CLASS' | 'DEADLINE' | 'EXAM' | 'PERSONAL' | 'CRON_EVENT'
 
 export type RecurrenceFreq = 'NONE' | 'DAILY' | 'WEEKLY' | 'MONTHLY'
 
@@ -161,4 +161,113 @@ export type AgentChatRequest = {
 export type AgentChatResponse = {
   conversation_id: string
   reply: string
+}
+
+// ============================================================================
+// Phase 4: Visual Workflow Builder
+// ============================================================================
+
+export type WorkflowStatus = 'draft' | 'active' | 'paused' | 'archived'
+
+export type TriggerType = 'internal_event' | 'webhook' | 'schedule' | 'manual'
+
+export type NodePosition = {
+  x: number
+  y: number
+}
+
+export type WorkflowNodeDef = {
+  id: string
+  type: string
+  position: NodePosition
+  data: Record<string, unknown>
+}
+
+export type WorkflowEdgeDef = {
+  id: string
+  source: string
+  target: string
+  source_handle?: string
+  target_handle?: string
+}
+
+export type WorkflowDefinitionSchema = {
+  nodes: WorkflowNodeDef[]
+  edges: WorkflowEdgeDef[]
+  variables: Record<string, unknown>
+}
+
+export type WorkflowResponse = {
+  id: string
+  user_id: string
+  workspace_id: string | null
+  name: string
+  description: string | null
+  status: WorkflowStatus
+  version: number
+  trigger_type: TriggerType
+  trigger_config: Record<string, unknown>
+  definition: WorkflowDefinitionSchema
+  webhook_url: string | null
+  webhook_secret: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type WorkflowListResponse = {
+  items: WorkflowResponse[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export type WorkflowCreatePayload = {
+  name: string
+  description?: string
+  workspace_id?: string
+  trigger_type: TriggerType
+  trigger_config: Record<string, unknown>
+  definition: WorkflowDefinitionSchema
+}
+
+export type WorkflowUpdatePayload = {
+   name?: string
+   description?: string
+   status?: WorkflowStatus
+   trigger_config?: Record<string, unknown>
+   definition?: WorkflowDefinitionSchema
+}
+
+export type NotificationType = 'sync' | 'schedule' | 'note' | 'system' | 'info' | 'success' | 'warning' | 'error'
+
+export type NotificationBlock =
+   | { type: 'text'; text: string }
+   | { type: 'image'; url: string; alt?: string }
+   | { type: 'html'; html: string }
+   | { type: 'code'; language?: string; content: string }
+   | { type: 'markdown'; text: string }
+
+export type NotificationActionDef = {
+   label: string
+   action: 'navigate' | 'dismiss' | 'callback'
+   url?: string
+   payload?: Record<string, unknown>
+}
+
+export type NotificationResponse = {
+   id: string
+   user_id: string
+   type: NotificationType
+   title: string
+   body: string | null
+   content: NotificationBlock[]
+   actions: NotificationActionDef[]
+   payload: Record<string, unknown>
+   read_at: string | null
+   created_at: string
+}
+
+export type NotificationListResponse = {
+   items: NotificationResponse[]
+   total: number
 }

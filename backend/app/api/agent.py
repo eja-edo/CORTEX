@@ -5,6 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database_async import get_async_db
@@ -15,11 +16,28 @@ from app.schemas import (
     AgentChatResponse,
 )
 from app.services.agent.agent_service import AgentService
+from app.services.agent.model_client import ModelClient
+from app.services.agent.provider_types import Message, GenerationConfig
+from app.core.internal_auth import verify_internal_key
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/agent", tags=["agent"])
+
+_model_client = ModelClient()
+
+
+class AgentCompleteRequest(BaseModel):
+    prompt: str
+    system_instruction: str | None = None
+    max_output_tokens: int | None = 1024
+    temperature: float | None = 0.7
+
+
+class AgentCompleteResponse(BaseModel):
+    reply: str
+    model_used: str
 
 
 @router.post("/chat", response_model=AgentChatResponse, status_code=status.HTTP_200_OK)
@@ -382,3 +400,27 @@ async def delete_conversation(
         "conversation_id": str(conversation_id),
         "message": "Conversation and all associated messages have been permanently deleted.",
     }
+
+
+@router.post("/complete", include_in_schema=False)
+async def complete(
+    payload: AgentCompleteRequest,
+    _: None = Depends(verify_internal_key),
+) -> AgentCompleteResponse:
+    """One-shot AI completion for workflow actions (internal only)."""
+    try:
+        messages = [Message(role="user", content=payload.prompt)]
+        config = GenerationConfig(
+            system_instruction=payload.system_instruction,
+            max_output_tokens=payload.max_output_tokens,
+            temperature=payload.temperature,
+        )
+        model_used, response = await _model_client.generate(messages, config)
+        print(f"Model used: {model_used}, response: {response}")
+        return AgentCompleteResponse(
+            reply=response.content or "",
+            model_used=model_used,
+        )
+    except Exception as e:
+        logger.error(f"Agent completion failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="AI completion failed")

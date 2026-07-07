@@ -296,8 +296,8 @@ function AssetRow({ asset, isPlaying, isActionLoading, onPlay, onDownload, onDel
 
                     <div className="rl2-meta">
                         <AssetStatusBadge status={asset.status} />
-                        {(asset.metadata as any)?.size && (
-                            <span><HardDrive size={9} />{formatFileSize((asset.metadata as any).size)}</span>
+                        {(asset.metadata as Record<string, unknown>)?.size && (
+                            <span><HardDrive size={9} />{formatFileSize((asset.metadata as Record<string, unknown>).size as number)}</span>
                         )}
                         <span><Clock size={9} />{formatRelativeTime(asset.created_at)}</span>
                     </div>
@@ -372,8 +372,9 @@ export function RecordingsList({
 
     useEffect(() => {
         if (isRecording) {
+            // eslint-disable-next-line react-hooks/set-state-in-effect
             setElapsedSeconds(0)
-            timerRef.current = setInterval(() => setElapsedSeconds(s => s + 1), 1000)
+            timerRef.current = setInterval(() => setElapsedSeconds((s: number) => s + 1), 1000)
         } else {
             if (timerRef.current) clearInterval(timerRef.current)
             setElapsedSeconds(0)
@@ -398,14 +399,19 @@ export function RecordingsList({
         }
     }, [requestWithAuth, workspaceId])
 
-    useEffect(() => { void loadAssets() }, [loadAssets])
+    useEffect(() => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        void loadAssets()
+    }, [loadAssets])
 
     useEffect(() => {
         const hasNewUpload = recordings.some(r => r.uploadState === 'uploaded')
         if (hasNewUpload) {
+            // eslint-disable-next-line react-hooks/set-state-in-effect
             void loadAssets()
             onAssetChange?.()
         }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [recordings])
 
     useEffect(() => {

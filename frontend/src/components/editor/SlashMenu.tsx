@@ -43,6 +43,7 @@ export function SlashMenu() {
 
   useEffect(() => {
     if (slashMenu.open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedIndex(0)
       setSlashMenuSearch('')
     }
@@ -144,7 +145,7 @@ export function SlashMenu() {
         {Object.entries(grouped).map(([category, items]) => (
           <div key={category} className="slash-menu-group">
             <div className="slash-menu-category">{category}</div>
-            {items.map((item, idx) => {
+            {items.map((item) => {
               const globalIdx = filtered.indexOf(item)
               return (
                 <button

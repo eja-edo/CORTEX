@@ -139,6 +139,7 @@ class LLMProcessorWorker:
         self._running = False
         self._redis_service: Optional[RedisStreamService] = None
         self._mongo_ocr_service = MongoOCRService()
+        self._consume_task: Optional[asyncio.Task] = None
 
     async def start(self) -> None:
         """Start the LLM worker with standardized Redis service."""
@@ -157,12 +158,27 @@ class LLMProcessorWorker:
         
         self._running = True
         logger.info("🤖 LLM Processor Worker started (with standardized Redis service)")
-        await self._consume_loop()
+        # Run consume loop as cancellable task
+        self._consume_task = asyncio.create_task(self._consume_loop())
+        try:
+            await self._consume_task
+        except asyncio.CancelledError:
+            logger.info("🤖 LLM Processor Worker: consume task cancelled during shutdown")
+            raise
 
     async def stop(self) -> None:
         """Stop the LLM worker gracefully."""
         self._running = False
         
+        # Cancel consume task first, wait for it to exit blocking call
+        if self._consume_task and not self._consume_task.done():
+            self._consume_task.cancel()
+            try:
+                await self._consume_task
+            except asyncio.CancelledError:
+                pass
+        
+        # Now safe to disconnect Redis
         if self._redis_service:
             # Stop background tasks (heartbeat, recovery)
             await self._redis_service.stop_background_tasks()
@@ -182,46 +198,50 @@ class LLMProcessorWorker:
         - Task acknowledgment/rejection
         - Graceful error handling
         """
-        while self._running:
-            try:
-                # Read tasks from stream (blocks for 5 seconds if no tasks)
-                tasks = await self._redis_service.read_tasks(count=1, block_ms=5000)
-                
-                if not tasks:
-                    # No tasks available, loop will retry
-                    continue
-                
-                # Process each task
-                for task in tasks:
-                    try:
-                        logger.info(f"🔍 Processing LLM task: {task.task_id} (asset={task.asset_id})")
-                        await self._process_task(task)
-                        
-                        # Acknowledge successful completion
-                        await self._redis_service.acknowledge(task)
-                        logger.info(f"✅ LLM task completed: {task.task_id}")
-                        
-                    except Exception as exc:
-                        logger.exception(f"❌ LLM task failed: {task.task_id}: {exc}")
-                        
-                        # Reject task (will retry up to max_retries, then move to DLQ)
+        try:
+            while self._running:
+                try:
+                    # Read tasks from stream (blocks for 5 seconds if no tasks)
+                    tasks = await self._redis_service.read_tasks(count=1, block_ms=5000)
+                    
+                    if not tasks:
+                        # No tasks available, loop will retry
+                        continue
+                    
+                    # Process each task
+                    for task in tasks:
                         try:
-                            await self._redis_service.reject(
-                                task, 
-                                error=str(exc)[:500],  # Truncate long errors
-                                retry=True
-                            )
-                        except Exception as reject_error:
-                            logger.error(f"Failed to reject task {task.task_id}: {reject_error}")
-                
-            except ConnectionError as exc:
-                logger.error(f"LLM consumer Redis connection error: {exc}")
-                # RedisStreamService will handle reconnection automatically
-                await asyncio.sleep(5)
-                
-            except Exception as exc:
-                logger.error(f"LLM consumer loop error: {exc}")
-                await asyncio.sleep(2)
+                            logger.info(f"🔍 Processing LLM task: {task.task_id} (asset={task.asset_id})")
+                            await self._process_task(task)
+                            
+                            # Acknowledge successful completion
+                            await self._redis_service.acknowledge(task)
+                            logger.info(f"✅ LLM task completed: {task.task_id}")
+                            
+                        except Exception as exc:
+                            logger.exception(f"❌ LLM task failed: {task.task_id}: {exc}")
+                            
+                            # Reject task (will retry up to max_retries, then move to DLQ)
+                            try:
+                                await self._redis_service.reject(
+                                    task, 
+                                    error=str(exc)[:500],  # Truncate long errors
+                                    retry=True
+                                )
+                            except Exception as reject_error:
+                                logger.error(f"Failed to reject task {task.task_id}: {reject_error}")
+                    
+                except ConnectionError as exc:
+                    logger.error(f"LLM consumer Redis connection error: {exc}")
+                    # RedisStreamService will handle reconnection automatically
+                    await asyncio.sleep(5)
+                    
+                except Exception as exc:
+                    logger.error(f"LLM consumer loop error: {exc}")
+                    await asyncio.sleep(2)
+        except asyncio.CancelledError:
+            logger.info("🤖 LLM Processor Worker: consume loop cancelled, exiting cleanly")
+            raise
 
     # ── Task processing ───────────────────────────────────────────────────────
 

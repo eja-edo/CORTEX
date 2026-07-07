@@ -27,7 +27,7 @@ class MemoryEmbeddingService:
         await db.execute(
             text("""
                 UPDATE knowledge_chunks
-                SET embedding = :emb::vector, updated_at = NOW()
+                SET embedding = CAST(:emb AS vector), updated_at = NOW()
                 WHERE id = :cid
             """),
             {"emb": embedding_str, "cid": chunk_id},
@@ -47,10 +47,10 @@ class MemoryEmbeddingService:
                 INSERT INTO memory_embeddings
                     (user_id, memory_type, memory_id, embedding, source_text)
                 VALUES
-                    (:uid, :mtype, :mid, :emb::vector, :text)
+                    (:uid, :mtype, :mid, CAST(:emb AS vector), :text)
                 ON CONFLICT (memory_type, memory_id)
                 DO UPDATE SET
-                    embedding = :emb2::vector,
+                    embedding = CAST(:emb2 AS vector),
                     source_text = :text2,
                     updated_at = NOW()
             """),
@@ -78,7 +78,7 @@ class MemoryEmbeddingService:
             await db.execute(
                 text("""
                     UPDATE knowledge_chunks
-                    SET embedding = :emb::vector, updated_at = NOW()
+                SET embedding = CAST(:emb AS vector), updated_at = NOW()
                     WHERE id = :cid
                 """),
                 {"emb": embedding_str, "cid": chunk["id"]},
@@ -102,8 +102,8 @@ class MemoryEmbeddingService:
                     me.memory_type,
                     me.memory_id,
                     me.source_text,
-                    (me.embedding <-> :qemb::vector) as distance,
-                    (1 - (me.embedding <-> :qemb::vector) / 2) as similarity_score
+                    (me.embedding <-> CAST(:qemb AS vector)) as distance,
+                    (1 - (me.embedding <-> CAST(:qemb AS vector)) / 2) as similarity_score
                 FROM memory_embeddings me
                 WHERE me.user_id = :uid
                 ORDER BY distance ASC
@@ -111,7 +111,7 @@ class MemoryEmbeddingService:
             """),
             {"qemb": embedding_str, "uid": user_id, "lim": limit},
         )
-        rows = await result.fetchall()
+        rows = result.fetchall()
         return [
             {
                 "id": str(r[0]),
@@ -138,8 +138,8 @@ class MemoryEmbeddingService:
                     kc.chunk_text,
                     kc.source_type,
                     kc.source_id,
-                    (kc.embedding <-> :qemb::vector) as distance,
-                    (1 - (kc.embedding <-> :qemb::vector) / 2) as similarity_score
+                    (kc.embedding <-> CAST(:qemb AS vector)) as distance,
+                    (1 - (kc.embedding <-> CAST(:qemb AS vector)) / 2) as similarity_score
                 FROM knowledge_chunks kc
                 WHERE kc.user_id = :uid
                   AND kc.embedding IS NOT NULL
@@ -149,7 +149,7 @@ class MemoryEmbeddingService:
             """),
             {"qemb": embedding_str, "uid": user_id, "lim": limit},
         )
-        rows = await result.fetchall()
+        rows = result.fetchall()
         return [
             {
                 "id": str(r[0]),

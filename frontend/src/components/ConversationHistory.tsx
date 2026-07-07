@@ -10,7 +10,7 @@ interface ConversationHistoryProps {
     className?: string
 }
 
-export function ConversationHistory({ onSelectConversation, onRefresh, className = '' }: ConversationHistoryProps) {
+export function ConversationHistory({ onSelectConversation, className = '' }: ConversationHistoryProps) {
     const [conversations, setConversations] = useState<ConversationListItem[]>([])
     const [isLoading, setIsLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
@@ -41,7 +41,8 @@ export function ConversationHistory({ onSelectConversation, onRefresh, className
     }
 
     useEffect(() => {
-        loadConversations(0)
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        void loadConversations(0)
     }, [])
 
     const handleDelete = async (conversationId: string, e: React.MouseEvent) => {

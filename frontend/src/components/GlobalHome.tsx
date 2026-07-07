@@ -1,8 +1,9 @@
 import { useMemo } from 'react'
-import { Calendar, Clock, FileText, Plus, Zap } from 'lucide-react'
+import { Calendar, Clock, FileText, Plus, Zap, ChevronRight } from 'lucide-react'
 import type { Workspace } from '../types'
 import type { AppNote } from '../hooks/useNotes'
 import type { Schedule } from '../types'
+
 interface GlobalHomeProps {
   user: { full_name?: string | null; email?: string | null } | null
   workspaces: Workspace[]
@@ -86,96 +87,96 @@ export function GlobalHome({
 
   return (
     <div className="global-home">
-      {/* Header */}
+      {/* Welcome Header */}
       <div className="global-home-header">
         <h1 className="global-home-greeting">
           {greeting}, {userName}
         </h1>
+        <p className="global-home-subtitle">
+          Your automation flows are running smoothly.
+        </p>
       </div>
 
-      {/* Main Grid */}
+      {/* Dashboard Grid */}
       <div className="global-home-grid">
         {/* Left Column */}
         <div className="global-home-left">
           {/* Upcoming Schedules */}
-          <section className="home-section">
-            <h2 className="home-section-title">
-              <Calendar size={16} />
-              Upcoming
-            </h2>
+          <section className="home-card">
+            <div className="home-card-header">
+              <div className="home-card-header-left">
+                <Calendar size={16} className="home-card-header-icon" />
+                <h2 className="home-card-header-label">Upcoming</h2>
+              </div>
+            </div>
 
-            {todaySchedules.length > 0 && (
-              <div className="home-section-group">
-                <h3 className="home-section-subtitle">Today</h3>
-                <div className="home-schedule-list">
-                  {todaySchedules.map(schedule => (
-                    <div key={schedule.id} className="home-schedule-item">
-                      <div className="home-schedule-time">
+            {(todaySchedules.length > 0 || tomorrowSchedules.length > 0) ? (
+              <div className="home-schedule-list">
+                {todaySchedules.map(schedule => (
+                  <div key={schedule.id} className="home-schedule-item">
+                    <div className="home-schedule-time-block">
+                      <p className="home-schedule-time-value">
                         {new Date(schedule.start_time).toLocaleTimeString('en-US', {
                           hour: '2-digit',
                           minute: '2-digit',
                         })}
-                      </div>
-                      <div className="home-schedule-content">
-                        <div className="home-schedule-title">{schedule.title}</div>
-                        {schedule.location && (
-                          <div className="home-schedule-location">{schedule.location}</div>
-                        )}
-                      </div>
+                      </p>
+                      <p className="home-schedule-time-label">Today</p>
                     </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {tomorrowSchedules.length > 0 && (
-              <div className="home-section-group">
-                <h3 className="home-section-subtitle">Tomorrow</h3>
-                <div className="home-schedule-list">
-                  {tomorrowSchedules.map(schedule => (
-                    <div key={schedule.id} className="home-schedule-item">
-                      <div className="home-schedule-time">
+                    <div className="home-schedule-content">
+                      <h4 className="home-schedule-title">{schedule.title}</h4>
+                      {schedule.location && (
+                        <p className="home-schedule-location">{schedule.location}</p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {tomorrowSchedules.map(schedule => (
+                  <div key={schedule.id} className="home-schedule-item home-schedule-item-dim">
+                    <div className="home-schedule-time-block">
+                      <p className="home-schedule-time-value">
                         {new Date(schedule.start_time).toLocaleTimeString('en-US', {
                           hour: '2-digit',
                           minute: '2-digit',
                         })}
-                      </div>
-                      <div className="home-schedule-content">
-                        <div className="home-schedule-title">{schedule.title}</div>
-                      </div>
+                      </p>
+                      <p className="home-schedule-time-label">Tomorrow</p>
                     </div>
-                  ))}
-                </div>
+                    <div className="home-schedule-content">
+                      <h4 className="home-schedule-title">{schedule.title}</h4>
+                    </div>
+                  </div>
+                ))}
               </div>
-            )}
-
-            {todaySchedules.length === 0 && tomorrowSchedules.length === 0 && (
+            ) : (
               <div className="home-empty-state">
-                <Calendar size={24} />
-                <p>No upcoming events</p>
+                <Calendar size={48} className="home-empty-state-icon" />
+                <p className="home-empty-state-title">No upcoming events</p>
+                <p className="home-empty-state-desc">Events from your calendar will appear here.</p>
               </div>
             )}
           </section>
 
           {/* Workspaces */}
-          <section className="home-section">
-            <h2 className="home-section-title">
-              <Zap size={16} />
-              Workspaces
-            </h2>
+          <section className="home-card">
+            <div className="home-card-header">
+              <div className="home-card-header-left">
+                <Zap size={16} className="home-card-header-icon" />
+                <h2 className="home-card-header-label">Workspaces</h2>
+              </div>
+            </div>
+
             {workspaces.length === 0 ? (
               <div className="home-empty-state">
-                <Zap size={24} />
-                <p>No workspaces yet</p>
-                <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
-                  Create your first workspace to get started
-                </p>
+                <Zap size={48} className="home-empty-state-icon" />
+                <p className="home-empty-state-title">No workspaces yet</p>
+                <p className="home-empty-state-desc">Create your first workspace to get started</p>
                 <button
-                  className="btn btn-primary"
+                  className="home-create-workspace-btn"
                   onClick={onCreateWorkspace}
-                  style={{ marginTop: '1rem' }}
+                  style={{ marginTop: '16px', width: 'auto', padding: '8px 24px', borderStyle: 'solid' }}
                 >
-                  <Plus size={14} style={{ marginRight: '0.5rem' }} />
+                  <Plus size={14} />
                   Create Workspace
                 </button>
               </div>
@@ -187,15 +188,25 @@ export function GlobalHome({
                     className="home-workspace-item"
                     onClick={() => onOpenWorkspace(workspace.id)}
                   >
-                    <div className="home-workspace-icon">
+                    <div
+                      className="home-workspace-avatar"
+                      style={{ background: 'var(--accent)' }}
+                    >
                       {workspace.name.charAt(0).toUpperCase()}
                     </div>
                     <div className="home-workspace-info">
                       <div className="home-workspace-name">{workspace.name}</div>
-                      <div className="home-workspace-role">{workspace.my_role}</div>
+                      <div className="home-workspace-role">
+                        {workspace.my_role} &middot; 0 Workflows
+                      </div>
                     </div>
+                    <ChevronRight size={16} className="home-workspace-chevron" />
                   </button>
                 ))}
+                <button className="home-create-workspace-btn" onClick={onCreateWorkspace}>
+                  <Plus size={14} />
+                  Create New Workspace
+                </button>
               </div>
             )}
           </section>
@@ -204,29 +215,37 @@ export function GlobalHome({
         {/* Right Column */}
         <div className="global-home-right">
           {/* Quick Actions */}
-          <section className="home-section">
-            <h2 className="home-section-title">
-              <Plus size={16} />
-              Quick Actions
-            </h2>
+          <section className="home-card">
+            <div className="home-card-header">
+              <div className="home-card-header-left">
+                <Plus size={16} className="home-card-header-icon" />
+                <h2 className="home-card-header-label">Quick Actions</h2>
+              </div>
+            </div>
             <div className="home-quick-actions">
               <button className="home-quick-action-btn" onClick={onCreateNote}>
-                <FileText size={18} />
+                <div className="home-quick-action-icon home-quick-action-icon--primary">
+                  <FileText size={22} />
+                </div>
                 <span>New Note</span>
               </button>
               <button className="home-quick-action-btn" onClick={onCreateEvent}>
-                <Calendar size={18} />
+                <div className="home-quick-action-icon home-quick-action-icon--secondary">
+                  <Calendar size={22} />
+                </div>
                 <span>New Event</span>
               </button>
             </div>
           </section>
 
           {/* Recent Activity */}
-          <section className="home-section">
-            <h2 className="home-section-title">
-              <Clock size={16} />
-              Recent Activity
-            </h2>
+          <section className="home-card" style={{ flex: 1 }}>
+            <div className="home-card-header">
+              <div className="home-card-header-left">
+                <Clock size={16} className="home-card-header-icon" />
+                <h2 className="home-card-header-label">Recent Activity</h2>
+              </div>
+            </div>
             <div className="home-activity-list">
               {recentNotesWithTitles.length > 0 ? (
                 recentNotesWithTitles.map(note => (
@@ -248,8 +267,9 @@ export function GlobalHome({
                 ))
               ) : (
                 <div className="home-empty-state">
-                  <FileText size={24} />
-                  <p>No recent notes</p>
+                  <FileText size={48} className="home-empty-state-icon" />
+                  <p className="home-empty-state-title">No recent notes</p>
+                  <p className="home-empty-state-desc">Activities from your flows will appear here.</p>
                 </div>
               )}
             </div>

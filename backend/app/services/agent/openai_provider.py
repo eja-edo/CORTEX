@@ -87,8 +87,63 @@ class OpenAIProvider(LLMProvider):
                 messages=openai_messages,
                 **kwargs,
             )
+
+            accumulated_tool_calls: dict[int, dict] = {}
+
             async for chunk in stream:
-                yield self._openai_chunk_to_provider(chunk)
+                if not (hasattr(chunk, "choices") and chunk.choices):
+                    continue
+
+                delta = getattr(chunk.choices[0], "delta", None)
+                finish_reason = getattr(chunk.choices[0], "finish_reason", None)
+                content = None
+
+                if delta:
+                    content = getattr(delta, "content", None)
+
+                    openai_tool_calls = getattr(delta, "tool_calls", None) or []
+                    for tc in openai_tool_calls:
+                        idx = getattr(tc, "index", 0)
+                        if idx not in accumulated_tool_calls:
+                            accumulated_tool_calls[idx] = {"id": "", "name": "", "arguments": ""}
+
+                        tc_id = getattr(tc, "id", None)
+                        if tc_id:
+                            accumulated_tool_calls[idx]["id"] = tc_id
+
+                        fn = getattr(tc, "function", None)
+                        if fn:
+                            fn_name = getattr(fn, "name", None)
+                            if fn_name:
+                                accumulated_tool_calls[idx]["name"] = fn_name
+                            fn_args = getattr(fn, "arguments", None)
+                            if fn_args:
+                                accumulated_tool_calls[idx]["arguments"] += fn_args
+
+                if finish_reason:
+                    tool_calls: list[ToolCall] = []
+                    for idx in sorted(accumulated_tool_calls.keys()):
+                        acc = accumulated_tool_calls[idx]
+                        if acc["name"]:
+                            try:
+                                args = json.loads(acc["arguments"]) if acc["arguments"] else {}
+                            except (json.JSONDecodeError, TypeError):
+                                args = {}
+                            tool_calls.append(
+                                ToolCall(
+                                    id=acc["id"] or f"tc_{idx}",
+                                    name=acc["name"],
+                                    args=args,
+                                )
+                            )
+                    accumulated_tool_calls.clear()
+                    yield ProviderStreamChunk(
+                        content=content,
+                        tool_calls=tool_calls if tool_calls else None,
+                        finish_reason=finish_reason,
+                    )
+                elif content:
+                    yield ProviderStreamChunk(content=content)
         except Exception as exc:
             logger.error(f"OpenAIProvider.generate_stream error on {model}: {exc}")
             raise
@@ -227,35 +282,4 @@ class OpenAIProvider(LLMProvider):
             usage=usage,
         )
 
-    def _openai_chunk_to_provider(self, chunk: object) -> ProviderStreamChunk:
-        content: str | None = None
-        tool_calls: list[ToolCall] = []
-        finish_reason: str | None = None
 
-        if hasattr(chunk, "choices") and chunk.choices:
-            delta = getattr(chunk.choices[0], "delta", None)
-            if delta:
-                content = getattr(delta, "content", None)
-                openai_tool_calls = getattr(delta, "tool_calls", None) or []
-                for tc in openai_tool_calls:
-                    fn = getattr(tc, "function", None)
-                    if fn:
-                        args_str = getattr(fn, "arguments", "{}")
-                        try:
-                            args = json.loads(args_str)
-                        except (json.JSONDecodeError, TypeError):
-                            args = {}
-                        tool_calls.append(
-                            ToolCall(
-                                id=getattr(tc, "id", ""),
-                                name=getattr(fn, "name", "unknown"),
-                                args=args,
-                            )
-                        )
-                finish_reason = getattr(chunk.choices[0], "finish_reason", None)
-
-        return ProviderStreamChunk(
-            content=content,
-            tool_calls=tool_calls if tool_calls else None,
-            finish_reason=finish_reason,
-        )

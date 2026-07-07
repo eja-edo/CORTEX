@@ -1,0 +1,493 @@
+/* ========== WORKFLOW DESIGN TOKENS ========== */
+
+.wf-root {
+  --wf-canvas-bg: #f8f9ff;
+  --wf-panel-bg: #ffffff;
+  --wf-panel-hover: #eff4ff;
+  --wf-panel-border: #c2c6d6;
+  --wf-panel-border-hover: #727785;
+
+  --wf-text-primary: #0b1c30;
+  --wf-text-secondary: #424754;
+  --wf-text-tertiary: #727785;
+  --wf-text-disabled: #c2c6d6;
+
+  --wf-accent: #0058be;
+  --wf-accent-hover: #2170e4;
+
+  /* Node category colors */
+  --wf-trigger: #6b38d4;
+  --wf-trigger-bg: rgba(107, 56, 212, 0.08);
+  --wf-action: #0058be;
+  --wf-action-bg: rgba(0, 88, 190, 0.08);
+  --wf-ai: #8455ef;
+  --wf-ai-bg: rgba(132, 85, 239, 0.08);
+  --wf-condition: #22c55e;
+  --wf-condition-bg: rgba(34, 197, 94, 0.08);
+  --wf-wait: #eab308;
+  --wf-wait-bg: rgba(234, 179, 8, 0.08);
+  --wf-webhook: #008096;
+  --wf-webhook-bg: rgba(0, 128, 150, 0.08);
+
+  /* Node surface */
+  --wf-node-bg: #ffffff;
+  --wf-node-border: #c2c6d6;
+  --wf-node-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+
+  /* Edge */
+  --wf-edge: #c2c6d6;
+  --wf-edge-active: #0058be;
+
+  /* Handles */
+  --wf-handle: #c2c6d6;
+  --wf-handle-active: #0058be;
+
+  /* Badge */
+  --wf-badge-warn-bg: rgba(234, 179, 8, 0.12);
+  --wf-badge-warn-text: #a16207;
+
+  /* MiniMap / Controls */
+  --wf-controls-bg: #ffffff;
+  --wf-controls-border: #c2c6d6;
+  --wf-controls-color: #727785;
+  --wf-controls-hover: #eff4ff;
+}
+
+/* ========== SEARCH BAR ========== */
+.wf-palette-search-wrap {
+  position: relative;
+  margin-bottom: 12px;
+}
+
+.wf-palette-search-icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+
+.wf-palette-search {
+  width: 100%;
+  padding: 8px 10px 8px 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: var(--font);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  box-sizing: border-box;
+}
+
+.wf-palette-search:focus {
+  border-color: var(--wf-accent);
+  box-shadow: 0 0 0 2px rgba(0, 88, 190, 0.1);
+}
+
+.wf-palette-search::placeholder {
+  color: var(--text-tertiary);
+}
+
+/* ========== CATEGORY HEADER ========== */
+.wf-palette-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.wf-palette-category {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+  flex-shrink: 0;
+}
+
+.wf-palette-category:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* ========== ITEMS WRAPPER ========== */
+.wf-palette-items-wrap {
+  overflow: hidden;
+}
+
+.wf-palette-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: var(--radius-lg);
+  cursor: grab;
+  font-size: 13px;
+  color: var(--text-secondary);
+  transition: background 0.1s, color 0.1s;
+  user-select: none;
+  border: 1px solid transparent;
+  overflow: hidden;
+}
+
+.wf-palette-item:hover {
+  background: var(--wf-panel-hover);
+  color: var(--text-primary);
+  border-color: rgba(194, 198, 214, 0.3);
+}
+
+.wf-palette-item:active {
+  cursor: grabbing;
+}
+
+.wf-palette-item-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+}
+
+.wf-palette-item-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  transition: color 0.1s;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wf-palette-item:hover .wf-palette-item-label {
+  color: var(--text-primary);
+}
+
+/* ========== NODE ========== */
+.wf-node {
+  position: relative;
+  background: var(--wf-node-bg);
+  border: 1px solid var(--wf-node-border);
+  border-radius: var(--radius-lg);
+  min-width: 120px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  font-size: 13px;
+  transition: box-shadow 0.2s, border-color 0.2s;
+  cursor: pointer;
+  padding: 16px 16px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.wf-node::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  border: 2px solid var(--node-color, var(--wf-node-border));
+  opacity: 0.15;
+  pointer-events: none;
+  transition: opacity 0.2s;
+}
+
+.wf-node:hover::before {
+  opacity: 0.3;
+}
+
+.wf-node--selected {
+  box-shadow: 0 0 0 2px var(--wf-accent), 0 2px 8px rgba(0, 88, 190, 0.12);
+  border-color: var(--wf-accent);
+}
+
+.wf-node--selected::before {
+  opacity: 0.4;
+  border-color: var(--wf-accent);
+}
+
+.wf-node--condition {
+  border-radius: 12px;
+}
+
+.wf-node--trigger {
+  border-color: var(--wf-trigger);
+  border-width: 1.5px;
+}
+
+/* ---- Node Toolbar (hover) ---- */
+.wf-node-toolbar {
+  position: absolute;
+  top: -28px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  padding: 3px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
+  z-index: 10;
+}
+
+.wf-node:hover .wf-node-toolbar {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.wf-node-toolbar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: all 0.1s;
+  padding: 0;
+}
+
+.wf-node-toolbar-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* ---- Node Icon ---- */
+.wf-node-icon-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: var(--node-color, var(--accent));
+  color: #fff;
+  flex-shrink: 0;
+  transition: transform 0.15s;
+}
+
+.wf-node--trigger .wf-node-icon-wrap {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+}
+
+.wf-node:hover .wf-node-icon-wrap {
+  transform: scale(1.05);
+}
+
+/* ---- Node Info ---- */
+.wf-node-info {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.wf-node-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+  line-height: 1.3;
+  margin-top:5px;
+}
+
+.wf-node-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--wf-badge-warn-bg);
+  color: var(--wf-badge-warn-text);
+  flex-shrink: 0;
+}
+
+.wf-node-subtitle {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  text-align: center;
+  line-height: 1.2;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wf-node-children {
+  width: 100%;
+}
+
+/* ========== HANDLE ========== */
+.wf-handle {
+  width: 8px !important;
+  height: 8px !important;
+  background: var(--wf-handle) !important;
+  border: 2px solid var(--wf-node-bg) !important;
+  border-radius: 50%;
+  transition: background 0.2s, transform 0.15s, box-shadow 0.15s;
+}
+
+.wf-handle:hover {
+  background: var(--wf-handle-active) !important;
+  transform: scale(1.4);
+  box-shadow: 0 0 6px rgba(0, 88, 190, 0.35);
+}
+
+.wf-handle--true {
+  background: var(--green) !important;
+  border-color: var(--wf-node-bg) !important;
+}
+
+.wf-handle--true:hover {
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.4) !important;
+}
+
+.wf-handle--false {
+  background: var(--red) !important;
+  border-color: var(--wf-node-bg) !important;
+}
+
+.wf-handle--false:hover {
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.4) !important;
+}
+
+.react-flow__handle-connecting {
+  background: var(--wf-handle-active) !important;
+}
+
+.react-flow__handle-valid {
+  background: var(--green) !important;
+}
+
+/* ========== HANDLE LABEL ========== */
+.wf-handle-label {
+  position: absolute;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+  user-select: none;
+  pointer-events: none;
+}
+
+.wf-handle-label--true {
+  left: 50%;
+  top: -14px;
+  transform: translateX(-50%);
+  color: var(--green);
+}
+
+.wf-handle-label--false {
+  left: 50%;
+  bottom: -14px;
+  transform: translateX(-50%);
+  color: var(--red);
+}
+
+.wf-node-body{
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-items: center;
+}
+
+/* ========== CONTROLS OVERRIDE ========== */
+.wf-controls {
+  background: var(--wf-controls-bg) !important;
+  border: 1px solid var(--wf-controls-border) !important;
+  border-radius: var(--radius) !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08) !important;
+}
+
+.wf-controls button {
+  background: transparent !important;
+  border-color: transparent !important;
+  color: var(--wf-controls-color) !important;
+  fill: var(--wf-controls-color) !important;
+  transition: background 0.1s, color 0.1s;
+}
+
+.wf-controls button:hover {
+  background: var(--wf-controls-hover) !important;
+  color: var(--wf-text-primary) !important;
+  fill: var(--wf-text-primary) !important;
+}
+
+.wf-controls button svg {
+  fill: inherit;
+}
+
+/* ========== MINIMAP OVERRIDE ========== */
+.wf-minimap {
+  background: var(--wf-controls-bg) !important;
+  border: 1px solid var(--wf-controls-border) !important;
+  border-radius: var(--radius) !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08) !important;
+}
+
+/* ========== EDGE OVERRIDE ========== */
+.react-flow__edge path {
+  stroke: var(--wf-edge) !important;
+  stroke-width: 2 !important;
+  transition: stroke 0.15s;
+  cursor: pointer;
+}
+
+.react-flow__edge.selected path {
+  stroke: var(--wf-edge-active) !important;
+  stroke-width: 2.5 !important;
+}
+
+.react-flow__edge:hover path {
+  stroke: var(--wf-edge-active) !important;
+}
+
+.react-flow__edge.selected .react-flow__edge-path,
+.react-flow__edge:hover .react-flow__edge-path {
+  stroke: var(--wf-edge-active) !important;
+}
+
+/* Arrow marker color on hover/selected */
+.react-flow__edge.selected .react-flow__arrowhead polyline,
+.react-flow__edge:hover .react-flow__arrowhead polyline {
+  fill: #0058be !important;
+  stroke: #0058be !important;
+}
+
+/* ========== SELECTION OVERRIDE ========== */
+.react-flow__selection {
+  background: rgba(0, 88, 190, 0.08) !important;
+  border: 1px solid var(--wf-accent) !important;
+}
+
+/* ========== CANVAS BACKGROUND ========== */
+.react-flow__background {
+  background: var(--wf-canvas-bg) !important;
+}

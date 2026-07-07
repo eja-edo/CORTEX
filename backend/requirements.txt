@@ -4,6 +4,7 @@ sqlalchemy==2.0.25
 psycopg2-binary==2.9.9
 asyncpg==0.30.0
 pydantic==2.9.2
+pgvector==0.5.0
 pydantic-settings==2.1.0
 python-dotenv==1.0.0
 alembic==1.13.1
@@ -20,7 +21,7 @@ boto3==1.35.69
 redis==5.0.8
 motor==3.6.0
 google-genai>=2.6.0
-openai>=1.55.0
+openai>=1.55.0 
 numpy==2.1.2
 opencv-python-headless==4.10.0.84
 scikit-image==0.24.0

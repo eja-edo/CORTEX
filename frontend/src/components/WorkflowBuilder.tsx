@@ -1,0 +1,579 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { nanoid } from 'nanoid'
+import { Settings, ChevronDown, Trash2, Play, AlertCircle, CheckCircle2 } from 'lucide-react'
+import {
+  ReactFlowProvider,
+  useNodesState,
+  useEdgesState,
+  addEdge,
+  MarkerType,
+  type Connection,
+  type Node,
+  type Edge,
+  type OnSelectionChangeParams,
+  type ReactFlowInstance,
+} from 'reactflow'
+import 'reactflow/dist/style.css'
+import type {
+  WorkflowNodeDef,
+  WorkflowEdgeDef,
+  WorkflowDefinitionSchema,
+  WorkflowCreatePayload,
+  WorkflowUpdatePayload,
+  WorkflowStatus,
+  TriggerType,
+} from '../types'
+import { useWorkflows } from '../hooks/useWorkflows'
+import { nodeTypes } from './workflow/nodes'
+import { getNodeConfig } from './workflow/nodeConfig'
+import { NodePalette } from './workflow/NodePalette'
+import { WorkflowCanvas } from './workflow/WorkflowCanvas'
+import { WorkflowToolbar } from './workflow/WorkflowToolbar'
+import { WorkflowList } from './workflow/WorkflowList'
+import { getConfigPanel } from './workflow/config'
+
+function getDefaultData(type: string): Record<string, unknown> {
+  const config = getNodeConfig(type)
+  return { label: config?.label ?? type, config: {} }
+}
+
+type WorkflowBuilderProps = {
+  workspaceId: string | null
+  workflowId: string | null
+  onBack?: () => void
+  onNavigate?: (workflowId: string) => void
+}
+
+export function WorkflowBuilder(props: WorkflowBuilderProps) {
+  return (
+    <ReactFlowProvider>
+      <WorkflowBuilderInner {...props} />
+    </ReactFlowProvider>
+  )
+}
+
+function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate }: WorkflowBuilderProps) {
+  const reactFlowWrapper = useRef<HTMLDivElement>(null)
+  const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null)
+  const [nodes, setNodes, onNodesChange] = useNodesState([])
+  const [edges, setEdges, onEdgesChange] = useEdgesState([])
+  const [selectedNode, setSelectedNode] = useState<Node | null>(null)
+
+  const [workflowName, setWorkflowName] = useState('')
+  const [workflowDescription, setWorkflowDescription] = useState('')
+  const [workflowStatus, setWorkflowStatus] = useState<WorkflowStatus>('draft')
+  const [triggerConfig, setTriggerConfig] = useState<Record<string, unknown>>({})
+  const [currentWorkflowId, setCurrentWorkflowId] = useState<string | null>(null)
+
+  const triggerType = useMemo<TriggerType>(() => {
+    const triggerNode = nodes.find(n => n.type?.startsWith('trigger.'))
+    if (triggerNode?.type) {
+      return triggerNode.type.replace('trigger.', '') as TriggerType
+    }
+    return 'manual'
+  }, [nodes])
+
+  const [view, setView] = useState<'list' | 'editor'>('list')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [nodeOutputs, setNodeOutputs] = useState<Record<string, { success: boolean; output: Record<string, unknown>; error: string | null }>>({})
+  const [runningNodeId, setRunningNodeId] = useState<string | null>(null)
+
+  const wf = useWorkflows()
+
+  const executeNodeRef = useRef<((nodeId: string, config: Record<string, unknown>) => void) | null>(null)
+
+  const injectExecuteNode = useCallback((node: Node): Node => ({
+    ...node,
+    data: {
+      ...node.data,
+      onExecute: (config: Record<string, unknown>) => {
+        executeNodeRef.current?.(node.id, config)
+      },
+    },
+  }), [])
+
+  const loadWorkflow = useCallback(async (id: string) => {
+    const data = await wf.getWorkflow(id)
+    if (!data) return
+    setCurrentWorkflowId(data.id)
+    setWorkflowName(data.name)
+    setWorkflowDescription(data.description ?? '')
+    setWorkflowStatus(data.status)
+    setTriggerConfig(data.trigger_config as Record<string, unknown>)
+
+    const def = data.definition
+    const flowNodes: Node[] = (def.nodes ?? []).map((n: WorkflowNodeDef) => {
+      const nd = n.data as Record<string, unknown>
+      const output = nd.output as { success: boolean; output: Record<string, unknown>; error: string | null } | undefined
+      if (output) {
+        setNodeOutputs(prev => ({ ...prev, [n.id]: output }))
+      }
+      return injectExecuteNode({ id: n.id, type: n.type, position: n.position, data: nd })
+    })
+
+    // Sync trigger_config from the trigger node's data if trigger_config is empty
+    const triggerNode = flowNodes.find(n => n.type?.startsWith('trigger.'))
+    if (triggerNode && (!data.trigger_config || Object.keys(data.trigger_config).length === 0)) {
+      const nodeConfig = triggerNode.data?.config as Record<string, unknown> ?? {}
+      if (nodeConfig && Object.keys(nodeConfig).length > 0) {
+        setTriggerConfig(nodeConfig)
+      }
+    }
+
+    const flowEdges: Edge[] = (def.edges ?? []).map((e: WorkflowEdgeDef) => ({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      sourceHandle: e.source_handle === null ? undefined : e.source_handle,
+      targetHandle: e.target_handle === null ? undefined : e.target_handle,
+      markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: '#b1b1b7' },
+    }))
+    setNodes(flowNodes)
+    setEdges(flowEdges)
+    setView('editor')
+  }, [wf, setNodes, setEdges])
+
+  useEffect(() => {
+    if (workspaceId) {
+      void wf.fetchWorkflows({ workspace_id: workspaceId })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId])
+
+  useEffect(() => {
+    if (workflowId && workflowId !== currentWorkflowId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      void loadWorkflow(workflowId)
+    }
+  }, [workflowId, currentWorkflowId, loadWorkflow])
+
+  useEffect(() => {
+    if (workflowId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setView('editor')
+    }
+  }, [workflowId])
+
+  const onConnect = useCallback((connection: Connection) => {
+    setEdges(eds => addEdge({
+      ...connection,
+      markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: '#b1b1b7' },
+    }, eds))
+  }, [setEdges])
+
+  const onDragOver = useCallback((event: React.DragEvent) => {
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+  }, [])
+
+  const onDrop = useCallback((event: React.DragEvent) => {
+    event.preventDefault()
+    const type = event.dataTransfer.getData('application/reactflow')
+    if (!type || !reactFlowInstance) return
+
+    const position = reactFlowInstance.screenToFlowPosition({
+      x: event.clientX,
+      y: event.clientY,
+    })
+
+    const id = nanoid()
+    const newNode: Node = injectExecuteNode({
+      id,
+      type,
+      position,
+      data: getDefaultData(type),
+    })
+    setNodes(nds => nds.concat(newNode))
+  }, [reactFlowInstance, setNodes, injectExecuteNode])
+
+  const onNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
+    setSelectedNode(node)
+  }, [])
+
+  const onPaneClick = useCallback(() => {
+    setSelectedNode(null)
+  }, [])
+
+  const onSelectionChange = useCallback(({ nodes: selectedNodes }: OnSelectionChangeParams) => {
+    if (selectedNodes.length === 1) {
+      setSelectedNode(selectedNodes[0])
+    } else if (selectedNodes.length === 0) {
+      setSelectedNode(null)
+    }
+  }, [])
+
+  const updateNodeConfig = useCallback((nodeId: string, config: Record<string, unknown>) => {
+    setNodes(nds => nds.map(n => {
+      if (n.id !== nodeId) return n
+      return { ...n, data: { ...n.data, config } }
+    }))
+    setSelectedNode(prev => prev?.id === nodeId ? { ...prev, data: { ...prev.data, config } } : prev)
+    // Sync trigger node config to triggerConfig so save/activate use the right data
+    if (selectedNode?.type?.startsWith('trigger.')) {
+      setTriggerConfig(config)
+    }
+  }, [setNodes, selectedNode])
+
+  const buildDefinition = useCallback((): WorkflowDefinitionSchema => {
+    return {
+      nodes: nodes.map(n => ({
+        id: n.id,
+        type: n.type ?? '',
+        position: n.position,
+        data: n.data as Record<string, unknown>,
+      })),
+      edges: edges.map(e => ({
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        source_handle: e.sourceHandle === null ? undefined : e.sourceHandle,
+        target_handle: e.targetHandle === null ? undefined : e.targetHandle,
+      })),
+      variables: {},
+    }
+  }, [nodes, edges])
+
+  const handleSave = useCallback(async () => {
+    setSaving(true)
+    try {
+      const definition = buildDefinition()
+      if (currentWorkflowId) {
+        const payload: WorkflowUpdatePayload = {
+          name: workflowName || 'Untitled Workflow',
+          description: workflowDescription || undefined,
+          definition,
+          trigger_config: triggerConfig,
+        }
+        const updated = await wf.updateWorkflow(currentWorkflowId, payload)
+        if (updated) {
+          setWorkflowName(updated.name)
+          setWorkflowStatus(updated.status)
+        }
+      } else {
+        const payload: WorkflowCreatePayload = {
+          name: workflowName || 'Untitled Workflow',
+          description: workflowDescription || undefined,
+          workspace_id: workspaceId ?? undefined,
+          trigger_type: triggerType,
+          trigger_config: triggerConfig,
+          definition,
+        }
+        const created = await wf.createWorkflow(payload)
+        if (created) {
+          setCurrentWorkflowId(created.id)
+          setWorkflowStatus(created.status)
+        }
+      }
+    } finally {
+      setSaving(false)
+    }
+  }, [currentWorkflowId, workflowName, workflowDescription, triggerType, triggerConfig, workspaceId, wf, buildDefinition])
+
+  const handleActivate = useCallback(async () => {
+    if (!currentWorkflowId) return
+    await handleSave()
+    const updated = await wf.activateWorkflow(currentWorkflowId)
+    if (updated) setWorkflowStatus(updated.status)
+  }, [currentWorkflowId, wf, handleSave])
+
+  const handlePause = useCallback(async () => {
+    if (!currentWorkflowId) return
+    const updated = await wf.pauseWorkflow(currentWorkflowId)
+    if (updated) setWorkflowStatus(updated.status)
+  }, [currentWorkflowId, wf])
+
+  const handleDelete = useCallback(async () => {
+    if (!currentWorkflowId) return
+    if (!window.confirm('Are you sure you want to delete this workflow?')) return
+    const ok = await wf.deleteWorkflow(currentWorkflowId)
+    if (ok) {
+      setCurrentWorkflowId(null)
+      setWorkflowName('')
+      setWorkflowDescription('')
+      setWorkflowStatus('draft')
+      setNodes([])
+      setEdges([])
+      setView('list')
+      if (workspaceId) void wf.fetchWorkflows({ workspace_id: workspaceId })
+    }
+  }, [currentWorkflowId, wf, setNodes, setEdges, workspaceId])
+
+  const handleRemoveNode = useCallback(() => {
+    setSelectedNode(prev => {
+      if (!prev) return null
+      setNodes(nds => nds.filter(n => n.id !== prev.id))
+      setEdges(eds => eds.filter(e => e.source !== prev.id && e.target !== prev.id))
+      return null
+    })
+  }, [setNodes, setEdges])
+
+  const handleRun = useCallback(async () => {
+    if (!currentWorkflowId) return
+    setError(null)
+    await handleSave()
+
+    // Auto-activate if not yet active
+    if (workflowStatus !== 'active') {
+      const updated = await wf.activateWorkflow(currentWorkflowId)
+      if (!updated) {
+        setError('Failed to activate workflow. Is the workflow service running?')
+        return
+      }
+      setWorkflowStatus(updated.status)
+    }
+
+    const result = await wf.triggerWorkflow(currentWorkflowId)
+    if (result) {
+      console.log('Workflow triggered:', result.instance_id)
+    } else {
+      setError('Failed to trigger workflow. Check console for details.')
+    }
+  }, [currentWorkflowId, wf, handleSave, workflowStatus])
+
+  const handleRunNode = useCallback(async (nodeId: string, config: Record<string, unknown>) => {
+    if (!currentWorkflowId) return
+    setRunningNodeId(nodeId)
+    setError(null)
+    try {
+      const result = await wf.executeNode(currentWorkflowId, nodeId, {
+        config,
+        trigger_data: {},
+        previous_outputs: {},
+      })
+      if (result) {
+        setNodeOutputs(prev => ({ ...prev, [nodeId]: result }))
+        setNodes(nds => nds.map(n =>
+          n.id === nodeId ? { ...n, data: { ...n.data, output: result } } : n
+        ))
+      } else {
+        setError('Failed to execute node. Is the workflow service running?')
+      }
+    } finally {
+      setRunningNodeId(null)
+    }
+  }, [currentWorkflowId, wf, setNodes])
+
+  useEffect(() => { executeNodeRef.current = handleRunNode }, [handleRunNode])
+
+  const handleNewWorkflow = useCallback(() => {
+    setCurrentWorkflowId(null)
+    setWorkflowName('')
+    setWorkflowDescription('')
+    setWorkflowStatus('draft')
+    setTriggerConfig({})
+    setNodes([])
+    setEdges([])
+    setSelectedNode(null)
+    setView('editor')
+  }, [setNodes, setEdges])
+
+  const handlePaletteDragStart = useCallback((event: React.DragEvent, type: string) => {
+    event.dataTransfer.setData('application/reactflow', type)
+    event.dataTransfer.effectAllowed = 'move'
+  }, [])
+
+  const handleAddStickyNote = useCallback(() => {
+    if (!reactFlowInstance) return
+    const viewport = reactFlowInstance.getViewport()
+    const center = reactFlowInstance.screenToFlowPosition({
+      x: window.innerWidth / 2,
+      y: window.innerHeight / 2,
+    })
+    const id = nanoid()
+    const newNode: Node = injectExecuteNode({
+      id,
+      type: 'sticky_note',
+      position: center,
+      data: { label: 'Sticky Note', content: '', color: 'yellow' },
+    })
+    setNodes(nds => nds.concat(newNode))
+  }, [reactFlowInstance, setNodes, injectExecuteNode])
+
+  const statusBadge = useMemo(() => {
+    const colors: Record<WorkflowStatus, string> = {
+      draft: 'var(--text-tertiary)',
+      active: 'var(--green)',
+      paused: 'var(--yellow)',
+      archived: 'var(--text-disabled)',
+    }
+    return { label: workflowStatus, color: colors[workflowStatus] ?? 'var(--text-tertiary)' }
+  }, [workflowStatus])
+
+  if (view === 'list') {
+    return (
+      <WorkflowList
+        workflows={wf.workflows}
+        loading={wf.loading}
+        onSelect={(id) => {
+          loadWorkflow(id)
+          if (onNavigate) onNavigate(id)
+        }}
+        onNew={handleNewWorkflow}
+      />
+    )
+  }
+
+  return (
+    <div className="wf-page wf-root">
+      <WorkflowToolbar
+        workflowName={workflowName}
+        workflowStatus={workflowStatus}
+        currentWorkflowId={currentWorkflowId}
+        saving={saving}
+        statusBadge={statusBadge}
+        onNameChange={setWorkflowName}
+        onBack={() => {
+          setView('list')
+          if (onBack) onBack()
+          if (workspaceId) void wf.fetchWorkflows({ workspace_id: workspaceId })
+        }}
+        onSave={handleSave}
+        onActivate={handleActivate}
+        onPause={handlePause}
+        onRun={handleRun}
+        onDelete={handleDelete}
+      />
+
+      {error && (
+        <div className="wf-error-banner">
+          <span>{error}</span>
+          <button type="button" onClick={() => setError(null)}>×</button>
+        </div>
+      )}
+
+      <div className="wf-body">
+        <NodePalette onDragStart={handlePaletteDragStart} onAddStickyNote={handleAddStickyNote} />
+
+        <WorkflowCanvas
+          nodes={nodes}
+          edges={edges}
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          onConnect={onConnect}
+          onDrop={onDrop}
+          onDragOver={onDragOver}
+          onNodeClick={onNodeClick}
+          onPaneClick={onPaneClick}
+          onSelectionChange={onSelectionChange}
+          onInit={setReactFlowInstance}
+          nodeTypes={nodeTypes}
+          reactFlowWrapperRef={reactFlowWrapper}
+        />
+
+        {selectedNode && selectedNode.type !== 'sticky_note' && (
+          <aside className="wf-config">
+            <div className="wf-config-header">
+              <div className="wf-config-header-left">
+                <h2 className="wf-config-title">Node Configuration</h2>
+                <p className="wf-config-subtitle">PARAMETERS</p>
+              </div>
+              <Settings size={18} style={{ color: 'var(--text-tertiary)' }} />
+            </div>
+            <div className="wf-config-body">
+              <div className="wf-config-field">
+                <label className="wf-config-label">TYPE</label>
+                <div className="wf-config-value">{selectedNode.type}</div>
+              </div>
+              <div className="wf-config-field">
+                <label className="wf-config-label">LABEL</label>
+                <input
+                  type="text"
+                  className="wf-config-input"
+                  value={selectedNode.data.label as string ?? ''}
+                  onChange={e => {
+                    const newLabel = e.target.value
+                    setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: { ...n.data, label: newLabel } } : n))
+                    setSelectedNode(prev => prev?.id === selectedNode.id ? { ...prev, data: { ...prev.data, label: newLabel } } : prev)
+                  }}
+                />
+              </div>
+              {(() => {
+                const ConfigPanel = getConfigPanel(selectedNode.type ?? '')
+                if (ConfigPanel) {
+                  return (
+                    <ConfigPanel
+                      config={(selectedNode.data.config as Record<string, unknown>) ?? {}}
+                      onChange={(cfg) => updateNodeConfig(selectedNode.id, cfg)}
+                    />
+                  )
+                }
+                return (
+                  <div className="wf-config-field">
+                    <label className="wf-config-label">CONFIG (JSON)</label>
+                    <div className="wf-config-textarea-wrap">
+                      <textarea
+                        className="wf-config-textarea"
+                        rows={6}
+                        value={JSON.stringify(selectedNode.data.config ?? {}, null, 2)}
+                        onChange={e => {
+                          try {
+                            const parsed = JSON.parse(e.target.value)
+                            updateNodeConfig(selectedNode.id, parsed)
+                          } catch {
+                            // Allow typing invalid JSON temporarily
+                          }
+                        }}
+                      />
+                    </div>
+                  </div>
+                )
+              })()}
+              {selectedNode.type?.startsWith('trigger.') && (
+                <div className="wf-config-field">
+                  <label className="wf-config-label">TRIGGER TYPE</label>
+                  <div className="wf-config-value">{triggerType.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase())}</div>
+                </div>
+              )}
+              {(() => {
+                const nodeOutput = nodeOutputs[selectedNode.id] ?? (selectedNode.data?.output as { success: boolean; output: Record<string, unknown>; error: string | null } | undefined)
+                if (nodeOutput) {
+                  return (
+                    <div className="wf-config-field">
+                      <label className="wf-config-label">OUTPUT</label>
+                      <div className={`wf-node-output ${nodeOutput.success ? 'wf-node-output--success' : 'wf-node-output--error'}`}>
+                        <div className="wf-node-output-header">
+                          {nodeOutput.success
+                            ? <CheckCircle2 size={14} style={{ color: 'var(--green)' }} />
+                            : <AlertCircle size={14} style={{ color: 'var(--red)' }} />}
+                          <span>{nodeOutput.success ? 'Success' : 'Failed'}</span>
+                        </div>
+                        {nodeOutput.error && <div className="wf-node-output-error">{nodeOutput.error}</div>}
+                        {nodeOutput.output && Object.keys(nodeOutput.output).length > 0 && (
+                          <pre className="wf-node-output-json">{JSON.stringify(nodeOutput.output, null, 2)}</pre>
+                        )}
+                      </div>
+                    </div>
+                  )
+                }
+                return null
+              })()}
+              {selectedNode.type !== 'sticky_note' ? (
+                <div className="wf-config-field">
+                  <button
+                    type="button"
+                    className="wf-config-run-btn"
+                    onClick={() => handleRunNode(selectedNode.id, (selectedNode.data.config as Record<string, unknown>) ?? {})}
+                    disabled={runningNodeId === selectedNode.id}
+                  >
+                    {runningNodeId === selectedNode.id ? (
+                      <>Running...</>
+                    ) : (
+                      <><Play size={14} /> Run Node</>
+                    )}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+            <div className="wf-config-actions">
+              <button type="button" className="wf-config-remove-btn" onClick={handleRemoveNode}>
+                <Trash2 size={16} />
+                Remove Node
+              </button>
+            </div>
+          </aside>
+        )}
+      </div>
+    </div>
+  )
+}

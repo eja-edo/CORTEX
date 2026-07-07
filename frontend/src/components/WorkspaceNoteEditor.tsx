@@ -1,17 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Columns2, Eye, FileText } from 'lucide-react'
-import MarkdownIt from 'markdown-it'
 import type { NoteItem } from './NoteSidebar'
 import { plainTextFromMarkdown } from '../utils/noteMarkdown'
 import { EditorSurface } from './editor/EditorSurface'
 import '../styles/editor.css'
-
-const md = new MarkdownIt({
-    html: false,
-    linkify: true,
-    typographer: true,
-    breaks: true,
-})
 
 function noteTitleFromMd(content: string): string {
     const text = plainTextFromMarkdown(content)
@@ -19,32 +11,6 @@ function noteTitleFromMd(content: string): string {
 }
 
 type ViewMode = 'split' | 'edit' | 'preview'
-
-// ── Helper: raw markdown operations ────────────────────────────
-
-function wrapSelection(
-    value: string,
-    selectionStart: number,
-    selectionEnd: number,
-    before: string,
-    after: string,
-    placeholder: string,
-): { value: string; selStart: number; selEnd: number } {
-    const selected = value.slice(selectionStart, selectionEnd)
-    const text = selected || placeholder
-    const newVal = value.slice(0, selectionStart) + before + text + after + value.slice(selectionEnd)
-    return { value: newVal, selStart: selectionStart + before.length, selEnd: selectionStart + before.length + text.length }
-}
-
-function prefixLine(
-    value: string,
-    selectionStart: number,
-    prefix: string,
-): { value: string; selStart: number; selEnd: number } {
-    const lineStart = value.lastIndexOf('\n', selectionStart - 1) + 1
-    const newVal = value.slice(0, lineStart) + prefix + value.slice(lineStart)
-    return { value: newVal, selStart: selectionStart + prefix.length, selEnd: selectionStart + prefix.length }
-}
 
 // ── WorkspaceNoteEditor ───────────────────────────────────────
 
@@ -88,7 +54,10 @@ export function WorkspaceNoteEditor({
 
     // Force sync on view mode change if blocks pane will show
     useEffect(() => {
-        if (viewMode !== 'edit') syncBlocks()
+        if (viewMode !== 'edit') {
+            // eslint-disable-next-line react-hooks/set-state-in-effect
+            syncBlocks()
+        }
     }, [viewMode, syncBlocks])
 
     const wordCount = useMemo(() => {
@@ -266,7 +235,7 @@ export function WorkspaceNoteEditor({
         queueFlush(md)
     }, [queueFlush])
 
-    const renderedHtml = md.render(localMd || '_Bắt đầu viết..._')
+
 
     return (
         <section className="wne-root">

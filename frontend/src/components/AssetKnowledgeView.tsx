@@ -249,7 +249,29 @@ export function AssetKnowledgeView({ assetId, requestWithAuth, onClose }: AssetK
         }
     }, [assetId, requestWithAuth])
 
-    useEffect(() => { void load() }, [load])
+    useEffect(() => {
+        // IIFE to load data on mount
+        ;(async () => {
+            setLoading(true)
+            setError('')
+            try {
+                const result = await requestWithAuth<AssetKnowledgeSummary>(`/knowledge/assets/${assetId}/summary`)
+                setData(result)
+                setSummaryExists(true)
+            } catch (err) {
+                // Check if it's a 404 (summary not found)
+                if (err instanceof ApiError && err.status === 404) {
+                    setSummaryExists(false)
+                    setData(null)
+                } else {
+                    setError(err instanceof Error ? err.message : 'Cannot load knowledge summary')
+                    setSummaryExists(true)
+                }
+            } finally {
+                setLoading(false)
+            }
+        })()
+    }, [assetId, requestWithAuth])
 
     // Load media URL from asset
     useEffect(() => {

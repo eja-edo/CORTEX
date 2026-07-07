@@ -10,11 +10,12 @@ Router chỉ làm 3 việc:
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from app.database import get_db
 from app.dependencies import get_current_active_user
+from app.core.internal_auth import verify_internal_key
 from app.models import Schedule, SyncOperation, User
 from app.schemas import (
     ScheduleCreate,
@@ -82,6 +83,42 @@ def get_schedules(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return result
+
+
+@router.get("/upcoming", include_in_schema=False)
+def get_upcoming_schedules(
+    minutes: int = Query(60, description="Look-ahead window in minutes"),
+    _: None = Depends(verify_internal_key),
+    db: Session = Depends(get_db),
+):
+    """Return schedules starting within the next N minutes (used by ScheduleChecker)."""
+    now = datetime.now(timezone.utc)
+    horizon = now + timedelta(minutes=minutes)
+
+    schedules = (
+        db.query(Schedule)
+        .filter(
+            Schedule.start_time >= now,
+            Schedule.start_time <= horizon,
+            Schedule.is_cancelled == False,
+        )
+        .order_by(Schedule.start_time.asc())
+        .all()
+    )
+
+    items = []
+    for s in schedules:
+        minutes_until = int((s.start_time - now).total_seconds() / 60)
+        items.append({
+            "id": str(s.id),
+            "user_id": str(s.user_id),
+            "title": s.title,
+            "start_time": s.start_time.isoformat(),
+            "type": s.type.value if hasattr(s.type, 'value') else str(s.type),
+            "minutes_until": minutes_until,
+        })
+
+    return {"items": items, "total": len(items)}
 
 
 @router.get("/{schedule_id}", response_model=ScheduleResponse)

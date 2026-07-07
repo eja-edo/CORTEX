@@ -57,7 +57,11 @@ async def get_workspace_notes(
 
     service = NoteService(db)
     notes = await service.get_notes_by_workspace(workspace_id)
-    return [service.to_summary_response(note) for note in notes]
+    result = []
+    for note in notes:
+        content = await service.materialize_note_content(note)
+        result.append(service.to_summary_response(note, content_override=content))
+    return result
 
 
 @router.get("/{note_id}", response_model=NoteResponse)

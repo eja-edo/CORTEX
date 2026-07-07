@@ -223,9 +223,7 @@
     overflow: visible !important;
 }
 
-.rbc-time-view {
-    overflow-y: auto !important;
-}
+
 
 .rbc-time-header.rbc-overflowing {
     border-right: none !important;

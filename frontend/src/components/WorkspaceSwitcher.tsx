@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { ChevronDown, Check, Plus, MoreVertical, Pencil, Trash2, UserPlus, Settings } from 'lucide-react'
 import type { Workspace } from '../types'
 
@@ -32,24 +33,59 @@ export function WorkspaceSwitcher({
   const [contextMenuId, setContextMenuId] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingName, setEditingName] = useState('')
+  const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({})
   const containerRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
   const contextMenuRef = useRef<HTMLDivElement>(null)
   const editInputRef = useRef<HTMLInputElement>(null)
 
 
+  const portalDropdownRef = useRef<HTMLDivElement>(null)
+
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+      const target = event.target as Node
+      const insideContainer = containerRef.current?.contains(target)
+      const insidePortalDropdown = portalDropdownRef.current?.contains(target)
+      const insideContextMenu = contextMenuRef.current?.contains(target)
+      if (!insideContainer && !insidePortalDropdown) {
         setIsOpen(false)
         setContextMenuId(null)
-      }
-      if (contextMenuRef.current && !contextMenuRef.current.contains(event.target as Node)) {
+      } else if (!insideContextMenu) {
         setContextMenuId(null)
       }
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
+
+  const updateDropdownPosition = useCallback(() => {
+    if (triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect()
+      const dropdownWidth = 350
+      const spaceRight = window.innerWidth - rect.left
+      const left = spaceRight < dropdownWidth
+        ? Math.max(8, window.innerWidth - dropdownWidth)
+        : rect.left
+      setDropdownStyle({
+        position: 'fixed',
+        top: `${rect.bottom + 4}px`,
+        left: `${left}px`,
+        minWidth: `${Math.min(dropdownWidth, window.innerWidth - 16)}px`,
+      })
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!isOpen) return
+    updateDropdownPosition()
+    window.addEventListener('scroll', updateDropdownPosition, true)
+    window.addEventListener('resize', updateDropdownPosition)
+    return () => {
+      window.removeEventListener('scroll', updateDropdownPosition, true)
+      window.removeEventListener('resize', updateDropdownPosition)
+    }
+  }, [isOpen, updateDropdownPosition])
 
 
   useEffect(() => {
@@ -115,9 +151,15 @@ export function WorkspaceSwitcher({
     <div ref={containerRef} className="workspace-switcher-container">
       {/* Workspace Switcher Button */}
       <button
+        ref={triggerRef}
         type="button"
         className="workspace-switcher-btn"
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={() => {
+          setIsOpen(!isOpen)
+          if (!isOpen) {
+            window.requestAnimationFrame(() => updateDropdownPosition())
+          }
+        }}
         title={displayWorkspace.name}
       >
         <div className="workspace-switcher-content">
@@ -153,9 +195,13 @@ export function WorkspaceSwitcher({
         </div>
       </button>
 
-      {/* Workspace Dropdown */}
-      {isOpen && !isCollapsed && (
-        <div className="workspace-switcher-dropdown">
+      {/* Workspace Dropdown (portal to escape sidebar overflow clipping) */}
+      {isOpen && !isCollapsed && createPortal(
+        <div
+          ref={portalDropdownRef}
+          className="workspace-switcher-dropdown"
+          style={dropdownStyle}
+        >
           {/* 1. HEADER SECTION */}
           {currentWorkspace && (
             <div className="workspace-dropdown-section workspace-dropdown-header-section">
@@ -370,7 +416,8 @@ export function WorkspaceSwitcher({
               <span>Create workspace</span>
             </button>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   )

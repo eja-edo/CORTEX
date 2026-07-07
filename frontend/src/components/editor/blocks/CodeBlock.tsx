@@ -31,7 +31,9 @@ export function CodeBlock({ block }: CodeBlockProps) {
       await navigator.clipboard.writeText(block.content)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
-    } catch {}
+    } catch {
+      // Copy failed - ignore
+    }
   }, [block.content])
 
   const handlePaste = useCallback((e: React.ClipboardEvent) => {

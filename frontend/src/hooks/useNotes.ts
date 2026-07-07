@@ -119,6 +119,7 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
     const handleNoteChange = useCallback((id: string, contentMd: string) => {
         setRecentNotes((prev) => prev.map((n) => (n.id === id ? { ...n, contentMd } : n)))
         scheduleNotePersist(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
 
     const noteSummaries = useMemo(
@@ -182,7 +183,7 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
         if (!workspaceDraggingNoteId) return
         if (!canMoveWorkspaceNote(workspaceDraggingNoteId, targetParentId)) return
         await handleMoveNote(workspaceDraggingNoteId, targetParentId)
-    }, [workspaceDraggingNoteId, canMoveWorkspaceNote])
+    }, [workspaceDraggingNoteId, canMoveWorkspaceNote]) // eslint-disable-line react-hooks/exhaustive-deps
 
     const collectDescendantIds = useCallback((rootNoteId: string): string[] => {
         const notesByParent = new Map<string | null, AppNote[]>()
@@ -231,7 +232,7 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
         }
     }
 
-    async function fetchFullNote(noteId: string): Promise<void> {
+    const fetchFullNote = useCallback(async (noteId: string): Promise<void> => {
         try {
             const data = await requestWithAuth<ApiNote>(`/notes/${noteId}`)
             const mapped = mapApiNoteToAppNote(data)
@@ -246,7 +247,7 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
         } catch (error) {
             console.error('Cannot load note:', error)
         }
-    }
+    }, [])
 
     useEffect(() => {
         if (!activeNoteId) return
@@ -268,6 +269,7 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
         void fetchFullNote(activeNoteId).finally(() => {
             noteLoadInFlightRef.current.delete(activeNoteId)
         })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [activeNoteId])
 
     async function persistNoteContent(noteId: string): Promise<void> {

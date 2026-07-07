@@ -1,8 +1,4 @@
-import type { BlockNode, BlockType } from '../types/editor'
-
-function isListType(type: BlockType): boolean {
-  return type === 'bullet_list' || type === 'ordered_list' || type === 'task_list'
-}
+import type { BlockNode } from '../types/editor'
 
 function serializeListItem(
   item: BlockNode,

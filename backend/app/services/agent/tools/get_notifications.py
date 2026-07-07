@@ -51,6 +51,8 @@ async def get_notifications_handler(args: dict, ctx: ToolContext) -> dict:
                     "type": notif.type,
                     "title": notif.title,
                     "body": notif.body,
+                    "content": notif.content or [],
+                    "actions": notif.actions or [],
                     "read_at": notif.read_at.isoformat() if notif.read_at else None,
                     "created_at": notif.created_at.isoformat(),
                 }

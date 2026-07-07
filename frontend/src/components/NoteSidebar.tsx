@@ -212,7 +212,7 @@ function NoteCardItem({
         }
       })
     }
-  }, [isExpanded])
+  }, [isExpanded, note.contentMd])
 
   useEffect(() => {
     return () => {
