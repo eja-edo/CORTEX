@@ -283,6 +283,7 @@ async def activate_workflow(
                         instance_id=instance_id,
                         workflow_id=str(workflow.id),
                         user_id=str(workflow.user_id),
+                        workspace_id=str(workflow.workspace_id) if workflow.workspace_id else None,
                         definition=workflow.definition,
                         trigger_data={
                             "event": "schedule.trigger",
@@ -422,25 +423,31 @@ async def execute_node(
         if label:
             node_id_labels[label] = n.get("id", "")
 
-    # Auto-populate trigger_data for schedule-triggered workflows so
-    # {{trigger.timestamp}} / {{trigger.timezone}} resolve correctly.
+    # Auto-populate trigger_data when empty so templates resolve correctly.
     resolved_trigger = data.trigger_data
-    if not resolved_trigger and workflow.trigger_type == TriggerType.SCHEDULE:
+    if not resolved_trigger:
         trigger_config = workflow.trigger_config or {}
-        tz_name = trigger_config.get("timezone", "UTC")
-        now = datetime.now(timezone.utc)
-        try:
-            tz = zoneinfo.ZoneInfo(tz_name)
-            local_now = now.astimezone(tz)
-            timestamp = local_now.isoformat()
-        except Exception:
-            timestamp = now.isoformat()
-        resolved_trigger = {
-            "event": "schedule.trigger",
-            "schedule_id": trigger_config.get("schedule_id"),
-            "timestamp": timestamp,
-            "timezone": tz_name,
-        }
+        if workflow.trigger_type == TriggerType.SCHEDULE:
+            tz_name = trigger_config.get("timezone", "UTC")
+            now = datetime.now(timezone.utc)
+            try:
+                tz = zoneinfo.ZoneInfo(tz_name)
+                local_now = now.astimezone(tz)
+                timestamp = local_now.isoformat()
+            except Exception:
+                timestamp = now.isoformat()
+            resolved_trigger = {
+                "event": "schedule.trigger",
+                "schedule_id": trigger_config.get("schedule_id"),
+                "timestamp": timestamp,
+                "timezone": tz_name,
+            }
+        elif workflow.trigger_type == TriggerType.MANUAL:
+            resolved_trigger = {"event": "manual.trigger", "input": {}}
+        elif workflow.trigger_type == TriggerType.WEBHOOK:
+            resolved_trigger = {"event": "webhook.received"}
+        elif workflow.trigger_type == TriggerType.INTERNAL_EVENT:
+            resolved_trigger = {"event": trigger_config.get("event", "unknown.event")}
 
     context = ActionContext(
         user_id=str(workflow.user_id),
@@ -450,6 +457,7 @@ async def execute_node(
         trigger_data=resolved_trigger,
         previous_outputs=data.previous_outputs,
         node_id_labels=node_id_labels,
+        workspace_id=str(workflow.workspace_id) if workflow.workspace_id else None,
     )
 
     result = await action.execute(data.config, context)

@@ -12,7 +12,7 @@ function parseTable(md: string): string[][] {
     line
       .split('|')
       .map(c => c.trim())
-      .filter((c, i, arr) => i > 0 || arr.length > 1)
+      .filter((_, i, arr) => i > 0 || arr.length > 1)
       .filter((_, i, arr) => i < arr.length - 1),
   )
 }

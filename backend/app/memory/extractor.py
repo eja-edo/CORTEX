@@ -1,15 +1,17 @@
 import json
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
-from google import genai
-from google.genai import types
+from openai import OpenAI
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-_client = genai.Client(api_key=settings.GEMINI_API_KEY)
+_openai_client = OpenAI(
+    api_key=settings.OPENAI_API_KEY,
+    base_url=settings.OPENAI_BASE_URL,
+)
 
 EXTRACTION_PROMPT = """You are a memory extraction engine. Given a user message, extract structured facts.
 
@@ -42,7 +44,7 @@ class LLMExtractor:
     LLM-based extraction — called from RQ worker for each detected message.
     """
 
-    MODEL = "gemini-2.0-flash-001"
+    MODEL = settings.OPENAI_DEFAULT_MODEL
 
     def extract(self, message: str, signals: List[str]) -> List[Dict[str, Any]]:
         if not message or not message.strip():
@@ -51,21 +53,31 @@ class LLMExtractor:
         prompt = EXTRACTION_PROMPT.format(message=message[:2000])
 
         try:
-            response = _client.models.generate_content(
+            response = _openai_client.chat.completions.create(
                 model=self.MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.1,
-                    max_output_tokens=1024,
-                ),
-            )
+                messages=[
+                    {"role": "system", "content": "You are a memory extraction engine. Respond in JSON."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.1,
+                max_tokens=1024,
+                response_format={"type": "json_object"},
+            )    
 
-            if not response or not response.text:
+            content = response.choices[0].message.content or ""
+            if not content.strip():
                 return []
 
-            text = response.text.strip()
+            text = content.strip()
             text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
             result = json.loads(text)
+
+            # The response is wrapped in a JSON object; extract the array if needed
+            if isinstance(result, dict):
+                for val in result.values():
+                    if isinstance(val, list):
+                        result = val
+                        break
 
             if not isinstance(result, list):
                 return []

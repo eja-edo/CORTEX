@@ -15,5 +15,6 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=8000,
         reload=False,
+        timeout_graceful_shutdown=30,
         log_config=None  # Use our custom logging config, don't override with uvicorn's
     )

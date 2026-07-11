@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { nanoid } from 'nanoid'
-import { Settings, ChevronDown, Trash2, Play, AlertCircle, CheckCircle2 } from 'lucide-react'
+import { Settings, Trash2, Play, AlertCircle, CheckCircle2 } from 'lucide-react'
 import {
   ReactFlowProvider,
   useNodesState,
@@ -31,6 +31,7 @@ import { WorkflowCanvas } from './workflow/WorkflowCanvas'
 import { WorkflowToolbar } from './workflow/WorkflowToolbar'
 import { WorkflowList } from './workflow/WorkflowList'
 import { getConfigPanel } from './workflow/config'
+import type { TemplateVar } from './workflow/config'
 
 function getDefaultData(type: string): Record<string, unknown> {
   const config = getNodeConfig(type)
@@ -76,8 +77,64 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate }: W
   const [view, setView] = useState<'list' | 'editor'>('list')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [nodeOutputs, setNodeOutputs] = useState<Record<string, { success: boolean; output: Record<string, unknown>; error: string | null }>>({})
   const [runningNodeId, setRunningNodeId] = useState<string | null>(null)
+
+  const templateVars = useMemo<TemplateVar[]>(() => {
+    const vars: TemplateVar[] = []
+
+    const upstreamIds = selectedNode
+      ? (() => {
+          const ids: string[] = []
+          const visited = new Set<string>()
+          const queue = [selectedNode.id]
+          while (queue.length > 0) {
+            const current = queue.shift()!
+            for (const edge of edges) {
+              if (edge.target === current && !visited.has(edge.source)) {
+                visited.add(edge.source)
+                ids.push(edge.source)
+                queue.push(edge.source)
+              }
+            }
+          }
+          return ids
+        })()
+      : []
+
+    if (triggerType === 'schedule') {
+      vars.push(
+        { label: 'Trigger event name', value: '{{trigger.event}}' },
+        { label: 'Schedule ID', value: '{{trigger.schedule_id}}' },
+        { label: 'Run timestamp', value: '{{trigger.timestamp}}' },
+        { label: 'Timezone', value: '{{trigger.timezone}}' },
+      )
+    } else if (triggerType === 'manual') {
+      vars.push(
+        { label: 'Trigger event name', value: '{{trigger.event}}' },
+        { label: 'Manual input', value: '{{trigger.input}}' },
+      )
+    }
+
+    for (const node of nodes) {
+      if (!selectedNode) continue
+      if (node.id === selectedNode.id) continue
+      if (!upstreamIds.includes(node.id)) continue
+
+      const label = node.data?.label as string | undefined
+      if (label) {
+        const output = nodeOutputs[node.id]
+        if (output?.output) {
+          for (const key of Object.keys(output.output)) {
+            vars.push({ label: `"${label}" → ${key}`, value: `{{steps.${label}.${key}}}` })
+          }
+        }
+      }
+    }
+
+    return vars
+  }, [triggerType, nodes, nodeOutputs, selectedNode, edges])
 
   const wf = useWorkflows()
 
@@ -274,7 +331,11 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate }: W
     if (!currentWorkflowId) return
     await handleSave()
     const updated = await wf.activateWorkflow(currentWorkflowId)
-    if (updated) setWorkflowStatus(updated.status)
+    if (updated && 'status' in updated) {
+      setWorkflowStatus(updated.status)
+    } else if (updated && 'error' in updated) {
+      setError(`Failed to activate workflow: ${updated.error}`)
+    }
   }, [currentWorkflowId, wf, handleSave])
 
   const handlePause = useCallback(async () => {
@@ -311,6 +372,7 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate }: W
   const handleRun = useCallback(async () => {
     if (!currentWorkflowId) return
     setError(null)
+    setSuccessMessage(null)
     await handleSave()
 
     // Auto-activate if not yet active
@@ -320,39 +382,72 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate }: W
         setError('Failed to activate workflow. Is the workflow service running?')
         return
       }
+      if ('error' in updated) {
+        setError(`Failed to activate workflow: ${updated.error}`)
+        return
+      }
       setWorkflowStatus(updated.status)
     }
 
     const result = await wf.triggerWorkflow(currentWorkflowId)
-    if (result) {
-      console.log('Workflow triggered:', result.instance_id)
-    } else {
-      setError('Failed to trigger workflow. Check console for details.')
+    if (result && 'instance_id' in result) {
+      setSuccessMessage(`Workflow triggered (ID: ${result.instance_id.slice(0, 8)}…)`)
+    } else if (result && 'error' in result) {
+      setError(`Failed to trigger workflow: ${result.error}`)
     }
   }, [currentWorkflowId, wf, handleSave, workflowStatus])
 
   const handleRunNode = useCallback(async (nodeId: string, config: Record<string, unknown>) => {
-    if (!currentWorkflowId) return
+    if (!currentWorkflowId) {
+      setError('Please save the workflow first before running a node.')
+      return
+    }
     setRunningNodeId(nodeId)
     setError(null)
+    setSuccessMessage(null)
     try {
+      // Build trigger_data from trigger type
+      const trigger_data: Record<string, unknown> = {}
+      if (triggerType === 'manual') {
+        trigger_data.event = 'manual.trigger'
+        trigger_data.input = {}
+      } else if (triggerType === 'schedule') {
+        trigger_data.event = 'schedule.trigger'
+        trigger_data.schedule_id = triggerConfig.schedule_id
+        trigger_data.timestamp = new Date().toISOString()
+        trigger_data.timezone = triggerConfig.timezone ?? 'UTC'
+      } else if (triggerType === 'webhook') {
+        trigger_data.event = 'webhook.received'
+      } else if (triggerType === 'internal_event') {
+        trigger_data.event = triggerConfig.event ?? 'unknown.event'
+      }
+
+      // Build previous_outputs from already-executed nodes
+      const previous_outputs: Record<string, unknown> = {}
+      for (const [nid, no] of Object.entries(nodeOutputs)) {
+        previous_outputs[nid] = no.output
+      }
+
       const result = await wf.executeNode(currentWorkflowId, nodeId, {
         config,
-        trigger_data: {},
-        previous_outputs: {},
+        trigger_data,
+        previous_outputs,
       })
       if (result) {
         setNodeOutputs(prev => ({ ...prev, [nodeId]: result }))
         setNodes(nds => nds.map(n =>
           n.id === nodeId ? { ...n, data: { ...n.data, output: result } } : n
         ))
+        if (!result.success && result.error) {
+          setError(result.error)
+        }
       } else {
         setError('Failed to execute node. Is the workflow service running?')
       }
     } finally {
       setRunningNodeId(null)
     }
-  }, [currentWorkflowId, wf, setNodes])
+  }, [currentWorkflowId, wf, setNodes, triggerType, triggerConfig, nodeOutputs])
 
   useEffect(() => { executeNodeRef.current = handleRunNode }, [handleRunNode])
 
@@ -375,7 +470,6 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate }: W
 
   const handleAddStickyNote = useCallback(() => {
     if (!reactFlowInstance) return
-    const viewport = reactFlowInstance.getViewport()
     const center = reactFlowInstance.screenToFlowPosition({
       x: window.innerWidth / 2,
       y: window.innerHeight / 2,
@@ -441,6 +535,12 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate }: W
           <button type="button" onClick={() => setError(null)}>×</button>
         </div>
       )}
+      {successMessage && (
+        <div className="wf-success-banner">
+          <span>{successMessage}</span>
+          <button type="button" onClick={() => setSuccessMessage(null)}>×</button>
+        </div>
+      )}
 
       <div className="wf-body">
         <NodePalette onDragStart={handlePaletteDragStart} onAddStickyNote={handleAddStickyNote} />
@@ -495,6 +595,7 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate }: W
                     <ConfigPanel
                       config={(selectedNode.data.config as Record<string, unknown>) ?? {}}
                       onChange={(cfg) => updateNodeConfig(selectedNode.id, cfg)}
+                      templateVars={templateVars}
                     />
                   )
                 }

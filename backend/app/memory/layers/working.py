@@ -7,13 +7,12 @@ logger = logging.getLogger(__name__)
 class WorkingMemory:
     """
     Layer 1: Working Memory
-    Sliding window token-based, thay thế MAX_CONVERSATION_HISTORY = 10.
+    Sliding window token-based, thay th? MAX_CONVERSATION_HISTORY = 10.
     """
 
     # Model token limits (conservative)
     MODEL_MAX_TOKENS = {
-        "gemini-2.0-flash-001": 1_000_000,
-        "gemini-1.5-flash-001": 1_000_000,
+        "oc/qwen3.6-plus-free": 128_000,
         "deepseek-chat": 64_000,
     }
 
@@ -23,7 +22,7 @@ class WorkingMemory:
 
     DEFAULT_MAX_TOKENS = 32_000
 
-    def __init__(self, model_name: str = "gemini-2.0-flash-001"):
+    def __init__(self, model_name: str = "oc/qwen3.6-plus-free"):
         self.model_name = model_name
         self.max_context = self.MODEL_MAX_TOKENS.get(model_name, self.DEFAULT_MAX_TOKENS)
 

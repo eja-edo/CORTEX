@@ -296,7 +296,7 @@ function AssetRow({ asset, isPlaying, isActionLoading, onPlay, onDownload, onDel
 
                     <div className="rl2-meta">
                         <AssetStatusBadge status={asset.status} />
-                        {(asset.metadata as Record<string, unknown>)?.size && (
+                        {typeof (asset.metadata as Record<string, unknown>)?.size === 'number' && (
                             <span><HardDrive size={9} />{formatFileSize((asset.metadata as Record<string, unknown>).size as number)}</span>
                         )}
                         <span><Clock size={9} />{formatRelativeTime(asset.created_at)}</span>

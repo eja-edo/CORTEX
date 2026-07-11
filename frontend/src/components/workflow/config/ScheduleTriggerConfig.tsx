@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
-import { Clock, Calendar, Repeat, Plus, Trash2, X } from 'lucide-react'
+import { Clock, Repeat, Plus, Trash2, X } from 'lucide-react'
 import type { RecurrenceFreq } from '../../../types'
 
 type ScheduleEntry = {
@@ -85,8 +85,8 @@ function getNextOccurrences(cron: string, count = 3): Date[] {
   }
 }
 
-function AddTimeModal({ timezone, initial, onClose, onCreated, onUpdated }: {
-  timezone: string
+function AddTimeModal({ initial, onClose, onCreated, onUpdated }: {
+  timezone?: string
   initial?: ScheduleEntry | null
   onClose: () => void
   onCreated: (entry: ScheduleEntry) => void

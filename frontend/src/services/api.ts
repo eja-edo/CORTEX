@@ -1,4 +1,4 @@
-import type { TokenPair } from '../types'
+import type { TokenPair, NotificationListResponse, NotificationResponse } from '../types'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api'
 const TOKEN_STORAGE_KEY = 'cortex_tokens'
@@ -191,6 +191,12 @@ export async function sendAgentMessage(
     })
 }
 
+export interface TokenUsage {
+    prompt_tokens: number
+    completion_tokens: number
+    total_tokens: number
+}
+
 export interface StreamEvent {
     type: 'text' | 'done' | 'tool_start' | 'tool_result' | 'thinking' | 'title_generated'
     text?: string
@@ -201,6 +207,14 @@ export interface StreamEvent {
     result?: unknown
     success?: boolean
     error?: string
+    usage?: TokenUsage
+    model_used?: string
+}
+
+export interface StreamOptions {
+    model?: string
+    temperature?: number
+    signal?: AbortSignal
 }
 
 export async function* streamAgentMessage(
@@ -208,6 +222,7 @@ export async function* streamAgentMessage(
     conversationId?: string,
     workspaceId?: string,
     context?: Record<string, unknown>,
+    options?: StreamOptions,
 ): AsyncGenerator<StreamEvent, void, undefined> {
     let tokens = getCurrentTokens()
     if (!tokens?.accessToken) {
@@ -220,6 +235,8 @@ export async function* streamAgentMessage(
         conversation_id: conversationId,
         workspace_id: workspaceId,
         context,
+        model: options?.model,
+        temperature: options?.temperature,
     })
 
     let response = await fetch(url, {
@@ -229,6 +246,7 @@ export async function* streamAgentMessage(
             'Authorization': `Bearer ${tokens.accessToken}`,
         },
         body,
+        signal: options?.signal,
     })
 
     // Handle 401 - token expired, refresh and retry
@@ -283,7 +301,12 @@ export async function* streamAgentMessage(
                         if (data.event === 'token' && data.text) {
                             yield { type: 'text', text: data.text }
                         } else if (data.event === 'done') {
-                            yield { type: 'done', conversation_id: data.conversation_id }
+                            yield {
+                                type: 'done',
+                                conversation_id: data.conversation_id,
+                                usage: data.usage,
+                                model_used: data.model_used,
+                            }
                         } else if (data.event === 'title_generated') {
                             yield {
                                 type: 'title_generated',
@@ -324,7 +347,12 @@ export async function* streamAgentMessage(
                 if (data.event === 'token' && data.text) {
                     yield { type: 'text', text: data.text }
                 } else if (data.event === 'done') {
-                    yield { type: 'done', conversation_id: data.conversation_id }
+                    yield {
+                        type: 'done',
+                        conversation_id: data.conversation_id,
+                        usage: data.usage,
+                        model_used: data.model_used,
+                    }
                 } else if (data.event === 'title_generated') {
                     yield {
                         type: 'title_generated',
@@ -350,6 +378,11 @@ export async function* streamAgentMessage(
                 // Ignore JSON parse errors
             }
         }
+    } catch (err) {
+        if ((err as Error)?.name === 'AbortError') {
+            return
+        }
+        throw err
     } finally {
         reader.releaseLock()
     }

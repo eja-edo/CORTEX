@@ -12,7 +12,8 @@ import { CalendarView } from './components/CalendarView'
 import { RecordPanel } from './components/RecordPanel'
 import { AssetKnowledgeView } from './components/AssetKnowledgeView'
 import { SettingsPanel } from './components/SettingsPanel'
-import type { SyncUpdateEvent, AppNotification } from './types'
+import type { SyncUpdateEvent } from './types'
+import type { AppNotification } from './components/NotificationBell'
 import { NotificationBell } from './components/NotificationBell'
 import type { NotificationKind } from './components/NotificationBell'
 import { WorkspaceNoteEditor } from './components/WorkspaceNoteEditor'
@@ -231,20 +232,17 @@ function App() {
    const syncToastTimerRef = useRef<number | null>(null)
 
   const activeWorkspaceView = routeWorkspaceState.view
-  const [activeWorkspaceNoteId, setActiveWorkspaceNoteId] = useState<string | null>(routeWorkspaceState.noteId)
   const [activeWorkspaceAssetId, setActiveWorkspaceAssetId] = useState<string | null>(routeWorkspaceState.assetId)
   const [activeWorkspaceKnowledgeAssetId, setActiveWorkspaceKnowledgeAssetId] = useState<string | null>(routeWorkspaceState.assetId)
   const [activeWorkspaceWorkflowId, setActiveWorkspaceWorkflowId] = useState<string | null>(routeWorkspaceState.workflowId)
 
 useEffect(() => {
-     // eslint-disable-next-line react-hooks/set-state-in-effect
-     setActiveWorkspaceNoteId(routeWorkspaceState.noteId)
      setActiveWorkspaceAssetId(routeWorkspaceState.assetId)
      setActiveWorkspaceWorkflowId(routeWorkspaceState.workflowId)
      if (routeWorkspaceState.view === 'knowledge') {
        setActiveWorkspaceKnowledgeAssetId(routeWorkspaceState.assetId)
      }
-   }, [routeWorkspaceState.noteId, routeWorkspaceState.assetId, routeWorkspaceState.view, routeWorkspaceState.workflowId])
+   }, [routeWorkspaceState.assetId, routeWorkspaceState.view, routeWorkspaceState.workflowId])
 
   useEffect(() => {
     applyThemeToDocument(theme)
@@ -376,12 +374,10 @@ const showSyncToast = useCallback((message: string): void => {
 
     notes.clearNotes()
     workspaces.switchWorkspace(workspace)
-    setActiveWorkspaceNoteId(null)
     navigate(workspaceRoute(workspace.id), { replace: true })
   }, [navigate, notes, workspaces])
 
   const openWorkspaceNote = useCallback((noteId: string) => {
-    setActiveWorkspaceNoteId(noteId)
     const workspaceId = workspaces.currentWorkspace?.id
     if (workspaceId) {
       navigate(noteRoute(workspaceId, noteId))
@@ -391,29 +387,30 @@ const showSyncToast = useCallback((message: string): void => {
   const handleCreateNote = useCallback(async (parentNoteId?: string): Promise<void> => {
     const created = await notes.handleCreateNote(parentNoteId)
     if (created) {
+      setSectionNoteOpen(true)
       openWorkspaceNote(created.id)
       auth.setStatusMessage('Note created.')
     } else {
       auth.setErrorMessage('Cannot create note')
     }
-  }, [notes, openWorkspaceNote, auth])
+  }, [notes, openWorkspaceNote, auth, setSectionNoteOpen])
 
   const handleDeleteNote = useCallback(async (noteId: string): Promise<void> => {
     const removedIds = await notes.handleDeleteNote(noteId)
     if (removedIds.length > 0) {
-      if (activeWorkspaceNoteId && new Set(removedIds).has(activeWorkspaceNoteId)) {
+      if (routeWorkspaceState.noteId && new Set(removedIds).has(routeWorkspaceState.noteId)) {
         const remaining = notes.recentNotes.filter((n) => !removedIds.includes(n.id))
-        setActiveWorkspaceNoteId(remaining[0]?.id ?? null)
+        const nextId = remaining[0]?.id ?? null
         const workspaceId = workspaces.currentWorkspace?.id
         if (activeWorkspaceView === 'note' && workspaceId) {
-          navigate(workspaceRoute(workspaceId))
+          navigate(nextId ? noteRoute(workspaceId, nextId) : workspaceRoute(workspaceId))
         }
       }
       auth.setStatusMessage('Note deleted.')
     } else {
       auth.setErrorMessage('Cannot delete note')
     }
-  }, [notes, activeWorkspaceNoteId, activeWorkspaceView, navigate, workspaces.currentWorkspace, auth])
+  }, [notes, activeWorkspaceView, navigate, workspaces.currentWorkspace, auth, routeWorkspaceState.noteId, noteRoute])
 
   const handleWorkspaceSidebarDrop = useCallback(async (targetParentId: string | null): Promise<void> => {
     await notes.handleWorkspaceSidebarDrop(targetParentId)
@@ -429,8 +426,8 @@ const renderWorkspaceSidebarNoteTree = useCallback((parentId: string | null, dep
            type="button"
         className={[
               'app-sidebar-sub-item',
-              activeWorkspaceView === 'note' && activeWorkspaceNoteId === note.id ? 'active' : '',
-              notes.workspaceDropTargetParentId === note.id ? 'workspace-nav-item--drop-target' : '',
+               activeWorkspaceView === 'note' && routeWorkspaceState.noteId === note.id ? 'active' : '',
+               notes.workspaceDropTargetParentId === note.id ? 'workspace-nav-item--drop-target' : '',
             ].filter(Boolean).join(' ')}
            style={{ paddingLeft: `${10 + (depth * 14)}px` }}
            onClick={() => openWorkspaceNote(note.id)}
@@ -483,9 +480,9 @@ const renderWorkspaceSidebarNoteTree = useCallback((parentId: string | null, dep
          {renderWorkspaceSidebarNoteTree(note.id, depth + 1)}
        </div>
      ))
-   // eslint-disable-next-line react-hooks/exhaustive-deps
-   }, [notes.workspaceNotesByParent, activeWorkspaceView, activeWorkspaceNoteId, notes.workspaceDropTargetParentId,
-       notes.workspaceDraggingNoteId, notes.canMoveWorkspaceNote])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [notes.workspaceNotesByParent, activeWorkspaceView, routeWorkspaceState.noteId, notes.workspaceDropTargetParentId,
+        notes.workspaceDraggingNoteId, notes.canMoveWorkspaceNote])
 
   const handleNoteChange = useCallback((id: string, contentMd: string) => {
     notes.handleNoteChange(id, contentMd)
@@ -988,7 +985,7 @@ const processNotificationChunk = (chunk: string): void => {
                                 type="button"
                                 className={[
                                   'app-sidebar-sub-item',
-                                  activeWorkspaceView === 'note' && activeWorkspaceNoteId === note.id ? 'active' : '',
+                                  activeWorkspaceView === 'note' && routeWorkspaceState.noteId === note.id ? 'active' : '',
                                   notes.workspaceDropTargetParentId === note.id ? 'workspace-nav-item--drop-target' : '',
                                 ].filter(Boolean).join(' ')}
                                 onClick={() => openWorkspaceNote(note.id)}
@@ -1045,11 +1042,11 @@ const processNotificationChunk = (chunk: string): void => {
                       <button
                         type="button"
                         className="app-sidebar-sub-item app-sidebar-sub-item--add"
-                        onClick={() => handleCreateNote()}
-                        title="New note"
+                        onClick={() => handleCreateNote(routeWorkspaceState.noteId ?? undefined)}
+                        title={routeWorkspaceState.noteId ? 'Add sub-note' : 'New note'}
                       >
                         <Plus size={13} />
-                        <span>New note</span>
+                        <span>{routeWorkspaceState.noteId ? 'Add sub-note' : 'New note'}</span>
                       </button>
                     </div>
                   </SidebarSection>

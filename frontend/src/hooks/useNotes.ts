@@ -263,6 +263,9 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
             }
         }
 
+        // Skip fetch if note already has sync state (e.g., freshly created via handleCreateNote)
+        if (noteSyncStatesRef.current[activeNoteId]) return
+
         if (noteLoadInFlightRef.current.has(activeNoteId)) return
 
         noteLoadInFlightRef.current.add(activeNoteId)

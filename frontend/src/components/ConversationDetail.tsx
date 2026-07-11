@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ArrowLeft, Copy, Check, AlertCircle, Loader, MessageSquare, Quote } from 'lucide-react'
-import type { ConversationDetailResponse, AgentMessage } from '../types'
+import type { ConversationDetailResponse, AgentMessage } from '../services/api'
 import { getConversation } from '../services/api'
 import '../styles/conversation-detail.css'
 
@@ -161,7 +161,7 @@ export function ConversationDetail({ conversationId, onBack, className = '' }: C
                             <p>No messages in this conversation</p>
                         </div>
                     ) : (
-                        conversation.messages.map(message => (
+                        conversation.messages.map((message: AgentMessage) => (
                             <div key={message.id} className={`conversation-message ${message.role}`}>
                                 <div className="conversation-message-header">
                                     <span className="message-role">{message.role}</span>

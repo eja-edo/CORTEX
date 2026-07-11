@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db, SessionLocal
 from app.database_async import get_async_db
-from app.dependencies import get_current_active_user
+from app.dependencies import get_current_active_user, get_current_user_or_internal, get_current_user_or_internal
 from app.models import User
 from app.schemas import NoteCreate, NotePatchRequest, NoteResponse, NoteRevisionResponse, NoteSummary, NoteUpdate
 from app.services.notes import NoteService
@@ -18,7 +18,7 @@ router = APIRouter(prefix="/notes", tags=["notes"])
 @router.post("", response_model=NoteResponse, status_code=status.HTTP_201_CREATED)
 async def create_note(
     payload: NoteCreate,
-    current_user: User = Depends(get_current_active_user),
+    current_user = Depends(get_current_user_or_internal),
     db: AsyncSession = Depends(get_async_db),
 ):
     service = NoteService(db)
@@ -32,7 +32,7 @@ async def create_note(
 @router.get("", response_model=list[NoteResponse])
 async def get_notes(
     render_html: bool = Query(False, description="Render markdown to sanitized HTML"),
-    current_user: User = Depends(get_current_active_user),
+    current_user = Depends(get_current_user_or_internal),
     db: AsyncSession = Depends(get_async_db),
 ):
     service = NoteService(db)
@@ -47,7 +47,7 @@ async def get_notes(
 @router.get("/workspaces/{workspace_id}", response_model=list[NoteSummary])
 async def get_workspace_notes(
     workspace_id: UUID,
-    current_user: User = Depends(get_current_active_user),
+    current_user = Depends(get_current_user_or_internal),
     db: AsyncSession = Depends(get_async_db),
 ):
     """Get all notes in a workspace. User must be a member."""
@@ -67,7 +67,7 @@ async def get_workspace_notes(
 @router.get("/{note_id}", response_model=NoteResponse)
 async def get_note(
     note_id: UUID,
-    current_user: User = Depends(get_current_active_user),
+    current_user = Depends(get_current_user_or_internal),
     db: AsyncSession = Depends(get_async_db),
 ):
     """Get a single note with full materialized content."""
@@ -83,7 +83,7 @@ async def get_note(
 async def update_note(
     note_id: UUID,
     payload: NoteUpdate,
-    current_user: User = Depends(get_current_active_user),
+    current_user = Depends(get_current_user_or_internal),
     db: AsyncSession = Depends(get_async_db),
 ):
     service = NoteService(db)
@@ -113,7 +113,7 @@ async def update_note(
 async def patch_note(
     note_id: UUID,
     payload: NotePatchRequest,
-    current_user: User = Depends(get_current_active_user),
+    current_user = Depends(get_current_user_or_internal),
     db: AsyncSession = Depends(get_async_db),
 ):
     service = NoteService(db)
@@ -136,7 +136,7 @@ async def patch_note(
 async def get_note_revisions(
     note_id: UUID,
     limit: int = Query(100, ge=1, le=500),
-    current_user: User = Depends(get_current_active_user),
+    current_user = Depends(get_current_user_or_internal),
     db: AsyncSession = Depends(get_async_db),
 ):
     service = NoteService(db)
@@ -149,7 +149,7 @@ async def get_note_revisions(
 @router.delete("/{note_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_note(
     note_id: UUID,
-    current_user: User = Depends(get_current_active_user),
+    current_user = Depends(get_current_user_or_internal),
     db: AsyncSession = Depends(get_async_db),
 ):
     service = NoteService(db)

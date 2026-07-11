@@ -16,6 +16,7 @@ from app.services.agent.model_client import (
     is_quota_error,
     is_fatal_error,
     is_model_incompatible_error,
+    get_default_model,
 )
 from app.services.agent.provider_types import (
     Message,
@@ -895,6 +896,8 @@ Return ONLY the title, no quotes or explanation."""
         conversation_id: UUID | None = None,
         workspace_id: UUID | None = None,
         context: dict | None = None,
+        model: str | None = None,
+        temperature: float | None = None,
     ):
         """
         Process a user message with streaming response, yielding SSE events.
@@ -1053,6 +1056,12 @@ Return ONLY the title, no quotes or explanation."""
             tool_call_counts: dict[str, int] = {}
             hard_error_occurred = False  # Track if we hit a hard error
             saved_assistant_count = 0
+            total_usage: dict[str, int] = {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+            }
+            last_model_used: str | None = model
 
             messages = _build_history_contents(recent_messages)
             _trim_incomplete_tail(messages, "streaming")
@@ -1079,9 +1088,13 @@ Return ONLY the title, no quotes or explanation."""
                 return
             _log_contents_structure(messages, "Valid streaming messages for turn 1")
 
+            # User-selected model (None/"auto" → round-robin across all models)
+            preferred_model = model if model and model != "auto" else None
+
             tools = self.registry.get_provider_tools()
             gen_config = GenerationConfig(
                 system_instruction=system_prompt,
+                temperature=temperature,
             )
 
             while turn < MAX_TOOL_TURNS:
@@ -1096,6 +1109,7 @@ Return ONLY the title, no quotes or explanation."""
                 try:
                     async for chunk in _model_client.stream_with_fallback(
                         messages, gen_config, tools=tools,
+                        preferred_model=preferred_model,
                     ):
                         if chunk.content:
                             turn_text += chunk.content
@@ -1103,6 +1117,11 @@ Return ONLY the title, no quotes or explanation."""
 
                         if chunk.tool_calls:
                             tool_calls.extend(chunk.tool_calls)
+
+                        if chunk.usage:
+                            last_model_used = preferred_model or last_model_used
+                            for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                                total_usage[k] = total_usage.get(k, 0) + (chunk.usage.get(k) or 0)
 
                     # Stream completed successfully for this turn
                     reply_text += turn_text
@@ -1330,6 +1349,22 @@ Return ONLY the title, no quotes or explanation."""
             await self.store.update_conversation_timestamp(conv.id)
             await self.store.increment_message_count(conv.id)
 
+            # Persist token usage for the daily budget / analytics
+            if total_usage.get("total_tokens"):
+                try:
+                    await self.store.increment_token_count(
+                        conv.id, total_usage["total_tokens"]
+                    )
+                except Exception as tok_err:
+                    logger.warning(f"Could not record token count (non-fatal): {tok_err}")
+                try:
+                    _model_client.record_stream_tokens(
+                        preferred_model or get_default_model(_model_client._provider),
+                        total_usage["total_tokens"],
+                    )
+                except Exception:
+                    pass
+
             # Summarize if needed
             if (
                 summarizer
@@ -1369,10 +1404,15 @@ Return ONLY the title, no quotes or explanation."""
             # can close the stream and get the conversation_id.
             if not conversation_id_str:
                 conversation_id_str = str(conv.id)
-            yield {"event": "done", "conversation_id": conversation_id_str}
+            yield {
+                "event": "done",
+                "conversation_id": conversation_id_str,
+                "usage": total_usage,
+                "model_used": last_model_used or "auto",
+            }
             logger.info(
                 f"✅ Streaming completed | conversation={conversation_id_str} | "
-                f"hard_error={hard_error_occurred}"
+                f"hard_error={hard_error_occurred} | usage={total_usage}"
             )
 
         except Exception as exc:

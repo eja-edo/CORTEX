@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from app.database import get_db
-from app.dependencies import get_current_active_user
+from app.dependencies import get_current_active_user, get_current_user_or_internal
 from app.core.internal_auth import verify_internal_key
 from app.models import Schedule, SyncOperation, User
 from app.schemas import (
@@ -58,7 +58,7 @@ async def _enqueue_google_sync(schedule: Schedule, operation: SyncOperation) -> 
 @router.post("", response_model=ScheduleResponse, status_code=201)
 async def create_schedule(
     schedule_data: ScheduleCreate,
-    current_user: User = Depends(get_current_active_user),
+    current_user = Depends(get_current_user_or_internal),
     db: Session = Depends(get_db),
 ):
     svc = ScheduleService(db)
@@ -71,7 +71,7 @@ async def create_schedule(
 def get_schedules(
     start_date: datetime = Query(...),
     end_date: datetime = Query(...),
-    current_user: User = Depends(get_current_active_user),
+    current_user = Depends(get_current_user_or_internal),
     db: Session = Depends(get_db),
 ):
     try:
@@ -124,7 +124,7 @@ def get_upcoming_schedules(
 @router.get("/{schedule_id}", response_model=ScheduleResponse)
 def get_schedule(
     schedule_id: UUID,
-    current_user: User = Depends(get_current_active_user),
+    current_user = Depends(get_current_user_or_internal),
     db: Session = Depends(get_db),
 ):
     schedule = ScheduleService(db).get_schedule_by_id(schedule_id, current_user.id)
@@ -137,7 +137,7 @@ def get_schedule(
 async def update_schedule(
     schedule_id: UUID,
     schedule_update: ScheduleUpdate,
-    current_user: User = Depends(get_current_active_user),
+    current_user = Depends(get_current_user_or_internal),
     db: Session = Depends(get_db),
 ):
     try:
@@ -155,7 +155,7 @@ async def update_schedule(
 @router.delete("/{schedule_id}", status_code=204)
 async def delete_schedule(
     schedule_id: UUID,
-    current_user: User = Depends(get_current_active_user),
+    current_user = Depends(get_current_user_or_internal),
     db: Session = Depends(get_db),
 ):
     try:
@@ -174,7 +174,7 @@ def get_schedule_instances(
     schedule_id: UUID,
     range_start: datetime = Query(...),
     range_end: datetime = Query(...),
-    current_user: User = Depends(get_current_active_user),
+    current_user = Depends(get_current_user_or_internal),
     db: Session = Depends(get_db),
 ):
     try:
@@ -193,7 +193,7 @@ async def update_schedule_instance(
     schedule_id: UUID,
     original_start_time: datetime,
     instance_data: ScheduleInstanceUpdate,
-    current_user: User = Depends(get_current_active_user),
+    current_user = Depends(get_current_user_or_internal),
     db: Session = Depends(get_db),
 ):
     try:
@@ -216,7 +216,7 @@ async def update_schedule_instance(
 async def cancel_schedule_instance(
     schedule_id: UUID,
     original_start_time: datetime,
-    current_user: User = Depends(get_current_active_user),
+    current_user = Depends(get_current_user_or_internal),
     db: Session = Depends(get_db),
 ):
     try:
@@ -243,7 +243,7 @@ from app.models import ScheduleReminder  # noqa: E402
 @router.get("/{schedule_id}/reminders")
 def get_schedule_reminders(
     schedule_id: UUID,
-    current_user: User = Depends(get_current_active_user),
+    current_user = Depends(get_current_user_or_internal),
     db: Session = Depends(get_db),
 ):
     schedule = ScheduleService(db).get_schedule_by_id(schedule_id, current_user.id)
@@ -257,7 +257,7 @@ def get_schedule_reminders(
 def add_schedule_reminder(
     schedule_id: UUID,
     reminder_configs: list,
-    current_user: User = Depends(get_current_active_user),
+    current_user = Depends(get_current_user_or_internal),
     db: Session = Depends(get_db),
 ):
     schedule = ScheduleService(db).get_schedule_by_id(schedule_id, current_user.id)
@@ -274,7 +274,7 @@ def add_schedule_reminder(
 def delete_schedule_reminder(
     schedule_id: UUID,
     reminder_id: UUID,
-    current_user: User = Depends(get_current_active_user),
+    current_user = Depends(get_current_user_or_internal),
     db: Session = Depends(get_db),
 ):
     reminder = (

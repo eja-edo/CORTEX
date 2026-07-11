@@ -119,14 +119,15 @@ export function useWorkflows() {
     }
   }, [])
 
-  const activateWorkflow = useCallback(async (workflowId: string): Promise<WorkflowResponse | null> => {
+  const activateWorkflow = useCallback(async (workflowId: string): Promise<WorkflowResponse | { error: string }> => {
     try {
       const updated = await workflowRequest<WorkflowResponse>(`/v1/workflows/${workflowId}/activate`, { method: 'POST' })
       setWorkflows(prev => prev.map(w => w.id === workflowId ? updated : w))
       return updated
     } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error'
       console.error('Cannot activate workflow:', error)
-      return null
+      return { error: message }
     }
   }, [])
 
@@ -141,7 +142,7 @@ export function useWorkflows() {
     }
   }, [])
 
-  const triggerWorkflow = useCallback(async (workflowId: string, inputData?: Record<string, unknown>): Promise<{ instance_id: string } | null> => {
+  const triggerWorkflow = useCallback(async (workflowId: string, inputData?: Record<string, unknown>): Promise<{ instance_id: string } | { error: string }> => {
     try {
       return await workflowRequest<{ instance_id: string }>(`/v1/workflows/${workflowId}/trigger`, {
         method: 'POST',
@@ -149,8 +150,9 @@ export function useWorkflows() {
         body: JSON.stringify({ input_data: inputData ?? {} }),
       })
     } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error'
       console.error('Cannot trigger workflow:', error)
-      return null
+      return { error: message }
     }
   }, [])
 
@@ -178,8 +180,10 @@ export function useWorkflows() {
         body: JSON.stringify(input),
       })
     } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error'
       console.error('Cannot execute node:', error)
-      return null
+      // Return as a failed execution so UI can display the actual error
+      return { success: false, output: {}, error: message }
     }
   }, [])
 

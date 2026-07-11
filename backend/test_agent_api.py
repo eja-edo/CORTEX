@@ -86,13 +86,7 @@ async def test_schema_validation():
             print(f"    - Schema type: {schema.get('type', 'MISSING')}")
             print(f"    - Properties: {list(schema.get('properties', {}).keys())}")
             print(f"    - Required: {schema.get('required', [])}")
-            
-            # Try to convert to gemini format
-            try:
-                gemini_fmt = tool.to_gemini_format()
-                print(f"    ✅ Gemini format OK")
-            except Exception as e:
-                print(f"    ❌ Gemini format error: {e}")
+            print(f"    ✅ Tool definition OK")
     
     except Exception as e:
         print(f"❌ Error loading schemas: {e}")

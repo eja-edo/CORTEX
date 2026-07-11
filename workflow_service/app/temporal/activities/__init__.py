@@ -29,6 +29,7 @@ class ExecuteActionInput:
     trigger_data: dict
     previous_outputs: dict
     node_id_labels: dict | None = None
+    workspace_id: str | None = None
 
 
 @dataclass
@@ -78,6 +79,7 @@ async def execute_action(input: ExecuteActionInput) -> ActionResult:
         trigger_data=input.trigger_data,
         previous_outputs=input.previous_outputs,
         node_id_labels=input.node_id_labels,
+        workspace_id=input.workspace_id,
     )
 
     return await action.execute(input.config, context)

@@ -13,6 +13,7 @@ class ActionContext:
     trigger_data: dict[str, Any]
     previous_outputs: dict[str, Any]
     node_id_labels: dict[str, str] | None = None
+    workspace_id: str | None = None
 
 
 @dataclass

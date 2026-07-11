@@ -1,5 +1,5 @@
 """
-Unified LLM client supporting multiple providers (Gemini, OpenAI-compatible).
+Unified LLM client supporting OpenAI-compatible providers.
 
 Design
 ------
@@ -33,7 +33,6 @@ from typing import Deque, AsyncIterator
 
 from app.config import settings
 from app.services.agent.base_provider import LLMProvider
-from app.services.agent.gemini_provider import GeminiProvider
 from app.services.agent.openai_provider import OpenAIProvider
 from app.services.agent.provider_types import (
     Message,
@@ -52,27 +51,19 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 def get_default_provider() -> LLMProvider:
-    if settings.LLM_PROVIDER == "openai":
-        if not settings.OPENAI_API_KEY:
-            logger.warning("OPENAI_API_KEY not set, falling back to Gemini")
-            return GeminiProvider()
-        return OpenAIProvider()
-    return GeminiProvider()
+    return OpenAIProvider()
 
 
-def get_default_model(provider: LLMProvider) -> str:
-    if isinstance(provider, OpenAIProvider):
-        return settings.OPENAI_DEFAULT_MODEL
-    return settings.GEMINI_DEFAULT_MODEL
+def get_default_model(provider: LLMProvider | None = None) -> str:
+    return settings.OPENAI_DEFAULT_MODEL
 
 
 def get_default_models() -> list[str]:
-    provider = get_default_provider()
-    return [get_default_model(provider)]
+    return [get_default_model()]
 
 
 # ---------------------------------------------------------------------------
-# Model catalogue — free-tier limits from the Gemini dashboard
+# Model catalogue
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -83,16 +74,11 @@ class ModelLimits:
 
 
 MODEL_LIMITS: dict[str, ModelLimits] = {
-    "models/gemini-3.1-flash-lite": ModelLimits(rpm=15, tpm=250_000, rpd=500),
     "models/gemma-4-31b-it":        ModelLimits(rpm=15, tpm=None,    rpd=1_500),
     "models/gemma-4-26b-a4b-it":    ModelLimits(rpm=15, tpm=None,    rpd=1_500),
 }
 
 AVAILABLE_MODELS: list[str] = list(MODEL_LIMITS.keys())
-
-STRUCTURED_JSON_MODELS: list[str] = [
-    "models/gemini-3.1-flash-lite",
-]
 
 EST_TOKENS_PER_REQUEST: int = 1_500
 RETRY_MAX_ATTEMPTS: int = 2
@@ -102,45 +88,32 @@ BUDGET_SAFETY_MARGIN: float = 0.05
 
 
 # ---------------------------------------------------------------------------
-# Error classifiers (Gemini-specific, kept for backward compat)
+# Error classifiers
 # ---------------------------------------------------------------------------
 
 _TRULY_FATAL_CODES: frozenset[str] = frozenset({"401", "403", "404"})
-_TRULY_FATAL_400_STATUSES: frozenset[str] = frozenset({
-    "API_KEY_INVALID", "PERMISSION_DENIED", "UNAUTHENTICATED",
-    "BILLING_DISABLED", "PROJECT_DISABLED",
-})
-_MODEL_SKIP_400_STATUSES: frozenset[str] = frozenset({
-    "INVALID_ARGUMENT", "FAILED_PRECONDITION", "UNIMPLEMENTED", "NOT_SUPPORTED",
-})
 
 
 def is_fatal_error(exc: Exception) -> bool:
     s = str(exc)
-    if any(code in s for code in _TRULY_FATAL_CODES):
-        return True
-    if "400" in s:
-        return any(status in s for status in _TRULY_FATAL_400_STATUSES)
-    return False
+    return any(code in s for code in _TRULY_FATAL_CODES)
 
 
 def is_model_incompatible_error(exc: Exception) -> bool:
-    s = str(exc)
-    if "400" in s:
-        return any(status in s for status in _MODEL_SKIP_400_STATUSES)
-    return False
+    s = str(exc).lower()
+    return "not supported" in s or "does not support" in s or "not found" in s
 
 
 def is_quota_error(exc: Exception) -> bool:
     s = str(exc).lower()
-    return "429" in s or "resource_exhausted" in s or "quota" in s
+    return "429" in s or "quota" in s or "rate_limit" in s
 
 
 def is_retryable_error(exc: Exception) -> bool:
     if is_quota_error(exc):
         return False
     s = str(exc)
-    return "500" in s or "503" in s or "INTERNAL" in s or "UNAVAILABLE" in s
+    return "500" in s or "503" in s
 
 
 # ---------------------------------------------------------------------------
@@ -307,9 +280,16 @@ class ModelClient:
         config: GenerationConfig,
         tools: list[ToolDefinition] | None = None,
         estimated_tokens: int = EST_TOKENS_PER_REQUEST,
+        preferred_model: str | None = None,
     ) -> AsyncIterator[ProviderStreamChunk]:
         last_exc: Exception | None = None
         budget_skipped_all: list[str] = []
+
+        def _ordered(preferred: str | None) -> list[str]:
+            base = self._model_order()
+            if not preferred or preferred not in self._models:
+                return base
+            return [preferred] + [m for m in base if m != preferred]
 
         for rotation_attempt in range(STREAM_ROTATION_RETRIES + 1):
             if rotation_attempt > 0:
@@ -320,7 +300,7 @@ class ModelClient:
                 )
                 await asyncio.sleep(delay)
 
-            ordered = self._model_order()
+            ordered = _ordered(preferred_model)
             models_tried: dict[str, str] = {}
             budget_skipped: list[str] = []
 
@@ -363,14 +343,6 @@ class ModelClient:
                     if is_fatal_error(error):
                         logger.error(f"stream_with_fallback: FATAL on {model} → {err_str}")
                         raise
-
-                    if is_model_incompatible_error(error):
-                        models_tried[model] = f"MODEL_INCOMPATIBLE: {err_str}"
-                        logger.warning(
-                            f"stream_with_fallback: model-incompatible on {model}. "
-                            f"{err_str}"
-                        )
-                        continue
 
                     if is_quota_error(error):
                         if budget:
@@ -481,12 +453,6 @@ class ModelClient:
                     logger.error(f"ModelClient: fatal error on {model}, aborting. {str(exc)[:200]}")
                     raise
 
-                if is_model_incompatible_error(exc):
-                    logger.warning(
-                        f"ModelClient: model-incompatible 400 on {model}, trying next. {str(exc)[:120]}"
-                    )
-                    continue
-
                 if is_quota_error(exc):
                     if budget:
                         budget.penalise()
@@ -534,7 +500,7 @@ class ModelClient:
             except Exception as exc:
                 last_exc = exc
 
-                if is_fatal_error(exc) or is_quota_error(exc) or is_model_incompatible_error(exc):
+                if is_fatal_error(exc) or is_quota_error(exc):
                     raise
 
                 if is_retryable_error(exc):

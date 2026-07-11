@@ -495,6 +495,8 @@ class AgentChatRequest(BaseModel):
     conversation_id: UUID | None = Field(default=None, description="Existing conversation ID, or null to start new")
     workspace_id: UUID | None = Field(default=None, description="Optional workspace context")
     context: dict | None = Field(default=None, description="Structured context (pills, runtime info) to include for LLM but not display as user text")
+    model: str | None = Field(default=None, description="Preferred model id, or 'auto' for round-robin")
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0, description="Sampling temperature override")
 
 
 class AgentChatResponse(BaseModel):

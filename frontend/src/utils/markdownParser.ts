@@ -1,7 +1,12 @@
 import MarkdownIt from 'markdown-it'
-import type Token from 'markdown-it/lib/token.mjs'
 import type { BlockNode, BlockType, BlockMeta } from '../types/editor'
 import { generateBlockId } from '../types/editor'
+
+interface MarkdownToken {
+  type: string
+  tag?: string
+  content?: string
+}
 
 const md = new MarkdownIt({
   html: false,
@@ -29,7 +34,7 @@ function isTaskItem(content: string): { checked: boolean; text: string } | null 
 }
 
 function extractListContent(
-  tokens: Token[],
+  tokens: MarkdownToken[],
   startIdx: number,
   listType: BlockType,
 ): { blocks: BlockNode[]; endIdx: number } {
@@ -52,7 +57,7 @@ function extractListContent(
         if (ct.type === 'paragraph_open') {
           const inlineToken = tokens[j + 1]
           if (inlineToken?.type === 'inline') {
-            content += (content ? '\n' : '') + inlineToken.content
+            content += (content ? '\n' : '') + (inlineToken.content ?? '')
           }
           j += 2
           while (j < tokens.length && tokens[j]?.type !== 'paragraph_close') j++
@@ -101,7 +106,7 @@ function extractListContent(
 }
 
 function extractBlockquoteContent(
-  tokens: Token[],
+  tokens: MarkdownToken[],
   startIdx: number,
 ): { blocks: BlockNode[]; endIdx: number } {
   const blocks: BlockNode[] = []
@@ -117,14 +122,15 @@ function extractBlockquoteContent(
         blocks.push({
           id: generateBlockId(),
           type: 'paragraph',
-          content: inlineToken.content,
+          content: inlineToken.content ?? '',
         })
       }
       i += 2
       while (i < tokens.length && tokens[i]?.type !== 'paragraph_close') i++
       i++
     } else if (t.type === 'heading_open') {
-      const level = Number(t.tag.slice(1)) as 1 | 2 | 3
+      const levelTag = t.tag ?? ''
+      const level = Number(levelTag.slice(1)) as 1 | 2 | 3
       const inlineToken = tokens[i + 1]
       const content = inlineToken?.content ?? ''
       const headingType = `heading_${level}` as BlockType

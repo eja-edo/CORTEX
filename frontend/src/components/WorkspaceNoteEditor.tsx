@@ -72,7 +72,7 @@ export function WorkspaceNoteEditor({
             if (timerRef.current && pendingFlushValueRef.current !== null) {
                 window.clearTimeout(timerRef.current)
                 timerRef.current = null
-                onChange(lastNoteIdRef.current, pendingFlushValueRef.current)
+                onChange(lastNoteIdRef.current ?? note.id, pendingFlushValueRef.current ?? '')
                 pendingFlushValueRef.current = null
             }
 

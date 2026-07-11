@@ -20,7 +20,6 @@ cryptography==42.0.8
 boto3==1.35.69
 redis==5.0.8
 motor==3.6.0
-google-genai>=2.6.0
 openai>=1.55.0 
 numpy==2.1.2
 opencv-python-headless==4.10.0.84

@@ -5,8 +5,6 @@ from typing import Callable, Dict, Any, Optional
 from datetime import datetime
 from pydantic import BaseModel, ValidationError
 
-from google.genai import types
-
 from app.services.agent.provider_types import ToolDefinition as ProviderToolDef
 from app.services.agent.tool_context import ToolContext
 from app.utils.logger import get_logger
@@ -31,14 +29,6 @@ class ToolDefinition:
         self.schema = schema
         self.handler = handler
         self.input_model = input_model
-
-    def to_gemini_format(self) -> dict:
-        """Convert to Gemini function calling format."""
-        return {
-            "name": self.name,
-            "description": self.description,
-            "parameters": self.schema,
-        }
 
     def to_provider_format(self) -> ProviderToolDef:
         """Convert to provider-agnostic ToolDefinition format."""
@@ -170,33 +160,6 @@ class ToolRegistry:
 
         tool = self.tools[name]
         return await tool.validate_and_execute(args, ctx)
-
-    def get_gemini_tools(self) -> list[types.Tool]:
-        """Get all tools in new SDK format.
-        
-        Returns a list with single Tool containing all function declarations.
-        Gemini SDK expects all functions in one Tool object.
-        """
-        function_declarations = []
-        for tool_def in self.tools.values():
-            func_decl = types.FunctionDeclaration(
-                name=tool_def.name,
-                description=tool_def.description,
-                parameters_json_schema=tool_def.schema,
-            )
-            function_declarations.append(func_decl)
-        
-        # Return single Tool with all function declarations
-        return [types.Tool(function_declarations=function_declarations)]
-
-    def get_gemini_tool_definitions(self) -> list[dict]:
-        """
-        Get all tools in Gemini function calling format.
-        
-        Returns:
-            List of tool definitions (dict format for old SDK)
-        """
-        return [tool.to_gemini_format() for tool in self.tools.values()]
 
     def get_provider_tools(self) -> list[ProviderToolDef]:
         """Get all tools in provider-agnostic format for the new provider system."""

@@ -65,7 +65,7 @@ class OpenAIProvider(LLMProvider):
         except Exception as exc:
             logger.error(f"OpenAIProvider.generate error on {model}: {exc}")
             raise
-
+        print("OpenAIProvider.generate response:", response)
         return self._openai_response_to_provider(response)
 
     async def generate_stream(
@@ -79,6 +79,9 @@ class OpenAIProvider(LLMProvider):
         openai_tools = self._tools_to_openai(tools) if tools else None
         kwargs = self._config_to_openai_kwargs(config, openai_tools)
         kwargs["stream"] = True
+        kwargs["stream_options"] = {"include_usage": True}
+
+        accumulated_usage: dict[str, int] | None = None
 
         client = _get_client()
         try:
@@ -91,6 +94,15 @@ class OpenAIProvider(LLMProvider):
             accumulated_tool_calls: dict[int, dict] = {}
 
             async for chunk in stream:
+                # Final usage-only chunk has no choices but carries `usage`
+                chunk_usage = getattr(chunk, "usage", None)
+                if chunk_usage:
+                    accumulated_usage = {
+                        "prompt_tokens": getattr(chunk_usage, "prompt_tokens", 0),
+                        "completion_tokens": getattr(chunk_usage, "completion_tokens", 0),
+                        "total_tokens": getattr(chunk_usage, "total_tokens", 0),
+                    }
+
                 if not (hasattr(chunk, "choices") and chunk.choices):
                     continue
 
@@ -141,6 +153,7 @@ class OpenAIProvider(LLMProvider):
                         content=content,
                         tool_calls=tool_calls if tool_calls else None,
                         finish_reason=finish_reason,
+                        usage=accumulated_usage,
                     )
                 elif content:
                     yield ProviderStreamChunk(content=content)

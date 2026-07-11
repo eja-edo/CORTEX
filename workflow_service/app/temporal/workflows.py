@@ -6,6 +6,7 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
+    from app.actions.base import ActionResult
     from app.temporal.activities import (
         ExecuteActionInput,
         execute_action,
@@ -25,6 +26,7 @@ class CortexWorkflowInput:
     user_id: str
     definition: dict
     trigger_data: dict
+    workspace_id: str | None = None
 
 
 @workflow.defn(name="CortexWorkflow")
@@ -148,13 +150,15 @@ class CortexWorkflow:
                         trigger_data=input.trigger_data,
                         previous_outputs=all_outputs,
                         node_id_labels=node_id_labels,
+                        workspace_id=input.workspace_id,
                     ),
                     start_to_close_timeout=timedelta(seconds=120),
                     retry_policy=retry_policy,
                 )
 
-                all_outputs[node_id] = output
-                final_output[node_id] = output
+                output_dict = output.output if isinstance(output, ActionResult) else output.get("output", output)
+                all_outputs[node_id] = output_dict
+                final_output[node_id] = output_dict
 
                 await workflow.execute_activity(
                     update_step_status,
@@ -163,14 +167,14 @@ class CortexWorkflow:
                         node_id=node_id,
                         node_type=node_type,
                         status="COMPLETED",
-                        output_data=output,
+                        output_data=output_dict,
                     ),
                     start_to_close_timeout=timedelta(seconds=10),
                 )
 
                 # Handle condition nodes: only follow the matching branch
                 if node_type == "action.condition":
-                    branch = output.output.get("branch", "false")
+                    branch = output_dict.get("branch", "false")
                     # Find edges from this node and deactivate nodes on the other branch
                     for edge in edges:
                         if edge.get("source") == node_id:

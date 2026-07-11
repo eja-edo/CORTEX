@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     temporal_task_queue: str = "cortex-workflow-queue"
 
     cortex_backend_url: str = "http://localhost:8000"
-    cortex_internal_api_key: str = ""
+    cortex_internal_api_key: str = "cortex-internal-key-2024"
 
     redis_url: str = "redis://localhost:6377"
 

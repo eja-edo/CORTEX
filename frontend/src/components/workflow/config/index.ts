@@ -1,4 +1,5 @@
 import type { ComponentType } from 'react'
+import type { TemplateVar } from './AutocompleteField'
 import { CreateNoteConfig } from './CreateNoteConfig'
 import { UpdateNoteConfig } from './UpdateNoteConfig'
 import { SendNotificationConfig } from './SendNotificationConfig'
@@ -9,9 +10,10 @@ import { WaitConfig } from './WaitConfig'
 import { ConditionConfig } from './ConditionConfig'
 import { ScheduleTriggerConfig } from './ScheduleTriggerConfig'
 
-type ConfigPanelProps = {
+export type ConfigPanelProps = {
   config: Record<string, unknown>
   onChange: (config: Record<string, unknown>) => void
+  templateVars?: TemplateVar[]
 }
 
 const configPanels: Record<string, ComponentType<ConfigPanelProps>> = {
@@ -29,3 +31,5 @@ const configPanels: Record<string, ComponentType<ConfigPanelProps>> = {
 export function getConfigPanel(type: string): ComponentType<ConfigPanelProps> | null {
   return configPanels[type] ?? null
 }
+
+export type { TemplateVar }

@@ -33,6 +33,32 @@
   opacity: 0.8;
 }
 
+/* ---- Success Banner ---- */
+.wf-success-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: var(--green);
+  color: #fff;
+  font-size: 13px;
+  gap: 12px;
+}
+
+.wf-success-banner button {
+  background: none;
+  border: none;
+  color: #fff;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.wf-success-banner button:hover {
+  opacity: 0.8;
+}
+
 /* ---- List View ---- */
 .wf-list-view {
   display: flex;
@@ -1599,7 +1625,53 @@
 }
 
 .wf-template-helper-item:hover {
-  background: var(--hover-bg);
+  background: var(--bg-hover);
+}
+
+/* ---- Autocomplete Field ---- */
+.wf-autocomplete-dropdown {
+  position: absolute;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  padding: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.wf-autocomplete-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  border: none;
+  background: none;
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.wf-autocomplete-item.active,
+.wf-autocomplete-item:hover {
+  background: var(--bg-hover);
+}
+
+.wf-autocomplete-value {
+  font-family: var(--font-mono);
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.wf-autocomplete-label {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ---- React Flow overrides ---- */

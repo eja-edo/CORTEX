@@ -1,5 +1,6 @@
 """Agent chat API endpoint for conversational AI interactions."""
 
+import asyncio
 import json
 from uuid import UUID
 
@@ -119,6 +120,8 @@ async def stream_chat(
                 conversation_id=payload.conversation_id,
                 workspace_id=payload.workspace_id,
                 context=payload.context,
+                model=payload.model,
+                temperature=payload.temperature,
             ):
                 if chunk.get("event") == "token" and chunk.get("text"):
                     reply_text += chunk["text"]
@@ -127,12 +130,18 @@ async def stream_chat(
                     yield f'data: {json.dumps({"event": "tool_start", "tool_name": chunk.get("tool_name"), "tool_args": chunk.get("tool_args")})}\n\n'
                 elif chunk.get("event") == "tool_result":
                     yield f'data: {json.dumps({"event": "tool_result", "tool_name": chunk.get("tool_name"), "result": chunk.get("result"), "success": chunk.get("success"), "error": chunk.get("error")})}\n\n'
+                elif chunk.get("event") == "title_generated":
+                    yield f'data: {json.dumps({"event": "title_generated", "title": chunk.get("title"), "conversation_id": str(chunk.get("conversation_id"))})}\n\n'
                 elif chunk.get("event") == "done":
                     result_conversation_id = chunk.get("conversation_id")
-                    yield f'data: {json.dumps({"event": "done", "conversation_id": str(result_conversation_id)})}\n\n'
+                    yield f'data: {json.dumps({"event": "done", "conversation_id": str(result_conversation_id), "usage": chunk.get("usage"), "model_used": chunk.get("model_used")})}\n\n'
                 elif chunk.get("event") == "error":
                     yield f'data: {json.dumps({"event": "error", "message": chunk.get("message")})}\n\n'
                     
+        except asyncio.CancelledError:
+            logger.info("Stream cancelled — server shutting down or client disconnected")
+        except GeneratorExit:
+            pass
         except Exception as exc:
             logger.error(f"Error in stream chat: {exc}", exc_info=True)
             yield f'data: {json.dumps({"event": "error", "message": str(exc)})}\n\n'

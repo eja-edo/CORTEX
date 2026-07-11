@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Bot, Send, X, Sparkles, RefreshCw, Copy, Check } from 'lucide-react'
-import { streamAgentMessage, listConversations, getConversation, revertAction, ApiError, type ConversationListItem, type StreamEvent, type PendingChange } from '../services/api'
+import { Bot, ArrowUp, X, Sparkles, RefreshCw, Copy, Check, Square, Plus, Mic, FileText, ChevronDown } from 'lucide-react'
+import { streamAgentMessage, listConversations, getConversation, revertAction, ApiError, type ConversationListItem, type StreamEvent, type PendingChange, type TokenUsage } from '../services/api'
 import { useConversationStore } from '../stores/conversationStore'
 import { knowledgeRoute, noteRoute, scheduleRoute } from '../services/routes'
 
@@ -37,6 +37,13 @@ type Message = {
 }
 
 const DISMISSED_KEY = 'cortex_dismissed_actions'
+const MODEL_KEY = 'cortex_chat_model'
+
+const AVAILABLE_MODELS: { id: string; label: string }[] = [
+    { id: 'auto', label: 'Auto (round-robin)' },
+    { id: 'models/gemma-4-31b-it', label: 'Gemma 4 31B' },
+    { id: 'models/gemma-4-26b-a4b-it', label: 'Gemma 4 26B' },
+]
 
 function getDismissedActionIds(): string[] {
     try {
@@ -139,6 +146,14 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
     const [pendingChangesOpen, setPendingChangesOpen] = useState(true)
     const inputRef = useRef<HTMLTextAreaElement>(null)
     const messagesEndRef = useRef<HTMLDivElement>(null)
+    const abortRef = useRef<AbortController | null>(null)
+    const [selectedModel, setSelectedModel] = useState<string>(
+        () => localStorage.getItem(MODEL_KEY) || 'auto'
+    )
+    const [lastUsage, setLastUsage] = useState<TokenUsage | null>(null)
+    const [lastModelUsed, setLastModelUsed] = useState<string | null>(null)
+    const [modelDropdownOpen, setModelDropdownOpen] = useState(false)
+    const modelDropdownRef = useRef<HTMLDivElement>(null)
     const { updateTokenUsage } = useConversationStore()
     const navigate = useNavigate()
 
@@ -201,7 +216,7 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                 const restoredChanges: PendingChange[] = []
                 for (const msg of conversation.messages) {
                     if (msg.role === 'tool' && msg.tool_name && msg.tool_output) {
-                        const output = msg.tool_output as Record<string, unknown>
+                        const output = msg.tool_output ? JSON.parse(msg.tool_output) as Record<string, unknown> : null
                         const result = output?.result as Record<string, unknown> | undefined
                         const actionId = result?.action_id as string | undefined
                         if (actionId && !dismissedIds.includes(actionId)) {
@@ -373,7 +388,7 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
             const loadedChanges: PendingChange[] = []
             for (const msg of conversation.messages) {
                 if (msg.role === 'tool' && msg.tool_name && msg.tool_output) {
-                    const output = msg.tool_output as Record<string, unknown>
+                    const output = msg.tool_output ? JSON.parse(msg.tool_output) as Record<string, unknown> : null
                     const result = output?.result as Record<string, unknown> | undefined
                     const actionId = result?.action_id as string | undefined
                     if (actionId && !dismissedIds.includes(actionId)) {
@@ -417,6 +432,8 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
     }, [sessionsOffset])
 
     const handleNewSession = useCallback(() => {
+        abortRef.current?.abort()
+        abortRef.current = null
         setMessages([])
         setConversationId(null)
         setConversationTitle(null)
@@ -424,9 +441,26 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
         setIsLoading(false)
         setCopiedId(null)
         setPendingChanges([])
+        setLastUsage(null)
+        setLastModelUsed(null)
         clearDismissedActionIds()
         clearConversationIdFromStorage()
     }, [clearConversationIdFromStorage])
+
+    const stopGeneration = useCallback(() => {
+        abortRef.current?.abort()
+        abortRef.current = null
+        setIsLoading(false)
+    }, [])
+
+    const handleModelChange = useCallback((model: string) => {
+        setSelectedModel(model)
+        try {
+            localStorage.setItem(MODEL_KEY, model)
+        } catch {
+            // ignore persistence errors
+        }
+    }, [])
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -440,13 +474,25 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
         return () => document.removeEventListener('keydown', handler)
     }, [onClose, isLoading])
 
+    useEffect(() => {
+        if (!modelDropdownOpen) return
+        const handler = (e: MouseEvent) => {
+            if (modelDropdownRef.current && !modelDropdownRef.current.contains(e.target as Node)) {
+                setModelDropdownOpen(false)
+            }
+        }
+        document.addEventListener('mousedown', handler)
+        return () => document.removeEventListener('mousedown', handler)
+    }, [modelDropdownOpen])
+
     const sendMessage = useCallback(async (text: string) => {
         if (!text.trim() || isLoading) return
         const userMsg = text.trim()
         setInput('')
         setError(null)
-        setDisplayIndex(0)
-        setFullReplyRef('')
+            setDisplayIndex(0)
+            setFullReplyRef('')
+            setLastUsage(null)
 
         const userMsgObj: Message = {
             id: Date.now().toString(),
@@ -478,6 +524,9 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
             let finalConversationId: string | null = null
             let thinkingSteps: Message['thinkingSteps'] = []
             let currentToolArgs: Record<string, unknown> | undefined
+
+            const controller = new AbortController()
+            abortRef.current = controller
 
             const handleToolNavigation = (event: StreamEvent) => {
                 if (!event.tool_name) return
@@ -517,7 +566,16 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                 }
             }
 
-            for await (const event of streamAgentMessage(userMsg, conversationId || undefined, workspaceId, context)) {
+            for await (const event of streamAgentMessage(
+                userMsg,
+                conversationId || undefined,
+                workspaceId,
+                context,
+                {
+                    model: selectedModel === 'auto' ? undefined : selectedModel,
+                    signal: controller.signal,
+                },
+            )) {
                 if (event.type === 'text' && event.text) {
                     fullReply += event.text
                     setFullReplyRef(fullReply)
@@ -575,6 +633,15 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                     setConversationTitle(event.title)
                 } else if (event.type === 'done' && event.conversation_id) {
                     finalConversationId = event.conversation_id
+                    if (event.usage) {
+                        setLastUsage(event.usage)
+                        if (typeof event.usage.total_tokens === 'number') {
+                            updateTokenUsage(event.usage.total_tokens)
+                        }
+                    }
+                    if (event.model_used) {
+                        setLastModelUsed(event.model_used)
+                    }
                     // Save conversationId to localStorage immediately (synchronously)
                     // This prevents data loss if user reloads right after sending a message
                     saveConversationIdToStorage(event.conversation_id)
@@ -607,9 +674,10 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                 )
             )
         } finally {
+            abortRef.current = null
             setIsLoading(false)
         }
-    }, [isLoading, conversationId, updateTokenUsage, addedPills, buildRuntimeContextText, navigate, workspaceId, onToolNavigate, saveConversationIdToStorage])
+    }, [isLoading, conversationId, updateTokenUsage, addedPills, buildRuntimeContextText, navigate, workspaceId, onToolNavigate, saveConversationIdToStorage, selectedModel])
 
     const toggleThinking = useCallback((messageId: string) => {
         setMessages(prev => prev.map(m =>
@@ -909,71 +977,26 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
 
                 {/* Input */}
                 <div className="ask-ai-input-area">
-                    {pendingSelection && !addedPills.some(p => p.text === pendingSelection) ||
-                        !pendingSelection && noteContent && !addedPills.some(p => p.text === noteContent) ||
-                        addedPills.length > 0 ? (
-                        <div className="ask-ai-context-area">
-                            <div className="ask-ai-context-pills">
-                                {/* Pending Selection - only show if not already added */}
-                                {pendingSelection && !addedPills.some(p => p.text === pendingSelection) && (
-                                    <div className="ask-ai-context-pill ask-ai-context-pill--pending">
-                                        <span className="ask-ai-context-pill-text" title={pendingSelection}>
-                                            {pendingSelection.slice(0, 40) + (pendingSelection.length > 40 ? '…' : '')}
-                                        </span>
-                                        <button
-                                            type="button"
-                                            className="ask-ai-context-pill-action"
-                                            onClick={addPendingSelection}
-                                            title="Add to context"
-                                        >
-                                            +
-                                        </button>
-                                    </div>
-                                )}
-
-                                {/* Add Full Note - only show if no pending and note not added */}
-                                {!pendingSelection && noteContent && !addedPills.some(p => p.text === noteContent) && (
-                                    <div className="ask-ai-context-pill ask-ai-context-pill--pending">
-                                        <span className="ask-ai-context-pill-text" title="Add full note content">
-                                            Add full note
-                                        </span>
-                                        <button
-                                            type="button"
-                                            className="ask-ai-context-pill-action"
-                                            onClick={() => {
-                                                setAddedPills(prev => [...prev, {
-                                                    id: Date.now().toString(),
-                                                    text: noteContent,
-                                                    label: `📝 ${noteTitle || 'Note'}`,
-                                                }])
-                                            }}
-                                            title="Add to context"
-                                        >
-                                            +
-                                        </button>
-                                    </div>
-                                )}
-
-                                {/* Added Pills */}
-                                {addedPills.map(pill => (
-                                    <div key={pill.id} className="ask-ai-context-pill ask-ai-context-pill--added">
-                                        <span className="ask-ai-context-pill-text" title={pill.text}>
-                                            {pill.label}
-                                        </span>
-                                        <button
-                                            type="button"
-                                            className="ask-ai-context-pill-action"
-                                            onClick={() => setAddedPills(prev => prev.filter(p => p.id !== pill.id))}
-                                            title="Remove from context"
-                                        >
-                                            ×
-                                        </button>
-                                    </div>
-                                ))}
-                                {/* runtime context is collected automatically on send; no manual refresh UI */}
-                            </div>
+                    {/* Context pills (between textarea and bottom bar) */}
+                    {addedPills.length > 0 && (
+                        <div className="ask-ai-context-pills ask-ai-context-pills--bar">
+                            {addedPills.map(pill => (
+                                <div key={pill.id} className="ask-ai-context-pill ask-ai-context-pill--added">
+                                    <span className="ask-ai-context-pill-text" title={pill.text}>
+                                        {pill.label}
+                                    </span>
+                                    <button
+                                        type="button"
+                                        className="ask-ai-context-pill-action"
+                                        onClick={() => setAddedPills(prev => prev.filter(p => p.id !== pill.id))}
+                                        title="Remove from context"
+                                    >
+                                        ×
+                                    </button>
+                                </div>
+                            ))}
                         </div>
-                    ) : null}
+                    )}
                     {pendingChanges.length > 0 && (
                         <div className="ask-ai-changes-area">
                             <button
@@ -1026,27 +1049,122 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                             )}
                         </div>
                     )}
+                    {/* Textarea area */}
                     <div className="ask-ai-input-wrapper">
                         <textarea
                             ref={inputRef}
                             className="ask-ai-input"
-                            placeholder="Ask anything… (Enter to send, Shift+Enter for newline)"
+                            placeholder="Ask anything…"
                             value={input}
                             onChange={e => setInput(e.target.value)}
                             onKeyDown={handleKeyDown}
-                            rows={1}
                             disabled={isLoading}
                         />
                         <button
                             type="button"
-                            className={`ask-ai-send-btn ${input.trim() && !isLoading ? 'active' : ''}`}
-                            onClick={() => void sendMessage(input)}
-                            disabled={!input.trim() || isLoading}
+                            className="ask-ai-mic-btn"
+                            title="Voice input"
+                            disabled={isLoading}
                         >
-                            <Send size={14} />
+                            <Mic size={15} />
                         </button>
                     </div>
+                    {/* Bottom bar */}
+                    <div className="ask-ai-bottom-bar">
+                        <div className="ask-ai-bottom-left">
+                            <button
+                                type="button"
+                                className="ask-ai-bottom-icon-btn"
+                                title="Add context"
+                                onClick={() => {
+                                    if (noteContent && !addedPills.some(p => p.text === noteContent)) {
+                                        setAddedPills(prev => [...prev, {
+                                            id: Date.now().toString(),
+                                            text: noteContent,
+                                            label: `\u{1F4DD} ${noteTitle || 'Note'}`,
+                                        }])
+                                    }
+                                }}
+                            >
+                                <Plus size={15} />
+                            </button>
+                            {pendingSelection && !addedPills.some(p => p.text === pendingSelection) && (
+                                <button
+                                    type="button"
+                                    className="ask-ai-bottom-icon-btn"
+                                    title="Add selected text"
+                                    onClick={addPendingSelection}
+                                >
+                                    <FileText size={14} />
+                                </button>
+                            )}
+                        </div>
+                        <div className="ask-ai-bottom-right">
+                            <div className="ask-ai-model-select" ref={modelDropdownRef}>
+                                <button
+                                    type="button"
+                                    className="ask-ai-model-trigger"
+                                    onClick={() => setModelDropdownOpen(v => !v)}
+                                    disabled={isLoading}
+                                    title="Select model"
+                                >
+                                    <span className="ask-ai-model-trigger-label">
+                                        {AVAILABLE_MODELS.find(m => m.id === selectedModel)?.label || 'Auto'}
+                                    </span>
+                                    <ChevronDown size={11} className={`ask-ai-model-chevron ${modelDropdownOpen ? 'open' : ''}`} />
+                                </button>
+                                {modelDropdownOpen && (
+                                    <div className="ask-ai-model-dropdown">
+                                        {AVAILABLE_MODELS.map((m) => (
+                                            <button
+                                                key={m.id}
+                                                type="button"
+                                                className={`ask-ai-model-option ${m.id === selectedModel ? 'active' : ''}`}
+                                                onClick={() => {
+                                                    handleModelChange(m.id)
+                                                    setModelDropdownOpen(false)
+                                                }}
+                                            >
+                                                <span className="ask-ai-model-option-label">{m.label}</span>
+                                                {m.id === selectedModel && <Check size={12} className="ask-ai-model-option-check" />}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                            {isLoading ? (
+                                <button
+                                    type="button"
+                                    className="ask-ai-stop-btn"
+                                    onClick={stopGeneration}
+                                    title="Stop generating"
+                                >
+                                    <Square size={13} />
+                                </button>
+                            ) : (
+                                <button
+                                    type="button"
+                                    className={`ask-ai-send-btn ${input.trim() ? 'active' : ''}`}
+                                    onClick={() => void sendMessage(input)}
+                                    disabled={!input.trim()}
+                                    title="Send"
+                                >
+                                    <ArrowUp size={16} />
+                                </button>
+                            )}
+                        </div>
+                    </div>
                 </div>
+                {lastUsage && (
+                    <div className="ask-ai-usage">
+                        <span className="ask-ai-usage-model">
+                            {lastModelUsed ? (AVAILABLE_MODELS.find(m => m.id === lastModelUsed)?.label || lastModelUsed) : 'Auto'}
+                        </span>
+                        <span className="ask-ai-usage-stat">↑ {lastUsage.prompt_tokens}</span>
+                        <span className="ask-ai-usage-stat">↓ {lastUsage.completion_tokens}</span>
+                        <span className="ask-ai-usage-stat ask-ai-usage-total">∑ {lastUsage.total_tokens}</span>
+                    </div>
+                )}
             </div>
         </div>
     )

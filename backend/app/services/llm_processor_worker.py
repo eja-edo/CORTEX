@@ -2,7 +2,7 @@
 LLM Processor Worker
 
 Consumes LLM tasks from Redis → retrieves OCR frames AND transcript segments
-from MongoDB → calls Gemini → saves timeline-based results to MongoDB.
+from MongoDB → calls LLM → saves timeline-based results to MongoDB.
 
 Supports three asset types:
   1. Video with OCR only
@@ -26,7 +26,7 @@ from typing import Optional
 
 from app.config import settings
 from app.services.mongo_service import MongoOCRService
-from app.services.llm_processing import gemini_service
+from app.services.llm_processing import llm_service
 from app.services.redis.llm_processor_task import (
     LLM_PROCESSOR_STREAM_KEY,
     LLM_CONSUMER_GROUP,
@@ -251,7 +251,7 @@ class LLMProcessorWorker:
           1. Fetch OCR frames (may be empty for audio-only)
           2. Fetch transcript segments (may be empty for video-only)
           3. Build time windows
-          4. Call Gemini per window → save OCRProcessedDocument
+          4. Call LLM per window → save OCRProcessedDocument
           5. Extract knowledge units
           6. Session synthesis → AssetKnowledgeSummary
         """
@@ -317,7 +317,7 @@ class LLMProcessorWorker:
             ocr_text = window.get("combined_text", "")
             transcript_text = window.get("transcript_text", "")
 
-            result = await gemini_service.process_window(
+            result = await llm_service.process_window(
                 start_sec=w_start,
                 end_sec=w_end,
                 ocr_text=ocr_text,
@@ -496,7 +496,7 @@ class LLMProcessorWorker:
         has_ocr: bool,
         has_transcript: bool,
     ) -> int:
-        result = await gemini_service.extract_knowledge(
+        result = await llm_service.extract_knowledge(
             text=ocr_text,
             context=context,
             start_sec=start_sec,
@@ -628,7 +628,7 @@ class LLMProcessorWorker:
             else 0
         )
 
-        result = await gemini_service.synthesize_session(
+        result = await llm_service.synthesize_session(
             processed_segments=summaries[:50],
             asset_title=f"asset_{task.asset_id}",
             duration_ms=duration_ms,

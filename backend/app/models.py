@@ -384,7 +384,7 @@ class Note(Base):
     is_deleted = Column(Boolean, nullable=False, default=False, server_default=text("false"))
     created_at = Column(DateTime, default=datetime.utcnow, server_default=text("NOW()"))
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=text("NOW()"))
-    # Vector embedding for semantic search (768-dim for Gemini text-embedding-004)
+    # Vector embedding for semantic search
     # Stored as PostgreSQL vector type via pgvector extension
     embedding = Column(JSONB, nullable=True)  # Fallback: store as JSON array until proper vector type
     embedding_generated_at = Column(DateTime, nullable=True)  # Track when embedding was computed

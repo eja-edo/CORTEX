@@ -1,8 +1,7 @@
 """
 Embedding Service for semantic search
 
-Routes embedding requests through 9router (OpenAI-compatible API proxy)
-using model gemini/gemini-embedding-2-preview.
+Routes embedding requests to the configured embedding model via OpenAI-compatible API.
 Caches results in Redis to avoid redundant API calls.
 """
 
@@ -34,17 +33,16 @@ def _get_client() -> AsyncOpenAI:
 
 class EmbeddingService:
     """
-    Service for generating and caching text embeddings via 9router.
+    Service for generating and caching text embeddings via OpenAI-compatible API.
 
-    Uses OpenAI-compatible /v1/embeddings endpoint routed through 9router
-    with model gemini/gemini-embedding-2-preview.
+    Uses /v1/embeddings endpoint with the configured embedding model.
     Features:
     - Redis caching with SHA256 key derivation
     - Async-first design
     - Graceful degradation on API failures
     """
 
-    MODEL = "gemini/gemini-embedding-2-preview"
+    MODEL = settings.EMBEDDING_MODEL
 
     # Redis cache configuration
     EMBEDDING_CACHE_TTL = 86400 * 30  # 30 days

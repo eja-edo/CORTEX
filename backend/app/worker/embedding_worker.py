@@ -14,7 +14,7 @@ Usage:
 Environment:
     - REDIS_URL: Redis connection string
     - DATABASE_URL: PostgreSQL synchronous connection
-    - GEMINI_API_KEY: Gemini API key
+    - OPENAI_API_KEY: OpenAI-compatible API key
 """
 
 import asyncio

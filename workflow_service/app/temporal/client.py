@@ -54,6 +54,7 @@ async def start_workflow_execution(
             instance_id=instance_id,
             workflow_id=str(workflow.id),
             user_id=str(workflow.user_id),
+            workspace_id=str(workflow.workspace_id) if workflow.workspace_id else None,
             definition=workflow.definition,
             trigger_data=trigger_data,
         ),

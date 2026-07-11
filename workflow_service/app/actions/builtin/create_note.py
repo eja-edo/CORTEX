@@ -45,16 +45,21 @@ class CreateNoteAction(BaseAction):
     async def execute(self, config: dict, context: ActionContext) -> ActionResult:
         title = self.resolve_template(config.get("title", "Untitled"), context)
         content = self.resolve_template(config.get("content", ""), context)
-        workspace_id = config.get("workspace_id")
-
+        workspace_id = config.get("workspace_id") or context.workspace_id
+        if not workspace_id:
+            return ActionResult(
+                success=False,
+                output={},
+                error="workspace_id is required (set in node config or workflow workspace)"
+            )
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.post(
                     f"{settings.cortex_backend_url}/api/notes",
                     json={
-                        "title": title,
-                        "content": content,
                         "workspace_id": workspace_id,
+                        "content": content or title,
+                        "content_type": "markdown",
                     },
                     headers={
                         "X-Internal-API-Key": settings.cortex_internal_api_key,
