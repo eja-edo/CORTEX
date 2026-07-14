@@ -68,7 +68,7 @@ async def test_schema_validation():
     print("="*60 + "\n")
     
     try:
-        from app.services.agent.tool_registry import get_tool_registry
+        from app.ai.agents.tool_registry import get_tool_registry
         
         registry = get_tool_registry()
         tools = registry.list_tools()

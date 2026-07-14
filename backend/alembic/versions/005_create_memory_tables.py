@@ -10,7 +10,13 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID, JSONB, TEXT, TIMESTAMP, BOOLEAN, INTEGER, VARCHAR, FLOAT
-from pgvector.sqlalchemy import Vector
+try:
+    from pgvector.sqlalchemy import Vector
+except ImportError:
+    from dataclasses import dataclass
+    @dataclass
+    class Vector:
+        pass
 
 
 revision: str = '005'

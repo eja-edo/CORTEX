@@ -531,6 +531,7 @@ class AgentConversation(Base):
     summary = Column(Text, nullable=True)  # Stores compressed summary of older messages
     message_count = Column(Integer, nullable=False, default=0, server_default=text("0"))  # Track total messages
     total_token_count = Column(Integer, nullable=False, default=0, server_default=text("0"))  # Total tokens in conversation
+    last_extracted_at = Column(DateTime, nullable=True)  # When memory was last extracted
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, server_default=text("NOW()"))
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, server_default=text("NOW()"))
 

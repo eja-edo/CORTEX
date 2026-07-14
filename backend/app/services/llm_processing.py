@@ -13,6 +13,7 @@ from openai import AsyncOpenAI
 
 from app.config import settings
 from app.utils.logger import get_logger
+from app.ai.loaders.prompt_loader import load, render
 
 logger = get_logger(__name__)
 
@@ -69,51 +70,13 @@ def _window_prompt_video_and_audio(
     transcript_text: str,
     asset_context: str,
 ) -> str:
-    return f"""You are an expert analyst processing a screen recording with audio narration.
-Segment: {start_sec:.1f}s – {end_sec:.1f}s  |  Asset: {asset_context}
-{_format_ocr_block(ocr_text)}{_format_transcript_block(transcript_text)}
-
-═══ YOUR TASK ═══
-
-Produce a DETAILED analysis of this segment. Your output will be the primary source of
-information about this moment in the recording, so be thorough and specific.
-
-1. SUMMARY (4-6 sentences)
-   • What application/website was open?
-   • What was the user actively trying to accomplish?
-   • What actions did they take (clicks, typing, navigation, commands)?
-   • What was the outcome — success, error, partial progress?
-   • Any important insight, decision, or teaching moment?
-
-2. USER INTENT
-   Describe the user's goal in this window in a complete sentence.
-
-3. TIMELINE EVENTS (be exhaustive — split into distinct moments)
-   For EACH meaningful action or topic shift create a separate event with:
-   • start_sec / end_sec  (pin to actual timing within {start_sec:.1f}–{end_sec:.1f}s)
-   • activity_summary: 2-3 sentences — what specifically happened
-   • spoken_content: copy the relevant transcript excerpt verbatim
-   • screen_content: copy the most important text/code visible on screen
-   • event_type: activity | error | solution | decision | explanation
-   • knowledge_value scoring guide:
-       1.0  — Critical: error found+fixed, key concept explained, architecture decision
-       0.8  — Important: new feature implemented, bug identified, tool/API demonstrated
-       0.6  — Useful: configuration change, code refactor, workflow step
-       0.4  — Moderate: navigation, searching, reading docs
-       0.2  — Low: minor UI interaction, waiting, loading
-       0.0  — Trivial: idle, lock screen, blank content
-   • topics: specific technology names, concept names (e.g. "React hooks", "SQL JOIN")
-   • keywords: searchable terms a user would type to find this moment
-
-4. ENTITIES — extract ALL occurrences of:
-   • URLs visited
-   • Code identifiers (function names, class names, variable names)
-   • Error messages (exact text)
-   • Tools and libraries used
-   • File paths
-
-Use OCR to understand WHAT was on screen; use transcript to understand WHY and the user's intent.
-"""
+    return render("assets/video_analysis.md",
+        start_sec=start_sec,
+        end_sec=end_sec,
+        asset_context=asset_context or "N/A",
+        ocr_block=_format_ocr_block(ocr_text),
+        transcript_block=_format_transcript_block(transcript_text),
+    )
 
 
 def _window_prompt_audio_only(
@@ -122,55 +85,12 @@ def _window_prompt_audio_only(
     transcript_text: str,
     asset_context: str,
 ) -> str:
-    return f"""You are an expert analyst processing an audio recording (no screen content).
-Segment: {start_sec:.1f}s – {end_sec:.1f}s  |  Asset: {asset_context}
-{_format_transcript_block(transcript_text)}
-
-═══ YOUR TASK ═══
-
-Produce a DETAILED analysis of this spoken segment. The transcript is your only source,
-so extract maximum value from it.
-
-1. SUMMARY (4-6 sentences)
-   • What topic or subject is being discussed?
-   • Who is speaking (if identifiable — e.g. different speakers, instructor, student)?
-   • What is the core message or argument being made?
-   • What specific information, instructions, or explanations were given?
-   • What conclusions or decisions were reached?
-
-2. USER INTENT
-   What is the speaker trying to communicate or accomplish in this segment?
-
-3. TIMELINE EVENTS (split into distinct topic shifts or key statements)
-   For EACH distinct topic or important statement create a separate event:
-   • start_sec / end_sec  (pin to timing within {start_sec:.1f}–{end_sec:.1f}s)
-   • activity_summary: 2-3 sentences capturing the substance of what was said
-   • spoken_content: the most important verbatim excerpt (20-60 words)
-   • screen_content: leave empty (no screen)
-   • event_type:
-       explanation — concept or process being explained
-       decision    — a choice or recommendation being made
-       activity    — describing an action or procedure
-       error       — describing a problem or mistake
-       solution    — describing how to fix something
-   • knowledge_value:
-       1.0  — Core concept explained, critical instruction given
-       0.8  — Important technique, methodology, or insight shared
-       0.6  — Useful detail, example, or context provided
-       0.4  — Background information, transition between topics
-       0.2  — Filler, repetition, social pleasantries
-   • topics: specific subject areas discussed
-   • keywords: terms a learner would search for to find this moment
-
-4. ENTITIES — extract ALL:
-   • Named technologies, tools, libraries, frameworks
-   • Named people, organizations, products
-   • URLs or file paths mentioned verbally
-   • Specific commands or code mentioned in speech
-
-Be comprehensive. This transcript may be from a lecture, tutorial, meeting, or
-narrated demonstration — treat it accordingly.
-"""
+    return render("assets/audio_analysis.md",
+        start_sec=start_sec,
+        end_sec=end_sec,
+        asset_context=asset_context or "N/A",
+        transcript_block=_format_transcript_block(transcript_text),
+    )
 
 
 def _window_prompt_ocr_only(
@@ -179,43 +99,12 @@ def _window_prompt_ocr_only(
     ocr_text: str,
     asset_context: str,
 ) -> str:
-    return f"""You are an expert analyst processing a silent screen recording (no audio).
-Segment: {start_sec:.1f}s – {end_sec:.1f}s  |  Asset: {asset_context}
-{_format_ocr_block(ocr_text)}
-
-═══ YOUR TASK ═══
-
-Produce a DETAILED analysis based solely on what was visible on screen.
-
-1. SUMMARY (4-6 sentences)
-   • What application or website was open?
-   • What content or data was displayed?
-   • What was the user apparently trying to do (inferred from screen state)?
-   • What changes occurred between frames (new content, errors, navigation)?
-   • Any error messages, code, commands, or important text visible?
-
-2. USER INTENT
-   Infer the user's goal from the screen content alone.
-
-3. TIMELINE EVENTS (split by meaningful screen changes)
-   • start_sec / end_sec within {start_sec:.1f}–{end_sec:.1f}s
-   • activity_summary: describe what is shown and what it implies about the user's action
-   • spoken_content: leave empty (no audio)
-   • screen_content: exact copy of the most important visible text
-   • event_type: activity | error | solution | decision | explanation
-   • knowledge_value (same scale as above)
-   • topics & keywords: derived from visible content
-
-4. ENTITIES — extract ALL visible:
-   • URLs in address bars or on screen
-   • Error messages (exact text)
-   • Code identifiers and snippets
-   • File paths, commands visible in terminal
-   • Tool/library names visible on screen
-
-Infer as much context as possible from what is shown, but do not fabricate
-information that is not present in the OCR text.
-"""
+    return render("assets/ocr_analysis.md",
+        start_sec=start_sec,
+        end_sec=end_sec,
+        asset_context=asset_context or "N/A",
+        ocr_block=_format_ocr_block(ocr_text),
+    )
 
 
 def _knowledge_extraction_prompt(
@@ -236,58 +125,14 @@ def _knowledge_extraction_prompt(
 
     source_desc = " + ".join(sources) if sources else "combined recording"
 
-    return f"""You are extracting structured knowledge units from a recording segment.
-Time range: {start_sec:.1f}s – {end_sec:.1f}s
-Context: {context or "N/A"}
-Sources available: {source_desc}
-{_format_ocr_block(ocr_text)}{_format_transcript_block(transcript_text)}
-
-═══ EXTRACTION INSTRUCTIONS ═══
-
-Extract EVERY piece of reusable knowledge. Be exhaustive — it is better to
-include a borderline item than to miss something useful.
-
-FACTS
-  • General learnings, techniques, best practices, concepts demonstrated
-  • Configuration details, parameter values, settings that matter
-  • "I learned that X works like Y" style insights
-  • Each fact should be a self-contained, reusable statement
-  • Minimum useful length: one clear sentence
-
-ERRORS
-  • Every error message shown on screen or mentioned verbally
-  • Include the EXACT error text as `message`
-  • For `resolution`: what was done to fix it (or "unresolved" if not fixed)
-  • Include partial errors — even if not fully resolved, document them
-
-CODE PATTERNS
-  • Any code snippet visible on screen or dictated verbally
-  • Include enough context to understand the pattern (not just one line)
-  • `purpose`: what this code accomplishes
-
-COMMANDS
-  • Every CLI/shell/terminal command visible or spoken
-  • Include flags and arguments
-  • `purpose`: what the command does
-
-EXPLANATIONS
-  • Any moment where a concept is explained, defined, or demonstrated
-  • Both verbal explanations (from transcript) and implicit demonstrations (from screen)
-  • `explanation`: a complete, standalone explanation of the topic
-
-DECISIONS
-  • Choices the user made with explicit or implicit reasoning
-  • Technology choices, architectural decisions, workaround selections
-  • `rationale`: why this choice was made (even if inferred)
-  • `alternatives_considered`: other options mentioned or implied
-
-For each item, estimate start_sec/end_sec within [{start_sec:.1f}, {end_sec:.1f}]:
-  • Use transcript timing for verbal explanations and decisions
-  • Use frame timestamps for screen-based errors and code
-  • When uncertain, use the window boundaries
-
-Do NOT skip items because they seem minor — the user may search for them later.
-"""
+    return render("memory/knowledge_extraction.md",
+        start_sec=start_sec,
+        end_sec=end_sec,
+        context=context or "N/A",
+        source_desc=source_desc,
+        ocr_block=_format_ocr_block(ocr_text),
+        transcript_block=_format_transcript_block(transcript_text),
+    )
 
 
 def _session_synthesis_prompt(
@@ -342,85 +187,15 @@ def _session_synthesis_prompt(
     events_block = "\n".join(notable_events[:60]) if notable_events else "  (none recorded)"
     total_events = len(all_events)
 
-    return f"""You are synthesizing a complete knowledge report for a {asset_type_desc}.
-
-Title: {asset_title}
-Duration: {duration_sec:.0f}s ({duration_sec/60:.1f} minutes)
-Windows analyzed: {len(processed_segments)}
-Total timeline events: {total_events}
-
-─── WINDOW-BY-WINDOW SUMMARY ───
-{windows_block}
-
-─── NOTABLE EVENTS (kv ≥ 0.4) ───
-{events_block}
-
-═══ SYNTHESIS INSTRUCTIONS ═══
-
-Your output is the PERMANENT knowledge record of this session. It must be:
-  • Complete — someone who has never seen the recording should understand what happened
-  • Accurate — only include things that actually occurred
-  • Useful — written so the user can search, review, and learn from it later
-
-1. SESSION TITLE
-   A specific, descriptive title (not generic) — e.g. "Debugging Docker Compose
-   networking issue in FastAPI app" not "Coding session".
-
-2. OVERALL SUMMARY (5-8 sentences)
-   Cover: What was the goal? What approach was used? What went well?
-   What problems occurred and how were they resolved? What was the end state?
-   What are the key takeaways?
-
-3. PRIMARY + SECONDARY TECHNOLOGIES
-   List every technology, framework, library, tool, platform that appeared.
-
-4. DIFFICULTY LEVEL
-   beginner / intermediate / advanced based on the content's technical depth.
-
-5. WORKFLOW (ordered steps)
-   Break the session into its logical phases/steps, each with start_sec/end_sec.
-   Be specific — "Installed dependencies and configured environment (0s–180s)"
-   not "Set up project".
-
-6. PROBLEMS ENCOUNTERED
-   Every problem, error, blocker, or confusion — include:
-   • Exact error message if available
-   • Context (what they were trying to do)
-   • Resolution (what fixed it, or "unresolved")
-   • Approximate time to resolve
-
-7. SOLUTIONS FOUND
-   Every successful fix, workaround, or discovery — include the specific solution
-   and how reusable/generalizable it is (0.0=very specific, 1.0=universally applicable).
-
-8. KNOWLEDGE GAINED
-   An EXHAUSTIVE list of distinct learnings — every concept, technique, and insight.
-   Write each as a complete sentence starting with an action verb:
-   "Learned that...", "Discovered that...", "Demonstrated how to...", etc.
-   Aim for at least one item per 2-3 minutes of content.
-
-9. KEY QUOTES
-   The 3-8 most important things said (verbatim or near-verbatim).
-   These should be the statements that best capture the session's insights.
-
-10. KNOWLEDGE TIMELINE (MOST IMPORTANT)
-    The complete, ordered timeline of ALL notable moments.
-    Include EVERY event with knowledge_value >= 0.3.
-    For audio sessions: include every distinct topic, explanation, and decision.
-    For video sessions: include every meaningful screen state change + speech.
-    Each entry must have:
-    • start_sec, end_sec (precise timing)
-    • activity_summary: 2-3 sentences fully describing the moment
-    • spoken_content: key verbatim excerpt (if audio available)
-    • screen_content: key visible text (if video available)
-    • event_type: activity | error | solution | decision | explanation
-    • knowledge_value: 0.0–1.0
-    • topics: specific subjects
-    • keywords: searchable terms
-
-    The timeline should be dense enough that the user can reconstruct the
-    entire session from it — aim for one entry per 30-60 seconds of content.
-"""
+    return render("synthesis/session_summary.md",
+        asset_type_desc=asset_type_desc,
+        asset_title=asset_title,
+        duration_sec=duration_sec,
+        window_count=len(processed_segments),
+        total_events=total_events,
+        windows_block=windows_block,
+        events_block=events_block,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -464,7 +239,7 @@ class LLMProcessingService:
                 response = await client.chat.completions.create(
                     model=self._model,
                     messages=[
-                        {"role": "system", "content": "You are a precise data extraction engine. Always respond in valid JSON."},
+                        {"role": "system", "content": load("system/llm_system.md")},
                         {"role": "user", "content": prompt},
                     ],
                     temperature=temperature,

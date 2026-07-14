@@ -10,10 +10,29 @@ LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 _is_configured = False
 
 
+class _UTF8StreamHandler(logging.StreamHandler):
+    """StreamHandler that always encodes to UTF-8, regardless of system encoding."""
+    def __init__(self, stream=None):
+        super().__init__(stream)
+        if stream is not None:
+            try:
+                self.stream = open(stream.name, 'a', encoding='utf-8', errors='replace')
+            except Exception:
+                pass
+
+
 def _configure_root_logger() -> None:
     global _is_configured
     if _is_configured:
         return
+
+    try:
+        if hasattr(sys.stdout, 'reconfigure'):
+            sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        else:
+            sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', errors='replace', closefd=False)
+    except Exception:
+        pass
 
     logging.basicConfig(
         level=LOG_LEVEL,
@@ -21,22 +40,6 @@ def _configure_root_logger() -> None:
         datefmt=LOG_DATE_FORMAT,
         stream=sys.stdout,
     )
-
-    # Suppress noisy dependencies BEFORE they log
-    # Disable SQLAlchemy engine and pool logging completely
-    for logger_name in ["sqlalchemy.engine", "sqlalchemy.pool", "sqlalchemy.dialects", "sqlalchemy"]:
-        logger = logging.getLogger(logger_name)
-        logger.setLevel(logging.CRITICAL)
-        logger.propagate = False
-        # Clear all handlers
-        for handler in logger.handlers[:]:
-            logger.removeHandler(handler)
-        # Add NullHandler to ensure nothing gets logged
-        logger.addHandler(logging.NullHandler())
-    
-    logging.getLogger("websockets").setLevel(logging.WARNING)
-    logging.getLogger("asyncio").setLevel(logging.WARNING)
-    _is_configured = True
 
 def setup_logger(name: str) -> logging.Logger:
     """Setup logging configuration for a new logger"""

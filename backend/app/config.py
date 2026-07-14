@@ -120,6 +120,10 @@ class Settings:
     OPENAI_VISION_MODEL: str = os.getenv("OPENAI_VISION_MODEL", "oc/qwen3.6-plus-free")
     OPENAI_EMBEDDING_MODEL: str = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
 
+    # Zep Configuration
+    ZEP_API_KEY: str = os.getenv("ZEP_API_KEY", "")
+    ZEP_API_URL: str = os.getenv("ZEP_API_URL", "https://api.getzep.com")
+
     LLM_WINDOW_SECONDS: float = float(os.getenv("LLM_WINDOW_SECONDS", "30.0"))
     LLM_MIN_KNOWLEDGE_VALUE: float = float(os.getenv("LLM_MIN_KNOWLEDGE_VALUE", "0.3"))
 

@@ -30,8 +30,8 @@ async def test_tool_registry():
     print("=" * 60)
 
     try:
-        from app.services.agent.tool_registry import get_tool_registry
-        from app.services.agent.tools import register_all_tools
+        from app.ai.agents.tool_registry import get_tool_registry
+        from app.ai.agents.tools import register_all_tools
 
         register_all_tools()
         registry = get_tool_registry()

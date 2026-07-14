@@ -32,7 +32,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.config import Settings
 from app.models import Note
-from app.services.agent.embedding_service import EmbeddingService
+from app.ai.agents.embedding_service import EmbeddingService
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(

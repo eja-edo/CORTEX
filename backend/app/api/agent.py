@@ -16,9 +16,9 @@ from app.schemas import (
     AgentChatRequest, 
     AgentChatResponse,
 )
-from app.services.agent.agent_service import AgentService
-from app.services.agent.model_client import ModelClient
-from app.services.agent.provider_types import Message, GenerationConfig
+from app.ai.agents.agent_service import AgentService
+from app.ai.agents.model_client import ModelClient
+from app.ai.agents.provider_types import Message, GenerationConfig
 from app.core.internal_auth import verify_internal_key
 from app.utils.logger import get_logger
 
@@ -37,6 +37,7 @@ class AgentCompleteRequest(BaseModel):
 
 
 class AgentCompleteResponse(BaseModel):
+    model_config = {"protected_namespaces": ()}
     reply: str
     model_used: str
 
@@ -180,7 +181,7 @@ async def list_conversations(
     Returns:
         List of conversations with pagination info
     """
-    from app.services.agent.conversation_store import ConversationStore
+    from app.ai.agents.conversation_store import ConversationStore
     
     # Validate limits
     limit = min(limit, 100)
@@ -234,7 +235,7 @@ async def get_conversation(
     Raises:
         HTTPException: 404 if conversation not found or not owned by user
     """
-    from app.services.agent.conversation_store import ConversationStore
+    from app.ai.agents.conversation_store import ConversationStore
     
     store = ConversationStore(db)
     conv = await store.get_conversation_by_id(conversation_id, current_user.id)
@@ -302,14 +303,14 @@ async def revert_action(
     Raises:
         HTTPException: 400 if revert fails
     """
-    from app.services.agent.action_snapshot_store import get_snapshot_store
-    from app.services.agent.tools.revert_action import (
+    from app.ai.agents.action_snapshot_store import get_snapshot_store
+    from app.ai.agents.tools.revert_action import (
         _revert_create_note,
         _revert_update_note,
         _revert_create_schedule,
         _revert_update_schedule,
     )
-    from app.services.agent.tool_context import ToolContext
+    from app.ai.agents.tool_context import ToolContext
 
     store = get_snapshot_store()
     user_id_str = str(current_user.id)
@@ -386,7 +387,7 @@ async def delete_conversation(
     Raises:
         HTTPException: 404 if conversation not found or not owned by user
     """
-    from app.services.agent.conversation_store import ConversationStore
+    from app.ai.agents.conversation_store import ConversationStore
     
     store = ConversationStore(db)
     success = await store.delete_conversation(conversation_id, current_user.id)
