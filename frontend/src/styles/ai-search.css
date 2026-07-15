@@ -917,7 +917,6 @@
 
 .ask-ai-input {
     width: 100%;
-    min-height: 52px;
     max-height: 160px;
     border: none;
     outline: none;
@@ -944,7 +943,7 @@
 .ask-ai-mic-btn {
     position: absolute;
     right: 12px;
-    top: 10px;
+    bottom: 0px;
     width: 30px;
     height: 30px;
     border: none;

@@ -359,6 +359,7 @@ class Note(Base):
     user_id = Column(UUID(as_uuid=True), nullable=False)
     workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=True, index=True)
     parent_note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="SET NULL"), nullable=True, index=True)
+    title = Column(String(500), nullable=False, server_default=text("'Untitled'"))
     content = Column(Text, nullable=False)
     content_type = Column(String(20), nullable=False, default="markdown", server_default=text("'markdown'"))
     position = Column(

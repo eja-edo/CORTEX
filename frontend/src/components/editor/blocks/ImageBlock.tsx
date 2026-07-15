@@ -1,7 +1,8 @@
-import { useRef, useEffect, useCallback, useMemo, useState } from 'react'
+import { useRef, useEffect, useCallback, useMemo, useState, useContext } from 'react'
 import type { BlockNode } from '../../../types/editor'
 import { useEditorStore } from '../../../stores/editorStore'
 import { uploadNoteImage } from '../../../services/api'
+import { ReadOnlyCtx } from '../EditorSurface'
 
 interface ImageBlockProps {
   block: BlockNode
@@ -10,6 +11,7 @@ interface ImageBlockProps {
 export function ImageBlock({ block }: ImageBlockProps) {
   const ref = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const readOnly = useContext(ReadOnlyCtx)
   const updateBlockContent = useEditorStore(s => s.updateBlockContent)
   const setFocusedBlock = useEditorStore(s => s.setFocusedBlock)
   const focusedBlockId = useEditorStore(s => s.focusedBlockId)
@@ -45,9 +47,10 @@ export function ImageBlock({ block }: ImageBlockProps) {
   }, [isFocused])
 
   const handleInput = useCallback((e: React.FormEvent<HTMLDivElement>) => {
+    if (readOnly) return
     const text = (e.target as HTMLDivElement).textContent ?? ''
     updateBlockContent(block.id, text)
-  }, [block.id, updateBlockContent])
+  }, [block.id, updateBlockContent, readOnly])
 
   const handleUploadClick = useCallback(() => {
     fileInputRef.current?.click()
@@ -149,21 +152,23 @@ export function ImageBlock({ block }: ImageBlockProps) {
           <div
             ref={ref}
             className={`block-editable block-image-source ${isFocused ? 'block-editable--focused' : ''}`}
-            contentEditable="plaintext-only"
+            contentEditable={readOnly ? "false" : "plaintext-only"}
             suppressContentEditableWarning
             onInput={handleInput}
-            onFocus={() => setFocusedBlock(block.id)}
-            onBlur={() => setFocusedBlock(null)}
+            onFocus={() => { if (!readOnly) setFocusedBlock(block.id) }}
+            onBlur={() => { if (!readOnly) setFocusedBlock(null) }}
             data-placeholder="![alt](url)"
           />
-          <button
-            className="block-image-upload-btn"
-            onClick={handleUploadClick}
-            disabled={uploading || !noteId}
-            title="Upload image"
-          >
-            📷
-          </button>
+          {!readOnly && (
+            <button
+              className="block-image-upload-btn"
+              onClick={handleUploadClick}
+              disabled={uploading || !noteId}
+              title="Upload image"
+            >
+              📷
+            </button>
+          )}
         </div>
       ) : null}
       <input

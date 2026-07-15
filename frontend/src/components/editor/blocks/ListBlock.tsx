@@ -22,6 +22,7 @@ export function ListBlock({ block, order }: ListBlockProps) {
   const {
     ref,
     isFocused,
+    readOnly,
     handleInput,
     handleCompositionStart,
     handleCompositionEnd,
@@ -33,6 +34,7 @@ export function ListBlock({ block, order }: ListBlockProps) {
   } = useRichTextBlock({ block })
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (readOnly) return
     const text = e.currentTarget.textContent ?? ''
 
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -64,7 +66,7 @@ export function ListBlock({ block, order }: ListBlockProps) {
   }, [block.id, splitBlock, mergeBlockBackward, exitListOnEmpty])
 
   const handleToggle = useCallback((e: React.MouseEvent) => {
-    if (!isTask) return
+    if (!isTask || readOnly) return
     e.stopPropagation()
     const newChecked = !(block.meta?.checked ?? false)
     const updateRecursive = (list: BlockNode[]): boolean => {
@@ -106,7 +108,7 @@ export function ListBlock({ block, order }: ListBlockProps) {
       <div
         ref={ref}
         className={`block-editable block-richtext ${isFocused ? 'block-editable--focused' : ''}`}
-        contentEditable="true"
+          contentEditable={!readOnly}
         suppressContentEditableWarning
         onInput={handleInput}
         onCompositionStart={handleCompositionStart}

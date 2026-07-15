@@ -1,45 +1,29 @@
-import { useRef, useEffect, useCallback } from 'react'
+import { useRef, useEffect, useCallback, useContext } from 'react'
 import { useEditorStore } from '../stores/editorStore'
 import type { BlockNode } from '../types/editor'
+import { ReadOnlyCtx } from '../components/editor/EditorSurface'
 
 // ── Markdown ↔ HTML conversion ──────────────────────────────────────────────
 
-/**
- * Convert inline markdown to HTML for display in contentEditable.
- * Order matters: bold before italic to handle **bold** vs *italic* overlap.
- */
 export function inlineMdToHtml(md: string): string {
   if (!md) return ''
   return md
-    // Bold+italic: ***text*** or ___text___
     .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
     .replace(/___(.+?)___/g, '<strong><em>$1</em></strong>')
-    // Bold: **text** or __text__
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/__(.+?)__/g, '<strong>$1</strong>')
-    // Italic: *text* or _text_
     .replace(/\*([^*\n]+?)\*/g, '<em>$1</em>')
     .replace(/_([^_\n]+?)_/g, '<em>$1</em>')
-    // Strikethrough: ~~text~~
     .replace(/~~(.+?)~~/g, '<del>$1</del>')
-    // Underline: ++text++ (non-standard but useful)
     .replace(/\+\+(.+?)\+\+/g, '<u>$1</u>')
-    // Highlight: ==text==
     .replace(/==(.+?)==/g, '<mark>$1</mark>')
-    // Inline code: `code`
     .replace(/`([^`\n]+?)`/g, '<code>$1</code>')
-    // Links: [text](url)
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
 }
 
-/**
- * Convert HTML (from contentEditable inner HTML) back to inline markdown.
- * Handles nested tags and browser-inserted elements like <br>, <div>, <span>.
- */
 export function htmlToInlineMd(html: string): string {
   if (!html) return ''
   
-  // Use a DOMParser to walk the tree properly
   const parser = new DOMParser()
   const doc = parser.parseFromString(`<body>${html}</body>`, 'text/html')
   
@@ -78,8 +62,6 @@ export function htmlToInlineMd(html: string): string {
         return '\n'
       case 'div':
       case 'p':
-        // Browser wraps new lines in divs - add newline before block elements
-        // but only if there's preceding content (not the first div)
         return (el.previousSibling ? '\n' : '') + inner
       case 'span':
         return inner
@@ -91,13 +73,10 @@ export function htmlToInlineMd(html: string): string {
   const body = doc.body
   let result = Array.from(body.childNodes).map(nodeToMd).join('')
   
-  // Clean up: normalize multiple newlines into single
   result = result.replace(/\n{3,}/g, '\n\n')
   
   return result
 }
-
-// ── Formatting command ───────────────────────────────────────────────────────
 
 type FormatType = 'bold' | 'italic' | 'underline' | 'strikethrough' | 'code' | 'highlight' | 'link'
 
@@ -108,13 +87,11 @@ function applyFormat(format: FormatType, linkUrl?: string): void {
   const range = selection.getRangeAt(0)
   const selectedText = range.toString()
   
-  // For code and strikethrough, use execCommand workaround via surroundContents
   if (format === 'code') {
     const code = document.createElement('code')
     try {
       range.surroundContents(code)
     } catch {
-      // Selection spans multiple elements - extract and re-wrap
       const fragment = range.extractContents()
       code.appendChild(fragment)
       range.insertNode(code)
@@ -176,7 +153,6 @@ function applyFormat(format: FormatType, linkUrl?: string): void {
     return
   }
   
-  // Bold and italic: use execCommand (best browser support)
   if (format === 'bold') {
     document.execCommand('bold', false)
     return
@@ -188,11 +164,8 @@ function applyFormat(format: FormatType, linkUrl?: string): void {
   }
 }
 
-// ── useRichTextBlock hook ────────────────────────────────────────────────────
-
 interface UseRichTextBlockOptions {
   block: BlockNode
-  /** Called when content changes, receives the markdown string */
   onContentChange?: (md: string) => void
 }
 
@@ -200,6 +173,7 @@ export function useRichTextBlock({ block, onContentChange }: UseRichTextBlockOpt
   const ref = useRef<HTMLDivElement>(null)
   const isComposingRef = useRef(false)
   const lastMdRef = useRef<string>(block.content)
+  const readOnly = useContext(ReadOnlyCtx)
   
   const updateBlockContent = useEditorStore(s => s.updateBlockContent)
   const setFocusedBlock = useEditorStore(s => s.setFocusedBlock)
@@ -208,10 +182,9 @@ export function useRichTextBlock({ block, onContentChange }: UseRichTextBlockOpt
   const closeBubbleToolbar = useEditorStore(s => s.closeBubbleToolbar)
   const isFocused = focusedBlockId === block.id
 
-  // Sync content from store → DOM (only when not focused to avoid cursor jump)
   useEffect(() => {
     if (!ref.current) return
-    if (isFocused) return // Don't overwrite while user is typing
+    if (isFocused) return
     
     const newHtml = inlineMdToHtml(block.content)
     if (ref.current.innerHTML !== newHtml) {
@@ -220,11 +193,10 @@ export function useRichTextBlock({ block, onContentChange }: UseRichTextBlockOpt
     }
   }, [block.content, isFocused])
 
-  // Focus management
   useEffect(() => {
+    if (readOnly) return
     if (isFocused && ref.current) {
       ref.current.focus()
-      // Place cursor at end
       const sel = window.getSelection()
       if (sel) {
         const range = document.createRange()
@@ -234,7 +206,7 @@ export function useRichTextBlock({ block, onContentChange }: UseRichTextBlockOpt
         sel.addRange(range)
       }
     }
-  }, [isFocused])
+  }, [isFocused, readOnly])
 
   const syncToStore = useCallback(() => {
     if (!ref.current) return
@@ -247,9 +219,9 @@ export function useRichTextBlock({ block, onContentChange }: UseRichTextBlockOpt
   }, [block.id, updateBlockContent, onContentChange])
 
   const handleInput = useCallback(() => {
-    if (isComposingRef.current) return
+    if (isComposingRef.current || readOnly) return
     syncToStore()
-  }, [syncToStore])
+  }, [syncToStore, readOnly])
 
   const handleCompositionStart = useCallback(() => {
     isComposingRef.current = true
@@ -257,20 +229,24 @@ export function useRichTextBlock({ block, onContentChange }: UseRichTextBlockOpt
 
   const handleCompositionEnd = useCallback(() => {
     isComposingRef.current = false
+    if (readOnly) return
     syncToStore()
-  }, [syncToStore])
+  }, [syncToStore, readOnly])
 
   const handleFocus = useCallback(() => {
+    if (readOnly) return
     setFocusedBlock(block.id)
-  }, [block.id, setFocusedBlock])
+  }, [block.id, setFocusedBlock, readOnly])
 
   const handleBlur = useCallback(() => {
+    if (readOnly) return
     setFocusedBlock(null)
     closeBubbleToolbar()
     syncToStore()
-  }, [setFocusedBlock, closeBubbleToolbar, syncToStore])
+  }, [setFocusedBlock, closeBubbleToolbar, syncToStore, readOnly])
 
   const handleMouseUp = useCallback(() => {
+    if (readOnly) return
     const selection = window.getSelection()
     if (!selection || selection.isCollapsed) {
       closeBubbleToolbar()
@@ -285,10 +261,10 @@ export function useRichTextBlock({ block, onContentChange }: UseRichTextBlockOpt
       const y = rect.top
       openBubbleToolbar(x, y, range.startOffset, range.endOffset)
     }
-  }, [openBubbleToolbar, closeBubbleToolbar])
+  }, [openBubbleToolbar, closeBubbleToolbar, readOnly])
 
   const handleKeyUp = useCallback((e: React.KeyboardEvent) => {
-    // Update bubble toolbar position if selection exists after keyboard navigation
+    if (readOnly) return
     if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Shift'].includes(e.key)) {
       const selection = window.getSelection()
       if (!selection?.isCollapsed) {
@@ -301,21 +277,21 @@ export function useRichTextBlock({ block, onContentChange }: UseRichTextBlockOpt
         closeBubbleToolbar()
       }
     }
-  }, [openBubbleToolbar, closeBubbleToolbar])
+  }, [openBubbleToolbar, closeBubbleToolbar, readOnly])
 
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
+    if (readOnly) return
     e.preventDefault()
     const text = e.clipboardData.getData('text/plain')
     document.execCommand('insertText', false, text)
-  }, [])
+  }, [readOnly])
 
   const format = useCallback((formatType: FormatType, linkUrl?: string) => {
-    if (!ref.current) return
+    if (readOnly || !ref.current) return
     ref.current.focus()
     applyFormat(formatType, linkUrl)
-    // Sync after format (slight delay to let DOM settle)
     setTimeout(syncToStore, 0)
-  }, [syncToStore])
+  }, [syncToStore, readOnly])
 
   return {
     ref,
@@ -329,5 +305,6 @@ export function useRichTextBlock({ block, onContentChange }: UseRichTextBlockOpt
     handleKeyUp,
     handlePaste,
     format,
+    readOnly,
   }
 }

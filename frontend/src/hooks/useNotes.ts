@@ -10,6 +10,7 @@ export type ApiNote = {
     user_id: string
     workspace_id: string | null
     parent_note_id: string | null
+    title: string
     content: string
     content_type: string
     position: { x: number; y: number }
@@ -78,7 +79,7 @@ function mapApiNoteToAppNote(note: ApiNote): AppNote {
         version: note.version,
         updatedAt: note.updated_at,
         parentNoteId: note.parent_note_id,
-        title: noteTitleFromMd(note.content),
+        title: note.title,
     }
 }
 
@@ -426,6 +427,25 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
         }
     }
 
+    async function handleTitleChange(noteId: string, newTitle: string): Promise<void> {
+        const current = recentNotesRef.current.find((n) => n.id === noteId)
+        if (!current || current.title === newTitle) return
+
+        try {
+            const updated = await requestWithAuth<ApiNote>(`/notes/${noteId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ version: current.version, title: newTitle }),
+            })
+            const mapped = mapApiNoteToAppNote(updated)
+            setRecentNotes((prev) =>
+                prev.map((n) => (n.id === noteId ? { ...n, ...mapped } : n)),
+            )
+        } catch (error) {
+            console.error('Cannot update title:', error)
+        }
+    }
+
     async function handleMoveNote(noteId: string, parentNoteId: string | null): Promise<void> {
         const current = recentNotesRef.current.find((note) => note.id === noteId)
         if (!current) return
@@ -484,6 +504,7 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
         workspaceRootNotes,
         activeWorkspaceNote,
         handleNoteChange,
+        handleTitleChange,
         fetchNotes,
         fetchFullNote,
         handleCreateNote,

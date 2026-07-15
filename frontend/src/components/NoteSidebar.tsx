@@ -15,6 +15,7 @@ export type NoteItem = {
   date: string
   contentMd: string
   parentNoteId?: string | null
+  title?: string
 }
 
 interface NoteSidebarProps {
@@ -187,7 +188,7 @@ function NoteCardItem({
   const autosaveTimerRef = useRef<number | null>(null)
   const [localMd, setLocalMd] = useState(note.contentMd)
   const expandId = `note-expand-${note.id}`
-  const title = getTitleFromMd(note.contentMd)
+  const title = note.title || getTitleFromMd(note.contentMd)
 
   useEffect(() => {
     if (!isExpanded) {

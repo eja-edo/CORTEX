@@ -1,6 +1,7 @@
-import { useRef, useEffect, useCallback, useMemo } from 'react'
+import { useRef, useEffect, useCallback, useMemo, useContext } from 'react'
 import type { BlockNode } from '../../../types/editor'
 import { useEditorStore } from '../../../stores/editorStore'
+import { ReadOnlyCtx } from '../EditorSurface'
 
 interface TableBlockProps {
   block: BlockNode
@@ -19,6 +20,7 @@ function parseTable(md: string): string[][] {
 
 export function TableBlock({ block }: TableBlockProps) {
   const ref = useRef<HTMLDivElement>(null)
+  const readOnly = useContext(ReadOnlyCtx)
   const updateBlockContent = useEditorStore(s => s.updateBlockContent)
   const setFocusedBlock = useEditorStore(s => s.setFocusedBlock)
   const focusedBlockId = useEditorStore(s => s.focusedBlockId)
@@ -35,26 +37,28 @@ export function TableBlock({ block }: TableBlockProps) {
   }, [block.content])
 
   const handleInput = useCallback((e: React.FormEvent<HTMLDivElement>) => {
+    if (readOnly) return
     const text = (e.target as HTMLDivElement).textContent ?? ''
     updateBlockContent(block.id, text)
-  }, [block.id, updateBlockContent])
+  }, [block.id, updateBlockContent, readOnly])
 
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
+    if (readOnly) return
     e.preventDefault()
     const text = e.clipboardData.getData('text/plain')
     document.execCommand('insertText', false, text)
-  }, [])
+  }, [readOnly])
 
   if (data.length === 0) {
     return (
       <div
         ref={ref}
         className={`block-editable block-table-empty ${isFocused ? 'block-editable--focused' : ''}`}
-        contentEditable="plaintext-only"
+        contentEditable={readOnly ? "false" : "plaintext-only"}
         suppressContentEditableWarning
         onInput={handleInput}
-        onFocus={() => setFocusedBlock(block.id)}
-        onBlur={() => setFocusedBlock(null)}
+        onFocus={() => { if (!readOnly) setFocusedBlock(block.id) }}
+        onBlur={() => { if (!readOnly) setFocusedBlock(null) }}
         onPaste={handlePaste}
         data-placeholder="| col1 | col2 |"
       />
@@ -88,7 +92,7 @@ export function TableBlock({ block }: TableBlockProps) {
       <div
         ref={ref}
         className={`block-editable block-table-source ${isFocused ? 'block-editable--focused' : ''}`}
-        contentEditable="plaintext-only"
+        contentEditable={readOnly ? "false" : "plaintext-only"}
         suppressContentEditableWarning
         onInput={handleInput}
         onFocus={() => setFocusedBlock(block.id)}

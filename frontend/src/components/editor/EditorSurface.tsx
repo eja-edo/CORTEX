@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useRef, useMemo, useLayoutEffect } from 'react'
+import { createContext, useContext, useEffect, useCallback, useRef, useMemo, useLayoutEffect } from 'react'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
@@ -8,13 +8,16 @@ import { BlockRenderer } from './BlockRenderer'
 import { SlashMenu } from './SlashMenu'
 import { BubbleToolbar } from './BubbleToolbar'
 
+export const ReadOnlyCtx = createContext(false)
+
 interface EditorSurfaceProps {
   initialMd: string
   noteId?: string
   onSave: (md: string) => void
+  readOnly?: boolean
 }
 
-function SortableBlock({ block }: { block: BlockNode }) {
+function SortableBlock({ block, readOnly }: { block: BlockNode; readOnly: boolean }) {
   const {
     attributes,
     listeners,
@@ -22,7 +25,7 @@ function SortableBlock({ block }: { block: BlockNode }) {
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: block.id })
+  } = useSortable({ id: block.id, disabled: readOnly })
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -32,12 +35,12 @@ function SortableBlock({ block }: { block: BlockNode }) {
 
   return (
     <div ref={setNodeRef} style={style} {...attributes}>
-      <BlockRenderer block={block} dragHandleListeners={listeners as SyntheticListenerMap} />
+      <BlockRenderer block={block} dragHandleListeners={readOnly ? undefined : (listeners as SyntheticListenerMap)} />
     </div>
   )
 }
 
-export function EditorSurface({ initialMd, noteId, onSave }: EditorSurfaceProps) {
+export function EditorSurface({ initialMd, noteId, onSave, readOnly = false }: EditorSurfaceProps) {
   const blocks = useEditorStore(s => s.blocks)
   const initializeFromMarkdown = useEditorStore(s => s.initializeFromMarkdown)
   const focusedBlockId = useEditorStore(s => s.focusedBlockId)
@@ -51,8 +54,6 @@ export function EditorSurface({ initialMd, noteId, onSave }: EditorSurfaceProps)
   const suppressAutoSaveRef = useRef(false)
 
   // Initialize blocks from markdown when content changes externally
-  // Skip re-init while user is focused on a block
-  // Also skip if the markdown was just serialized from blocks (avoid circular sync)
   useEffect(() => {
     if (initialMd !== prevMdRef.current && !focusedBlockId) {
       if (initialMd === lastSerializedMdRef.current) {
@@ -72,6 +73,7 @@ export function EditorSurface({ initialMd, noteId, onSave }: EditorSurfaceProps)
 
   // Ctrl+S to save
   useEffect(() => {
+    if (readOnly) return
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 's') {
         e.preventDefault()
@@ -83,14 +85,14 @@ export function EditorSurface({ initialMd, noteId, onSave }: EditorSurfaceProps)
     }
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [serializeAndNotify])
+  }, [serializeAndNotify, readOnly])
 
   // Debounced auto-save when blocks change
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const prevBlocksRef = useRef<string>('')
 
   useEffect(() => {
-    // Suppress auto-save after blocks were re-initialized from external markdown
+    if (readOnly) return
     if (suppressAutoSaveRef.current) {
       suppressAutoSaveRef.current = false
       return
@@ -110,7 +112,7 @@ export function EditorSurface({ initialMd, noteId, onSave }: EditorSurfaceProps)
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     }
-  }, [blocks, serializeAndNotify])
+  }, [blocks, serializeAndNotify, readOnly])
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -132,33 +134,53 @@ export function EditorSurface({ initialMd, noteId, onSave }: EditorSurfaceProps)
   const blockIds = useMemo(() => blocks.map(b => b.id), [blocks])
 
   return (
-    <div
-      ref={surfaceRef}
-      className="editor-surface"
-      onClick={() => closeSlashMenu()}
-    >
-      <DndContext
-        sensors={sensors}
-        collisionDetection={closestCenter}
-        onDragEnd={handleDragEnd}
+    <ReadOnlyCtx.Provider value={readOnly}>
+      <div
+        ref={surfaceRef}
+        className={`editor-surface${readOnly ? ' editor-surface--readonly' : ''}`}
+        onClick={() => !readOnly && closeSlashMenu()}
+        onMouseDown={(e) => {
+          if (readOnly) e.preventDefault()
+        }}
       >
-        <SortableContext items={blockIds} strategy={verticalListSortingStrategy}>
+        {readOnly ? (
           <div className="editor-block-list">
             {blocks.map(block => (
-              <SortableBlock key={block.id} block={block} />
+              <div key={block.id} className="editor-block" data-block-id={block.id} data-block-type={block.type}>
+                <div className="editor-block-content">
+                  <BlockRenderer block={block} />
+                </div>
+              </div>
             ))}
+            {blocks.length === 0 && (
+              <div className="editor-empty-state">Empty note</div>
+            )}
           </div>
-        </SortableContext>
-      </DndContext>
+        ) : (
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleDragEnd}
+          >
+            <SortableContext items={blockIds} strategy={verticalListSortingStrategy}>
+              <div className="editor-block-list">
+                {blocks.map(block => (
+                  <SortableBlock key={block.id} block={block} readOnly={false} />
+                ))}
+              </div>
+            </SortableContext>
+          </DndContext>
+        )}
 
-      {blocks.length === 0 && (
-        <div className="editor-empty-state">
-          Empty block. Start typing...
-        </div>
-      )}
+        {!readOnly && blocks.length === 0 && (
+          <div className="editor-empty-state">
+            Empty block. Start typing...
+          </div>
+        )}
 
-      <SlashMenu />
-      <BubbleToolbar onFormat={() => {}} />
-    </div>
+        {!readOnly && <SlashMenu />}
+        {!readOnly && <BubbleToolbar onFormat={() => {}} />}
+      </div>
+    </ReadOnlyCtx.Provider>
   )
 }

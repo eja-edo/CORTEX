@@ -15,6 +15,7 @@ export function HeadingBlock({ block }: HeadingBlockProps) {
   const {
     ref,
     isFocused,
+    readOnly,
     handleInput,
     handleCompositionStart,
     handleCompositionEnd,
@@ -26,6 +27,7 @@ export function HeadingBlock({ block }: HeadingBlockProps) {
   } = useRichTextBlock({ block })
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (readOnly) return
     const text = e.currentTarget.textContent ?? ''
 
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -40,7 +42,6 @@ export function HeadingBlock({ block }: HeadingBlockProps) {
       return
     }
 
-    // Keyboard shortcuts
     if (e.metaKey || e.ctrlKey) {
       if (e.key.toLowerCase() === 'b') {
         e.preventDefault()
@@ -50,13 +51,13 @@ export function HeadingBlock({ block }: HeadingBlockProps) {
         document.execCommand('italic', false)
       }
     }
-  }, [block.id, splitBlock, mergeBlockBackward])
+  }, [block.id, splitBlock, mergeBlockBackward, readOnly])
 
   return (
     <div
       ref={ref}
       className={`block-heading-editable block-editable block-richtext heading-level-${level} ${isFocused ? 'block-editable--focused' : ''}`}
-      contentEditable="true"
+      contentEditable={!readOnly}
       suppressContentEditableWarning
       onInput={handleInput}
       onCompositionStart={handleCompositionStart}

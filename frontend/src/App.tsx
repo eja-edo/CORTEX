@@ -27,6 +27,7 @@ import { AskAI } from './components/AskAI'
 import { WorkflowBuilder } from './components/WorkflowBuilder'
 import { getStoredTheme, applyThemeToDocument } from './utils/theme'
 import type { AppTheme } from './utils/theme'
+import { getBlockEditingEnabled, setBlockEditingEnabled } from './utils/noteSettings'
 import { useAuth } from './hooks/useAuth'
 import { useWorkspaces } from './hooks/useWorkspaces'
 import { useNotes, noteTitleFromMd } from './hooks/useNotes'
@@ -226,6 +227,7 @@ function App() {
   const [createEventInitialTimes, setCreateEventInitialTimes] = useState<{ startDate: string; endDate: string } | null>(null)
   const isWorkspaceSidebarCollapsed = false
    const [theme, _setTheme] = useState<AppTheme>(getStoredTheme)
+   const [blockEditingEnabled, _setBlockEditingEnabled] = useState<boolean>(getBlockEditingEnabled)
    const [sectionNoteOpen, setSectionNoteOpen] = useState(true)
    const [sectionRecordOpen, setSectionRecordOpen] = useState(true)
    const notif = useNotifications()
@@ -486,6 +488,10 @@ const renderWorkspaceSidebarNoteTree = useCallback((parentId: string | null, dep
 
   const handleNoteChange = useCallback((id: string, contentMd: string) => {
     notes.handleNoteChange(id, contentMd)
+  }, [notes])
+
+  const handleNoteTitleChange = useCallback((id: string, title: string) => {
+    notes.handleTitleChange(id, title)
   }, [notes])
 
   const handleCalendarSlotSelect = useCallback((slotStart: Date, slotEnd: Date) => {
@@ -1175,6 +1181,11 @@ const processNotificationChunk = (chunk: string): void => {
                   const date = new Date(isoDateTime)
                   return date.toLocaleString('vi-VN', { dateStyle: 'short', timeStyle: 'short' })
                 }}
+                blockEditingEnabled={blockEditingEnabled}
+                onBlockEditingChange={(enabled) => {
+                  _setBlockEditingEnabled(enabled)
+                  setBlockEditingEnabled(enabled)
+                }}
               />
             ) : activeWorkspaceView === 'schedule' ? (
               <section className="home-workspace">
@@ -1258,8 +1269,10 @@ const processNotificationChunk = (chunk: string): void => {
                 <WorkspaceNoteEditor
                   note={notes.activeWorkspaceNote}
                   onChange={handleNoteChange}
+                  onTitleChange={handleNoteTitleChange}
                   onAskAI={() => setIsAskAIOpen(true)}
                   onSelectionChange={(text) => setPendingSelection(text)}
+                  blockEditingEnabled={blockEditingEnabled}
                 />
               </div>
             ) : (

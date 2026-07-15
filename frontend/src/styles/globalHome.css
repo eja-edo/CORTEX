@@ -3,6 +3,7 @@
   max-width: 1200px;
   margin: 0 auto;
   padding: 48px 40px;
+  overflow-y: auto;
 }
 
 /* Dot-grid background on the parent container (.flex-1.overflow-y-auto) */

@@ -12,31 +12,37 @@ function noteTitleFromMd(content: string): string {
 
 type ViewMode = 'split' | 'edit' | 'preview'
 
-// ── WorkspaceNoteEditor ───────────────────────────────────────
-
 interface WorkspaceNoteEditorProps {
     note: NoteItem
     onChange: (id: string, contentMd: string) => void
+    onTitleChange?: (id: string, title: string) => void
     onAskAI?: () => void
     onSelectionChange?: (selectedText: string) => void
+    blockEditingEnabled?: boolean
 }
 
 export function WorkspaceNoteEditor({
     note,
     onChange,
+    onTitleChange,
+    blockEditingEnabled = false,
 }: WorkspaceNoteEditorProps) {
     const [localMd, setLocalMd] = useState(note.contentMd)
     const [debouncedMd, setDebouncedMd] = useState(note.contentMd)
+    const [localTitle, setLocalTitle] = useState(note.title || noteTitleFromMd(note.contentMd))
     const [viewMode, setViewMode] = useState<ViewMode>('split')
     const timerRef = useRef<number | null>(null)
     const debounceTimerRef = useRef<number | null>(null)
     const lastNoteIdRef = useRef<string | null>(null)
     const lastContentMdRef = useRef<string>(note.contentMd)
+    const lastTitleRef = useRef<string>(note.title || noteTitleFromMd(note.contentMd))
     const pendingFlushValueRef = useRef<string | null>(null)
     const textareaRef = useRef<HTMLTextAreaElement>(null)
     const previewRef = useRef<HTMLDivElement>(null)
     const selectionRef = useRef<{ start: number; end: number } | null>(null)
     const syncingScroll = useRef<'left' | 'right' | null>(null)
+
+    const blockReadOnly = !blockEditingEnabled
 
     // Debounce raw → blocks: wait 2s after last textarea change
     useEffect(() => {
@@ -55,7 +61,6 @@ export function WorkspaceNoteEditor({
     // Force sync on view mode change if blocks pane will show
     useEffect(() => {
         if (viewMode !== 'edit') {
-            // eslint-disable-next-line react-hooks/set-state-in-effect
             syncBlocks()
         }
     }, [viewMode, syncBlocks])
@@ -65,10 +70,9 @@ export function WorkspaceNoteEditor({
         return text.trim().split(/\s+/).filter(Boolean).length
     }, [localMd])
 
-    // Sync when switching notes — handles both new-note-switch and async content load
+    // Sync when switching notes
     useEffect(() => {
         if (lastNoteIdRef.current !== note.id) {
-            // Switching to a different note: flush pending content for the old note first
             if (timerRef.current && pendingFlushValueRef.current !== null) {
                 window.clearTimeout(timerRef.current)
                 timerRef.current = null
@@ -78,14 +82,21 @@ export function WorkspaceNoteEditor({
 
             lastNoteIdRef.current = note.id
             lastContentMdRef.current = note.contentMd
+            lastTitleRef.current = note.title || noteTitleFromMd(note.contentMd)
             setLocalMd(note.contentMd)
+            setLocalTitle(lastTitleRef.current)
         } else if (note.contentMd !== lastContentMdRef.current) {
-            // Same note, content updated externally (e.g. fetchFullNote completed)
             const prevSynced = lastContentMdRef.current
             lastContentMdRef.current = note.contentMd
             setLocalMd((current) => (current === prevSynced ? note.contentMd : current))
+        } else {
+            const apiTitle = note.title || noteTitleFromMd(note.contentMd)
+            if (apiTitle !== lastTitleRef.current) {
+                lastTitleRef.current = apiTitle
+                setLocalTitle(apiTitle)
+            }
         }
-    }, [note.id, note.contentMd, onChange])
+    }, [note.id, note.contentMd, note.title, onChange])
 
     // Sync scroll between textarea and preview in split mode
     useEffect(() => {
@@ -158,7 +169,6 @@ export function WorkspaceNoteEditor({
 
     // Tab key handler for raw textarea
     const handleTextareaKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-        // Ctrl+S → sync blocks immediately
         if ((e.metaKey || e.ctrlKey) && e.key === 's') {
             e.preventDefault()
             syncBlocks()
@@ -174,7 +184,6 @@ export function WorkspaceNoteEditor({
         const end = el.selectionEnd
         const value = el.value
 
-        // Get line boundaries
         const lineStart = value.lastIndexOf('\n', start - 1) + 1
         let lineEnd = value.indexOf('\n', lineStart)
         if (lineEnd === -1) lineEnd = value.length
@@ -184,7 +193,6 @@ export function WorkspaceNoteEditor({
         let newEnd: number
 
         if (e.shiftKey) {
-            // Outdent: remove 2 leading spaces from current line
             const currentLine = value.slice(lineStart, lineEnd)
             const indentMatch = currentLine.match(/^ {1,2}/)
             if (indentMatch) {
@@ -196,18 +204,15 @@ export function WorkspaceNoteEditor({
                 return
             }
         } else {
-            // Check if cursor is on a list line
             const currentLine = value.slice(lineStart, lineEnd)
             const listMatch = currentLine.match(/^(\s*)([-*+]|\d+\.)\s/)
 
             if (listMatch) {
-                // Indent list item: add 2 spaces before the list marker
                 const markerStart = lineStart + listMatch[1].length
                 newValue = value.slice(0, markerStart) + '  ' + value.slice(markerStart)
                 newStart = start + 2
                 newEnd = end + 2
             } else {
-                // Insert 2 spaces at cursor
                 newValue = value.slice(0, start) + '  ' + value.slice(end)
                 newStart = start + 2
                 newEnd = newStart
@@ -218,7 +223,6 @@ export function WorkspaceNoteEditor({
         applyValue(newValue)
     }, [applyValue, syncBlocks])
 
-    // Raw markdown textarea change
     const handleTextareaChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
         selectionRef.current = {
             start: e.target.selectionStart,
@@ -228,21 +232,44 @@ export function WorkspaceNoteEditor({
         applyValue(newMd)
     }, [applyValue])
 
-    // Block editor save → sync markdown
     const handleBlockEditorSave = useCallback((md: string) => {
         setLocalMd(md)
         setDebouncedMd(md)
         queueFlush(md)
     }, [queueFlush])
 
+    const handleTitleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+        setLocalTitle(e.target.value)
+    }, [])
 
+    const handleTitleInputBlur = useCallback(() => {
+        const trimmed = localTitle.trim() || 'Untitled'
+        setLocalTitle(trimmed)
+        if (onTitleChange && note.title !== trimmed) {
+            onTitleChange(note.id, trimmed)
+        }
+    }, [localTitle, note.id, note.title, onTitleChange])
+
+    const handleTitleInputKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+        if (e.key === 'Enter') {
+            e.currentTarget.blur()
+        }
+    }, [])
 
     return (
         <section className="wne-root">
             {/* Header */}
             <header className="wne-header">
                 <div className="wne-meta">
-                    <h2 className="wne-title">{noteTitleFromMd(localMd)}</h2>
+                    <input
+                        className="wne-title-input"
+                        type="text"
+                        value={localTitle}
+                        onChange={handleTitleInputChange}
+                        onBlur={handleTitleInputBlur}
+                        onKeyDown={handleTitleInputKeyDown}
+                        placeholder="Untitled"
+                    />
                     <div className="wne-info">
                         <span className="wne-date">{note.date}</span>
                         <span className="wne-sep">·</span>
@@ -284,7 +311,7 @@ export function WorkspaceNoteEditor({
 
                 {viewMode === 'split' && <div className="wne-divider" />}
 
-                {/* PREVIEW PANE: Block editor (interactive) */}
+                {/* PREVIEW PANE: Block editor */}
                 {(viewMode === 'preview' || viewMode === 'split') && (
                     <div className="wne-pane wne-pane--preview">
                         {viewMode === 'split' && <div className="wne-pane-label">Blocks</div>}
@@ -293,6 +320,7 @@ export function WorkspaceNoteEditor({
                                 initialMd={debouncedMd}
                                 noteId={note.id}
                                 onSave={handleBlockEditorSave}
+                                readOnly={blockReadOnly}
                             />
                         </div>
                     </div>

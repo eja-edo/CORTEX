@@ -132,6 +132,9 @@ class Settings:
 
     UNSEARCH_URL: str = os.getenv("UNSEARCH_URL", "http://localhost:8009")
 
+    # Jina AI Reader
+    JINA_API_KEY: str = os.getenv("JINA_API_KEY", "")
+
     # ── Memory System ─────────────────────────────────────────────────────────
     MEMORY_REDIS_HOST: str = os.getenv("MEMORY_REDIS_HOST", "localhost")
     MEMORY_REDIS_PORT: int = int(os.getenv("MEMORY_REDIS_PORT", "6379"))

@@ -17,6 +17,7 @@ from app.ai.tools.neural_search import NEURAL_SEARCH_DEFINITION
 from app.ai.tools.deep_research import DEEP_RESEARCH_DEFINITION
 from app.ai.tools.revert_action import REVERT_ACTION_DEFINITION
 from app.ai.tools.extract_memory import EXTRACT_MEMORY_DEFINITION
+from app.ai.tools.web_fetch import WEB_FETCH_DEFINITION
 
 def register_all_tools() -> None:
     """Register all tools with the global registry."""
@@ -38,6 +39,7 @@ def register_all_tools() -> None:
         DEEP_RESEARCH_DEFINITION,
         REVERT_ACTION_DEFINITION,
         EXTRACT_MEMORY_DEFINITION,
+        WEB_FETCH_DEFINITION,
     ]
 
     for tool_def in tools:

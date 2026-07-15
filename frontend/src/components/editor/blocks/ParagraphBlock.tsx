@@ -15,6 +15,7 @@ export function ParagraphBlock({ block }: ParagraphBlockProps) {
   const {
     ref,
     isFocused,
+    readOnly,
     handleInput,
     handleCompositionStart,
     handleCompositionEnd,
@@ -26,10 +27,10 @@ export function ParagraphBlock({ block }: ParagraphBlockProps) {
   } = useRichTextBlock({ block })
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (readOnly) return
     const el = e.currentTarget
     const text = el.textContent ?? ''
 
-    // Slash menu: only when empty
     if (e.key === '/' && text === '' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
       e.preventDefault()
       const rect = el.getBoundingClientRect()
@@ -39,11 +40,9 @@ export function ParagraphBlock({ block }: ParagraphBlockProps) {
 
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      // Split at current cursor: get text before/after selection
       const selection = window.getSelection()
       if (selection && selection.rangeCount > 0) {
         const range = selection.getRangeAt(0)
-        // Get text before cursor
         const beforeRange = document.createRange()
         beforeRange.setStart(el, 0)
         beforeRange.setEnd(range.startContainer, range.startOffset)
@@ -62,7 +61,6 @@ export function ParagraphBlock({ block }: ParagraphBlockProps) {
       return
     }
 
-    // Keyboard shortcuts for formatting
     if (e.metaKey || e.ctrlKey) {
       switch (e.key.toLowerCase()) {
         case 'b':
@@ -98,13 +96,13 @@ export function ParagraphBlock({ block }: ParagraphBlockProps) {
         }
       }
     }
-  }, [block.id, splitBlock, mergeBlockBackward, openSlashMenu])
+  }, [block.id, splitBlock, mergeBlockBackward, openSlashMenu, readOnly])
 
   return (
     <div
       ref={ref}
       className={`block-paragraph block-editable block-richtext ${isFocused ? 'block-editable--focused' : ''}`}
-      contentEditable="true"
+      contentEditable={!readOnly}
       suppressContentEditableWarning
       onInput={handleInput}
       onCompositionStart={handleCompositionStart}

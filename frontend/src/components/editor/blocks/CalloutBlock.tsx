@@ -1,7 +1,8 @@
-import { useRef, useEffect, useCallback } from 'react'
+import { useRef, useEffect, useCallback, useContext } from 'react'
 import { Info, AlertTriangle, Lightbulb, AlertCircle, Ban } from 'lucide-react'
 import type { BlockNode } from '../../../types/editor'
 import { useEditorStore } from '../../../stores/editorStore'
+import { ReadOnlyCtx } from '../EditorSurface'
 
 interface CalloutBlockProps {
   block: BlockNode
@@ -20,6 +21,7 @@ export function CalloutBlock({ block }: CalloutBlockProps) {
   const calloutType = block.meta?.calloutType ?? 'NOTE'
   const calloutConfig = CALLOUT_ICONS[calloutType] ?? CALLOUT_ICONS.NOTE
   const CalloutIcon = calloutConfig.icon
+  const readOnly = useContext(ReadOnlyCtx)
   const updateBlockContent = useEditorStore(s => s.updateBlockContent)
   const setFocusedBlock = useEditorStore(s => s.setFocusedBlock)
   const focusedBlockId = useEditorStore(s => s.focusedBlockId)
@@ -34,17 +36,19 @@ export function CalloutBlock({ block }: CalloutBlockProps) {
   }, [block.content])
 
   useEffect(() => {
-    if (isFocused && ref.current) {
+    if (!readOnly && isFocused && ref.current) {
       ref.current.focus()
     }
-  }, [isFocused])
+  }, [isFocused, readOnly])
 
   const handleInput = useCallback((e: React.FormEvent<HTMLDivElement>) => {
+    if (readOnly) return
     const text = (e.target as HTMLDivElement).textContent ?? ''
     updateBlockContent(block.id, text)
-  }, [block.id, updateBlockContent])
+  }, [block.id, updateBlockContent, readOnly])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (readOnly) return
     const text = ref.current?.textContent ?? ''
 
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -58,7 +62,7 @@ export function CalloutBlock({ block }: CalloutBlockProps) {
       mergeBlockBackward(block.id)
       return
     }
-  }, [block.id, splitBlock, mergeBlockBackward])
+  }, [block.id, splitBlock, mergeBlockBackward, readOnly])
 
   return (
     <div className={`block-callout block-callout--${calloutType.toLowerCase()}`}>
@@ -70,12 +74,12 @@ export function CalloutBlock({ block }: CalloutBlockProps) {
         <div
           ref={ref}
           className={`block-editable ${isFocused ? 'block-editable--focused' : ''}`}
-          contentEditable="plaintext-only"
+          contentEditable={readOnly ? "false" : "plaintext-only"}
           suppressContentEditableWarning
           onInput={handleInput}
           onKeyDown={handleKeyDown}
-          onFocus={() => setFocusedBlock(block.id)}
-          onBlur={() => setFocusedBlock(null)}
+          onFocus={() => { if (!readOnly) setFocusedBlock(block.id) }}
+          onBlur={() => { if (!readOnly) setFocusedBlock(null) }}
           data-placeholder="Callout text..."
         />
       </div>

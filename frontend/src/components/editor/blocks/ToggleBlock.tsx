@@ -1,8 +1,9 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useContext } from 'react'
 import { ChevronRight } from 'lucide-react'
 import type { BlockNode } from '../../../types/editor'
 import { useEditorStore } from '../../../stores/editorStore'
 import { BlockRenderer } from '../BlockRenderer'
+import { ReadOnlyCtx } from '../EditorSurface'
 
 interface ToggleBlockProps {
   block: BlockNode
@@ -11,6 +12,7 @@ interface ToggleBlockProps {
 export function ToggleBlock({ block }: ToggleBlockProps) {
   const ref = useRef<HTMLDivElement>(null)
   const [isOpen, setIsOpen] = useState(false)
+  const readOnly = useContext(ReadOnlyCtx)
   const updateBlockContent = useEditorStore(s => s.updateBlockContent)
   const setFocusedBlock = useEditorStore(s => s.setFocusedBlock)
   const focusedBlockId = useEditorStore(s => s.focusedBlockId)
@@ -25,17 +27,19 @@ export function ToggleBlock({ block }: ToggleBlockProps) {
   }, [block.content])
 
   useEffect(() => {
-    if (isFocused && ref.current) {
+    if (!readOnly && isFocused && ref.current) {
       ref.current.focus()
     }
-  }, [isFocused])
+  }, [isFocused, readOnly])
 
   const handleInput = useCallback((e: React.FormEvent<HTMLDivElement>) => {
+    if (readOnly) return
     const text = (e.target as HTMLDivElement).textContent ?? ''
     updateBlockContent(block.id, text)
-  }, [block.id, updateBlockContent])
+  }, [block.id, updateBlockContent, readOnly])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (readOnly) return
     const text = ref.current?.textContent ?? ''
 
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -49,7 +53,7 @@ export function ToggleBlock({ block }: ToggleBlockProps) {
       mergeBlockBackward(block.id)
       return
     }
-  }, [block.id, splitBlock, mergeBlockBackward])
+  }, [block.id, splitBlock, mergeBlockBackward, readOnly])
 
   return (
     <div className="block-toggle">
@@ -67,12 +71,12 @@ export function ToggleBlock({ block }: ToggleBlockProps) {
         <div
           ref={ref}
           className={`block-editable ${isFocused ? 'block-editable--focused' : ''}`}
-          contentEditable="plaintext-only"
+          contentEditable={readOnly ? "false" : "plaintext-only"}
           suppressContentEditableWarning
           onInput={handleInput}
           onKeyDown={handleKeyDown}
-          onFocus={() => setFocusedBlock(block.id)}
-          onBlur={() => setFocusedBlock(null)}
+          onFocus={() => { if (!readOnly) setFocusedBlock(block.id) }}
+          onBlur={() => { if (!readOnly) setFocusedBlock(null) }}
           data-placeholder="Toggle title..."
         />
       </div>

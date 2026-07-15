@@ -190,6 +190,7 @@ class NoteCreate(BaseModel):
     content: str = Field(..., min_length=1, max_length=MAX_NOTE_CONTENT_LENGTH)
     content_type: str = Field(default="markdown", max_length=20)
     parent_note_id: UUID | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=500)
     position: dict[str, Any] = Field(default_factory=lambda: {"x": 0, "y": 0})
     size: dict[str, Any] = Field(default_factory=lambda: {"width": 200, "height": 200})
     style: dict[str, Any] = Field(default_factory=lambda: {"color": "yellow"})
@@ -207,6 +208,7 @@ class NoteUpdate(BaseModel):
     content: str | None = Field(default=None, min_length=1, max_length=MAX_NOTE_CONTENT_LENGTH)
     content_type: str | None = Field(default=None, max_length=20)
     parent_note_id: UUID | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=500)
     position: dict[str, Any] | None = None
     size: dict[str, Any] | None = None
     style: dict[str, Any] | None = None
@@ -275,6 +277,7 @@ class NoteResponse(BaseModel):
     user_id: UUID
     workspace_id: UUID | None
     parent_note_id: UUID | None
+    title: str
     content: str
     content_type: str
     position: dict[str, Any]

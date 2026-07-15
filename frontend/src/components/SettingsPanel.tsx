@@ -22,6 +22,8 @@ type SettingsPanelProps = {
   theme: AppTheme
   onThemeChange: (theme: AppTheme) => void
   formatDateTimeVi: (isoDateTime: string | null) => string
+  blockEditingEnabled: boolean
+  onBlockEditingChange: (enabled: boolean) => void
 }
 
 export function SettingsPanel({ 
@@ -34,6 +36,8 @@ export function SettingsPanel({
   theme,
   onThemeChange,
   formatDateTimeVi,
+  blockEditingEnabled,
+  onBlockEditingChange,
 }: SettingsPanelProps) {
   return (
     <section className="settings-workspace">
@@ -69,6 +73,29 @@ export function SettingsPanel({
             )
           })}
         </div>
+      </div>
+
+      {/* Notes Card */}
+      <div className="settings-card">
+        <div className="settings-card-title">Notes</div>
+        <div className="settings-card-subtitle">
+          Configure how notes are displayed and edited.
+        </div>
+        <label className="settings-toggle-row">
+          <div className="settings-toggle-info">
+            <span className="settings-toggle-label">Edit blocks</span>
+            <span className="settings-toggle-desc">
+              Allow editing note content directly from the block editor (Split / Blocks view).
+              When disabled, editing is only available from the raw Markdown side.
+            </span>
+          </div>
+          <input
+            type="checkbox"
+            className="settings-toggle"
+            checked={blockEditingEnabled}
+            onChange={(e) => onBlockEditingChange(e.target.checked)}
+          />
+        </label>
       </div>
       
       {/* Google Calendar Card */}

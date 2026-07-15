@@ -59,10 +59,16 @@ class NoteService:
             if parent is None:
                 raise ValueError("Parent note not found")
 
+        if payload.title:
+            title = payload.title
+        else:
+            title = self.extract_title(payload.content)
+
         note = Note(
             user_id=user_id,
             workspace_id=payload.workspace_id,
             parent_note_id=payload.parent_note_id,
+            title=title,
             content=payload.content,
             content_type=payload.content_type,
             position=payload.position,
@@ -240,6 +246,7 @@ class NoteService:
             user_id=note.user_id,
             workspace_id=note.workspace_id,
             parent_note_id=getattr(note, "parent_note_id", None),
+            title=note.title,
             content=content,
             content_type=note.content_type,
             position=note.position,
@@ -261,13 +268,12 @@ class NoteService:
         return "Untitled"
 
     def to_summary_response(self, note: Note, content_override: str | None = None) -> NoteSummary:
-        content = content_override if content_override is not None else note.content
         return NoteSummary(
             id=note.id,
             user_id=note.user_id,
             workspace_id=note.workspace_id,
             parent_note_id=getattr(note, "parent_note_id", None),
-            title=self.extract_title(content),
+            title=note.title,
             content_type=note.content_type,
             position=note.position,
             size=note.size,

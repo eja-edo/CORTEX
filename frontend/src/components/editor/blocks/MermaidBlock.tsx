@@ -1,6 +1,7 @@
-import { useRef, useEffect, useState, useCallback } from 'react'
+import { useRef, useEffect, useState, useCallback, useContext } from 'react'
 import type { BlockNode } from '../../../types/editor'
 import { useEditorStore } from '../../../stores/editorStore'
+import { ReadOnlyCtx } from '../EditorSurface'
 
 interface MermaidBlockProps {
   block: BlockNode
@@ -18,6 +19,7 @@ export function MermaidBlock({ block }: MermaidBlockProps) {
   const ref = useRef<HTMLDivElement>(null)
   const editorRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState<string | null>(null)
+  const readOnly = useContext(ReadOnlyCtx)
   const updateBlockContent = useEditorStore(s => s.updateBlockContent)
   const setFocusedBlock = useEditorStore(s => s.setFocusedBlock)
   const focusedBlockId = useEditorStore(s => s.focusedBlockId)
@@ -48,7 +50,7 @@ export function MermaidBlock({ block }: MermaidBlockProps) {
   }, [block.content])
 
   useEffect(() => {
-    if (isFocused && editorRef.current) {
+    if (!readOnly && isFocused && editorRef.current) {
       editorRef.current.focus()
       const sel = window.getSelection()
       if (sel) {
@@ -59,12 +61,13 @@ export function MermaidBlock({ block }: MermaidBlockProps) {
         sel.addRange(range)
       }
     }
-  }, [isFocused])
+  }, [isFocused, readOnly])
 
   const handleInput = useCallback((e: React.FormEvent<HTMLDivElement>) => {
+    if (readOnly) return
     const text = (e.target as HTMLDivElement).textContent ?? ''
     updateBlockContent(block.id, text)
-  }, [block.id, updateBlockContent])
+  }, [block.id, updateBlockContent, readOnly])
 
   return (
     <div className="block-mermaid">
@@ -78,11 +81,11 @@ export function MermaidBlock({ block }: MermaidBlockProps) {
       <div
         ref={editorRef}
         className={`block-editable block-mermaid-source ${isFocused ? 'block-editable--focused' : ''}`}
-        contentEditable="plaintext-only"
+        contentEditable={readOnly ? "false" : "plaintext-only"}
         suppressContentEditableWarning
         onInput={handleInput}
-        onFocus={() => setFocusedBlock(block.id)}
-        onBlur={() => setFocusedBlock(null)}
+        onFocus={() => { if (!readOnly) setFocusedBlock(block.id) }}
+        onBlur={() => { if (!readOnly) setFocusedBlock(null) }}
         data-placeholder="flowchart LR&#10;A --> B"
       />
     </div>

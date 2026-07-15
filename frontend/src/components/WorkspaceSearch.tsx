@@ -7,6 +7,7 @@ type NoteItem = {
     date: string
     contentMd: string
     parentNoteId?: string | null
+    title?: string
 }
 
 interface WorkspaceSearchProps {
@@ -75,13 +76,13 @@ export function WorkspaceSearch({ notes, onOpenNote, onClose }: WorkspaceSearchP
             .slice(0, 10)
             .map(note => ({
                 noteId: note.id,
-                title: getTitleFromMd(note.contentMd),
+                title: note.title || getTitleFromMd(note.contentMd),
                 snippet: getSnippet(note.contentMd, query),
                 date: note.date,
             }))
         : notes.slice(0, 6).map(note => ({
             noteId: note.id,
-            title: getTitleFromMd(note.contentMd),
+            title: note.title || getTitleFromMd(note.contentMd),
             snippet: plainTextFromMarkdown(note.contentMd).slice(0, 80),
             date: note.date,
         }))
