@@ -23,6 +23,7 @@ from app.api.upload import router as upload_router
 from app.api.knowledge import router as knowledge_router
 from app.api.internal import router as internal_router
 from app.api.workspaces import router as workspaces_router
+from app.api.proposals import router as proposals_router
 from app.api.sse import notification_sse_router, sync_sse_router
 from app.services.transcription_results_consumer import transcription_results_consumer
 from app.services.llm_processor_worker import get_llm_processor_worker
@@ -205,6 +206,7 @@ app.include_router(knowledge_router, prefix=settings.API_STR)
 app.include_router(workspaces_router, prefix=settings.API_STR)
 app.include_router(sync_sse_router, prefix=settings.API_STR)
 app.include_router(notification_sse_router, prefix=settings.API_STR)
+app.include_router(proposals_router, prefix=settings.API_STR)
 
 # Internal service-to-service endpoints (not exposed to internet)
 app.include_router(internal_router)

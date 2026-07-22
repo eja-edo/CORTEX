@@ -521,6 +521,46 @@ class WorkspaceMember(Base):
     )
 
 
+class NoteEditProposal(Base):
+    """Reviewable proposal for AI-generated note edits (not yet applied to the note)."""
+    __tablename__ = "note_edit_proposals"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # Content reference: patch is applied on top of base_revision (or note.content if NULL)
+    base_revision_id = Column(UUID(as_uuid=True), ForeignKey("note_revisions.id"), nullable=True)
+    base_version = Column(Integer, nullable=False)
+    patch = Column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
+
+    # Creator identity (supports USER / AGENT / WORKFLOW / SYSTEM)
+    creator_type = Column(String(20), nullable=False, default="USER")
+    creator_id = Column(String(255), nullable=False)
+
+    # Status machine: pending → applying → approved
+    status = Column(String(20), nullable=False, default="pending")
+
+    # Audit trail
+    approved_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    approved_at = Column(DateTime, nullable=True)
+    rejected_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    rejected_at = Column(DateTime, nullable=True)
+
+    # Lifecycle
+    last_viewed_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=False)
+    conversation_id = Column(UUID, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, server_default=text("NOW()"))
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, server_default=text("NOW()"))
+
+    __table_args__ = (
+        Index("ix_proposals_note_status", "note_id", "status"),
+        Index("ix_proposals_creator", "creator_type", "creator_id"),
+        Index("ix_proposals_expires", "status", "expires_at"),
+    )
+
+
 class AgentConversation(Base):
     """Multi-turn conversation thread with an AI agent."""
     __tablename__ = "agent_conversations"
@@ -555,6 +595,8 @@ class AgentMessage(Base):
     tool_name = Column(String(100), nullable=True)
     tool_input = Column(JSONB, nullable=True, default=dict, server_default=text("'{}'::jsonb"))
     tool_output = Column(JSONB, nullable=True, default=dict, server_default=text("'{}'::jsonb"))
+    tool_call_id = Column(String(100), nullable=True)
+    turn_id = Column(UUID(as_uuid=True), nullable=True, index=True)
     token_count = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, server_default=text("NOW()"))
 

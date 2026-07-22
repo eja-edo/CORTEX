@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Bot, ArrowUp, X, Sparkles, RefreshCw, Copy, Check, Square, Plus, Mic, FileText, ChevronDown } from 'lucide-react'
+import MarkdownIt from 'markdown-it'
+import DOMPurify from 'dompurify'
 import { streamAgentMessage, listConversations, getConversation, revertAction, ApiError, type ConversationListItem, type StreamEvent, type PendingChange, type TokenUsage } from '../services/api'
 import { useConversationStore } from '../stores/conversationStore'
 import { knowledgeRoute, noteRoute, scheduleRoute } from '../services/routes'
@@ -13,6 +15,7 @@ interface AskAIProps {
     onInsert?: (text: string) => void
     workspaceId?: string
     onToolNavigate?: (toolName: string) => Promise<void>
+    onNoteDiff?: (noteId: string, proposalId: string) => void
 }
 
 type ContextPill = {
@@ -29,10 +32,12 @@ type Message = {
     thinkingOpen?: boolean
     thinkingSteps?: Array<{
         id: string
-        type: 'tool_start' | 'tool_result'
-        toolName: string
+        type: 'thinking' | 'text' | 'tool_start' | 'tool_result'
+        toolName?: string
         toolArgs?: Record<string, unknown>
         result?: unknown
+        text?: string
+        success?: boolean
     }>
 }
 
@@ -122,7 +127,94 @@ function buildPendingChange(
     }
 }
 
-export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onInsert, workspaceId, onToolNavigate }: AskAIProps) {
+function previewContent(content: string, maxLen = 60): string {
+    if (!content || typeof content !== 'string') return ''
+    const firstLine = content.split('\n').find(l => l.trim().replace(/^#+\s+/, '')) ?? content
+    return firstLine.replace(/^#+\s+/, '').slice(0, maxLen).trim()
+}
+
+export function toolSemanticDescription(toolName: string, toolArgs?: Record<string, unknown>): string {
+    if (!toolArgs) return ''
+    const content = (toolArgs.content as string) || ''
+    const title = (toolArgs.title as string) || ''
+    const query = (toolArgs.query as string) || ''
+    const noteId = (toolArgs.note_id as string) || ''
+
+    switch (toolName) {
+        case 'update_note': {
+            const preview = previewContent(content)
+            return preview ? `note "${preview}"` : (noteId ? 'note' : 'note')
+        }
+        case 'create_note': {
+            const preview = previewContent(content)
+            const t = title || preview
+            return t ? `note mới "${t}"` : 'note mới'
+        }
+        case 'delete_note':
+            return 'xóa note'
+        case 'get_note': {
+            const id = (toolArgs.note_id as string) ?? ''
+            return id ? `xem note ${id.slice(0, 8)}…` : 'xem note'
+        }
+        case 'list_notes':
+            return title ? `ds notes • ${title}` : 'ds notes'
+        case 'search_notes': {
+            return query ? `tìm "${query}"` : 'tìm notes'
+        }
+        case 'create_schedule': {
+            return title ? `lịch "${title}"` : 'lịch mới'
+        }
+        case 'update_schedule':
+            return title ? `cập nhật lịch "${title}"` : 'cập nhật lịch'
+        case 'delete_schedule':
+            return 'xóa lịch'
+        case 'list_schedules':
+            return 'ds lịch'
+        case 'revert_action':
+            return '(undo)'
+        case 'web_search':
+            return query ? `web search "${query}"` : 'web search'
+        default:
+            return ''
+    }
+}
+
+export function toolResultSummary(toolName: string, result: unknown, success: boolean): string {
+    const r = result as Record<string, unknown> | undefined
+    if (!success) {
+        const err = (r?.error as string) ?? 'thất bại'
+        return `✗ ${err.slice(0, 60)}`
+    }
+    switch (toolName) {
+        case 'update_note':
+        case 'create_note': {
+            const v = r?.version as number | undefined
+            const id = (r?.id as string)?.slice(0, 8)
+            return v ? `v${v}${id ? ` • ${id}` : ''}` : 'xong'
+        }
+        case 'delete_note':
+            return 'đã xóa'
+        case 'search_notes':
+        case 'list_notes': {
+            const count = Array.isArray(r?.notes) ? (r.notes as unknown[]).length
+                : Array.isArray(r?.results) ? (r.results as unknown[]).length
+                : Array.isArray(result) ? (result as unknown[]).length
+                : 0
+            return `${count} kết quả`
+        }
+        case 'get_note':
+            return r?.title ? `"${(r.title as string).slice(0, 30)}"` : 'ok'
+        case 'create_schedule':
+        case 'update_schedule': {
+            const id = (r?.id as string)?.slice(0, 8)
+            return id ? `id ${id}` : 'ok'
+        }
+        default:
+            return 'xong'
+    }
+}
+
+export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onInsert, workspaceId, onToolNavigate, onNoteDiff }: AskAIProps) {
     const STORAGE_KEY = 'cortex_chatbot_state'
 
     const [messages, setMessages] = useState<Message[]>([])
@@ -140,8 +232,6 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
     const [addedPills, setAddedPills] = useState<ContextPill[]>([
         ...(noteContent ? [{ id: 'note', text: noteContent, label: `📝 ${noteTitle || 'Note'}` }] : []),
     ])
-    const [displayIndex, setDisplayIndex] = useState(0)
-    const [fullReplyRef, setFullReplyRef] = useState('')
     const [pendingChanges, setPendingChanges] = useState<PendingChange[]>([])
     const [pendingChangesOpen, setPendingChangesOpen] = useState(true)
     const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -183,16 +273,6 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
         inputRef.current?.focus()
     }, [])
 
-    // Typing effect animation
-    useEffect(() => {
-        if (displayIndex < fullReplyRef.length) {
-            const timer = setTimeout(() => {
-                setDisplayIndex(prev => prev + 1)
-            }, 10) // 20ms delay between each character
-            return () => clearTimeout(timer)
-        }
-    }, [displayIndex, fullReplyRef.length])
-
     // Load state from localStorage on mount and restore conversation from backend
     useEffect(() => {
         let canceled = false
@@ -204,31 +284,51 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                 if (canceled) return
 
                 console.info(`✅ Restored ${conversation.messages.length} messages for conversation ${savedConversationId}`)
-                setMessages(conversation.messages.map(msg => ({
-                    id: msg.id,
-                    role: msg.role as 'user' | 'assistant',
-                    content: msg.content,
-                })))
+                // Filter out tool messages — they are not user-facing
+                const visibleMessages = conversation.messages.filter(m => m.role !== 'tool')
+                setMessages(visibleMessages.map(msg => {
+                    const text = msg.content ?? ''
+                    return {
+                        id: msg.id,
+                        role: msg.role as 'user' | 'assistant',
+                        content: text,
+                        // Build a single text step so the renderer has marked content to display
+                        // through `renderMarkdown`. This is critical for reload — without this,
+                        // restored assistant messages would render empty.
+                        thinkingSteps: msg.role === 'assistant' && text
+                            ? [{ id: `restored-${msg.id}`, type: 'text' as const, text }]
+                            : undefined,
+                    }
+                }))
                 setConversationTitle(conversation.title ?? null)
 
                 // Restore pending changes from tool messages
                 const dismissedIds = getDismissedActionIds()
                 const restoredChanges: PendingChange[] = []
                 for (const msg of conversation.messages) {
-                    if (msg.role === 'tool' && msg.tool_name && msg.tool_output) {
-                        const output = msg.tool_output ? JSON.parse(msg.tool_output) as Record<string, unknown> : null
-                        const result = output?.result as Record<string, unknown> | undefined
-                        const actionId = result?.action_id as string | undefined
-                        if (actionId && !dismissedIds.includes(actionId)) {
-                            const change = buildPendingChange(
-                                msg.tool_name,
-                                result,
-                                msg.tool_input as Record<string, unknown> | undefined,
-                            )
-                            if (change) {
-                                change.id = `restored-${actionId}`
-                                restoredChanges.push(change)
+                    if (msg.role === 'tool' && msg.tool_name) {
+                        try {
+                            const output = msg.tool_output
+                                ? (typeof msg.tool_output === 'string'
+                                    ? JSON.parse(msg.tool_output)
+                                    : msg.tool_output) as Record<string, unknown>
+                                : null
+                            const result = (output as { result?: Record<string, unknown> })?.result
+                            const actionId = result?.action_id as string | undefined
+                            if (actionId && !dismissedIds.includes(actionId)) {
+                                const toolInput = msg.tool_input
+                                    ? (typeof msg.tool_input === 'string'
+                                        ? JSON.parse(msg.tool_input)
+                                        : msg.tool_input) as Record<string, unknown>
+                                    : undefined
+                                const change = buildPendingChange(msg.tool_name, result, toolInput)
+                                if (change) {
+                                    change.id = `restored-${actionId}`
+                                    restoredChanges.push(change)
+                                }
                             }
+                        } catch (parseErr) {
+                            console.warn('Failed to parse tool message:', msg.id, parseErr)
                         }
                     }
                 }
@@ -370,11 +470,20 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
             const conversation = await getConversation(sessionId)
 
             // Convert conversation messages to Message format
-            const loadedMessages: Message[] = conversation.messages.map(msg => ({
-                id: msg.id,
-                role: msg.role as 'user' | 'assistant',
-                content: msg.content,
-            }))
+            // Filter out tool messages — they are not user-facing
+            const visibleMessages = conversation.messages.filter(m => m.role !== 'tool')
+            const loadedMessages: Message[] = visibleMessages.map(msg => {
+                const text = msg.content ?? ''
+                return {
+                    id: msg.id,
+                    role: msg.role as 'user' | 'assistant',
+                    content: text,
+                    // Rebuild text step for rendering through renderMarkdown
+                    thinkingSteps: msg.role === 'assistant' && text
+                        ? [{ id: `loaded-${msg.id}`, type: 'text' as const, text }]
+                        : undefined,
+                }
+            })
 
             setMessages(loadedMessages)
             setConversationId(sessionId)
@@ -387,20 +496,29 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
             const dismissedIds = getDismissedActionIds()
             const loadedChanges: PendingChange[] = []
             for (const msg of conversation.messages) {
-                if (msg.role === 'tool' && msg.tool_name && msg.tool_output) {
-                    const output = msg.tool_output ? JSON.parse(msg.tool_output) as Record<string, unknown> : null
-                    const result = output?.result as Record<string, unknown> | undefined
-                    const actionId = result?.action_id as string | undefined
-                    if (actionId && !dismissedIds.includes(actionId)) {
-                        const change = buildPendingChange(
-                            msg.tool_name,
-                            result,
-                            msg.tool_input as Record<string, unknown> | undefined,
-                        )
-                        if (change) {
-                            change.id = `restored-${actionId}`
-                            loadedChanges.push(change)
+                if (msg.role === 'tool' && msg.tool_name) {
+                    try {
+                        const output = msg.tool_output
+                            ? (typeof msg.tool_output === 'string'
+                                ? JSON.parse(msg.tool_output)
+                                : msg.tool_output) as Record<string, unknown>
+                            : null
+                        const result = (output as { result?: Record<string, unknown> })?.result
+                        const actionId = result?.action_id as string | undefined
+                        if (actionId && !dismissedIds.includes(actionId)) {
+                            const toolInput = msg.tool_input
+                                ? (typeof msg.tool_input === 'string'
+                                    ? JSON.parse(msg.tool_input)
+                                    : msg.tool_input) as Record<string, unknown>
+                                : undefined
+                            const change = buildPendingChange(msg.tool_name, result, toolInput)
+                            if (change) {
+                                change.id = `restored-${actionId}`
+                                loadedChanges.push(change)
+                            }
                         }
+                    } catch (parseErr) {
+                        console.warn('Failed to parse tool message:', msg.id, parseErr)
                     }
                 }
             }
@@ -490,9 +608,7 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
         const userMsg = text.trim()
         setInput('')
         setError(null)
-            setDisplayIndex(0)
-            setFullReplyRef('')
-            setLastUsage(null)
+        setLastUsage(null)
 
         const userMsgObj: Message = {
             id: Date.now().toString(),
@@ -520,10 +636,13 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
             if (runtimeText) context.runtime = runtimeText
 
             // Call streaming agent API
-            let fullReply = ''
             let finalConversationId: string | null = null
             let thinkingSteps: Message['thinkingSteps'] = []
             let currentToolArgs: Record<string, unknown> | undefined
+            let currentThinkingText = ''
+            let currentTextText = ''
+            // Steps are pushed in arrival order so we preserve temporal
+            // interleaving of reasoning, tool calls and natural-language reply.
 
             const controller = new AbortController()
             abortRef.current = controller
@@ -566,6 +685,37 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                 }
             }
 
+            const flushPendingText = () => {
+                if (!currentTextText) return
+                const textStep = {
+                    id: `text-${Date.now()}-${Math.random()}`,
+                    type: 'text' as const,
+                    text: currentTextText,
+                }
+                thinkingSteps = [...thinkingSteps, textStep]
+                currentTextText = ''
+            }
+
+            const flushPendingThinking = () => {
+                if (!currentThinkingText) return
+                const thinkingStep = {
+                    id: `thinking-${Date.now()}-${Math.random()}`,
+                    type: 'thinking' as const,
+                    text: currentThinkingText,
+                }
+                thinkingSteps = [...thinkingSteps, thinkingStep]
+                currentThinkingText = ''
+            }
+
+            const pushStepNow = () => {
+                setMessages(prev =>
+                    prev.map(m => m.id === loadingMsgObj.id
+                        ? { ...m, thinkingSteps }
+                        : m
+                    )
+                )
+            }
+
             for await (const event of streamAgentMessage(
                 userMsg,
                 conversationId || undefined,
@@ -577,44 +727,63 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                 },
             )) {
                 if (event.type === 'text' && event.text) {
-                    fullReply += event.text
-                    setFullReplyRef(fullReply)
-                    setMessages(prev =>
-                        prev.map(m => m.id === loadingMsgObj.id
-                            ? { ...m, content: fullReply, loading: false, thinkingSteps }
-                            : m
-                        )
-                    )
-                } else if (event.type === 'tool_start' && event.tool_name) {
-                    currentToolArgs = event.tool_args
-                    const stepId = `step-${Date.now()}-${Math.random()}`
-                    const step = {
-                        id: stepId,
-                        type: 'tool_start' as const,
-                        toolName: event.tool_name,
-                        toolArgs: event.tool_args,
+                    currentTextText += event.text
+                    // Live-update the trailing text step so users see streaming text.
+                    // Only the LAST 'text' type step gets updated in place.
+                    const stepsWithoutTrailingText = thinkingSteps.filter(s => s.type !== 'text')
+                    const newTextStep = {
+                        id: 'text-live',
+                        type: 'text' as const,
+                        text: currentTextText,
                     }
-                    thinkingSteps = [...thinkingSteps, step]
-                    setMessages(prev =>
-                        prev.map(m => m.id === loadingMsgObj.id
-                            ? { ...m, thinkingSteps, loading: true }
-                            : m
-                        )
-                    )
-                } else if (event.type === 'tool_result' && event.tool_name) {
-                    const step = {
-                        id: `result-${Date.now()}-${Math.random()}`,
-                        type: 'tool_result' as const,
-                        toolName: event.tool_name,
-                        result: event.result,
-                    }
-                    thinkingSteps = [...thinkingSteps, step]
+                    thinkingSteps = [...stepsWithoutTrailingText, newTextStep]
                     setMessages(prev =>
                         prev.map(m => m.id === loadingMsgObj.id
                             ? { ...m, thinkingSteps }
                             : m
                         )
                     )
+                } else if (event.type === 'thinking' && event.text) {
+                    currentThinkingText += event.text
+                    const stepsWithoutTrailingThinking = thinkingSteps.filter(s => s.type !== 'thinking')
+                    const newThinkingStep = {
+                        id: 'thinking-live',
+                        type: 'thinking' as const,
+                        text: currentThinkingText,
+                    }
+                    thinkingSteps = [...stepsWithoutTrailingThinking, newThinkingStep]
+                    setMessages(prev =>
+                        prev.map(m => m.id === loadingMsgObj.id
+                            ? { ...m, thinkingSteps }
+                            : m
+                        )
+                    )
+                } else if (event.type === 'tool_start' && event.tool_name) {
+                    // Flush pending thinking + text into discrete steps BEFORE adding tool step
+                    flushPendingThinking()
+                    flushPendingText()
+                    currentToolArgs = event.tool_args
+                    const step = {
+                        id: `tool-${Date.now()}-${Math.random()}`,
+                        type: 'tool_start' as const,
+                        toolName: event.tool_name,
+                        toolArgs: event.tool_args,
+                    }
+                    thinkingSteps = [...thinkingSteps, step]
+                    pushStepNow()
+                } else if (event.type === 'tool_result' && event.tool_name) {
+                    flushPendingThinking()
+                    flushPendingText()
+                    const step = {
+                        id: `result-${Date.now()}-${Math.random()}`,
+                        type: 'tool_result' as const,
+                        toolName: event.tool_name,
+                        result: event.result,
+                        success: event.success,
+                    }
+                    thinkingSteps = [...thinkingSteps, step]
+                    pushStepNow()
+
                     handleToolNavigation(event)
 
                     // Track pending change for mutating tools
@@ -631,6 +800,12 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                     currentToolArgs = undefined
                 } else if (event.type === 'title_generated' && event.title) {
                     setConversationTitle(event.title)
+                } else if (event.type === 'note_diff' && event.note_id && event.proposal_id) {
+                    console.log('[AskAI] note_diff event received', { note_id: event.note_id, proposal_id: event.proposal_id, has_onNoteDiff: !!onNoteDiff })
+                    if (onNoteDiff) {
+                        console.log('[AskAI] calling onNoteDiff', event.note_id, event.proposal_id)
+                        onNoteDiff(event.note_id, event.proposal_id)
+                    }
                 } else if (event.type === 'done' && event.conversation_id) {
                     finalConversationId = event.conversation_id
                     if (event.usage) {
@@ -649,6 +824,10 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                 }
             }
 
+            // Flush any remaining thinking + text as final steps
+            flushPendingThinking()
+            flushPendingText()
+
             // Update conversation ID if this is the first message
             if (!conversationId && finalConversationId) {
                 console.debug(`Setting conversationId state: ${finalConversationId}`)
@@ -656,11 +835,11 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
             }
 
             // Update token usage in store
-            updateTokenUsage(0) // Placeholder - real implementation would get actual usage
+            updateTokenUsage(0)
 
             setMessages(prev =>
                 prev.map(m => m.id === loadingMsgObj.id
-                    ? { ...m, content: fullReply, loading: false, thinkingSteps }
+                    ? { ...m, loading: false, thinkingSteps }
                     : m
                 )
             )
@@ -744,21 +923,32 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
         setPendingChanges([])
     }, [pendingChanges])
 
+    // Shared markdown-it instance for rendering AI assistant replies.
+    // Uses the same parser the rest of the app uses to keep behavior consistent.
+    const md = useMemo(() => new MarkdownIt({
+        html: false,
+        linkify: true,
+        typographer: true,
+        breaks: true,
+    }), [])
+
+    // DOMPurify sanitizes the markdown output for `dangerouslySetInnerHTML`.
     const renderMarkdown = (text: string): string => {
-        return text
-            .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code class="lang-$1">$2</code></pre>')
-            .replace(/`([^`]+)`/g, '<code>$1</code>')
-            .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-            .replace(/\*(.+?)\*/g, '<em>$1</em>')
-            .replace(/^### (.+)$/gm, '<h3>$1</h3>')
-            .replace(/^## (.+)$/gm, '<h2>$1</h2>')
-            .replace(/^# (.+)$/gm, '<h1>$1</h1>')
-            .replace(/^[-*] (.+)$/gm, '<li>$1</li>')
-            .replace(/(<li>.*<\/li>\n?)+/g, s => `<ul>${s}</ul>`)
-            .replace(/^(\d+)\. (.+)$/gm, '<li>$2</li>')
-            .replace(/\n\n/g, '</p><p>')
-            .replace(/^(?!<[huplo]|<\/[huplo]|<pre|<\/pre)(.+)$/gm, '<p>$1</p>')
+        if (!text) return ''
+        const raw = md.render(text)
+        return DOMPurify.sanitize(raw, {
+            ALLOWED_TAGS: [
+                'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+                'p', 'br', 'hr', 'strong', 'em', 's', 'del', 'code', 'pre',
+                'ul', 'ol', 'li',
+                'blockquote', 'a', 'span'
+            ],
+            ALLOWED_ATTR: ['href', 'title', 'class', 'target', 'rel'],
+            FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed'],
+        })
     }
+
+
 
     return (
         <div className="ask-ai-backdrop" onClick={onClose}>
@@ -884,34 +1074,38 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                                                         <div className="ask-ai-thinking-steps">
                                                             {msg.thinkingSteps.map(step => (
                                                                 <div key={step.id} className="ask-ai-thinking-step">
+                                                                    {step.type === 'thinking' && step.text && (
+                                                                        <div className="ask-ai-step-item ask-ai-step-thinking">
+                                                                            <span className="ask-ai-step-badge">💭</span>
+                                                                            <span className="ask-ai-step-text ask-ai-step-text-thinking">
+                                                                                {step.text}
+                                                                            </span>
+                                                                        </div>
+                                                                    )}
                                                                     {step.type === 'tool_start' && (
                                                                         <div className="ask-ai-step-item">
                                                                             <span className="ask-ai-step-badge">📌</span>
                                                                             <span className="ask-ai-step-text">
-                                                                                Using <strong>{step.toolName}</strong>
+                                                                                <strong>{step.toolName}</strong>
+                                                                                <span className="ask-ai-step-detail"> → {toolSemanticDescription(step.toolName ?? '', step.toolArgs)}</span>
                                                                                 {step.toolArgs && Object.keys(step.toolArgs).length > 0 && (
-                                                                                    <code style={{ marginLeft: '4px', fontSize: '11px' }}>
-                                                                                        {JSON.stringify(step.toolArgs).slice(0, 60)}...
-                                                                                    </code>
+                                                                                    <details>
+                                                                                        <summary style={{ fontSize: '11px', cursor: 'pointer', color: 'var(--text-tertiary)' }}>chi tiết</summary>
+                                                                                        <code style={{ marginLeft: '4px', fontSize: '11px' }}>
+                                                                                            {JSON.stringify(step.toolArgs, null, 2).slice(0, 200)}
+                                                                                            {JSON.stringify(step.toolArgs).length > 200 ? '…' : ''}
+                                                                                        </code>
+                                                                                    </details>
                                                                                 )}
                                                                             </span>
                                                                         </div>
                                                                     )}
                                                                     {step.type === 'tool_result' && (
                                                                         <div className="ask-ai-step-item">
-                                                                            <span className="ask-ai-step-badge">✓</span>
+                                                                            <span className="ask-ai-step-badge">{step.success === false ? '✗' : '✓'}</span>
                                                                             <span className="ask-ai-step-text">
-                                                                                Got result from <strong>{step.toolName}</strong>
-                                                                                {step.result ? (() => {
-                                                                                    const resultStr = typeof step.result === 'string'
-                                                                                        ? step.result
-                                                                                        : JSON.stringify(step.result);
-                                                                                    return (
-                                                                                        <code style={{ marginLeft: '4px', fontSize: '11px' }}>
-                                                                                            {resultStr.slice(0, 60)}...
-                                                                                        </code>
-                                                                                    );
-                                                                                })() : null}
+                                                                                <strong>{step.toolName}</strong>
+                                                                                <span className="ask-ai-step-detail"> {toolResultSummary(step.toolName ?? '', step.result, step.success !== false)}</span>
                                                                             </span>
                                                                         </div>
                                                                     )}
@@ -924,45 +1118,67 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                                         </div>
                                     ) : (
                                         <>
-                                            {msg.role === 'assistant' ? (
-                                                <div
-                                                    className="ask-ai-msg-content"
-                                                    dangerouslySetInnerHTML={{
-                                                        __html: renderMarkdown(
-                                                            index === messages.length - 1 && fullReplyRef
-                                                                ? fullReplyRef.slice(0, displayIndex)
-                                                                : msg.content
-                                                        )
-                                                    }}
-                                                />
+                                            {msg.role === 'user' ? (
+                                                <div className="ask-ai-msg-content">{msg.content}</div>
                                             ) : (
-                                                <div className="ask-ai-msg-content">
-                                                    {index === messages.length - 1 && fullReplyRef
-                                                        ? fullReplyRef.slice(0, displayIndex)
-                                                        : msg.content
-                                                    }
-                                                </div>
-                                            )}
+                                                <div className="ask-ai-stream">
+                                                    {/* Inline rendered text from completed streaming */}
+                                                    {(msg.thinkingSteps ?? []).filter(s => s.type === 'text').map(s => (
+                                                        <div key={s.id} className="ask-ai-step ask-ai-step--text">
+                                                            <span
+                                                                className="ask-ai-step-body ask-ai-step-body--text"
+                                                                dangerouslySetInnerHTML={{
+                                                                    __html: renderMarkdown(s.text ?? '')
+                                                                }}
+                                                            />
+                                                        </div>
+                                                    ))}
+                                                    {/* Fallback for restored messages that have content but no text step */}
+                                                    {(msg.thinkingSteps ?? []).filter(s => s.type === 'text').length === 0 && msg.content && (
+                                                        <div className="ask-ai-step ask-ai-step--text">
+                                                            <span
+                                                                className="ask-ai-step-body ask-ai-step-body--text"
+                                                                dangerouslySetInnerHTML={{
+                                                                    __html: renderMarkdown(msg.content)
+                                                                }}
+                                                            />
+                                                        </div>
+                                                    )}
 
-                                            {msg.role === 'assistant' && !msg.loading && (
-                                                <div className="ask-ai-msg-actions">
-                                                    <button
-                                                        type="button"
-                                                        className="ask-ai-msg-action-btn"
-                                                        title="Copy"
-                                                        onClick={() => void handleCopy(msg.id, msg.content)}
-                                                    >
-                                                        {copiedId === msg.id ? <Check size={11} /> : <Copy size={11} />}
-                                                    </button>
-                                                    {onInsert && (
-                                                        <button
-                                                            type="button"
-                                                            className="ask-ai-msg-action-btn"
-                                                            title="Insert into note"
-                                                            onClick={() => onInsert(msg.content)}
-                                                        >
-                                                            Insert
-                                                        </button>
+                                                    {msg.role === 'assistant' && !msg.loading && (
+                                                        <div className="ask-ai-msg-actions">
+                                                            <button
+                                                                type="button"
+                                                                className="ask-ai-msg-action-btn"
+                                                                title="Copy full reply"
+                                                                onClick={() => {
+                                                                    const steppedText = (msg.thinkingSteps ?? [])
+                                                                        .filter(s => s.type === 'text')
+                                                                        .map(s => s.text ?? '')
+                                                                        .join('')
+                                                                    const text = steppedText || msg.content || ''
+                                                                    void handleCopy(msg.id, text)
+                                                                }}
+                                                            >
+                                                                {copiedId === msg.id ? <Check size={11} /> : <Copy size={11} />}
+                                                            </button>
+                                                            {onInsert && (
+                                                                <button
+                                                                    type="button"
+                                                                    className="ask-ai-msg-action-btn"
+                                                                    title="Insert into note"
+                                                                    onClick={() => {
+                                                                        const steppedText = (msg.thinkingSteps ?? [])
+                                                                            .filter(s => s.type === 'text')
+                                                                            .map(s => s.text ?? '')
+                                                                            .join('')
+                                                                        onInsert(steppedText || msg.content || '')
+                                                                    }}
+                                                                >
+                                                                    Insert
+                                                                </button>
+                                                            )}
+                                                        </div>
                                                     )}
                                                 </div>
                                             )}

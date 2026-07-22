@@ -68,10 +68,13 @@ class ToolDefinition:
             # Execute handler
             result = await self.handler(args, ctx)
 
-            # Log execution
             elapsed_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
             logger.info(
-                f"✅ Tool '{self.name}' executed in {elapsed_ms:.1f}ms | user={ctx.user_id}"
+                f"event=tool_execution "
+                f"tool_name={self.name} "
+                f"success=true "
+                f"elapsed_ms={elapsed_ms:.1f} "
+                f"user={ctx.user_id}"
             )
 
             return {
@@ -81,10 +84,15 @@ class ToolDefinition:
 
         except Exception as exc:
             elapsed_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
-            error_msg = f"Tool execution failed: {str(exc)}"
+            error_msg = str(exc)
 
             logger.error(
-                f"❌ Tool '{self.name}' failed in {elapsed_ms:.1f}ms | user={ctx.user_id} | error={error_msg}",
+                f"event=tool_execution "
+                f"tool_name={self.name} "
+                f"success=false "
+                f"elapsed_ms={elapsed_ms:.1f} "
+                f"user={ctx.user_id} "
+                f"error={error_msg}",
                 exc_info=True,
             )
 

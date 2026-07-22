@@ -813,6 +813,132 @@
     color: var(--text-tertiary);
 }
 
+/* ── Semantic tool descriptions (richer UI) ── */
+
+.ask-ai-step-detail {
+    color: var(--text-tertiary);
+    font-size: 11px;
+    margin-left: 4px;
+}
+
+.ask-ai-step-body--thinking {
+    color: var(--text-tertiary);
+    font-style: italic;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.ask-ai-step-body--text {
+    color: var(--text-primary);
+    font-size: 13.5px;
+    line-height: 1.55;
+}
+
+.ask-ai-step-body--text p {
+    margin: 0 0 6px;
+}
+
+.ask-ai-step-body--text p:last-child {
+    margin-bottom: 0;
+}
+
+.ask-ai-step-body--text pre {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 12px;
+    overflow-x: auto;
+    margin: 6px 0;
+}
+
+.ask-ai-step-body--text code {
+    background: rgba(135, 131, 120, 0.12);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+}
+
+.ask-ai-step-body--text h1,
+.ask-ai-step-body--text h2,
+.ask-ai-step-body--text h3,
+.ask-ai-step-body--text h4 {
+    margin: 8px 0 4px;
+    font-weight: 600;
+}
+
+.ask-ai-step-body--text h1 {
+    font-size: 1.1rem;
+}
+
+.ask-ai-step-body--text h2 {
+    font-size: 1rem;
+}
+
+.ask-ai-step-body--text h3,
+.ask-ai-step-body--text h4 {
+    font-size: 0.95rem;
+}
+
+.ask-ai-step-body--text ul,
+.ask-ai-step-body--text ol {
+    margin: 6px 0;
+    padding-left: 1.4em;
+}
+
+.ask-ai-step-body--text li {
+    margin: 2px 0;
+}
+
+.ask-ai-step-body--tool {
+    color: var(--text-secondary);
+}
+
+.ask-ai-step-body--tool strong {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.ask-ai-step-body--result {
+    color: var(--text-tertiary);
+}
+
+.ask-ai-step-body--result strong {
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+.ask-ai-step-args {
+    margin: 4px 0 0 22px;
+    padding: 6px 8px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--text-tertiary);
+    overflow-x: auto;
+    white-space: pre-wrap;
+}
+
+.ask-ai-step--thinking {
+    opacity: 0.85;
+}
+
+.ask-ai-step--tool {
+    margin: 2px 0;
+}
+
+.ask-ai-step--text {
+    margin: 4px 0;
+}
+
+.ask-ai-step--result {
+    margin: 1px 0 4px 22px;
+    font-size: 11px;
+}
+
 .ask-ai-error-banner {
     display: flex;
     align-items: center;

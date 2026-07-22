@@ -199,6 +199,7 @@ export interface TokenUsage {
 
 export interface StreamEvent {
     type: 'text' | 'done' | 'tool_start' | 'tool_result' | 'thinking' | 'title_generated'
+    | 'note_diff' | 'proposal_approved' | 'proposal_rejected' | 'proposal_conflict' | 'proposal_expired'
     text?: string
     conversation_id?: string
     title?: string
@@ -209,6 +210,10 @@ export interface StreamEvent {
     error?: string
     usage?: TokenUsage
     model_used?: string
+    proposal_id?: string
+    note_id?: string
+    base_version?: number
+    version?: number
 }
 
 export interface StreamOptions {
@@ -327,10 +332,45 @@ export async function* streamAgentMessage(
                                 success: data.success,
                                 error: data.error,
                             }
-                        } else if (data.event === 'thinking') {
+                        } else if (data.event === 'reasoning_token') {
                             yield {
                                 type: 'thinking',
-                                text: data.content
+                                text: data.text
+                            }
+                        } else if (data.event === 'note_diff') {
+                            console.log('[api.ts] note_diff event received', { proposal_id: data.proposal_id, note_id: data.note_id, base_version: data.base_version })
+                            yield {
+                                type: 'note_diff',
+                                proposal_id: data.proposal_id,
+                                note_id: data.note_id,
+                                base_version: data.base_version,
+                            }
+                        } else if (data.event === 'proposal_approved') {
+                            yield {
+                                type: 'proposal_approved',
+                                proposal_id: data.proposal_id,
+                                note_id: data.note_id,
+                                version: data.version,
+                            }
+                        } else if (data.event === 'proposal_rejected') {
+                            yield {
+                                type: 'proposal_rejected',
+                                proposal_id: data.proposal_id,
+                                note_id: data.note_id,
+                            }
+                        } else if (data.event === 'proposal_conflict') {
+                            yield {
+                                type: 'proposal_conflict',
+                                proposal_id: data.proposal_id,
+                                note_id: data.note_id,
+                                base_version: data.expected,
+                                version: data.actual,
+                            }
+                        } else if (data.event === 'proposal_expired') {
+                            yield {
+                                type: 'proposal_expired',
+                                proposal_id: data.proposal_id,
+                                note_id: data.note_id,
                             }
                         }
                     } catch {
@@ -372,6 +412,41 @@ export async function* streamAgentMessage(
                         result: data.result,
                         success: data.success,
                         error: data.error,
+                    }
+                } else if (data.event === 'note_diff') {
+                    console.log('[api.ts buffer] note_diff event received', { proposal_id: data.proposal_id, note_id: data.note_id })
+                    yield {
+                        type: 'note_diff',
+                        proposal_id: data.proposal_id,
+                        note_id: data.note_id,
+                        base_version: data.base_version,
+                    }
+                } else if (data.event === 'proposal_approved') {
+                    yield {
+                        type: 'proposal_approved',
+                        proposal_id: data.proposal_id,
+                        note_id: data.note_id,
+                        version: data.version,
+                    }
+                } else if (data.event === 'proposal_rejected') {
+                    yield {
+                        type: 'proposal_rejected',
+                        proposal_id: data.proposal_id,
+                        note_id: data.note_id,
+                    }
+                } else if (data.event === 'proposal_conflict') {
+                    yield {
+                        type: 'proposal_conflict',
+                        proposal_id: data.proposal_id,
+                        note_id: data.note_id,
+                        base_version: data.expected,
+                        version: data.actual,
+                    }
+                } else if (data.event === 'proposal_expired') {
+                    yield {
+                        type: 'proposal_expired',
+                        proposal_id: data.proposal_id,
+                        note_id: data.note_id,
                     }
                 }
             } catch {

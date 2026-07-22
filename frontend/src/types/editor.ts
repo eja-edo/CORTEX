@@ -3,6 +3,9 @@ export type BlockType =
   | 'heading_1'
   | 'heading_2'
   | 'heading_3'
+  | 'heading_4'
+  | 'heading_5'
+  | 'heading_6'
   | 'bullet_list'
   | 'ordered_list'
   | 'task_list'
@@ -24,6 +27,8 @@ export interface BlockMeta {
   collapsed?: boolean
   calloutType?: 'NOTE' | 'TIP' | 'WARNING' | 'IMPORTANT' | 'CAUTION'
   listNesting?: number
+  lineStart?: number
+  lineEnd?: number
 }
 
 export interface BlockNode {

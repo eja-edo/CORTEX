@@ -185,8 +185,19 @@
 }
 
 .block-heading-editable.heading-level-3 {
-  font-size: 1.05rem;
-  font-weight: 600;
+  font-size: 15px;
+}
+
+.block-heading-editable.heading-level-4 {
+  font-size: 14px;
+}
+
+.block-heading-editable.heading-level-5 {
+  font-size: 13px;
+}
+
+.block-heading-editable.heading-level-6 {
+  font-size: 12px;
 }
 
 /* ── List items ── */

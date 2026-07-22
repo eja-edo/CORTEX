@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useCallback, useRef, useMemo, useLayoutEffect } from 'react'
+import { createContext, useEffect, useCallback, useRef, useMemo, useLayoutEffect } from 'react'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
@@ -34,7 +34,7 @@ function SortableBlock({ block, readOnly }: { block: BlockNode; readOnly: boolea
   }
 
   return (
-    <div ref={setNodeRef} style={style} {...attributes}>
+    <div ref={setNodeRef} style={style} data-block-id={block.id} data-block-type={block.type} {...attributes}>
       <BlockRenderer block={block} dragHandleListeners={readOnly ? undefined : (listeners as SyntheticListenerMap)} />
     </div>
   )

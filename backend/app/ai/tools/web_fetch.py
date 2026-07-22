@@ -3,6 +3,7 @@
 Uses the same multi-engine extraction pipeline as render.py:
 main_container -> readability -> trafilatura (optional), with
 auto-fallback to Jina AI Reader when quality is poor.
+Results are truncated to MAX_MARKDOWN_CHARS to control token usage.
 """
 
 import asyncio
@@ -15,6 +16,9 @@ from app.utils.logger import get_logger
 from app.utils.web_reader import ExtractionError, Reader
 
 logger = get_logger(__name__)
+
+MAX_MARKDOWN_CHARS = 8000
+TRUNCATION_SUFFIX = "\n\n[...Content truncated. Use more specific queries to narrow down.]"
 
 
 class WebFetchInput(BaseModel):
@@ -43,11 +47,18 @@ async def web_fetch_handler(args: dict, ctx: ToolContext) -> dict:
     try:
         result = await loop.run_in_executor(None, reader.fetch, url)
 
+        markdown = result["markdown"]
+        truncated = len(markdown) > MAX_MARKDOWN_CHARS
+        if truncated:
+            markdown = markdown[:MAX_MARKDOWN_CHARS] + TRUNCATION_SUFFIX
+
         return {
             "url": result["url"],
             "title": result.get("title", ""),
-            "markdown": result["markdown"],
-            "length": result["length"],
+            "markdown": markdown,
+            "length": len(markdown),
+            "truncated": truncated,
+            "original_length": result["length"],
             "method_used": result.get("method_used", ""),
             "candidate_lengths": result.get("candidate_lengths", {}),
             "last_updated": result.get("last_updated"),

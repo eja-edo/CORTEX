@@ -4,10 +4,13 @@ Searches Zep semantic memory graph and fetches conversation episodic summaries
 from PostgreSQL to provide context-aware memory retrieval.
 """
 
+from uuid import UUID
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
 from app.ai.agents.tool_context import ToolContext
 from app.services.zep_memory import search_semantic_memories
+from app.services.workspace_permission import WorkspacePermission
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -17,10 +20,6 @@ class ExtractMemoryInput(BaseModel):
     query: str = Field(
         ..., min_length=1, max_length=500,
         description="Search query to find relevant memories.",
-    )
-    workspace_id: str | None = Field(
-        None,
-        description="Workspace ID to scope the memory search. Defaults to the current workspace.",
     )
     conversation_id: str | None = Field(
         None,
@@ -34,20 +33,24 @@ class ExtractMemoryInput(BaseModel):
 
 async def extract_memory_handler(args: dict, ctx: ToolContext) -> dict:
     """Handle extract_memory tool call."""
-    from uuid import UUID
     from sqlalchemy import select
     from app.models import AgentConversation
 
-    ws_id = args.get("workspace_id") or str(ctx.workspace_id) if ctx.workspace_id else None
+    workspace_id = ctx.workspace_id
+    if workspace_id is None:
+        return {
+            "success": False,
+            "error": "workspace_id is required but not available in context",
+        }
+
+    # Check workspace membership
+    with ctx.get_sync_db() as sync_db:
+        WorkspacePermission.require_member(workspace_id, ctx.user_id, sync_db)
+
+    ws_id = str(workspace_id)
     conv_id = args.get("conversation_id")
     query = args.get("query", "")
     limit = args.get("limit", 10)
-
-    if not ws_id:
-        return {
-            "success": False,
-            "error": "No workspace_id available. Cannot search memories.",
-        }
 
     # ── 1. Search Zep semantic memory ──
     memories = await search_semantic_memories(
@@ -109,10 +112,6 @@ EXTRACT_MEMORY_SCHEMA = {
             "type": "string",
             "description": "Search query to find relevant memories about the workspace",
         },
-        "workspace_id": {
-            "type": "string",
-            "description": "Optional workspace UUID to scope memory search",
-        },
         "conversation_id": {
             "type": "string",
             "description": "Optional conversation UUID to include episodic summary context",
@@ -132,7 +131,7 @@ EXTRACT_MEMORY_DEFINITION = {
     "input_model": ExtractMemoryInput,
     "schema": EXTRACT_MEMORY_SCHEMA,
     "description": (
-        "Retrieve stored memory about the workspace. "
+        "Retrieve stored memory about the current workspace. "
         "Searches the long-term semantic memory graph for relevant information "
         "about projects, preferences, decisions, and environment. "
         "Optionally includes episodic summary from a specific conversation. "

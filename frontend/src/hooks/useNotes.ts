@@ -228,6 +228,15 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
             // sync state from a previous workspace or old note list
             noteSyncStatesRef.current = {}
             noteLoadInFlightRef.current = new Set()
+
+            // Re-queue full content fetch for the active note.
+            // This handles the race where fetchFullNote completed before us
+            // (its content was lost) or where fetchNotes cleared the in-flight
+            // flag that the useEffect's fetchFullNote depends on.
+            if (activeNoteId) {
+                noteLoadInFlightRef.current.add(activeNoteId)
+                void fetchFullNote(activeNoteId)
+            }
         } catch (error) {
             console.error('Cannot load notes:', error)
         }
@@ -238,7 +247,12 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
             const data = await requestWithAuth<ApiNote>(`/notes/${noteId}`)
             const mapped = mapApiNoteToAppNote(data)
 
-            setRecentNotes((prev) => prev.map((n) => (n.id === noteId ? mapped : n)))
+            setRecentNotes((prev) => {
+                if (prev.some((n) => n.id === noteId)) {
+                    return prev.map((n) => (n.id === noteId ? mapped : n))
+                }
+                return [...prev, mapped]
+            })
             noteSyncStatesRef.current[noteId] = {
                 baseContent: mapped.contentMd,
                 baseVersion: mapped.version,

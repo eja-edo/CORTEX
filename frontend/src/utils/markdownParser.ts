@@ -117,20 +117,25 @@ function extractBlockquoteContent(
     if (!t) { i++; continue }
 
     if (t.type === 'paragraph_open') {
+      const lineStart = (t as any).map?.[0]
+      const lineEnd = (t as any).map?.[1]
       const inlineToken = tokens[i + 1]
       if (inlineToken?.type === 'inline') {
         blocks.push({
           id: generateBlockId(),
           type: 'paragraph',
           content: inlineToken.content ?? '',
+          meta: lineStart !== undefined ? { lineStart, lineEnd } : undefined,
         })
       }
       i += 2
       while (i < tokens.length && tokens[i]?.type !== 'paragraph_close') i++
       i++
     } else if (t.type === 'heading_open') {
+      const lineStart = (t as any).map?.[0]
+      const lineEnd = (t as any).map?.[1]
       const levelTag = t.tag ?? ''
-      const level = Number(levelTag.slice(1)) as 1 | 2 | 3
+      const level = Number(levelTag.slice(1))
       const inlineToken = tokens[i + 1]
       const content = inlineToken?.content ?? ''
       const headingType = `heading_${level}` as BlockType
@@ -138,11 +143,14 @@ function extractBlockquoteContent(
         id: generateBlockId(),
         type: headingType,
         content,
+        meta: lineStart !== undefined ? { lineStart, lineEnd } : undefined,
       })
       i += 2
       while (i < tokens.length && tokens[i]?.type !== 'heading_close') i++
       i++
     } else if (t.type === 'bullet_list_open' || t.type === 'ordered_list_open') {
+      const lineStart = (t as any).map?.[0]
+      const lineEnd = (t as any).map?.[1]
       const listType: BlockType = t.type === 'ordered_list_open' ? 'ordered_list' : 'bullet_list'
       const nested = extractListContent(tokens, i, listType)
       const listItems = nested.blocks
@@ -152,6 +160,7 @@ function extractBlockquoteContent(
           type: 'list_group',
           content: '',
           children: listItems,
+          meta: lineStart !== undefined ? { lineStart, lineEnd } : undefined,
         })
       }
       i = nested.endIdx
@@ -348,10 +357,13 @@ export function parseMarkdownToBlocks(source: string): BlockNode[] {
       lastLineEnd.value = token.map[1]
     }
 
+    const lineStart = token.map?.[0]
+    const lineEnd = token.map?.[1]
+
     switch (token.type) {
       case 'heading_open': {
-        const level = Number(token.tag.slice(1)) as 1 | 2 | 3
-        if (level < 1 || level > 3) continue
+        const level = Number(token.tag.slice(1))
+        if (level < 1 || level > 6) continue
         const inlineToken = tokens[i + 1]
         const content = inlineToken?.content ?? ''
         const headingType = `heading_${level}` as BlockType
@@ -359,6 +371,7 @@ export function parseMarkdownToBlocks(source: string): BlockNode[] {
           id: generateBlockId(),
           type: headingType,
           content,
+          meta: lineStart !== undefined ? { lineStart, lineEnd } : undefined,
         })
         i += 2
         while (i < tokens.length && tokens[i]?.type !== 'heading_close') i++
@@ -381,7 +394,7 @@ export function parseMarkdownToBlocks(source: string): BlockNode[] {
             id: generateBlockId(),
             type: 'callout',
             content: content.replace(/^\[!\w+\]\s*/, ''),
-            meta: { calloutType: calloutMatch.calloutType },
+            meta: { calloutType: calloutMatch.calloutType, lineStart, lineEnd },
           })
         } else {
           const lines = content.split(/\r?\n/)
@@ -393,7 +406,7 @@ export function parseMarkdownToBlocks(source: string): BlockNode[] {
                 id: generateBlockId(),
                 type: 'image',
                 content: line,
-                meta: { language: imgMatch[2] },
+                meta: { language: imgMatch[2], lineStart, lineEnd },
               })
             } else {
               pushPlainTextLines(blocks, line)
@@ -421,7 +434,7 @@ export function parseMarkdownToBlocks(source: string): BlockNode[] {
               id: generateBlockId(),
               type: 'image',
               content: line,
-              meta: { language: imgMatch[2] },
+              meta: { language: imgMatch[2], lineStart, lineEnd },
             })
           } else {
             pushPlainTextLines(blocks, line)
@@ -441,6 +454,7 @@ export function parseMarkdownToBlocks(source: string): BlockNode[] {
             type: 'list_group',
             content: '',
             children: listItems,
+            meta: lineStart !== undefined ? { lineStart, lineEnd } : undefined,
           })
         }
         i = listResult.endIdx
@@ -454,13 +468,14 @@ export function parseMarkdownToBlocks(source: string): BlockNode[] {
             id: generateBlockId(),
             type: 'mermaid',
             content: token.content,
+            meta: lineStart !== undefined ? { language, lineStart, lineEnd } : { language },
           })
         } else {
           blocks.push({
             id: generateBlockId(),
             type: 'code_block',
             content: token.content,
-            meta: { language },
+            meta: lineStart !== undefined ? { language, lineStart, lineEnd } : { language },
           })
         }
         break
@@ -471,6 +486,7 @@ export function parseMarkdownToBlocks(source: string): BlockNode[] {
           id: generateBlockId(),
           type: 'code_block',
           content: token.content,
+          meta: lineStart !== undefined ? { lineStart, lineEnd } : undefined,
         })
         break
       }
@@ -480,6 +496,7 @@ export function parseMarkdownToBlocks(source: string): BlockNode[] {
           id: generateBlockId(),
           type: 'divider',
           content: '',
+          meta: lineStart !== undefined ? { lineStart, lineEnd } : undefined,
         })
         break
       }
@@ -491,6 +508,7 @@ export function parseMarkdownToBlocks(source: string): BlockNode[] {
           type: 'blockquote',
           content: '',
           children: quoteBlocks.blocks.length > 0 ? quoteBlocks.blocks : undefined,
+          meta: lineStart !== undefined ? { lineStart, lineEnd } : undefined,
         })
         i = quoteBlocks.endIdx
         break
@@ -506,13 +524,14 @@ export function parseMarkdownToBlocks(source: string): BlockNode[] {
           j++
         }
         const tableLines = source.split('\n')
-        const startLine = token.map?.[0] ?? 0
-        const endLine = tokens[j - 1]?.map?.[1] ?? startLine + 1
+        const startLine = lineStart ?? 0
+        const endLine = lineEnd ?? startLine + 1
         const tableMd = tableLines.slice(startLine, endLine).join('\n')
         blocks.push({
           id: generateBlockId(),
           type: 'table',
           content: tableMd,
+          meta: lineStart !== undefined ? { lineStart, lineEnd } : undefined,
         })
         i = j - 1
         break
@@ -545,6 +564,7 @@ export function parseMarkdownToBlocks(source: string): BlockNode[] {
             id: generateBlockId(),
             type: 'toggle',
             content: summary,
+            meta: lineStart !== undefined ? { lineStart, lineEnd } : undefined,
             children: innerContent
               ? parseMarkdownToBlocks(innerContent)
               : undefined,
@@ -554,6 +574,7 @@ export function parseMarkdownToBlocks(source: string): BlockNode[] {
             id: generateBlockId(),
             type: 'html',
             content: htmlContent,
+            meta: lineStart !== undefined ? { lineStart, lineEnd } : undefined,
           })
         }
         break

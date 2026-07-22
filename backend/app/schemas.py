@@ -252,6 +252,65 @@ class NoteRevisionResponse(BaseModel):
     created_at: datetime
 
 
+class NoteProposalStatus(str, Enum):
+    PENDING = "pending"
+    APPLYING = "applying"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
+    SUPERSEDED = "superseded"
+
+
+class NoteProposalCreatorType(str, Enum):
+    USER = "USER"
+    AGENT = "AGENT"
+    WORKFLOW = "WORKFLOW"
+    SYSTEM = "SYSTEM"
+
+
+class NoteEditProposalResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    note_id: UUID
+    base_revision_id: UUID | None
+    base_version: int
+    patch: list[dict[str, Any]]
+    creator_type: str
+    creator_id: str
+    status: str
+    approved_by: UUID | None
+    approved_at: datetime | None
+    rejected_by: UUID | None
+    rejected_at: datetime | None
+    last_viewed_at: datetime | None
+    expires_at: datetime
+    conversation_id: UUID | None
+    created_at: datetime
+    updated_at: datetime
+    # Computed fields (not stored in DB)
+    old_content: str | None = None
+    new_content: str | None = None
+
+
+class NoteProposalApproveResponse(BaseModel):
+    proposal_id: UUID
+    note_id: UUID
+    status: str
+    version: int
+
+
+class NoteProposalRejectResponse(BaseModel):
+    proposal_id: UUID
+    note_id: UUID
+    status: str
+
+
+class NoteProposalListResponse(BaseModel):
+    items: list[NoteEditProposalResponse]
+    total: int
+
+
 class NoteSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

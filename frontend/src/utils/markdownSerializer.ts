@@ -41,7 +41,10 @@ function serializeBlocks(blocks: BlockNode[], baseIndent: string = ''): string {
 
       case 'heading_1':
       case 'heading_2':
-      case 'heading_3': {
+      case 'heading_3':
+      case 'heading_4':
+      case 'heading_5':
+      case 'heading_6': {
         const level = Number(block.type.split('_')[1])
         output.push(`${baseIndent}${'#'.repeat(level)} ${block.content}`)
         break

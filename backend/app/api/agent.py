@@ -136,6 +136,10 @@ async def stream_chat(
                 elif chunk.get("event") == "done":
                     result_conversation_id = chunk.get("conversation_id")
                     yield f'data: {json.dumps({"event": "done", "conversation_id": str(result_conversation_id), "usage": chunk.get("usage"), "model_used": chunk.get("model_used")})}\n\n'
+                elif chunk.get("event") == "reasoning_token" and chunk.get("text"):
+                    yield f'data: {json.dumps({"event": "reasoning_token", "text": chunk["text"]})}\n\n'
+                elif chunk.get("event") == "note_diff":
+                    yield f'data: {json.dumps({"event": "note_diff", "proposal_id": chunk.get("proposal_id"), "note_id": chunk.get("note_id"), "base_version": chunk.get("base_version")})}\n\n'
                 elif chunk.get("event") == "error":
                     yield f'data: {json.dumps({"event": "error", "message": chunk.get("message")})}\n\n'
                     

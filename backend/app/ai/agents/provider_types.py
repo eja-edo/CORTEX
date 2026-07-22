@@ -46,6 +46,7 @@ class ProviderResponse:
 @dataclass
 class ProviderStreamChunk:
     content: str | None = None
+    reasoning: str | None = None
     tool_calls: list[ToolCall] | None = None
     finish_reason: str | None = None
     usage: dict[str, Any] | None = None

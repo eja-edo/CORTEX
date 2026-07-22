@@ -8,7 +8,7 @@ interface HeadingBlockProps {
 }
 
 export function HeadingBlock({ block }: HeadingBlockProps) {
-  const level = block.type === 'heading_1' ? 1 : block.type === 'heading_2' ? 2 : 3
+  const level = Number(block.type.split('_')[1]) || 3
   const splitBlock = useEditorStore(s => s.splitBlock)
   const mergeBlockBackward = useEditorStore(s => s.mergeBlockBackward)
 

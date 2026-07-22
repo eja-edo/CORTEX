@@ -227,6 +227,7 @@ function App() {
   const [createEventInitialTimes, setCreateEventInitialTimes] = useState<{ startDate: string; endDate: string } | null>(null)
   const isWorkspaceSidebarCollapsed = false
    const [theme, _setTheme] = useState<AppTheme>(getStoredTheme)
+  const [reviewProposal, setReviewProposal] = useState<{ noteId: string; proposalId: string } | null>(null)
    const [blockEditingEnabled, _setBlockEditingEnabled] = useState<boolean>(getBlockEditingEnabled)
    const [sectionNoteOpen, setSectionNoteOpen] = useState(true)
    const [sectionRecordOpen, setSectionRecordOpen] = useState(true)
@@ -1273,6 +1274,11 @@ const processNotificationChunk = (chunk: string): void => {
                   onAskAI={() => setIsAskAIOpen(true)}
                   onSelectionChange={(text) => setPendingSelection(text)}
                   blockEditingEnabled={blockEditingEnabled}
+                  reviewProposal={reviewProposal}
+                  onReviewProposalResolved={(noteId) => {
+                    setReviewProposal(null)
+                    void notes.fetchFullNote(noteId)
+                  }}
                 />
               </div>
             ) : (
@@ -1304,6 +1310,9 @@ const processNotificationChunk = (chunk: string): void => {
                   } else if (toolName === 'knowledge') {
                     await assets.loadSidebarAssets()
                   }
+                }}
+                onNoteDiff={(noteId, proposalId) => {
+                  setReviewProposal({ noteId, proposalId })
                 }}
               />
             </div>

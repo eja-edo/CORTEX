@@ -3,6 +3,7 @@ import { Columns2, Eye, FileText } from 'lucide-react'
 import type { NoteItem } from './NoteSidebar'
 import { plainTextFromMarkdown } from '../utils/noteMarkdown'
 import { EditorSurface } from './editor/EditorSurface'
+import { DiffReviewPanel } from './DiffReviewPanel'
 import '../styles/editor.css'
 
 function noteTitleFromMd(content: string): string {
@@ -19,6 +20,8 @@ interface WorkspaceNoteEditorProps {
     onAskAI?: () => void
     onSelectionChange?: (selectedText: string) => void
     blockEditingEnabled?: boolean
+    reviewProposal?: { noteId: string; proposalId: string } | null
+    onReviewProposalResolved?: (noteId: string) => void
 }
 
 export function WorkspaceNoteEditor({
@@ -26,6 +29,8 @@ export function WorkspaceNoteEditor({
     onChange,
     onTitleChange,
     blockEditingEnabled = false,
+    reviewProposal,
+    onReviewProposalResolved,
 }: WorkspaceNoteEditorProps) {
     const [localMd, setLocalMd] = useState(note.contentMd)
     const [debouncedMd, setDebouncedMd] = useState(note.contentMd)
@@ -98,7 +103,8 @@ export function WorkspaceNoteEditor({
         }
     }, [note.id, note.contentMd, note.title, onChange])
 
-    // Sync scroll between textarea and preview in split mode
+    // Sync scroll between textarea and preview in split mode.
+    // Ratio-based sync throttled via rAF to avoid jank.
     useEffect(() => {
         if (viewMode !== 'split') return
 
@@ -106,20 +112,36 @@ export function WorkspaceNoteEditor({
         const preview = previewRef.current
         if (!textarea || !preview) return
 
-        const onScroll = (source: 'left' | 'right') => {
+        let rafL = 0
+        let rafR = 0
+
+        const syncL = () => {
+            rafL = 0
             if (syncingScroll.current) return
-            syncingScroll.current = source
-
-            const el = source === 'left' ? textarea : preview
-            const target = source === 'left' ? preview : textarea
-            const ratio = el.scrollTop / (el.scrollHeight - el.clientHeight)
-            target.scrollTop = ratio * (target.scrollHeight - target.clientHeight)
-
+            syncingScroll.current = 'left'
+            const ratio = textarea.scrollTop / (textarea.scrollHeight - textarea.clientHeight)
+            preview.scrollTop = ratio * (preview.scrollHeight - preview.clientHeight)
             syncingScroll.current = null
         }
 
-        const onScrollLeft = () => onScroll('left')
-        const onScrollRight = () => onScroll('right')
+        const syncR = () => {
+            rafR = 0
+            if (syncingScroll.current) return
+            syncingScroll.current = 'right'
+            const ratio = preview.scrollTop / (preview.scrollHeight - preview.clientHeight)
+            textarea.scrollTop = ratio * (textarea.scrollHeight - textarea.clientHeight)
+            syncingScroll.current = null
+        }
+
+        const onScrollLeft = () => {
+            if (rafL) return
+            rafL = requestAnimationFrame(syncL)
+        }
+
+        const onScrollRight = () => {
+            if (rafR) return
+            rafR = requestAnimationFrame(syncR)
+        }
 
         textarea.addEventListener('scroll', onScrollLeft, { passive: true })
         preview.addEventListener('scroll', onScrollRight, { passive: true })
@@ -127,6 +149,8 @@ export function WorkspaceNoteEditor({
         return () => {
             textarea.removeEventListener('scroll', onScrollLeft)
             preview.removeEventListener('scroll', onScrollRight)
+            if (rafL) cancelAnimationFrame(rafL)
+            if (rafR) cancelAnimationFrame(rafR)
         }
     }, [viewMode])
 
@@ -255,6 +279,31 @@ export function WorkspaceNoteEditor({
             e.currentTarget.blur()
         }
     }, [])
+
+    const handleReviewApproved = useCallback((noteId: string) => {
+        if (onReviewProposalResolved) {
+            onReviewProposalResolved(noteId)
+        }
+    }, [onReviewProposalResolved])
+
+    const handleReviewClose = useCallback(() => {
+        if (onReviewProposalResolved) {
+            onReviewProposalResolved(note.id)
+        }
+    }, [onReviewProposalResolved, note.id])
+
+    if (reviewProposal && reviewProposal.noteId === note.id) {
+        return (
+            <section className="wne-root">
+                <DiffReviewPanel
+                    noteId={note.id}
+                    proposalId={reviewProposal.proposalId}
+                    onClose={handleReviewClose}
+                    onApproved={handleReviewApproved}
+                />
+            </section>
+        )
+    }
 
     return (
         <section className="wne-root">

@@ -144,6 +144,16 @@ Do not wait for approval on low-risk plans.
   * do not retry automatically
   * explain the limitation clearly
 
+* If a tool returns `"success": false` with an error message:
+
+  * accept the error — do not retry the same call
+  * report the error to the user clearly
+  * do not fabricate or hallucinate the result
+
+* Tool results include a `source_id` (e.g. `S1`, `S2`) for attribution.
+  When citing information from a specific tool result, reference it as `[S1]`, `[S2]`, etc.
+  This keeps citations accurate and token-efficient.
+
 Available tools:
 
 * search_notes

@@ -9,13 +9,12 @@ interface TableBlockProps {
 
 function parseTable(md: string): string[][] {
   const lines = md.split('\n').filter(l => l.trim() && !l.trim().match(/^[-| ]+$/))
-  return lines.map(line =>
-    line
-      .split('|')
-      .map(c => c.trim())
-      .filter((_, i, arr) => i > 0 || arr.length > 1)
-      .filter((_, i, arr) => i < arr.length - 1),
-  )
+  return lines.map(line => {
+    const cells = line.split('|').map(c => c.trim())
+    if (cells.length > 0 && cells[0] === '') cells.shift()
+    if (cells.length > 0 && cells[cells.length - 1] === '') cells.pop()
+    return cells
+  })
 }
 
 export function TableBlock({ block }: TableBlockProps) {
@@ -89,17 +88,19 @@ export function TableBlock({ block }: TableBlockProps) {
           ))}
         </tbody>
       </table>
-      <div
-        ref={ref}
-        className={`block-editable block-table-source ${isFocused ? 'block-editable--focused' : ''}`}
-        contentEditable={readOnly ? "false" : "plaintext-only"}
-        suppressContentEditableWarning
-        onInput={handleInput}
-        onFocus={() => setFocusedBlock(block.id)}
-        onBlur={() => setFocusedBlock(null)}
-        onPaste={handlePaste}
-        data-placeholder="| col1 | col2 |"
-      />
+      {isFocused && !readOnly && (
+        <div
+          ref={ref}
+          className="block-editable block-table-source block-editable--focused"
+          contentEditable="plaintext-only"
+          suppressContentEditableWarning
+          onInput={handleInput}
+          onFocus={() => setFocusedBlock(block.id)}
+          onBlur={() => setFocusedBlock(null)}
+          onPaste={handlePaste}
+          data-placeholder="| col1 | col2 |"
+        />
+      )}
     </div>
   )
 }

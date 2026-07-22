@@ -65,7 +65,6 @@ class OpenAIProvider(LLMProvider):
         except Exception as exc:
             logger.error(f"OpenAIProvider.generate error on {model}: {exc}")
             raise
-        print("OpenAIProvider.generate response:", response)
         return self._openai_response_to_provider(response)
 
     async def generate_stream(
@@ -112,6 +111,7 @@ class OpenAIProvider(LLMProvider):
 
                 if delta:
                     content = getattr(delta, "content", None)
+                    reasoning = getattr(delta, "reasoning_content", None)
 
                     openai_tool_calls = getattr(delta, "tool_calls", None) or []
                     for tc in openai_tool_calls:
@@ -151,12 +151,20 @@ class OpenAIProvider(LLMProvider):
                     accumulated_tool_calls.clear()
                     yield ProviderStreamChunk(
                         content=content,
+                        reasoning=reasoning,
                         tool_calls=tool_calls if tool_calls else None,
                         finish_reason=finish_reason,
                         usage=accumulated_usage,
                     )
-                elif content:
-                    yield ProviderStreamChunk(content=content)
+                    accumulated_usage = None
+                else:
+                    if content:
+                        yield ProviderStreamChunk(content=content)
+                    if reasoning:
+                        yield ProviderStreamChunk(reasoning=reasoning)
+
+            if accumulated_usage:
+                yield ProviderStreamChunk(usage=accumulated_usage)
         except Exception as exc:
             logger.error(f"OpenAIProvider.generate_stream error on {model}: {exc}")
             raise
@@ -176,17 +184,10 @@ class OpenAIProvider(LLMProvider):
 
         for msg in messages:
             if msg.role == "user":
-                if msg.tool_result:
-                    result.append({
-                        "role": "tool",
-                        "tool_call_id": msg.tool_result.tool_call_id,
-                        "content": json.dumps(msg.tool_result.content, default=str),
-                    })
-                else:
-                    result.append({
-                        "role": "user",
-                        "content": msg.content or "",
-                    })
+                result.append({
+                    "role": "user",
+                    "content": msg.content or "",
+                })
             elif msg.role == "assistant":
                 entry: dict = {"role": "assistant"}
                 if msg.content:

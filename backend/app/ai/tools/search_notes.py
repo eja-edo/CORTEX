@@ -2,13 +2,13 @@
 
 import logging
 import time
-from typing import Optional
 from uuid import UUID
 from pydantic import BaseModel, Field
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from app.ai.agents.tool_context import ToolContext
 from app.ai.agents.semantic_search import semantic_search_notes
+from app.services.workspace_permission import WorkspacePermission
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 class SearchNotesInput(BaseModel):
     """Validation model for search_notes tool."""
     query: str = Field(..., min_length=1, max_length=1000, description="Search query")
-    workspace_id: Optional[str] = Field(None, description="Optional workspace ID to scope search")
     limit: int = Field(default=10, ge=1, le=50, description="Max results")
 
 
@@ -36,14 +35,14 @@ async def search_notes_handler(args: dict, ctx: ToolContext) -> dict:
     """
     query = args["query"]
     limit = args.get("limit", 10)
-    workspace_id_str = args.get("workspace_id")
-    
-    workspace_id = None
-    if workspace_id_str:
-        try:
-            workspace_id = UUID(workspace_id_str)
-        except ValueError as exc:
-            raise ValueError(f"Invalid workspace_id format: {exc}")
+
+    workspace_id = ctx.workspace_id
+    if workspace_id is None:
+        raise ValueError("workspace_id is required but not available in context")
+
+    # Check workspace membership
+    with ctx.get_sync_db() as sync_db:
+        WorkspacePermission.require_member(workspace_id, ctx.user_id, sync_db)
 
     try:
         start_time = time.time()
@@ -92,10 +91,6 @@ SEARCH_NOTES_SCHEMA = {
             "type": "string",
             "description": "Search query - can be keywords or natural language",
         },
-        "workspace_id": {
-            "type": "string",
-            "description": "Optional UUID of workspace to scope search to",
-        },
         "limit": {
             "type": "integer",
             "description": "Maximum number of notes to return",
@@ -109,5 +104,5 @@ SEARCH_NOTES_DEFINITION = {
     "handler": search_notes_handler,
     "input_model": SearchNotesInput,
     "schema": SEARCH_NOTES_SCHEMA,
-    "description": "Search user's notes by keyword. Returns matching notes with content preview.",
+    "description": "Search notes in the current workspace by keyword. Returns matching notes with content preview.",
 }

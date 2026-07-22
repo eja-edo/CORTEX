@@ -156,5 +156,10 @@ class Settings:
     MEMORY_EXTRACTION_ENABLED: bool = os.getenv("MEMORY_EXTRACTION_ENABLED", "true").lower() == "true"
     OCR_SERVICE_MODE: str = os.getenv("OCR_SERVICE_MODE", "EXTERNAL")
 
+    # ── Agent feature flags ──────────────────────────────────────────────────
+    AGENT_PARALLEL_TOOL_EXECUTION: bool = os.getenv("AGENT_PARALLEL_TOOL_EXECUTION", "true").lower() == "true"
+    AGENT_TOOL_CALL_COUNT_SCOPE: str = os.getenv("AGENT_TOOL_CALL_COUNT_SCOPE", "turn")
+    AGENT_TOKEN_BUDGET_HISTORY: bool = os.getenv("AGENT_TOKEN_BUDGET_HISTORY", "false").lower() == "true"
+
 
 settings = Settings()

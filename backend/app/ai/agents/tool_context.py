@@ -53,11 +53,16 @@ class ToolContext:
         """
         Async context manager for database access.
         Uses the existing async session.
+        Rolls back the session if an exception occurs to prevent transaction corruption.
         """
         try:
             yield self._async_db
         except Exception as exc:
             logger.error(f"Error in async_db context: {exc}", exc_info=True)
+            try:
+                await self._async_db.rollback()
+            except Exception as rb_exc:
+                logger.warning(f"Rollback after error failed (non-fatal): {rb_exc}")
             raise
 
     def __enter__(self):

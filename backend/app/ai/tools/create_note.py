@@ -18,7 +18,6 @@ logger = get_logger(__name__)
 class CreateNoteInput(BaseModel):
     """Validation model for create_note tool."""
     content: str = Field(..., min_length=1, max_length=50000, description="Note content (markdown)")
-    workspace_id: str = Field(..., description="Workspace UUID where to create note")
     style_color: str = Field(
         default="yellow",
         pattern="^(yellow|blue|green|pink|purple)$",
@@ -35,13 +34,11 @@ async def create_note_handler(args: dict, ctx: ToolContext) -> dict:
     - user_id comes from ctx (never from args)
     """
     content = args["content"]
-    workspace_id_str = args["workspace_id"]
     style_color = args.get("style_color", "yellow")
 
-    try:
-        workspace_id = UUID(workspace_id_str)
-    except ValueError:
-        raise ValueError(f"Invalid workspace_id format: {workspace_id_str}")
+    workspace_id = ctx.workspace_id
+    if workspace_id is None:
+        raise ValueError("workspace_id is required but not available in context")
 
     # Check workspace permission (sync check)
     with ctx.get_sync_db() as sync_db:
@@ -96,10 +93,6 @@ CREATE_NOTE_SCHEMA = {
             "type": "string",
             "description": "Note content in markdown format",
         },
-        "workspace_id": {
-            "type": "string",
-            "description": "UUID of the workspace to create note in",
-        },
         "style_color": {
             "type": "string",
             "enum": ["yellow", "blue", "green", "pink", "purple"],
@@ -107,7 +100,7 @@ CREATE_NOTE_SCHEMA = {
             "description": "Color of the note",
         },
     },
-    "required": ["content", "workspace_id"],
+    "required": ["content"],
 }
 
 CREATE_NOTE_DEFINITION = {
@@ -115,5 +108,5 @@ CREATE_NOTE_DEFINITION = {
     "handler": create_note_handler,
     "input_model": CreateNoteInput,
     "schema": CREATE_NOTE_SCHEMA,
-    "description": "Create a new note. User must be editor in the workspace.",
+    "description": "Create a new note in the current workspace.",
 }

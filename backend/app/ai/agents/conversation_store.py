@@ -7,6 +7,7 @@ from sqlalchemy import select, desc, and_, delete, func
 from sqlalchemy.orm import Session
 
 from app.utils.logger import get_logger
+from app.utils.tokens import estimate_message_tokens
 
 from app.models import AgentConversation, AgentMessage, User
 
@@ -90,6 +91,67 @@ class ConversationStore:
         # Reverse so the list is oldest→newest (correct order for LLM context)
         return list(reversed(messages))
 
+    async def get_recent_messages_by_token_budget(
+        self,
+        conversation_id: UUID,
+        max_tokens: int = 8000,
+        fetch_limit: int = 50,
+    ) -> list[AgentMessage]:
+        """
+        Load the most recent messages that fit within a token budget.
+        Fetches fetch_limit newest messages, keeps newest first within
+        budget, returns in chronological order (oldest -> newest).
+
+        Falls back to get_recent_messages(limit=10) if token estimation fails.
+        """
+        try:
+            stmt = (
+                select(AgentMessage)
+                .where(AgentMessage.conversation_id == conversation_id)
+                .order_by(AgentMessage.created_at.desc())
+                .limit(fetch_limit)
+            )
+            result = await self.db.execute(stmt)
+            all_messages = list(result.scalars().all())
+            if not all_messages:
+                return []
+
+            # Iterate newest -> oldest, keep newest within budget
+            total_tokens = 0
+            keep: list[AgentMessage] = []
+            for msg in all_messages:
+                tokens = estimate_message_tokens(
+                    role=msg.role,
+                    content=getattr(msg, 'content', None),
+                    tool_name=getattr(msg, 'tool_name', None),
+                    tool_output=getattr(msg, 'tool_output', None),
+                )
+                if total_tokens + tokens > max_tokens:
+                    if not keep:
+                        # Edge case: newest message alone exceeds budget
+                        # Keep at least this one to avoid empty history
+                        logger.warning(
+                            f"Newest message exceeds max_tokens ({tokens} > {max_tokens}) "
+                            f"for conversation {conversation_id} — keeping it anyway"
+                        )
+                        keep.append(msg)
+                        total_tokens += tokens
+                    break
+                total_tokens += tokens
+                keep.append(msg)
+
+            # Reverse to oldest -> newest (expected by _build_history_contents)
+            keep.reverse()
+
+            logger.info(
+                f"Token-budget history: kept {len(keep)}/{len(all_messages)} messages "
+                f"({total_tokens}/{max_tokens} tokens) for conversation {conversation_id}"
+            )
+            return keep
+        except Exception as exc:
+            logger.warning(f"Token-budget history failed, falling back to message-count limit: {exc}")
+            return await self.get_recent_messages(conversation_id, limit=10)
+
     async def save_message(
         self,
         conversation_id: UUID,
@@ -98,6 +160,8 @@ class ConversationStore:
         tool_name: str | None = None,
         tool_input: dict | None = None,
         tool_output: dict | None = None,
+        tool_call_id: str | None = None,
+        turn_id: UUID | None = None,
         token_count: int | None = None,
         context: dict | None = None,
     ) -> AgentMessage | None:
@@ -157,6 +221,8 @@ class ConversationStore:
             tool_name=tool_name,
             tool_input=tool_input,
             tool_output=tool_output,
+            tool_call_id=tool_call_id,
+            turn_id=turn_id,
             token_count=token_count,
             created_at=datetime.utcnow(),
         )

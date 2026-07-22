@@ -1,12 +1,12 @@
-"""Update note tool that accepts full content and builds a patch server-side."""
+"""Update note tool that creates a reviewable proposal instead of applying directly."""
 
 from uuid import UUID
 from pydantic import BaseModel, Field
 
-from app.schemas import MAX_NOTE_CONTENT_LENGTH, NotePatchRequest
-from app.ai.agents.action_snapshot_store import ActionSnapshot, get_snapshot_store
+from app.schemas import MAX_NOTE_CONTENT_LENGTH
 from app.ai.agents.tool_context import ToolContext
 from app.services.notes import NoteService
+from app.services.proposal_service import ProposalService
 from app.utils.logger import get_logger
 from app.utils.note_delta import build_text_patch
 
@@ -23,7 +23,8 @@ class UpdateNoteInput(BaseModel):
 
 async def update_note_handler(args: dict, ctx: ToolContext) -> dict:
     """
-    Update a note by sending full content; server computes patch.
+    Update a note by creating a proposal. The proposal must be approved
+    before changes are applied to the note.
 
     Security:
     - Note must belong to ctx.user_id
@@ -37,61 +38,54 @@ async def update_note_handler(args: dict, ctx: ToolContext) -> dict:
 
     try:
         async with ctx.async_db() as async_db:
-            service = NoteService(async_db)
-            current = await service.get_note(note_id=note_id, user_id=ctx.user_id)
+            note_service = NoteService(async_db)
+            proposal_service = ProposalService(async_db)
+
+            current = await note_service.get_note(note_id=note_id, user_id=ctx.user_id)
             if current is None:
                 raise ValueError("Note not found")
 
-            current_content = await service.materialize_note_content(current)
+            current_content = await note_service.materialize_note_content(current)
             if current_content == content:
                 return {
                     "id": str(current.id),
                     "version": current.version,
+                    "proposal_id": None,
                     "updated": False,
                     "success": True,
                 }
-
-            # --- CAPTURE PREV STATE ---
-            prev_content = current_content
-            prev_version = current.version
-            # --------------------------
 
             patch = build_text_patch(current_content, content)
             if not patch:
                 return {
                     "id": str(current.id),
                     "version": current.version,
+                    "proposal_id": None,
                     "updated": False,
                     "success": True,
                 }
 
-            payload = NotePatchRequest(version=current.version, patch=patch)
-            updated = await service.patch_note(note_id=note_id, user_id=ctx.user_id, payload=payload)
-            if updated is None:
-                raise ValueError("Version conflict, please retry")
-
-            # --- REVERT SNAPSHOT ---
-            snapshot = ActionSnapshot(
-                tool_name="update_note",
-                user_id=str(ctx.user_id),
-                conversation_id=str(getattr(ctx, "conversation_id", "")),
-                snapshot={
-                    "op": "update_note",
-                    "note_id": str(note_id),
-                    "prev_content": prev_content,
-                    "prev_version": prev_version,
-                },
+            # Create a proposal instead of applying directly
+            proposal = await proposal_service.create_proposal(
+                note=current,
+                user_id=ctx.user_id,
+                old_content=current_content,
+                new_content=content,
+                patch=patch,
+                creator_type="AGENT",
+                creator_id=f"agent:{ctx.user_id}",
+                conversation_id=getattr(ctx, "conversation_id", None),
             )
-            action_id = await get_snapshot_store().save(snapshot)
-            # -----------------------
 
+            logger.info(
+                f"update_note: created proposal {proposal.id} for note {current.id} "
+                f"(version={current.version})"
+            )
             return {
-                "id": str(updated.id),
-                "version": updated.version,
-                "updated_at": updated.updated_at.isoformat() if updated.updated_at else None,
-                "updated": True,
-                "action_id": action_id,
-                "revert_hint": "Bạn có thể hoàn tác cập nhật này bằng action_id trên.",
+                "id": str(current.id),
+                "version": current.version,
+                "proposal_id": str(proposal.id),
+                "updated": False,
                 "success": True,
             }
 
@@ -120,5 +114,5 @@ UPDATE_NOTE_DEFINITION = {
     "handler": update_note_handler,
     "input_model": UpdateNoteInput,
     "schema": UPDATE_NOTE_SCHEMA,
-    "description": "Update a note by providing full markdown content; server computes patch and saves.",
+    "description": "Update a note by providing full markdown content; server computes patch and creates a reviewable proposal (approval required before changes take effect).",
 }
