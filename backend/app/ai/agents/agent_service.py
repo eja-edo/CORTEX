@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import User
@@ -269,6 +269,71 @@ def _trim_incomplete_tail(messages: list[Message], label: str) -> None:
         logger.info(
             f"Trimmed {removed} trailing history item(s) before appending current user ({label})"
         )
+
+
+async def _maybe_trigger_memory_extraction(
+    summarizer,
+    conv,
+    db: AsyncSession,
+) -> None:
+    """Trigger memory extraction when conversation crosses message-count threshold.
+
+    Wrapped in a Postgres transaction-scoped advisory lock keyed on
+    conv.id so concurrent requests on the same conversation cannot both
+    run `summarize_conversation` simultaneously. The first request that
+    acquires the lock does the extraction; others return immediately
+    after logging.
+
+    Note: does NOT address the stale-conv.message_count read issue —
+    that is fixed in `increment_message_count` (Issue 5).
+
+    Args:
+        summarizer: ConversationSummarizer instance or None (no-op).
+        conv: AgentConversation loaded from DB; the latest message_count
+              is read *from the in-memory conv* by the caller's threshold
+              check before invoking this helper.
+        db: AsyncSession — the lock is released when the surrounding
+            transaction commits or rolls back automatically.
+    """
+    if summarizer is None:
+        return
+    threshold = summarizer.MESSAGE_THRESHOLD
+    if conv.message_count < threshold or conv.message_count % threshold >= 2:
+        return
+
+    # Hash UUID → bigint for pg_try_advisory_xact_lock(bigint).
+    lock_key = conv.id.hex if isinstance(conv.id, UUID) else str(conv.id).replace("-", "")
+    lock_stmt = text(
+        "SELECT pg_try_advisory_xact_lock(hashtextextended(:k, 0))"
+    ).bindparams(k=lock_key)
+
+    try:
+        result = await db.execute(lock_stmt)
+        acquired = result.scalar()
+    except Exception as exc:
+        logger.warning(f"Advisory lock attempt failed for conv {conv.id}: {exc}")
+        return
+
+    if not acquired:
+        logger.info(
+            f"⏭ Skipping memory extraction — another request holds the "
+            f"advisory lock for conv {conv.id} (message_count={conv.message_count})"
+        )
+        return
+
+    logger.info(
+        f"💾 Triggering memory extraction | conversation={conv.id} | "
+        f"messages={conv.message_count} (lock acquired)"
+    )
+    try:
+        summary_result = await summarizer.summarize_conversation(conv.id)
+        if summary_result.get("success"):
+            logger.info(f"✅ Memory extraction complete | {summary_result}")
+        else:
+            logger.warning(f"⚠️ Memory extraction failed | {summary_result}")
+    except Exception as exc:
+        logger.warning(f"Error in memory extraction: {exc}")
+
 
 
 def _message_full_text(msg) -> str:
@@ -872,15 +937,7 @@ Return ONLY the title, no quotes or explanation."""
                 and conv.message_count >= summarizer.MESSAGE_THRESHOLD
                 and conv.message_count % summarizer.MESSAGE_THRESHOLD < 2
             ):
-                logger.info(f"💾 Triggering memory extraction | conversation={conv.id} | messages={conv.message_count}")
-                try:
-                    summary_result = await summarizer.summarize_conversation(conv.id)
-                    if summary_result.get("success"):
-                        logger.info(f"✅ Memory extraction complete | {summary_result}")
-                    else:
-                        logger.warning(f"⚠️ Memory extraction failed | {summary_result}")
-                except Exception as exc:
-                    logger.warning(f"Error in memory extraction: {exc}")
+                await _maybe_trigger_memory_extraction(summarizer, conv, self.db)
 
             await self.db.commit()
 
@@ -1566,17 +1623,7 @@ Return ONLY the title, no quotes or explanation."""
                 and conv.message_count >= summarizer.MESSAGE_THRESHOLD
                 and conv.message_count % summarizer.MESSAGE_THRESHOLD < 2
             ):
-                logger.info(
-                    f"💾 Triggering memory extraction (streaming) | conversation={conv.id} | messages={conv.message_count}"
-                )
-                try:
-                    summary_result = await summarizer.summarize_conversation(conv.id)
-                    if summary_result.get("success"):
-                        logger.info(f"✅ Memory extraction complete (streaming) | {summary_result}")
-                    else:
-                        logger.warning(f"⚠️ Memory extraction failed (streaming) | {summary_result}")
-                except Exception as exc:
-                    logger.warning(f"Error in memory extraction (streaming): {exc}")
+                await _maybe_trigger_memory_extraction(summarizer, conv, self.db)
 
             await self.db.commit()
 
