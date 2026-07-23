@@ -371,6 +371,14 @@ def _message_full_text(msg) -> str:
     return _inject_context_into_text(content, ctx)
 
 
+def _get_message_created_at(record) -> datetime | None:
+    """Safely extract `created_at` from a DB record, returning None on failure."""
+    try:
+        return getattr(record, "created_at", None)
+    except Exception:
+        return None
+
+
 def _build_history_contents(records: list) -> list[Message]:
     records = list(records)
     while records and records[0].role != "user":
@@ -386,6 +394,7 @@ def _build_history_contents(records: list) -> list[Message]:
     while i < n:
         record = records[i]
         role = getattr(record, "role", None)
+        ts = _get_message_created_at(record)
 
         if role == "user":
             user_text = _message_full_text(record)
@@ -396,7 +405,7 @@ def _build_history_contents(records: list) -> list[Message]:
                 logger.info(f"Skipping out-of-order user message (expected {expected_role})")
                 i += 1
                 continue
-            messages.append(Message(role="user", content=user_text))
+            messages.append(Message(role="user", content=user_text, created_at=ts))
             expected_role = "assistant"
             i += 1
 
@@ -410,7 +419,7 @@ def _build_history_contents(records: list) -> list[Message]:
                 logger.info(f"Skipping empty assistant message (content is {content!r})")
                 i += 1
                 continue
-            messages.append(Message(role="assistant", content=content))
+            messages.append(Message(role="assistant", content=content, created_at=ts))
             expected_role = "user"
             i += 1
 
@@ -448,9 +457,9 @@ def _build_history_contents(records: list) -> list[Message]:
                 )
 
             if tool_calls:
-                messages.append(Message(role="assistant", tool_calls=tool_calls))
+                messages.append(Message(role="assistant", tool_calls=tool_calls, created_at=ts))
                 for tr in tool_results:
-                    messages.append(Message(role="tool", tool_result=tr))
+                    messages.append(Message(role="tool", tool_result=tr, created_at=ts))
                 expected_role = "assistant"
 
             i = j
@@ -518,7 +527,7 @@ class AgentService:
 Return ONLY the title, no quotes or explanation."""
 
             messages = [
-                Message(role="user", content=prompt),
+                Message(role="user", content=prompt, created_at=datetime.utcnow()),
             ]
 
             gen_config = GenerationConfig(
@@ -685,7 +694,7 @@ Return ONLY the title, no quotes or explanation."""
             messages = _build_history_contents(recent_messages)
             _trim_incomplete_tail(messages, "handle")
             current_text = _inject_context_into_text(message, context)
-            messages.append(Message(role="user", content=current_text))
+            messages.append(Message(role="user", content=current_text, created_at=datetime.utcnow()))
             logger.info(
                 f"Messages seeded with {len(messages)} items "
                 f"({len(recent_messages)} history + 1 current)"
@@ -700,7 +709,6 @@ Return ONLY the title, no quotes or explanation."""
             _log_contents_structure(messages, "Valid messages for turn 1")
 
             total_usage: dict[str, int] = {
-                "prompt_tokens": 0,
                 "completion_tokens": 0,
                 "total_tokens": 0,
                 "estimated_system_prompt_tokens": 0,
@@ -781,6 +789,7 @@ Return ONLY the title, no quotes or explanation."""
                             ToolCall(id=tc.id, name=tc.name, args=tc.args)
                             for tc in tool_calls
                         ],
+                        created_at=datetime.utcnow(),
                     )
                 )
 
@@ -876,6 +885,7 @@ Return ONLY the title, no quotes or explanation."""
                                     name=tool_name,
                                     content=result,
                                 ),
+                                created_at=datetime.utcnow(),
                             )
                         )
 
@@ -1156,7 +1166,7 @@ Return ONLY the title, no quotes or explanation."""
             messages = _build_history_contents(recent_messages)
             _trim_incomplete_tail(messages, "streaming")
             current_text = _inject_context_into_text(message, context)
-            messages.append(Message(role="user", content=current_text))
+            messages.append(Message(role="user", content=current_text, created_at=datetime.utcnow()))
             logger.info(
                 f"Streaming messages seeded with {len(messages)} items "
                 f"({len(recent_messages)} history + 1 current)"
@@ -1307,10 +1317,11 @@ Return ONLY the title, no quotes or explanation."""
                                 ToolCall(id=tc.id, name=tc.name, args=tc.args)
                                 for tc in tool_calls
                             ],
+                            created_at=datetime.utcnow(),
                         )
                     )
                 elif turn_text:
-                    messages.append(Message(role="assistant", content=turn_text))
+                    messages.append(Message(role="assistant", content=turn_text, created_at=datetime.utcnow()))
 
                 is_valid, validation_msg = _validate_contents_ordering(messages)
                 if not is_valid:
@@ -1461,6 +1472,7 @@ Return ONLY the title, no quotes or explanation."""
                                         name=tool_name,
                                         content=result,
                                     ),
+                                    created_at=datetime.utcnow(),
                                 )
                             )
 
@@ -1527,6 +1539,7 @@ Return ONLY the title, no quotes or explanation."""
                                         name=tool_name,
                                         content=result,
                                     ),
+                                    created_at=datetime.utcnow(),
                                 )
                             )
                 if tool_result_messages:

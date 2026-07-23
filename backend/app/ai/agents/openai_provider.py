@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import AsyncIterator
 
 from openai import AsyncOpenAI
@@ -169,6 +170,15 @@ class OpenAIProvider(LLMProvider):
             logger.error(f"OpenAIProvider.generate_stream error on {model}: {exc}")
             raise
 
+    @staticmethod
+    def _format_content_with_ts(content: str | None, created_at: datetime | None) -> str:
+        """Prepend a human-readable timestamp to message content for LLM context."""
+        raw = content or ""
+        if created_at is None:
+            return raw
+        ts = created_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+        return f"[{ts}] {raw}"
+
     def _messages_to_openai(
         self,
         messages: list[Message],
@@ -186,12 +196,12 @@ class OpenAIProvider(LLMProvider):
             if msg.role == "user":
                 result.append({
                     "role": "user",
-                    "content": msg.content or "",
+                    "content": self._format_content_with_ts(msg.content, msg.created_at),
                 })
             elif msg.role == "assistant":
                 entry: dict = {"role": "assistant"}
                 if msg.content:
-                    entry["content"] = msg.content
+                    entry["content"] = self._format_content_with_ts(msg.content, msg.created_at)
                 else:
                     entry["content"] = None
                 if msg.tool_calls:
