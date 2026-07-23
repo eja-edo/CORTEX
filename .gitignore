@@ -57,3 +57,5 @@ lab/**
 logs/
 
 tests/
+
+test_artifacts/
