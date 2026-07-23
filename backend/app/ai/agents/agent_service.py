@@ -577,6 +577,7 @@ Return ONLY the title, no quotes or explanation."""
         Process a user message with tool calling support and memory management.
         """
         try:
+            generated_title = None
             if conversation_id:
                 conv = await self.store.get_conversation_by_id(conversation_id, self.user.id)
                 if not conv:
@@ -593,6 +594,15 @@ Return ONLY the title, no quotes or explanation."""
                     conversation_id=None,
                     workspace_id=workspace_id,
                 )
+                # Generate title for new conversation (Issue 6)
+                try:
+                    new_title = await self._generate_conversation_title(message)
+                    await self.store.update_conversation_title(conv.id, new_title)
+                    conv.title = new_title
+                    generated_title = new_title
+                    logger.info(f"✅ Generated title for conversation {conv.id}: {new_title}")
+                except Exception as exc:
+                    logger.warning(f"⚠️ Title generation failed (non-fatal): {exc}")
         except Exception as exc:
             logger.error(f"Error getting conversation: {exc}", exc_info=True)
             raise
@@ -966,10 +976,13 @@ Return ONLY the title, no quotes or explanation."""
                 f"conversation_id={conv.id}"
             )
 
-            return {
+            result = {
                 "conversation_id": str(conv.id),
                 "reply": reply_text or "No response generated.",
             }
+            if generated_title:
+                result["title"] = generated_title
+            return result
 
         except Exception as exc:
             logger.error(f"❌ Error in agent loop: {exc}", exc_info=True)
