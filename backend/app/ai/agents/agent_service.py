@@ -591,7 +591,6 @@ Return ONLY the title, no quotes or explanation."""
             else:
                 conv = await self.store.get_or_create_conversation(
                     user_id=self.user.id,
-                    conversation_id=None,
                     workspace_id=workspace_id,
                 )
                 # Generate title for new conversation (Issue 6)
@@ -1052,7 +1051,6 @@ Return ONLY the title, no quotes or explanation."""
             else:
                 conv = await self.store.get_or_create_conversation(
                     user_id=user_id,
-                    conversation_id=None,
                     workspace_id=workspace_id,
                 )
                 

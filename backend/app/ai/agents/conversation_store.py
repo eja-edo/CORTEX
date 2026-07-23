@@ -24,27 +24,11 @@ class ConversationStore:
     async def get_or_create_conversation(
         self,
         user_id: UUID,
-        conversation_id: UUID | None = None,
         workspace_id: UUID | None = None,
         title: str | None = None,
     ) -> AgentConversation:
-        """Get existing conversation or create new one."""
+        """Create a new conversation."""
 
-        # If conversation_id provided, load it
-        if conversation_id:
-            stmt = select(AgentConversation).where(
-                and_(
-                    AgentConversation.id == conversation_id,
-                    AgentConversation.user_id == user_id
-                )
-            )
-            result = await self.db.execute(stmt)
-            conv = result.scalar_one_or_none()
-            if conv:
-                return conv
-            # If conversation not found, treat as new conversation
-
-        # Create new conversation
         new_conv = AgentConversation(
             user_id=user_id,
             workspace_id=workspace_id,
