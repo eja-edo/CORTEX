@@ -131,10 +131,25 @@ EXTRACT_MEMORY_DEFINITION = {
     "input_model": ExtractMemoryInput,
     "schema": EXTRACT_MEMORY_SCHEMA,
     "description": (
-        "Retrieve stored memory about the current workspace. "
-        "Searches the long-term semantic memory graph for relevant information "
+        "Retrieve stored long-term memory about the current workspace. "
+        "Searches the semantic memory graph for relevant information "
         "about projects, preferences, decisions, and environment. "
         "Optionally includes episodic summary from a specific conversation. "
-        "Use this when you need to recall past decisions, preferences, or context."
+        "\n\n"
+        "MUST be called when the user:\n"
+        "- references a prior conversation, decision, or preference with relative "
+        "time phrases (e.g. 'last time', 'yesterday', 'as I mentioned', 'as we discussed', "
+        "'như đã nói', 'lần trước', 'hôm trước', 'tuần trước')\n"
+        "- asks about a preference/setting they may have stated before that is not "
+        "present in the current message\n"
+        "- references an entity (project, note, task) without re-explaining what it "
+        "is, expecting you to remember it\n"
+        "- asks for personalized suggestions that depend on 'habits' or 'preferences' "
+        "you may already know about them\n"
+        "\n"
+        "The recent-message window only covers the last 10 messages and may NOT contain "
+        "what the user is referring to. Do not skip this check just because the recent "
+        "context seems sufficient — past decisions and preferences live in long-term "
+        "memory, not in the sliding window."
     ),
 }
