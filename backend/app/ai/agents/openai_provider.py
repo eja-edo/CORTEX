@@ -11,11 +11,16 @@ from app.ai.agents.base_provider import LLMProvider
 from app.ai.agents.provider_types import (
     Message,
     GenerationConfig,
+    ToolDefinition,
+    ToolCall,
     ProviderResponse,
     ProviderStreamChunk,
-    ToolCall,
-    ToolDefinition,
 )
+
+# Maximum character length for serialized tool output sent to the LLM.
+# Longer outputs are truncated with a note. Prevents context-window waste
+# from verbose tool results (search hits, file contents, etc.).
+TOOL_OUTPUT_MAX_CHARS = 4000
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -179,6 +184,22 @@ class OpenAIProvider(LLMProvider):
         ts = created_at.strftime("%Y-%m-%d %H:%M:%S UTC")
         return f"[{ts}] {raw}"
 
+    @staticmethod
+    def _truncate_tool_output(content: dict) -> str:
+        """Serialize a tool-output dict, truncating to TOOL_OUTPUT_MAX_CHARS.
+
+        The full output is still stored in the DB; only the LLM-prompt
+        copy is truncated.
+        """
+        serialized = json.dumps(content, default=str)
+        if len(serialized) <= TOOL_OUTPUT_MAX_CHARS:
+            return serialized
+        truncated = serialized[:TOOL_OUTPUT_MAX_CHARS]
+        return truncated + (
+            f"\n\n[Output truncated at {TOOL_OUTPUT_MAX_CHARS} chars; "
+            f"original size was {len(serialized)} chars]"
+        )
+
     def _messages_to_openai(
         self,
         messages: list[Message],
@@ -221,7 +242,7 @@ class OpenAIProvider(LLMProvider):
                 result.append({
                     "role": "tool",
                     "tool_call_id": msg.tool_result.tool_call_id,
-                    "content": json.dumps(msg.tool_result.content, default=str),
+                    "content": self._truncate_tool_output(msg.tool_result.content),
                 })
 
         return result
