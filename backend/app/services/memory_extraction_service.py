@@ -23,7 +23,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models import AgentConversation, AgentMessage
 from app.ai.agents.model_client import ModelClient
-from app.ai.agents.openai_provider import TOOL_OUTPUT_MAX_CHARS
 from app.ai.agents.provider_types import Message, GenerationConfig
 from app.services.memory_extraction_prompt import build_extraction_messages
 from app.services.zep_memory import (
@@ -37,9 +36,14 @@ logger = get_logger(__name__)
 _model_client = ModelClient()
 
 # Tool output truncation for the memory extraction LLM prompt.
-# Increased from the original hardcoded 200 which was too aggressive
-# and stripped useful semantic information from extracted memories.
-MEMORY_TOOL_OUTPUT_MAX_CHARS = TOOL_OUTPUT_MAX_CHARS
+# Value chosen based on production data (88 tool messages):
+#   P50 = 216, P90 = 24,048, P95 = 41,586, P99 = 55,656, Max = 55,656
+# 25,000 covers 90% of tool outputs while protecting the memory extraction
+# model's context window from rare massive payloads.
+# Independent from the conversation-LLM truncation (TOOL_OUTPUT_MAX_CHARS = 4000
+# in openai_provider.py) because the two pipelines use different models with
+# different context-window budgets.
+MEMORY_TOOL_OUTPUT_MAX_CHARS = 25000
 
 
 def _build_conversation_text(messages: list[AgentMessage]) -> str:

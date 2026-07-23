@@ -156,6 +156,47 @@ async def test_get_message_created_at_safe():
     assert _get_message_created_at(ExceptionRaiser()) is None
 
 
+async def test_build_history_contents_tool_messages_get_created_at():
+    """Tool messages in _build_history_contents get created_at set on Message.
+
+    Unlike user/assistant roles (timestamp baked into content text), tool
+    messages carry created_at as a property on the Message dataclass so
+    downstream code can access it if needed.
+    """
+    from app.ai.agents.agent_service import _build_history_contents
+    from app.ai.agents.provider_types import Message
+
+    class FakeRecord:
+        def __init__(self, role, content=None, created_at=None, tool_name=None, tool_input=None, tool_output=None, tool_call_id=None, turn_id=None):
+            self.role = role
+            self.content = content
+            self.created_at = created_at
+            self.tool_name = tool_name
+            self.tool_input = tool_input
+            self.tool_output = tool_output
+            self.tool_call_id = tool_call_id
+            self.turn_id = turn_id
+
+    ts = datetime(2026, 7, 23, 12, 0, 0)
+    records = [
+        FakeRecord(role="user", content="get weather", created_at=ts),
+        FakeRecord(role="assistant", content="", created_at=ts, tool_name="get_weather", tool_call_id="call1", turn_id="t1"),
+        FakeRecord(role="tool", created_at=ts, tool_name="get_weather", tool_input={"city": "Hanoi"}, tool_output={"temp": 30}, tool_call_id="call1", turn_id="t1"),
+    ]
+
+    result = _build_history_contents(records)
+    # Should produce: user msg, assistant (tool_calls), tool (tool_result)
+    assert len(result) == 3
+    # User msg has timestamp baked into content
+    assert "[2026-07-23" in result[0].content
+    # Tool msg has created_at set
+    assert result[2].role == "tool"
+    assert result[2].created_at == ts
+    assert result[2].tool_result is not None
+    assert result[2].tool_result.name == "get_weather"
+    assert result[2].tool_result.content == {"temp": 30}
+
+
 async def test_current_user_message_bakes_timestamp():
     """Current-turn user message has timestamp baked into content."""
     from app.ai.agents.agent_service import _format_timestamp
@@ -183,6 +224,8 @@ async def main():
     print("✓ test_message_full_text_bakes_timestamp")
     await test_get_message_created_at_safe()
     print("✓ test_get_message_created_at_safe")
+    await test_build_history_contents_tool_messages_get_created_at()
+    print("✓ test_build_history_contents_tool_messages_get_created_at")
     await test_current_user_message_bakes_timestamp()
     print("✓ test_current_user_message_bakes_timestamp")
     print("All Issue-4 tests passed.")

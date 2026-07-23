@@ -85,20 +85,15 @@ class ConversationSummarizer:
         result = await self.db.execute(stmt)
         conv = result.scalar_one_or_none()
 
-        if not conv or not conv.summary:
+        if not conv or not conv.summary or not conv.last_extracted_at:
             return ""
 
-        cutoff = ""
-        if conv.last_extracted_at:
-            cutoff = conv.last_extracted_at.strftime("%Y-%m-%d %H:%M:%S UTC")
-
-        if cutoff:
-            return (
-                f"=== PREVIOUS CONVERSATION HISTORY (events up to {cutoff}) ===\n"
-                f"{conv.summary}\n\n"
-                f"=== RECENT CONVERSATION ===\n"
-            )
-        return f"=== PREVIOUS CONVERSATION CONTEXT ===\n{conv.summary}\n"
+        cutoff = conv.last_extracted_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+        return (
+            f"=== PREVIOUS CONVERSATION HISTORY (events up to {cutoff}) ===\n"
+            f"{conv.summary}\n\n"
+            f"=== RECENT CONVERSATION ===\n"
+        )
 
 
 def get_conversation_summarizer(db: AsyncSession) -> ConversationSummarizer:
