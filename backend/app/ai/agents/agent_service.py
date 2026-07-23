@@ -336,24 +336,18 @@ async def _maybe_trigger_memory_extraction(
 
 
 
-def _message_full_text(msg) -> str:
+def _inject_context_into_text(text: str, ctx: dict | None) -> str:
+    """Inject context (pills, runtime) into a user message for LLM consumption.
+
+    Shared between historical reconstruction (`_message_full_text`) and
+    the current turn (Issue 3 — context was saved to DB but never injected
+    into the LLM prompt for the ongoing turn).
     """
-    Reconstruct full message text from stored content + context.
-    
-    For user messages with structured context (pills, runtime info), combines
-    them back together for LLM consumption. For messages without context
-    (backward compatible), returns content as-is.
-    """
-    content = getattr(msg, 'content', '') or ''
-    ctx = getattr(msg, 'context', None)
-    
     if not ctx:
-        return content
-    
+        return text
     parts = []
     pills = ctx.get('pills', [])
     runtime = ctx.get('runtime', None)
-    
     if pills:
         pills_text = '\n\n---\n\n'.join(p['text'] for p in pills if p.get('text'))
         parts.append(f"Context:\n\n{pills_text}")
@@ -363,10 +357,18 @@ def _message_full_text(msg) -> str:
             parts.append(f"Runtime UI Context:\n\n" + '\n'.join(runtime_lines))
         else:
             parts.append(f"Runtime UI Context:\n\n{runtime}")
-    
     if parts:
-        return '\n\n'.join(parts) + f"\n\n{content}"
-    return content
+        return '\n\n'.join(parts) + f"\n\n{text}"
+    return text
+
+
+def _message_full_text(msg) -> str:
+    """
+    Reconstruct full message text from stored content + context.
+    """
+    content = getattr(msg, 'content', '') or ''
+    ctx = getattr(msg, 'context', None)
+    return _inject_context_into_text(content, ctx)
 
 
 def _build_history_contents(records: list) -> list[Message]:
@@ -682,7 +684,8 @@ Return ONLY the title, no quotes or explanation."""
                 )
             messages = _build_history_contents(recent_messages)
             _trim_incomplete_tail(messages, "handle")
-            messages.append(Message(role="user", content=message))
+            current_text = _inject_context_into_text(message, context)
+            messages.append(Message(role="user", content=current_text))
             logger.info(
                 f"Messages seeded with {len(messages)} items "
                 f"({len(recent_messages)} history + 1 current)"
@@ -1152,7 +1155,8 @@ Return ONLY the title, no quotes or explanation."""
 
             messages = _build_history_contents(recent_messages)
             _trim_incomplete_tail(messages, "streaming")
-            messages.append(Message(role="user", content=message))
+            current_text = _inject_context_into_text(message, context)
+            messages.append(Message(role="user", content=current_text))
             logger.info(
                 f"Streaming messages seeded with {len(messages)} items "
                 f"({len(recent_messages)} history + 1 current)"
