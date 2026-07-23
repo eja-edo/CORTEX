@@ -3,7 +3,7 @@
 from uuid import UUID
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, and_, delete, func
+from sqlalchemy import select, desc, and_, delete, func, update, text
 from sqlalchemy.orm import Session
 
 from app.utils.logger import get_logger
@@ -242,28 +242,42 @@ class ConversationStore:
         await self.db.flush()
 
     async def increment_message_count(self, conversation_id: UUID) -> None:
-        """Increment the message count for a conversation."""
+        """Increment the message count atomically using UPDATE ... RETURNING.
 
-        stmt = select(AgentConversation).where(
-            AgentConversation.id == conversation_id
+        Avoids the race-condition of SELECT-then-UPDATE when multiple
+        concurrent requests add messages to the same conversation.
+        """
+
+        stmt = (
+            update(AgentConversation)
+            .where(AgentConversation.id == conversation_id)
+            .values(message_count=AgentConversation.message_count + 1)
+            .returning(AgentConversation.message_count)
         )
         result = await self.db.execute(stmt)
-        conv = result.scalar_one_or_none()
-        if conv:
-            conv.message_count = (conv.message_count or 0) + 1
-            await self.db.flush()
+        row = result.one_or_none()
+        if row is None:
+            logger.warning(
+                f"increment_message_count: conversation {conversation_id} not found"
+            )
+        await self.db.flush()
 
     async def increment_token_count(self, conversation_id: UUID, token_count: int) -> None:
-        """Add tokens to the conversation's total token count."""
+        """Add tokens to the conversation's total token count atomically."""
 
-        stmt = select(AgentConversation).where(
-            AgentConversation.id == conversation_id
+        stmt = (
+            update(AgentConversation)
+            .where(AgentConversation.id == conversation_id)
+            .values(total_token_count=AgentConversation.total_token_count + token_count)
+            .returning(AgentConversation.total_token_count)
         )
         result = await self.db.execute(stmt)
-        conv = result.scalar_one_or_none()
-        if conv:
-            conv.total_token_count = (conv.total_token_count or 0) + token_count
-            await self.db.flush()
+        row = result.one_or_none()
+        if row is None:
+            logger.warning(
+                f"increment_token_count: conversation {conversation_id} not found"
+            )
+        await self.db.flush()
 
     async def update_conversation_title(self, conversation_id: UUID, title: str) -> AgentConversation | None:
         """Update conversation title."""
