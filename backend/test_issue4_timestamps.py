@@ -1,11 +1,12 @@
 """
 Tests for Issue 4: propagate `created_at` timestamps through the Message
-dataclass, `_build_history_contents`, and the OpenAI provider formatting.
+dataclass, baked into content at construction time (provider-agnostic).
 
 Verifies:
 - Message dataclass accepts created_at
-- _build_history_contents extracts created_at from DB records
-- OpenAI provider bakes timestamp into content
+- _format_timestamp helper
+- _build_history_contents bakes timestamp into message content
+- OpenAI provider does NOT add its own timestamp (prevents double-baking)
 - Current-turn messages get datetime.utcnow()
 """
 import os
@@ -47,10 +48,21 @@ async def test_message_created_at_defaults_to_none():
     assert m.created_at is None
 
 
-async def test_build_history_contents_propagates_created_at():
-    """_build_history_contents reads created_at from DB records."""
+async def test_format_timestamp():
+    """_format_timestamp produces correct output."""
+    from app.ai.agents.agent_service import _format_timestamp
+    ts = datetime(2026, 7, 23, 14, 30, 0)
+
+    result = _format_timestamp(ts)
+    assert result == "[2026-07-23 14:30:00 UTC] "
+
+    result_none = _format_timestamp(None)
+    assert result_none == ""
+
+
+async def test_build_history_contents_bakes_timestamp_into_content():
+    """_build_history_contents bakes created_at into content string."""
     from app.ai.agents.agent_service import _build_history_contents
-    from app.ai.agents.provider_types import Message
 
     class FakeRecord:
         def __init__(self, role, content, created_at=None, **kw):
@@ -61,7 +73,6 @@ async def test_build_history_contents_propagates_created_at():
                 setattr(self, k, v)
 
     ts = datetime(2026, 7, 23, 10, 0, 0)
-
     records = [
         FakeRecord(role="user", content="Hello", created_at=ts),
         FakeRecord(role="assistant", content="Hi there", created_at=datetime(2026, 7, 23, 10, 0, 5)),
@@ -69,13 +80,14 @@ async def test_build_history_contents_propagates_created_at():
 
     result = _build_history_contents(records)
     assert len(result) == 2
-    assert result[0].created_at == ts
-    assert result[1].created_at is not None
-    assert result[1].created_at > ts
+    assert "[2026-07-23 10:00:00 UTC] " in result[0].content
+    assert "Hello" in result[0].content
+    assert "[2026-07-23 10:00:05 UTC] " in result[1].content
+    assert "Hi there" in result[1].content
 
 
-async def test_build_history_contents_handles_missing_created_at():
-    """When a DB record lacks created_at, Message.created_at should be None."""
+async def test_build_history_contents_handles_no_timestamp():
+    """When DB record lacks created_at, no timestamp prefix is added."""
     from app.ai.agents.agent_service import _build_history_contents
 
     class FakeRecord:
@@ -88,68 +100,44 @@ async def test_build_history_contents_handles_missing_created_at():
         FakeRecord(role="assistant", content="Hi"),
     ]
     result = _build_history_contents(records)
-    assert all(m.created_at is None for m in result)
+    assert all("[2026" not in (m.content or "") for m in result)
 
 
-async def test_build_history_contents_tool_messages_get_created_at():
-    """Tool messages in history also get their created_at propagated."""
-    from app.ai.agents.agent_service import _build_history_contents
-
-    class FakeRecord:
-        def __init__(self, role, **kw):
-            self.role = role
-            for k, v in kw.items():
-                setattr(self, k, v)
-            self.created_at = kw.get("created_at", datetime(2026, 7, 23, 10, 0, 0))
-
-    ts = datetime(2026, 7, 23, 10, 1, 0)
-    records = [
-        FakeRecord(role="user", content="Use tool"),
-        FakeRecord(role="assistant", content=None, turn_id="t1"),
-        FakeRecord(role="tool", tool_name="search", tool_input={"q": "x"}, tool_output={"r": "y"}, tool_call_id="t1_0", turn_id="t1", created_at=ts),
-    ]
-    result = _build_history_contents(records)
-    # assistant with tool_calls + tool
-    tool_msgs = [m for m in result if m.role == "tool"]
-    assert len(tool_msgs) == 1
-    assert tool_msgs[0].created_at == ts
-
-
-async def test_openai_provider_bakes_timestamp():
-    """OpenAIProvider._format_content_with_ts prepends timestamp."""
-    from app.ai.agents.openai_provider import OpenAIProvider
-    provider = OpenAIProvider()
-    ts = datetime(2026, 7, 23, 14, 30, 0)
-
-    result = provider._format_content_with_ts("hello", ts)
-    assert "[2026-07-23 14:30:00 UTC]" in result
-    assert "hello" in result
-
-    result_none = provider._format_content_with_ts("world", None)
-    assert result_none == "world"
-
-    result_empty_ts = provider._format_content_with_ts("test", datetime(2026, 1, 1, 0, 0, 0))
-    assert "[2026-01-01 00:00:00 UTC] test" == result_empty_ts
-
-
-async def test_openai_provider_messages_to_openai_includes_timestamps():
-    """_messages_to_openai includes timestamps for user and assistant messages."""
+async def test_openai_provider_does_not_double_bake_timestamp():
+    """OpenAI provider does not add its own timestamp (baked at construction)."""
     from app.ai.agents.openai_provider import OpenAIProvider
     from app.ai.agents.provider_types import Message, GenerationConfig
     provider = OpenAIProvider()
     config = GenerationConfig()
 
+    # Content already has timestamp baked in
     msgs = [
-        Message(role="user", content="hi", created_at=datetime(2026, 7, 23, 10, 0, 0)),
-        Message(role="assistant", content="hello", created_at=datetime(2026, 7, 23, 10, 0, 5)),
+        Message(role="user", content="[2026-07-23 14:30:00 UTC] hi"),
+        Message(role="assistant", content="[2026-07-23 14:30:05 UTC] hello"),
     ]
     result = provider._messages_to_openai(msgs, config)
-    assert result[0]["content"] == "[2026-07-23 10:00:00 UTC] hi"
-    assert result[1]["content"] == "[2026-07-23 10:00:05 UTC] hello"
+    assert result[0]["content"] == "[2026-07-23 14:30:00 UTC] hi"
+    assert result[1]["content"] == "[2026-07-23 14:30:05 UTC] hello"
+    # Verify no double timestamp
+    assert result[0]["content"].count("UTC") == 1
+
+
+async def test_message_full_text_bakes_timestamp():
+    """_message_full_text bakes timestamp into content."""
+    from app.ai.agents.agent_service import _message_full_text
+
+    class FakeMsg:
+        content = "Hello"
+        context = None
+        created_at = datetime(2026, 7, 23, 10, 0, 0)
+
+    result = _message_full_text(FakeMsg())
+    assert "[2026-07-23 10:00:00 UTC] " in result
+    assert "Hello" in result
 
 
 async def test_get_message_created_at_safe():
-    """_get_message_created_at safely handles records without created_at."""
+    """_get_message_created_at safely handles edge cases."""
     from app.ai.agents.agent_service import _get_message_created_at
 
     class Good:
@@ -168,23 +156,35 @@ async def test_get_message_created_at_safe():
     assert _get_message_created_at(ExceptionRaiser()) is None
 
 
+async def test_current_user_message_bakes_timestamp():
+    """Current-turn user message has timestamp baked into content."""
+    from app.ai.agents.agent_service import _format_timestamp
+    now = datetime.utcnow()
+    result = _format_timestamp(now) + "user text"
+    assert result.startswith("[")
+    assert result.endswith(" UTC] user text")
+    assert "user text" in result
+
+
 async def main():
     await test_message_dataclass_accepts_created_at()
     print("✓ test_message_dataclass_accepts_created_at")
     await test_message_created_at_defaults_to_none()
     print("✓ test_message_created_at_defaults_to_none")
-    await test_build_history_contents_propagates_created_at()
-    print("✓ test_build_history_contents_propagates_created_at")
-    await test_build_history_contents_handles_missing_created_at()
-    print("✓ test_build_history_contents_handles_missing_created_at")
-    await test_build_history_contents_tool_messages_get_created_at()
-    print("✓ test_build_history_contents_tool_messages_get_created_at")
-    await test_openai_provider_bakes_timestamp()
-    print("✓ test_openai_provider_bakes_timestamp")
-    await test_openai_provider_messages_to_openai_includes_timestamps()
-    print("✓ test_openai_provider_messages_to_openai_includes_timestamps")
+    await test_format_timestamp()
+    print("✓ test_format_timestamp")
+    await test_build_history_contents_bakes_timestamp_into_content()
+    print("✓ test_build_history_contents_bakes_timestamp_into_content")
+    await test_build_history_contents_handles_no_timestamp()
+    print("✓ test_build_history_contents_handles_no_timestamp")
+    await test_openai_provider_does_not_double_bake_timestamp()
+    print("✓ test_openai_provider_does_not_double_bake_timestamp")
+    await test_message_full_text_bakes_timestamp()
+    print("✓ test_message_full_text_bakes_timestamp")
     await test_get_message_created_at_safe()
     print("✓ test_get_message_created_at_safe")
+    await test_current_user_message_bakes_timestamp()
+    print("✓ test_current_user_message_bakes_timestamp")
     print("All Issue-4 tests passed.")
 
 

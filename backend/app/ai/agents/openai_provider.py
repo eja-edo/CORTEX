@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from typing import AsyncIterator
 
 from openai import AsyncOpenAI
@@ -176,15 +175,6 @@ class OpenAIProvider(LLMProvider):
             raise
 
     @staticmethod
-    def _format_content_with_ts(content: str | None, created_at: datetime | None) -> str:
-        """Prepend a human-readable timestamp to message content for LLM context."""
-        raw = content or ""
-        if created_at is None:
-            return raw
-        ts = created_at.strftime("%Y-%m-%d %H:%M:%S UTC")
-        return f"[{ts}] {raw}"
-
-    @staticmethod
     def _truncate_tool_output(content: dict) -> str:
         """Serialize a tool-output dict, truncating to TOOL_OUTPUT_MAX_CHARS.
 
@@ -217,12 +207,12 @@ class OpenAIProvider(LLMProvider):
             if msg.role == "user":
                 result.append({
                     "role": "user",
-                    "content": self._format_content_with_ts(msg.content, msg.created_at),
+                    "content": msg.content or "",
                 })
             elif msg.role == "assistant":
                 entry: dict = {"role": "assistant"}
                 if msg.content:
-                    entry["content"] = self._format_content_with_ts(msg.content, msg.created_at)
+                    entry["content"] = msg.content
                 else:
                     entry["content"] = None
                 if msg.tool_calls:

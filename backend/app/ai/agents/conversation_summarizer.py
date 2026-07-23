@@ -71,7 +71,11 @@ class ConversationSummarizer:
         conversation_id: UUID,
         include_summary: bool = True,
     ) -> str:
-        """Get the episodic summary for context injection."""
+        """Get the episodic summary with boundary timestamp for context injection.
+
+        Marks where the summary ends and recent conversation begins so the LLM
+        understands the temporal scope of each section (Issue 4c).
+        """
         if not include_summary:
             return ""
 
@@ -84,6 +88,16 @@ class ConversationSummarizer:
         if not conv or not conv.summary:
             return ""
 
+        cutoff = ""
+        if conv.last_extracted_at:
+            cutoff = conv.last_extracted_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+
+        if cutoff:
+            return (
+                f"=== PREVIOUS CONVERSATION HISTORY (events up to {cutoff}) ===\n"
+                f"{conv.summary}\n\n"
+                f"=== RECENT CONVERSATION ===\n"
+            )
         return f"=== PREVIOUS CONVERSATION CONTEXT ===\n{conv.summary}\n"
 
 

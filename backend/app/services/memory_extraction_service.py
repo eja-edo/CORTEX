@@ -7,6 +7,10 @@ Orchestrates the conversation memory extraction pipeline:
 3. Parses JSON response
 4. Stores updated Episodic Summary in PostgreSQL (UPSERT)
 5. Stores new Semantic Memories in Zep
+
+Tool output truncation (Issue 7):
+- Conversation LLM pipeline truncates at TOOL_OUTPUT_MAX_CHARS (4000)
+- Memory extraction pipeline uses MEMORY_TOOL_OUTPUT_MAX_CHARS
 """
 
 import json
@@ -19,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models import AgentConversation, AgentMessage
 from app.ai.agents.model_client import ModelClient
+from app.ai.agents.openai_provider import TOOL_OUTPUT_MAX_CHARS
 from app.ai.agents.provider_types import Message, GenerationConfig
 from app.services.memory_extraction_prompt import build_extraction_messages
 from app.services.zep_memory import (
@@ -31,6 +36,11 @@ logger = get_logger(__name__)
 
 _model_client = ModelClient()
 
+# Tool output truncation for the memory extraction LLM prompt.
+# Increased from the original hardcoded 200 which was too aggressive
+# and stripped useful semantic information from extracted memories.
+MEMORY_TOOL_OUTPUT_MAX_CHARS = TOOL_OUTPUT_MAX_CHARS
+
 
 def _build_conversation_text(messages: list[AgentMessage]) -> str:
     """Build a conversation transcript from messages."""
@@ -41,7 +51,11 @@ def _build_conversation_text(messages: list[AgentMessage]) -> str:
         if msg.role == "tool":
             tool_name = msg.tool_name or "unknown"
             output = msg.tool_output or {}
-            summary = str(output)[:200] if output else ""
+            summary = str(output)[:MEMORY_TOOL_OUTPUT_MAX_CHARS] if output else ""
+            if len(summary) >= MEMORY_TOOL_OUTPUT_MAX_CHARS:
+                summary += (
+                    f"\n\n[Output truncated at {MEMORY_TOOL_OUTPUT_MAX_CHARS} chars]"
+                )
             parts.append(f"Tool ({tool_name}): {summary}")
         else:
             parts.append(f"{role_label}: {content}")

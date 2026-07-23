@@ -14,7 +14,7 @@ os.environ.setdefault(
 )
 
 
-def reset_cache():
+async def reset_cache():
     """Clear the in-process dedupe cache for test isolation."""
     from app.services.zep_memory import _dedupe_cache
     _dedupe_cache.clear()
@@ -203,6 +203,68 @@ async def test_zep_search_based_dedupe():
         mock_search.assert_called_once()
 
 
+async def test_zep_dedupe_near_duplicate_at_threshold():
+    """Near-duplicate at exactly 0.95 threshold is caught.
+
+    "User prefers PostgreSQL." vs "User really likes PostgreSQL a lot."
+    — semantically the same, different wording."""
+    from app.services.zep_memory import add_semantic_memory, _dedupe_cache
+    reset_cache()
+    _dedupe_cache.clear()
+
+    with patch("app.services.zep_memory._get_client") as mock_get_client:
+        fake_client = MagicMock()
+        fake_client.graph.add = MagicMock()
+        mock_get_client.return_value = fake_client
+
+        with patch("app.services.zep_memory.search_semantic_memories") as mock_search:
+            mock_search.return_value = [
+                {"fact": "User really likes PostgreSQL a lot.", "score": 0.95, "category": "preference", "content": "User really likes PostgreSQL a lot."}
+            ]
+
+            result = await add_semantic_memory(
+                user_id="ws-1",
+                category="preference",
+                content="User prefers PostgreSQL.",
+                confidence=0.9,
+                expected_lifetime="permanent",
+            )
+            assert result is True
+            assert fake_client.graph.add.call_count == 0, (
+                "graph.add must be skipped when Zep returns near-duplicate at 0.95 threshold"
+            )
+        mock_search.assert_called_once()
+
+
+async def test_zep_dedupe_below_threshold_not_duplicate():
+    """Content scoring below 0.95 is NOT considered a duplicate."""
+    from app.services.zep_memory import add_semantic_memory, _dedupe_cache
+    reset_cache()
+    _dedupe_cache.clear()
+
+    with patch("app.services.zep_memory._get_client") as mock_get_client:
+        fake_client = MagicMock()
+        fake_client.graph.add = MagicMock()
+        mock_get_client.return_value = fake_client
+
+        with patch("app.services.zep_memory.search_semantic_memories") as mock_search:
+            mock_search.return_value = [
+                {"fact": "User likes cheese.", "score": 0.50, "category": "preference", "content": "User likes cheese."}
+            ]
+
+            result = await add_semantic_memory(
+                user_id="ws-1",
+                category="preference",
+                content="User prefers PostgreSQL.",
+                confidence=0.9,
+                expected_lifetime="permanent",
+            )
+            assert result is True
+            assert fake_client.graph.add.call_count == 1, (
+                "graph.add must proceed when Zep score is below threshold"
+            )
+
+
 async def main():
     await test_in_process_dedupe_skips_exact_duplicate()
     print("✓ test_in_process_dedupe_skips_exact_duplicate")
@@ -216,6 +278,10 @@ async def main():
     print("✓ test_dedupe_batch_skips_duplicates")
     await test_zep_search_based_dedupe()
     print("✓ test_zep_search_based_dedupe")
+    await test_zep_dedupe_near_duplicate_at_threshold()
+    print("✓ test_zep_dedupe_near_duplicate_at_threshold")
+    await test_zep_dedupe_below_threshold_not_duplicate()
+    print("✓ test_zep_dedupe_below_threshold_not_duplicate")
     print("All Issue-2b tests passed.")
 
 

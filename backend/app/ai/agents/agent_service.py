@@ -362,13 +362,23 @@ def _inject_context_into_text(text: str, ctx: dict | None) -> str:
     return text
 
 
+def _format_timestamp(dt: datetime | None) -> str:
+    """Format a datetime as a human-readable timestamp prefix for LLM content."""
+    if dt is None:
+        return ""
+    return f"[{dt.strftime('%Y-%m-%d %H:%M:%S UTC')}] "
+
+
 def _message_full_text(msg) -> str:
     """
-    Reconstruct full message text from stored content + context.
+    Reconstruct full message text from stored content + context, with
+    timestamp baked in (provider-agnostic, Issue 4).
     """
     content = getattr(msg, 'content', '') or ''
     ctx = getattr(msg, 'context', None)
-    return _inject_context_into_text(content, ctx)
+    ts = _get_message_created_at(msg)
+    enriched = _inject_context_into_text(content, ctx)
+    return _format_timestamp(ts) + enriched
 
 
 def _get_message_created_at(record) -> datetime | None:
@@ -410,16 +420,16 @@ def _build_history_contents(records: list) -> list[Message]:
             i += 1
 
         elif role == "assistant":
-            content = getattr(record, "content", None)
+            raw_content = getattr(record, "content", None)
             if expected_role != "assistant":
                 logger.info(f"Skipping out-of-order assistant message (expected {expected_role})")
                 i += 1
                 continue
-            if not content:
-                logger.info(f"Skipping empty assistant message (content is {content!r})")
+            if not raw_content:
+                logger.info(f"Skipping empty assistant message (content is {raw_content!r})")
                 i += 1
                 continue
-            messages.append(Message(role="assistant", content=content, created_at=ts))
+            messages.append(Message(role="assistant", content=_format_timestamp(ts) + raw_content, created_at=ts))
             expected_role = "user"
             i += 1
 
@@ -703,7 +713,8 @@ Return ONLY the title, no quotes or explanation."""
             messages = _build_history_contents(recent_messages)
             _trim_incomplete_tail(messages, "handle")
             current_text = _inject_context_into_text(message, context)
-            messages.append(Message(role="user", content=current_text, created_at=datetime.utcnow()))
+            now = datetime.utcnow()
+            messages.append(Message(role="user", content=_format_timestamp(now) + current_text, created_at=now))
             logger.info(
                 f"Messages seeded with {len(messages)} items "
                 f"({len(recent_messages)} history + 1 current)"
@@ -1177,7 +1188,8 @@ Return ONLY the title, no quotes or explanation."""
             messages = _build_history_contents(recent_messages)
             _trim_incomplete_tail(messages, "streaming")
             current_text = _inject_context_into_text(message, context)
-            messages.append(Message(role="user", content=current_text, created_at=datetime.utcnow()))
+            now = datetime.utcnow()
+            messages.append(Message(role="user", content=_format_timestamp(now) + current_text, created_at=now))
             logger.info(
                 f"Streaming messages seeded with {len(messages)} items "
                 f"({len(recent_messages)} history + 1 current)"
@@ -1332,7 +1344,8 @@ Return ONLY the title, no quotes or explanation."""
                         )
                     )
                 elif turn_text:
-                    messages.append(Message(role="assistant", content=turn_text, created_at=datetime.utcnow()))
+                    now = datetime.utcnow()
+                    messages.append(Message(role="assistant", content=_format_timestamp(now) + turn_text, created_at=now))
 
                 is_valid, validation_msg = _validate_contents_ordering(messages)
                 if not is_valid:
