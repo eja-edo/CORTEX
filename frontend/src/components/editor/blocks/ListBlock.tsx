@@ -66,7 +66,7 @@ export function ListBlock({ block, order }: ListBlockProps) {
   }, [block.id, splitBlock, mergeBlockBackward, exitListOnEmpty])
 
   const handleToggle = useCallback((e: React.MouseEvent) => {
-    if (!isTask || readOnly) return
+    if (!isTask) return
     e.stopPropagation()
     const newChecked = !(block.meta?.checked ?? false)
     const updateRecursive = (list: BlockNode[]): boolean => {
@@ -83,7 +83,13 @@ export function ListBlock({ block, order }: ListBlockProps) {
     }
     const newBlocks = structuredClone(blocks)
     updateRecursive(newBlocks)
-    useEditorStore.getState().setBlocks(newBlocks)
+    const store = useEditorStore.getState()
+    store.setBlocks(newBlocks)
+    // Persist immediately — no debounce — so the raw markdown updates
+    // the moment the user ticks/unticks the checkbox.
+    store.serializeAndNotify((md) => {
+      store.saveCallback?.(md)
+    })
   }, [block.id, block.meta, isTask, blocks])
 
   return (

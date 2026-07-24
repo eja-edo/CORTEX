@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { ArrowLeft, Copy, Check, AlertCircle, Loader, MessageSquare, Quote } from 'lucide-react'
 import type { ConversationDetailResponse, AgentMessage } from '../services/api'
 import { getConversation } from '../services/api'
+import { renderMarkdownToSanitizedHtml } from '../utils/markdown/renderToHtml'
 import '../styles/conversation-detail.css'
 
 interface ConversationDetailProps {
@@ -47,15 +48,17 @@ export function ConversationDetail({ conversationId, onBack, className = '' }: C
         switch (message.role) {
             case 'user':
                 return (
-                    <div className="conversation-message-content user-content">
-                        <p>{message.content}</p>
-                    </div>
+                    <div
+                        className="conversation-message-content user-content"
+                        dangerouslySetInnerHTML={{ __html: renderMarkdownToSanitizedHtml(message.content) }}
+                    />
                 )
             case 'assistant':
                 return (
-                    <div className="conversation-message-content assistant-content">
-                        <p>{message.content}</p>
-                    </div>
+                    <div
+                        className="conversation-message-content assistant-content"
+                        dangerouslySetInnerHTML={{ __html: renderMarkdownToSanitizedHtml(message.content) }}
+                    />
                 )
             case 'tool':
                 return (

@@ -71,6 +71,33 @@ export function EditorSurface({ initialMd, noteId, onSave, readOnly = false }: E
     onSaveRef.current = onSave
   })
 
+  // Register an immediate-save callback so child blocks (e.g. ListBlock
+  // checkbox toggle) can persist changes without waiting for the 2s
+  // auto-save debounce.
+  useEffect(() => {
+    const cb = (_md: string) => {
+      // _md is the serialized markdown; we re-derive `prevBlocksRef` from
+      // the current store state rather than closing over the React render's
+      // `blocks` (which may be stale at the moment this callback fires).
+      const currentSerialized = JSON.stringify(useEditorStore.getState().blocks)
+      lastSerializedMdRef.current = _md
+      onSaveRef.current(_md)
+      // Cancel the pending debounced auto-save — the change was just
+      // persisted immediately, no need to save again 2s later.
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = null
+      }
+      // Mark the current blocks as already saved so the auto-save effect
+      // skips the next re-run.
+      prevBlocksRef.current = currentSerialized
+    }
+    useEditorStore.getState().registerSaveCallback(cb)
+    return () => {
+      useEditorStore.getState().unregisterSaveCallback()
+    }
+  }, [])
+
   // Ctrl+S to save
   useEffect(() => {
     if (readOnly) return
@@ -92,7 +119,6 @@ export function EditorSurface({ initialMd, noteId, onSave, readOnly = false }: E
   const prevBlocksRef = useRef<string>('')
 
   useEffect(() => {
-    if (readOnly) return
     if (suppressAutoSaveRef.current) {
       suppressAutoSaveRef.current = false
       return
@@ -112,7 +138,7 @@ export function EditorSurface({ initialMd, noteId, onSave, readOnly = false }: E
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     }
-  }, [blocks, serializeAndNotify, readOnly])
+  }, [blocks, serializeAndNotify])
 
   const sensors = useSensors(
     useSensor(PointerSensor, {

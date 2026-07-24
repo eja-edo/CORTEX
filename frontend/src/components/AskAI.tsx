@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Bot, ArrowUp, X, Sparkles, RefreshCw, Copy, Check, Square, Plus, Mic, FileText, ChevronDown } from 'lucide-react'
-import MarkdownIt from 'markdown-it'
-import DOMPurify from 'dompurify'
 import { streamAgentMessage, listConversations, getConversation, revertAction, ApiError, type ConversationListItem, type StreamEvent, type PendingChange, type TokenUsage } from '../services/api'
 import { useConversationStore } from '../stores/conversationStore'
 import { knowledgeRoute, noteRoute, scheduleRoute } from '../services/routes'
+import { renderMarkdownToSanitizedHtml } from '../utils/markdown/renderToHtml'
 
 interface AskAIProps {
     noteContent?: string
@@ -923,30 +922,9 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
         setPendingChanges([])
     }, [pendingChanges])
 
-    // Shared markdown-it instance for rendering AI assistant replies.
-    // Uses the same parser the rest of the app uses to keep behavior consistent.
-    const md = useMemo(() => new MarkdownIt({
-        html: false,
-        linkify: true,
-        typographer: true,
-        breaks: true,
-    }), [])
-
-    // DOMPurify sanitizes the markdown output for `dangerouslySetInnerHTML`.
-    const renderMarkdown = (text: string): string => {
-        if (!text) return ''
-        const raw = md.render(text)
-        return DOMPurify.sanitize(raw, {
-            ALLOWED_TAGS: [
-                'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-                'p', 'br', 'hr', 'strong', 'em', 's', 'del', 'code', 'pre',
-                'ul', 'ol', 'li',
-                'blockquote', 'a', 'span'
-            ],
-            ALLOWED_ATTR: ['href', 'title', 'class', 'target', 'rel'],
-            FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed'],
-        })
-    }
+    // Markdown rendering for AI assistant replies. Uses the shared util so the
+    // configuration stays in sync with ConversationDetail / NoteSidebar.
+    const renderMarkdown = useMemo(() => renderMarkdownToSanitizedHtml, [])
 
 
 

@@ -2,42 +2,37 @@ import { useRef, useEffect, useCallback, useContext } from 'react'
 import { useEditorStore } from '../stores/editorStore'
 import type { BlockNode } from '../types/editor'
 import { ReadOnlyCtx } from '../components/editor/EditorSurface'
+import { renderInlineMarkdownToHtml } from '../utils/markdown/renderToHtml'
 
 // ── Markdown ↔ HTML conversion ──────────────────────────────────────────────
-
+//
+// `inlineMdToHtml` delegates to the shared `renderInlineMarkdownToHtml` so the
+// live editor preview parses with the same `markdown-it` configuration as
+// every other render path (AskAI, ConversationDetail, NoteSidebar). This fixes
+// the previous regex-based implementation which silently dropped the `title`
+// attribute on links, did not unescape Markdown backslash syntax, and did not
+// resolve reference-style links.
 export function inlineMdToHtml(md: string): string {
-  if (!md) return ''
-  return md
-    .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
-    .replace(/___(.+?)___/g, '<strong><em>$1</em></strong>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/__(.+?)__/g, '<strong>$1</strong>')
-    .replace(/\*([^*\n]+?)\*/g, '<em>$1</em>')
-    .replace(/_([^_\n]+?)_/g, '<em>$1</em>')
-    .replace(/~~(.+?)~~/g, '<del>$1</del>')
-    .replace(/\+\+(.+?)\+\+/g, '<u>$1</u>')
-    .replace(/==(.+?)==/g, '<mark>$1</mark>')
-    .replace(/`([^`\n]+?)`/g, '<code>$1</code>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+  return renderInlineMarkdownToHtml(md)
 }
 
 export function htmlToInlineMd(html: string): string {
   if (!html) return ''
-  
+
   const parser = new DOMParser()
   const doc = parser.parseFromString(`<body>${html}</body>`, 'text/html')
-  
+
   function nodeToMd(node: Node): string {
     if (node.nodeType === Node.TEXT_NODE) {
       return node.textContent ?? ''
     }
-    
+
     if (node.nodeType !== Node.ELEMENT_NODE) return ''
-    
+
     const el = node as HTMLElement
     const tag = el.tagName.toLowerCase()
     const inner = Array.from(el.childNodes).map(nodeToMd).join('')
-    
+
     switch (tag) {
       case 'strong':
       case 'b':
@@ -56,10 +51,12 @@ export function htmlToInlineMd(html: string): string {
         return `\`${inner}\``
       case 'a': {
         const href = el.getAttribute('href') ?? ''
-        return `[${inner}](${href})`
+        const title = el.getAttribute('title') ?? ''
+        // Re-emit `title` when present so the rendered HTML is round-trippable.
+        return title ? `[${inner}](${href} "${title}")` : `[${inner}](${href})`
       }
       case 'br':
-        return '\n'
+        return '  \n'
       case 'div':
       case 'p':
         return (el.previousSibling ? '\n' : '') + inner
@@ -69,12 +66,12 @@ export function htmlToInlineMd(html: string): string {
         return inner
     }
   }
-  
+
   const body = doc.body
   let result = Array.from(body.childNodes).map(nodeToMd).join('')
-  
+
   result = result.replace(/\n{3,}/g, '\n\n')
-  
+
   return result
 }
 

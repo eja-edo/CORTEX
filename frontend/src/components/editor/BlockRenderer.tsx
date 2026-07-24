@@ -28,6 +28,9 @@ export function BlockRenderer({ block, dragHandleListeners }: BlockRendererProps
       case 'heading_1':
       case 'heading_2':
       case 'heading_3':
+      case 'heading_4':
+      case 'heading_5':
+      case 'heading_6':
         return <HeadingBlock block={block} />
 
       case 'bullet_list':

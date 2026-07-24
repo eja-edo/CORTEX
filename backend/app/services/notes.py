@@ -4,13 +4,13 @@ from datetime import datetime
 from uuid import UUID
 
 import bleach
-from markdown_it import MarkdownIt
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import SessionLocal
 from app.models import Note
 from app.repositories.notes import NoteRepository
 from app.schemas import NoteCreate, NotePatchRequest, NoteResponse, NoteSummary, NoteUpdate
+from app.services.markdown_config import build_markdown_renderer
 from app.services.workspace_permission import WorkspacePermission
 from app.utils.note_delta import apply_text_patch, build_text_patch
 
@@ -46,7 +46,8 @@ class NoteService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
         self.repository = NoteRepository(session)
-        self.markdown = MarkdownIt("commonmark", {"html": False, "linkify": True, "typographer": True})
+        # Mirror of frontend/src/utils/markdown/config.ts — keep in sync.
+        self.markdown = build_markdown_renderer()
 
     async def create_note(self, payload: NoteCreate, user_id: UUID) -> Note:
         # Check user has write permission in the workspace

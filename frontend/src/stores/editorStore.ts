@@ -18,6 +18,11 @@ interface EditorStore {
   updateBlockContent: (blockId: string, content: string) => void
   serializeAndNotify: (notify: (md: string) => void) => void
 
+  /** Registered by EditorSurface — allows any component to trigger an immediate save. */
+  saveCallback: ((md: string) => void) | null
+  registerSaveCallback: (cb: (md: string) => void) => void
+  unregisterSaveCallback: () => void
+
   splitBlock: (blockId: string, beforeContent: string, afterContent: string) => void
   deleteBlock: (blockId: string) => void
   mergeBlockBackward: (blockId: string) => void
@@ -90,6 +95,16 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     const { blocks } = get()
     const md = serializeBlocksToMarkdown(blocks)
     notify(md)
+  },
+
+  saveCallback: null,
+
+  registerSaveCallback: (cb: (md: string) => void) => {
+    set({ saveCallback: cb })
+  },
+
+  unregisterSaveCallback: () => {
+    set({ saveCallback: null })
   },
 
   splitBlock: (blockId: string, beforeContent: string, afterContent: string) => {

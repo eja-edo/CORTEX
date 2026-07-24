@@ -27,6 +27,7 @@ export interface BlockMeta {
   collapsed?: boolean
   calloutType?: 'NOTE' | 'TIP' | 'WARNING' | 'IMPORTANT' | 'CAUTION'
   listNesting?: number
+  order?: number
   lineStart?: number
   lineEnd?: number
 }

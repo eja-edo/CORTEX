@@ -1,14 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Bold, Check, ChevronRight, Code, Italic, Link, Minus, Plus, Search, Trash2, Type, X } from 'lucide-react'
-import MarkdownIt from 'markdown-it'
 import { plainTextFromMarkdown } from '../utils/noteMarkdown'
-
-const md = new MarkdownIt({
-  html: false,
-  linkify: true,
-  typographer: true,
-  breaks: true,
-})
+import {
+  renderMarkdownToSanitizedHtml,
+  toggleTaskInMarkdown,
+} from '../utils/markdown/renderToHtml'
 
 export type NoteItem = {
   id: string
@@ -186,6 +182,7 @@ function NoteCardItem({
   const summaryButtonRef = useRef<HTMLButtonElement>(null)
   const dragPreviewRef = useRef<HTMLElement | null>(null)
   const autosaveTimerRef = useRef<number | null>(null)
+  const previewRef = useRef<HTMLDivElement>(null)
   const [localMd, setLocalMd] = useState(note.contentMd)
   const expandId = `note-expand-${note.id}`
   const title = note.title || getTitleFromMd(note.contentMd)
@@ -227,6 +224,23 @@ function NoteCardItem({
       }
     }
   }, [])
+
+  // Interactive task-list checkboxes in the markdown preview
+  useEffect(() => {
+    if (isExpanded || !previewRef.current) return
+    const el = previewRef.current
+    const onChange = (e: Event) => {
+      const target = e.target as HTMLInputElement
+      if (target.type !== 'checkbox' || !target.hasAttribute('data-task-index')) return
+      const idx = Number(target.getAttribute('data-task-index'))
+      const updated = toggleTaskInMarkdown(note.contentMd, idx)
+      if (updated !== note.contentMd) {
+        onNoteChange(note.id, updated)
+      }
+    }
+    el.addEventListener('change', onChange)
+    return () => el.removeEventListener('change', onChange)
+  }, [isExpanded, note.contentMd, note.id, onNoteChange])
 
   const AUTOSAVE_INTERVAL = Number(import.meta.env.VITE_AUTOSAVE_INTERVAL) || 350
   const queueAutosave = useCallback((value: string) => {
@@ -280,7 +294,7 @@ function NoteCardItem({
     if (window.confirm(`Xóa note "${title}"?`)) onDeleteNote(note.id)
   }
 
-  const renderedHtml = md.render(note.contentMd || '_Chưa có nội dung_')
+  const renderedHtml = renderMarkdownToSanitizedHtml(note.contentMd || '_Chưa có nội dung_', { interactiveTasks: true })
   const emoji = note.contentMd.includes('**') ? '📋' : note.contentMd.includes('http') ? '🔗' : '📝'
 
   const handleDragStart = (event: React.DragEvent) => {
@@ -409,7 +423,7 @@ function NoteCardItem({
                 <div className="note-md-edit-hint">Markdown · Tab=2sp · Esc lưu</div>
               </div>
             ) : (
-              <div className="note-md-preview" dangerouslySetInnerHTML={{ __html: renderedHtml }} />
+              <div ref={previewRef} className="note-md-preview" dangerouslySetInnerHTML={{ __html: renderedHtml }} />
             )}
 
             <div className="note-toolbar" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
