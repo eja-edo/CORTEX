@@ -129,6 +129,22 @@ export function useSchedules() {
         }
     }, [fetchSchedules])
 
+    const handleUpdateSchedule = useCallback(async (item: Schedule, patch: Partial<Schedule>): Promise<boolean> => {
+        if (!item.id) return false
+        try {
+            await requestWithAuth<Schedule>(`/schedules/${item.id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(patch),
+            })
+            await fetchSchedules()
+            return true
+        } catch (error) {
+            console.error('Cannot update schedule:', error)
+            return false
+        }
+    }, [fetchSchedules])
+
     const handleRemoveSchedule = useCallback(async (scheduleId: string): Promise<void> => {
         try {
             await requestWithAuth<void>(`/schedules/${scheduleId}`, { method: 'DELETE' })
@@ -156,6 +172,7 @@ export function useSchedules() {
         handleRenewGoogleCalendarWatch,
         handleCreateSchedule,
         handleToggleComplete,
+        handleUpdateSchedule,
         handleRemoveSchedule,
     }
 }

@@ -22,14 +22,25 @@ export const MARKDOWN_IT_OPTIONS: {
 // `_ALLOWED_TAGS` / `_ALLOWED_ATTRIBUTES` in `backend/app/services/notes.py`.
 // Frontend allows a couple of extras (mark, sub, sup, span) that the editor
 // surfaces through bubble toolbar (highlight, sub/sup future-proofing).
+//
+// `svg` and its drawing primitives (`rect`, `path`) are allowed so we can
+// render task-list checkboxes as lucide-style icons inline (matching the
+// note editor's `block-task-checkbox`).
 export const SANITIZE_ALLOWED_TAGS: readonly string[] = [
   'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
   'p', 'br', 'hr', 'strong', 'em', 's', 'del', 'code', 'pre',
   'ul', 'ol', 'li',
   'blockquote', 'a', 'span', 'mark', 'sub', 'sup', 'img',
+  'svg', 'rect', 'path', 'circle', 'line', 'polyline', 'polygon',
 ]
 
 export const SANITIZE_ALLOWED_ATTR: readonly string[] = [
   'href', 'title', 'class', 'target', 'rel',
   'src', 'alt',
+  // SVG attributes emitted by lucide-style icons and our task-list post-processor.
+  'xmlns', 'width', 'height', 'viewBox', 'fill', 'stroke',
+  'stroke-width', 'stroke-linecap', 'stroke-linejoin',
+  'x', 'y', 'rx', 'ry', 'd',
+  'aria-hidden', 'aria-disabled', 'role', 'tabindex',
+  'data-task-index',
 ]

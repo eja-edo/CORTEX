@@ -134,29 +134,37 @@ describe('renderMarkdownToSanitizedHtml — basic syntax (markdownguide.org)', (
       expect(out).toContain('<p>Second paragraph in same item.</p>')
     })
 
-    it('renders task list (GFM extension)', () => {
+    it('renders task list (GFM extension) as lucide square icons', () => {
       const out = renderMarkdownToSanitizedHtml('- [ ] todo\n- [x] done')
       expect(out).toContain('todo')
       expect(out).toContain('done')
-      expect(out).toContain('type="checkbox"')
-      expect(out).toContain('disabled')
       expect(out).toContain('class="task-list-item"')
-      // checked item
-      expect(out.match(/checked/g)).toHaveLength(1)
+      expect(out).toContain('lucide-square')
+      expect(out).toContain('lucide-square-check-big')
+      // Should not emit a disabled <input> anymore — the icon is decorative.
+      expect(out).not.toContain('type="checkbox"')
+      expect(out).not.toContain(' disabled')
+      expect(out).not.toContain('disabled=""')
     })
 
-    it('renders interactive task list without disabled', () => {
-      const out = renderMarkdownToSanitizedHtml('- [ ] todo\n- [x] done', { interactiveTasks: true })
+    it('emits aria-disabled read-only checkbox in non-interactive mode', () => {
+      const out = renderMarkdownToSanitizedHtml('- [ ] a\n- [x] b')
+      expect(out).toContain('aria-disabled="true"')
+      expect(out).not.toContain('data-task-index')
+    })
+
+    it('emits data-task-index when interactiveTasks', () => {
+      const out = renderMarkdownToSanitizedHtml('- [ ] a\n- [x] b', { interactiveTasks: true })
       expect(out).toContain('data-task-index="0"')
       expect(out).toContain('data-task-index="1"')
-      expect(out).not.toContain('disabled')
-      expect(out).toContain('class="task-list-item"')
-      expect(out.match(/checked/g)).toHaveLength(1)
+      expect(out).toContain('class="block-task-checkbox md-task-toggle"')
     })
 
     it('supports bare images in interactive mode', () => {
       const out = renderMarkdownToSanitizedHtml('- [ ] ![img](x.png)', { interactiveTasks: true })
-      expect(out).not.toContain('disabled')
+      expect(out).not.toContain(' disabled')
+      expect(out).not.toContain('disabled=""')
+      expect(out).toContain('data-task-index="0"')
     })
   })
 

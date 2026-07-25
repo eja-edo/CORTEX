@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Calendar as BigCalendar } from 'react-big-calendar'
-import { CheckCircle2, Clock3, MapPin, Tag, Trash2, X, Plus, RefreshCw, Repeat } from 'lucide-react'
+import { Plus, RefreshCw, Repeat } from 'lucide-react'
 import { format, parseISO } from 'date-fns'
 import { clsx } from 'clsx'
 import type { Schedule } from '../types'
 import { localizer } from '../utils/calendar'
+import { EventDetailModal } from './EventDetailModal'
 
 function parseServerDateTime(value: string): Date {
     const hasTimezone = /(?:Z|[+-]\d{2}:\d{2})$/i.test(value)
@@ -41,6 +42,7 @@ interface CalendarViewProps {
     onOpenCreateEvent: () => void
     onSlotSelect?: (start: Date, end: Date) => void
     onToggleComplete: (item: Schedule) => Promise<void>
+    onUpdate?: (item: Schedule, patch: Partial<Schedule>) => Promise<boolean>
     onRemove: (id: string) => Promise<void>
 }
 
@@ -53,7 +55,7 @@ export function CalendarView({
     isGoogleCalendarConnected = false,
     schedules, startDate, endDate,
     onStartDateChange, onEndDateChange,
-    onFetch, onOpenCreateEvent, onSlotSelect, onToggleComplete, onRemove,
+    onFetch, onOpenCreateEvent, onSlotSelect, onToggleComplete, onUpdate, onRemove,
 }: CalendarViewProps) {
     const [selectedSchedule, setSelectedSchedule] = useState<Schedule | null>(null)
     const [currentDate, setCurrentDate] = useState<Date>(() => new Date(startDate))
@@ -261,88 +263,16 @@ export function CalendarView({
 
             {/* Event Detail Modal */}
             {selectedSchedule && selectedStart && selectedEnd && (
-                <div className="modal-backdrop" onClick={() => setSelectedSchedule(null)}>
-                    <div className="modal" onClick={(e) => e.stopPropagation()}>
-                        <div className="modal-header">
-                            <div className="modal-title-area">
-                                <div className={`modal-event-type-badge badge-${selectedSchedule.type}`}>
-                                    {TYPE_LABELS[selectedSchedule.type] ?? selectedSchedule.type}
-                                </div>
-                                <div className="modal-title">{selectedSchedule.title}</div>
-                            </div>
-                            <button type="button" className="modal-close" onClick={() => setSelectedSchedule(null)}>
-                                <X size={15} />
-                            </button>
-                        </div>
-
-                        <div className="modal-body">
-                            <div className="modal-meta-list">
-                                <div className="modal-meta-row">
-                                    <Clock3 size={14} className="modal-meta-icon" />
-                                    <span className="modal-meta-text">
-                                        {format(selectedStart, 'EEEE, MMM d, yyyy')} · {formatTimeRange(selectedStart, selectedEnd)}
-                                    </span>
-                                </div>
-                                
-                                {/* Recurrence indicator */}
-                                {selectedSchedule.recurrence && selectedSchedule.recurrence.freq !== 'NONE' && (
-                                    <div className="modal-meta-row">
-                                        <Repeat size={14} className="modal-meta-icon" />
-                                        <span className="modal-meta-text">
-                                            {selectedSchedule.recurrence.freq === 'DAILY' && 'Daily'}
-                                            {selectedSchedule.recurrence.freq === 'WEEKLY' && 'Weekly'}
-                                            {selectedSchedule.recurrence.freq === 'MONTHLY' && 'Monthly'}
-                                            {selectedSchedule.recurrence.interval && selectedSchedule.recurrence.interval > 1 && ` every ${selectedSchedule.recurrence.interval}`}
-                                        </span>
-                                    </div>
-                                )}
-                                
-                                {selectedSchedule.location && (
-                                    <div className="modal-meta-row">
-                                        <MapPin size={14} className="modal-meta-icon" />
-                                        <span className="modal-meta-text">{selectedSchedule.location}</span>
-                                    </div>
-                                )}
-                                <div className="modal-meta-row">
-                                    <Tag size={14} className="modal-meta-icon" />
-                                    <span className="modal-meta-text" style={{ color: 'var(--text-tertiary)' }}>
-                                        {selectedSchedule.is_completed ? 'Completed' : 'In progress'}
-                                    </span>
-                                </div>
-                            </div>
-
-                            {selectedSchedule.description && (
-                                <div className="modal-description">
-                                    <div className="modal-description-label">Notes</div>
-                                    <p>{selectedSchedule.description}</p>
-                                </div>
-                            )}
-                        </div>
-
-                        <div className="modal-footer">
-                            <button
-                                type="button"
-                                className="btn btn-danger"
-                                onClick={async () => { if (selectedSchedule.id) { await onRemove(selectedSchedule.id); } setSelectedSchedule(null) }}
-                            >
-                                <Trash2 size={13} /> Delete
-                            </button>
-                            <div className="modal-footer-right">
-                                <button type="button" className="btn btn-ghost" onClick={() => setSelectedSchedule(null)}>
-                                    Close
-                                </button>
-                                <button
-                                    type="button"
-                                    className="btn btn-primary"
-                                    onClick={async () => { await onToggleComplete(selectedSchedule); setSelectedSchedule(null) }}
-                                >
-                                    <CheckCircle2 size={13} />
-                                    {selectedSchedule.is_completed ? 'Mark in progress' : 'Mark complete'}
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+                <EventDetailModal
+                    schedule={selectedSchedule}
+                    startDate={selectedStart}
+                    endDate={selectedEnd}
+                    canEdit={Boolean(selectedSchedule.id) && Boolean(onUpdate)}
+                    onUpdate={onUpdate ?? (async () => false)}
+                    onToggleComplete={onToggleComplete}
+                    onRemove={onRemove}
+                    onClose={() => setSelectedSchedule(null)}
+                />
             )}
         </div>
     )

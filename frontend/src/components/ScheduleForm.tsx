@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react'
 import type { FormEvent } from 'react'
+import { Layers, MapPin, Calendar, TextQuote, MoveRight, RefreshCw, Bell, Paperclip, X } from 'lucide-react'
 
 import type { Schedule, ScheduleType, RecurrenceRule, ReminderConfig } from '../types'
 import { RecurrenceConfig } from './RecurrenceConfig'
 import { ReminderConfig as ReminderConfigComponent } from './ReminderConfig'
+import { MarkdownField } from './MarkdownField'
 
 function toLocalInputDateTime(value: Date): string {
   const local = new Date(value.getTime() - value.getTimezoneOffset() * 60000)
@@ -12,7 +14,6 @@ function toLocalInputDateTime(value: Date): string {
 
 function getNowRounded(): Date {
   const now = new Date()
-  // Round up to the next 30-min mark for a cleaner default
   const minutes = now.getMinutes()
   const roundedMinutes = minutes < 30 ? 30 : 0
   const hoursAdd = minutes < 30 ? 0 : 1
@@ -43,15 +44,15 @@ export function ScheduleForm({ onCreate, initialTimes, onClose }: ScheduleFormPr
   })
   const [location, setLocation] = useState('')
   const [description, setDescription] = useState('')
-  
-  // New fields for recurrence and reminders
+
   const [recurrence, setRecurrence] = useState<RecurrenceRule | null>(null)
   const [reminders, setReminders] = useState<ReminderConfig[]>([])
-  
+
+  const [showRecurrence, setShowRecurrence] = useState(false)
+  const [showReminders, setShowReminders] = useState(false)
+
   const [formError, setFormError] = useState('')
 
-  // When initialTimes changes (e.g. user clicks a different slot and re-opens),
-  // update the fields to reflect the new slot.
   useEffect(() => {
     /* eslint-disable react-hooks/set-state-in-effect */
     if (!initialTimes) return
@@ -92,58 +93,69 @@ export function ScheduleForm({ onCreate, initialTimes, onClose }: ScheduleFormPr
   }
 
   return (
-    <form onSubmit={handleSubmit} className="schedule-form">
+    <form id="create-event-form" onSubmit={handleSubmit} className="schedule-form">
       {formError && (
         <div className="form-error">{formError}</div>
       )}
 
-      <div className="form-field">
-        <label className="form-label" htmlFor="title">Title</label>
+      <div className="title-group">
         <input
-          id="title"
           type="text"
-          className="form-input"
+          className="input-title"
           value={title}
           onChange={e => setTitle(e.target.value)}
-          placeholder="Event title"
+          placeholder="Tên sự kiện của bạn..."
+          autoFocus
           required
         />
+        <div className="title-underline" />
       </div>
 
-      <div className="form-field">
-        <label className="form-label" htmlFor="type">Type</label>
-        <select
-          id="type"
-          className="form-select"
-          value={type}
-          onChange={e => setType(e.target.value as ScheduleType)}
-        >
-          <option value="CLASS">Class</option>
-          <option value="DEADLINE">Deadline</option>
-          <option value="EXAM">Exam</option>
-          <option value="PERSONAL">Personal</option>
-        </select>
-      </div>
-
-      <div className="form-row">
-        <div className="form-field">
-          <label className="form-label" htmlFor="startTime">Start</label>
+      <div className="grid-row">
+        <div className="form-item">
+          <label><Layers size={14} /> Phân loại</label>
+          <select
+            className="input-field"
+            value={type}
+            onChange={e => setType(e.target.value as ScheduleType)}
+          >
+            <option value="CLASS">Lớp học (Class)</option>
+            <option value="EXAM">Hội chẩn (Exam)</option>
+            <option value="PERSONAL">Cá nhân (Personal)</option>
+            <option value="DEADLINE">Deadline</option>
+            <option value="CRON_EVENT">Cron</option>
+          </select>
+        </div>
+        <div className="form-item">
+          <label><MapPin size={14} /> Địa điểm</label>
           <input
-            id="startTime"
+            type="text"
+            className="input-field"
+            value={location}
+            onChange={e => setLocation(e.target.value)}
+            placeholder="Phòng hoặc Link Zoom"
+          />
+        </div>
+      </div>
+
+      <label><Calendar size={14} /> Thời gian diễn ra</label>
+      <div className="time-box">
+        <div className="time-segment">
+          <div className="time-segment-label">BẮT ĐẦU</div>
+          <input
             type="datetime-local"
-            className="form-input"
             value={startTime}
             onChange={e => setStartTime(e.target.value)}
             required
           />
         </div>
-
-        <div className="form-field">
-          <label className="form-label" htmlFor="endTime">End</label>
+        <div className="time-arrow">
+          <MoveRight size={20} />
+        </div>
+        <div className="time-segment">
+          <div className="time-segment-label">KẾT THÚC</div>
           <input
-            id="endTime"
             type="datetime-local"
-            className="form-input"
             value={endTime}
             onChange={e => setEndTime(e.target.value)}
             required
@@ -151,44 +163,75 @@ export function ScheduleForm({ onCreate, initialTimes, onClose }: ScheduleFormPr
         </div>
       </div>
 
-      <div className="form-field">
-        <label className="form-label" htmlFor="location">Location</label>
-        <input
-          id="location"
-          type="text"
-          className="form-input"
-          value={location}
-          onChange={e => setLocation(e.target.value)}
-          placeholder="Room, link, or address"
-        />
-      </div>
-
-      <div className="form-field">
-        <label className="form-label" htmlFor="description">Description</label>
-        <textarea
-          id="description"
-          className="form-textarea"
+      <div className="form-item">
+        <label><TextQuote size={14} /> Ghi chú thêm</label>
+        <MarkdownField
+          className="input-field"
+          rows={2}
           value={description}
-          onChange={e => setDescription(e.target.value)}
-          placeholder="Optional description"
-          rows={3}
+          onChange={setDescription}
+          placeholder="Nội dung tóm tắt..."
+          ariaLabel="Ghi chú thêm (markdown)"
         />
       </div>
 
-      <RecurrenceConfig value={recurrence} onChange={setRecurrence} />
-
-      <ReminderConfigComponent value={reminders} onChange={setReminders} />
-
-      <div className="form-actions">
-        {onClose && (
-          <button type="button" className="btn btn-ghost" onClick={onClose}>
-            Cancel
-          </button>
-        )}
-        <button type="submit" className="btn btn-primary">
-          Create event
+      <div className="options-group">
+        <button
+          type="button"
+          className={`pill ${recurrence ? 'active' : ''}`}
+          onClick={() => setShowRecurrence(s => !s)}
+        >
+          <RefreshCw size={14} /> Lặp lại
+        </button>
+        <button
+          type="button"
+          className={`pill ${reminders.length > 0 ? 'active' : ''}`}
+          onClick={() => setShowReminders(s => !s)}
+        >
+          <Bell size={14} /> Nhắc nhở
+        </button>
+        <button type="button" className="pill" disabled title="Sắp ra mắt">
+          <Paperclip size={14} /> Đính kèm
         </button>
       </div>
+
+      {(showRecurrence || recurrence) && (
+        <div className="options-panel">
+          {showRecurrence ? (
+            <div className="options-panel-header">
+              <span>Lặp lại</span>
+              <button
+                type="button"
+                className="options-panel-close"
+                onClick={() => setShowRecurrence(false)}
+                aria-label="Đóng"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          ) : null}
+          <RecurrenceConfig value={recurrence} onChange={setRecurrence} />
+        </div>
+      )}
+
+      {(showReminders || reminders.length > 0) && (
+        <div className="options-panel">
+          {showReminders ? (
+            <div className="options-panel-header">
+              <span>Nhắc nhở</span>
+              <button
+                type="button"
+                className="options-panel-close"
+                onClick={() => setShowReminders(false)}
+                aria-label="Đóng"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          ) : null}
+          <ReminderConfigComponent value={reminders} onChange={setReminders} />
+        </div>
+      )}
     </form>
   )
 }

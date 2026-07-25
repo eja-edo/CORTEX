@@ -40,10 +40,8 @@ export function renderMarkdownToSanitizedHtml(
   const raw = md.render(content)
   const withTaskItems = renderTaskListItems(raw, opts?.interactiveTasks)
   return DOMPurify.sanitize(withTaskItems, {
-    ALLOWED_TAGS: [...SANITIZE_ALLOWED_TAGS, 'input'],
-    ALLOWED_ATTR: opts?.interactiveTasks
-      ? [...SANITIZE_ALLOWED_ATTR, 'type', 'checked', 'data-task-index']
-      : [...SANITIZE_ALLOWED_ATTR, 'type', 'disabled', 'checked'],
+    ALLOWED_TAGS: [...SANITIZE_ALLOWED_TAGS],
+    ALLOWED_ATTR: [...SANITIZE_ALLOWED_ATTR],
     FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed'],
   })
 }
@@ -90,25 +88,39 @@ export function renderInlineMarkdownToHtml(content: string): string {
   })
 }
 
-// ── Task-list (GFM checkbox) post-processor ──────────────────────────────────
+// ── Task-list icon SVGs (mirrors note editor's Square / SquareCheckBig) ──────
+//
+// The block editor renders checkboxes with lucide's Square / SquareCheckBig
+// icons via React components. We bake the same SVG markup into the HTML
+// output here so the rendered preview matches the note view exactly.
+//
+// These two icon paths are the canonical ones from the lucide-react source.
+const TASK_ICON_UNCHECKED =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-square"><rect width="18" height="18" x="3" y="3" rx="2"></rect></svg>'
+
+const TASK_ICON_CHECKED =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-square-check-big"><path d="M21 10.656V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12.344"></path><path d="m9 11 3 3L22 4"></path></svg>'
+
+// ── Task list post-processor ─────────────────────────────────────────────────
 //
 // markdown-it does not natively support `- [ ]` / `- [x]` syntax. We convert
-// the rendered `<li>[ ]</li>` / `<li>[x]</li>` into checkboxes at the HTML
-// level. This is safer and simpler than writing a full markdown-it plugin.
+// `<li>[ ]</li>` / `<li>[x]</li>` into lucide square icons inline so the
+// HTML output matches the note editor's task-list rendering exactly.
+//
+// When `interactive` is true, each list item also gets a `data-task-index`
+// — the caller attaches a `change` listener on the container and calls
+// {@link toggleTaskInMarkdown} to persist the toggle.
 function renderTaskListItems(html: string, interactive?: boolean): string {
   let idx = 0
   return html.replace(
     /<li>(\s*)\[([ xX])\]\s*/g,
     (_, ws, mark) => {
       const checked = mark.toLowerCase() === 'x'
-      if (interactive) {
-        return `<li class="task-list-item">${ws}<input type="checkbox" data-task-index="${idx++}"${
-          checked ? ' checked' : ''
-        }> `
-      }
-      return `<li class="task-list-item">${ws}<input type="checkbox" disabled${
-        checked ? ' checked' : ''
-      }> `
+      const icon = checked ? TASK_ICON_CHECKED : TASK_ICON_UNCHECKED
+      const wrapClass = interactive ? 'md-task-toggle' : ''
+      const dataAttr = interactive ? ` data-task-index="${idx}"` : ''
+      idx++
+      return `<li class="task-list-item">${ws}<span class="block-task-checkbox ${wrapClass}"${dataAttr} aria-disabled="true">${icon}</span> `
     },
   )
 }

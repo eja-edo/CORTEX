@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, CheckCircle2, ChevronDown, GitBranch, Home, Plus, Search, Settings, StickyNote, Video, X, Trash2 } from 'lucide-react'
+import { AlertCircle, CheckCircle2, ChevronDown, GitBranch, Home, Plus, Search, Settings, Sparkles, StickyNote, Video, X, Trash2 } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
 import 'react-big-calendar/lib/css/react-big-calendar.css'
 import './App.css'
@@ -1202,6 +1202,7 @@ const processNotificationChunk = (chunk: string): void => {
                     onOpenCreateEvent={handleOpenCreateEvent}
                     onSlotSelect={handleCalendarSlotSelect}
                     onToggleComplete={schedules.handleToggleComplete}
+                    onUpdate={schedules.handleUpdateSchedule}
                     onRemove={schedules.handleRemoveSchedule}
                   />
                 </div>
@@ -1327,11 +1328,9 @@ const processNotificationChunk = (chunk: string): void => {
           <div className="modal-backdrop" onClick={handleCloseCreateEvent}>
             <div className="modal create-modal" onClick={(e) => e.stopPropagation()}>
               <div className="modal-header">
-                <div className="modal-title-area">
-                  <div className="modal-title">New event</div>
-                </div>
-                <button type="button" className="modal-close" onClick={handleCloseCreateEvent}>
-                  <X size={16} />
+                <span className="category-tag">Lịch biểu</span>
+                <button type="button" className="modal-close" onClick={handleCloseCreateEvent} aria-label="Đóng">
+                  <X size={18} />
                 </button>
               </div>
               <div className="modal-body">
@@ -1340,6 +1339,15 @@ const processNotificationChunk = (chunk: string): void => {
                   initialTimes={createEventInitialTimes}
                   onClose={handleCloseCreateEvent}
                 />
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn-cm-cancel" onClick={handleCloseCreateEvent}>
+                  Bỏ qua
+                </button>
+                <button type="submit" form="create-event-form" className="btn-cm-create">
+                  <span>Lưu sự kiện</span>
+                  <Sparkles size={18} />
+                </button>
               </div>
             </div>
           </div>
