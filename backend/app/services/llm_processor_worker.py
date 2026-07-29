@@ -24,6 +24,8 @@ import json
 from datetime import datetime
 from typing import Optional
 
+from sqlalchemy import select
+
 from app.config import settings
 from app.services.mongo_service import MongoOCRService
 from app.services.llm_processing import llm_service
@@ -36,7 +38,7 @@ from app.services.redis.redis_stream_service import RedisStreamService
 from app.utils.decorator import singleton
 from app.utils.logger import get_logger
 from app.models import AssetStatus, Asset
-from app.database import get_db
+from app.database_async import AsyncSessionLocal
 
 logger = get_logger(__name__)
 
@@ -408,18 +410,20 @@ class LLMProcessorWorker:
             status="completed",
         )
         # Update status in assets table (PostgreSQL)
-        db_gen = get_db()
-        db = next(db_gen)
-        try:
-            asset = db.query(Asset).filter(Asset.id == task.asset_id).first()
-            if asset:
-                # Nếu AssetStatus có COMPLETED thì dùng, không thì fallback READY
-                asset.status = AssetStatus.COMPLETED
-                asset.updated_at = datetime.utcnow()
-                db.add(asset)
-                db.commit()
-        finally:
-            db.close()
+        async with AsyncSessionLocal() as db:
+            try:
+                asset = (
+                    await db.execute(select(Asset).where(Asset.id == task.asset_id))
+                ).scalar_one_or_none()
+                if asset:
+                    asset.status = AssetStatus.COMPLETED
+                    asset.updated_at = datetime.utcnow()
+                    await db.commit()
+            except Exception:
+                logger.exception(
+                    "Failed to mark asset %s as completed", task.asset_id
+                )
+                await db.rollback()
         logger.info(
             f"✅ LLM processing done: asset={task.asset_id}, "
             f"windows={len(windows)}, tokens={total_tokens}, cost=${total_cost:.4f}"

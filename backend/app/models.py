@@ -51,6 +51,7 @@ class ReminderMethod(str, Enum):
 class ReminderStatus(str, Enum):
     """Reminder lifecycle status."""
     PENDING = "pending"
+    PROCESSING = "processing"
     SENT = "sent"
     FAILED = "failed"
     CANCELLED = "cancelled"

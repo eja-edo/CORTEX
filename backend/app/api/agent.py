@@ -308,7 +308,7 @@ async def revert_action(
         HTTPException: 400 if revert fails
     """
     from app.ai.agents.action_snapshot_store import get_snapshot_store
-    from app.ai.agents.tools.revert_action import (
+    from app.ai.tools.revert_action import (
         _revert_create_note,
         _revert_update_note,
         _revert_create_schedule,

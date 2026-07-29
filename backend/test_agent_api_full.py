@@ -31,7 +31,7 @@ async def test_tool_registry():
 
     try:
         from app.ai.agents.tool_registry import get_tool_registry
-        from app.ai.agents.tools import register_all_tools
+        from app.ai.tools import register_all_tools
 
         register_all_tools()
         registry = get_tool_registry()

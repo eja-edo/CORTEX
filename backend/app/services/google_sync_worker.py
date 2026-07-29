@@ -9,7 +9,9 @@ import asyncio
 from typing import Optional
 from uuid import UUID
 
-from app.database import get_db
+from sqlalchemy import select
+
+from app.database_async import AsyncSessionLocal
 from app.models import Schedule, SyncOperation
 from app.services.google_calendar_sync import GoogleCalendarSyncService
 from app.services.redis.google_sync_task import (
@@ -164,8 +166,10 @@ class GoogleSyncWorker:
         """
         Xử lý một sync task: load Schedule từ DB rồi gọi GoogleCalendarSyncService.
 
-        DB session mở ngắn gọn per-task để tránh giữ connection
-        trong suốt thời gian Redis blocking read.
+        Schedule được load bằng async session (non-blocking) rồi detach khỏi
+        session để GoogleCalendarSyncService (sync) có thể thao tác trên
+        detached instance. Phần sync service chạy trong asyncio.to_thread để
+        không block event loop trong khi chờ HTTP / DB I/O.
         """
         if not task.schedule_id:
             logger.warning(
@@ -173,38 +177,56 @@ class GoogleSyncWorker:
             )
             return
 
-        db_gen = get_db()
-        db = next(db_gen)
-        try:
+        # Bước 1: load schedule qua async session.
+        async with AsyncSessionLocal() as async_db:
             schedule = (
-                db.query(Schedule)
-                .filter(Schedule.id == UUID(task.schedule_id))
-                .first()
-            )
-
-            if schedule is None:
-                # Schedule đã bị xoá trước khi worker kịp xử lý — bình thường.
-                # Không raise để tránh retry vô ích.
-                logger.warning(
-                    "GoogleSyncWorker: schedule %s not found (deleted?), "
-                    "acknowledging task %s without sync",
-                    task.schedule_id,
-                    task.task_id,
+                await async_db.execute(
+                    select(Schedule).where(Schedule.id == UUID(task.schedule_id))
                 )
-                return
+            ).scalar_one_or_none()
 
-            sync_service = GoogleCalendarSyncService(db)
+        if schedule is None:
+            # Schedule đã bị xoá trước khi worker kịp xử lý — bình thường.
+            # Không raise để tránh retry vô ích.
+            logger.warning(
+                "GoogleSyncWorker: schedule %s not found (deleted?), "
+                "acknowledging task %s without sync",
+                task.schedule_id,
+                task.task_id,
+            )
+            return
 
+        # Bước 2: chạy sync service (sync code) trong thread riêng để
+        # không block event loop.
+        try:
             if task.operation == SyncOperation.UPSERT.value:
-                sync_service.sync_upsert_schedule(schedule)
+                await asyncio.to_thread(self._sync_upsert, schedule)
             elif task.operation == SyncOperation.DELETE.value:
-                sync_service.sync_delete_schedule(schedule)
+                await asyncio.to_thread(self._sync_delete, schedule)
             else:
                 logger.warning(
                     "GoogleSyncWorker: unknown operation '%s' in task %s",
                     task.operation,
                     task.task_id,
                 )
+        except Exception:
+            logger.exception(
+                "GoogleSyncWorker: sync service raised for task %s", task.task_id
+            )
+            raise
 
-        finally:
-            db.close()
+    @staticmethod
+    def _sync_upsert(schedule: Schedule) -> None:
+        """Helper chạy trong thread — mở sync session cho GoogleCalendarSyncService."""
+        from app.database import sync_session  # local import: tránh vòng phụ thuộc
+
+        with sync_session() as db:
+            GoogleCalendarSyncService(db).sync_upsert_schedule(schedule)
+
+    @staticmethod
+    def _sync_delete(schedule: Schedule) -> None:
+        """Helper chạy trong thread — mở sync session cho GoogleCalendarSyncService."""
+        from app.database import sync_session  # local import: tránh vòng phụ thuộc
+
+        with sync_session() as db:
+            GoogleCalendarSyncService(db).sync_delete_schedule(schedule)
