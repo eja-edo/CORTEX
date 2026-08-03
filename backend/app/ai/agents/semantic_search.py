@@ -64,14 +64,14 @@ async def semantic_search_notes(
     
     # Build semantic search query using pgvector
     try:
-        # Raw SQL for pgvector cosine similarity search
-        # Note: embedding column stores JSON array, convert to proper vector type for search
+        # pgvector cosine similarity search
+        # embedding column is already vector(768)
         sql = """
             SELECT 
                 n.id,
                 n.content,
-                (n.embedding::vector <-> :query_embedding::vector) as distance,
-                (1 - (n.embedding::vector <-> :query_embedding::vector) / 2) as similarity_score
+                (n.embedding <-> CAST(:query_embedding AS vector)) as distance,
+                (1 - (n.embedding <-> CAST(:query_embedding AS vector)) / 2) as similarity_score
             FROM notes n
             WHERE 
                 n.user_id = :user_id 
@@ -87,7 +87,7 @@ async def semantic_search_notes(
             LIMIT :limit
         """
         
-        # Convert embedding list to PostgreSQL vector format
+        # Serialize list to string for raw SQL (asyncpg doesn't auto-map list to vector in text())
         embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
         
         params = {

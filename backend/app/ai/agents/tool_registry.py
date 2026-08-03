@@ -1,8 +1,11 @@
 """Tool registry for managing agent tools and their execution."""
 
 import json
+import os
+import re
+from pathlib import Path
 from typing import Callable, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from pydantic import BaseModel, ValidationError
 
 from app.ai.agents.provider_types import ToolDefinition as ProviderToolDef
@@ -10,6 +13,117 @@ from app.ai.agents.tool_context import ToolContext
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# ── Structured logging config ──────────────────────────────────────────────
+
+TOOL_LOG_DIR = Path(os.getenv("TOOL_LOG_DIR", "logs"))
+TOOL_LOG_FILE = TOOL_LOG_DIR / "tool-executions.jsonl"
+
+SENSITIVE_ARG_KEYS = re.compile(
+    r"^(api[_-]?key|password|secret|token|authorization|bearer|auth|private[_-]?key)$",
+    re.IGNORECASE,
+)
+CONTENT_ARG_KEYS = frozenset({"content"})
+TRUNCATE_LENGTH = 500
+MAX_SANITIZE_DEPTH = 5
+
+
+def _sanitize_args(args: dict) -> dict:
+    """Return a sanitised copy of tool arguments suitable for logging."""
+    def _walk(obj: Any, depth: int = 0) -> Any:
+        if depth > MAX_SANITIZE_DEPTH:
+            return "[MAX_DEPTH]"
+        if isinstance(obj, str):
+            if obj == "":
+                return obj
+            if len(obj) > TRUNCATE_LENGTH:
+                return obj[:TRUNCATE_LENGTH] + "..."
+            return obj
+        if not isinstance(obj, dict):
+            return obj
+
+        cleaned: dict = {}
+        for key, value in obj.items():
+            low_key = key.lower()
+            if SENSITIVE_ARG_KEYS.match(key):
+                cleaned[key] = "[REDACTED]"
+            elif low_key in CONTENT_ARG_KEYS:
+                cleaned[key] = "[REDACTED]"
+            elif isinstance(value, list):
+                cleaned[key] = [_walk(v, depth + 1) for v in value]
+            else:
+                cleaned[key] = _walk(value, depth + 1)
+        return cleaned
+
+    return _walk(args)  # type: ignore[return-value]
+
+
+def _write_tool_log(
+    *,
+    tool_name: str,
+    args: dict,
+    user_id: str,
+    conversation_id: str | None,
+    duration_ms: float,
+    success: bool,
+    error: str | None = None,
+) -> None:
+    """Append a structured JSON line to the tool log file."""
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "tool_name": tool_name,
+        "args": _sanitize_args(args),
+        "user_id": str(user_id),
+        "conversation_id": str(conversation_id) if conversation_id else None,
+        "duration_ms": round(duration_ms, 1),
+        "success": success,
+        "error": error,
+    }
+    try:
+        TOOL_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(TOOL_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+    except OSError:
+        pass  # non-fatal; logging should never break execution
+
+
+# ── Tool execution logging (legacy Python logger + structured JSONL) ────────
+
+def _log_execution(
+    *,
+    tool_name: str,
+    args: dict,
+    ctx: ToolContext,
+    duration_ms: float,
+    success: bool,
+    error: str | None = None,
+    exc_info: bool = False,
+) -> None:
+    """Log tool execution through both the Python logger and the JSONL file."""
+    level = logger.error if error else logger.info
+    log_msg = (
+        f"event=tool_execution "
+        f"tool_name={tool_name} "
+        f"success={'true' if success else 'false'} "
+        f"elapsed_ms={duration_ms:.1f} "
+        f"user={ctx.user_id}"
+    )
+    if error:
+        log_msg += f" error={error}"
+
+    log_fn = lambda: level(log_msg, exc_info=exc_info)  # noqa: E731
+    log_fn()
+
+    conv_id = str(ctx.conversation_id) if ctx.conversation_id else None
+    _write_tool_log(
+        tool_name=tool_name,
+        args=args,
+        user_id=str(ctx.user_id),
+        conversation_id=conv_id,
+        duration_ms=duration_ms,
+        success=success,
+        error=error,
+    )
 
 
 class ToolDefinition:
@@ -59,7 +173,15 @@ class ToolDefinition:
                     args = validated_args.model_dump()
                 except ValidationError as exc:
                     error_msg = f"Invalid arguments: {exc.json()}"
-                    logger.warning(f"Tool {self.name} validation failed: {error_msg}")
+                    duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
+                    _log_execution(
+                        tool_name=self.name,
+                        args=args,
+                        ctx=ctx,
+                        duration_ms=duration_ms,
+                        success=False,
+                        error=error_msg,
+                    )
                     return {
                         "error": error_msg,
                         "success": False,
@@ -68,13 +190,13 @@ class ToolDefinition:
             # Execute handler
             result = await self.handler(args, ctx)
 
-            elapsed_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
-            logger.info(
-                f"event=tool_execution "
-                f"tool_name={self.name} "
-                f"success=true "
-                f"elapsed_ms={elapsed_ms:.1f} "
-                f"user={ctx.user_id}"
+            duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
+            _log_execution(
+                tool_name=self.name,
+                args=args,
+                ctx=ctx,
+                duration_ms=duration_ms,
+                success=True,
             )
 
             return {
@@ -83,16 +205,16 @@ class ToolDefinition:
             }
 
         except Exception as exc:
-            elapsed_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
+            duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
             error_msg = str(exc)
 
-            logger.error(
-                f"event=tool_execution "
-                f"tool_name={self.name} "
-                f"success=false "
-                f"elapsed_ms={elapsed_ms:.1f} "
-                f"user={ctx.user_id} "
-                f"error={error_msg}",
+            _log_execution(
+                tool_name=self.name,
+                args=args,
+                ctx=ctx,
+                duration_ms=duration_ms,
+                success=False,
+                error=error_msg,
                 exc_info=True,
             )
 
@@ -161,6 +283,14 @@ class ToolRegistry:
         if name not in self.tools:
             error_msg = f"Tool not found: {name}"
             logger.error(error_msg)
+            _log_execution(
+                tool_name=name,
+                args=args,
+                ctx=ctx,
+                duration_ms=0.0,
+                success=False,
+                error=error_msg,
+            )
             return {
                 "error": error_msg,
                 "success": False,

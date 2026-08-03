@@ -7,7 +7,7 @@ from sqlalchemy import select, desc, and_, delete, func, update, text
 from sqlalchemy.orm import Session
 
 from app.utils.logger import get_logger
-from app.utils.tokens import estimate_message_tokens
+from app.utils.tokens import estimate_weighted_message_tokens, estimate_message_tokens
 
 from app.models import AgentConversation, AgentMessage, User
 
@@ -149,10 +149,24 @@ class ConversationStore:
         token_count: int | None = None,
         context: dict | None = None,
     ) -> AgentMessage | None:
-        """Save a message to the conversation."""
+        """Save a message to the conversation.
+
+        If token_count is not provided, it is auto-calculated using the
+        weighted token policy (full weight for user/assistant, weighted+capped
+        for tool). The summary counters (tokens_since_last_summary,
+        messages_since_last_summary) are incremented atomically after saving.
+        """
 
         normalized_role = role.strip().lower() if role else role
         normalized_content = content.strip() if isinstance(content, str) else content
+
+        if token_count is None:
+            token_count = estimate_weighted_message_tokens(
+                role=normalized_role,
+                content=normalized_content,
+                tool_name=tool_name,
+                tool_output=tool_output,
+            )
 
         # Normalize non-tool messages
         if normalized_role in {"user", "assistant"}:
@@ -180,8 +194,10 @@ class ConversationStore:
                 )
                 last_msg.content = normalized_content
                 last_msg.context = context
+                last_msg.token_count = token_count
                 last_msg.created_at = datetime.utcnow()
                 await self.db.flush()
+                await self._increment_summary_counters(conversation_id, token_count)
                 return last_msg
 
         elif normalized_role == "tool":
@@ -212,6 +228,7 @@ class ConversationStore:
         )
         self.db.add(message)
         await self.db.flush()
+        await self._increment_summary_counters(conversation_id, token_count)
         return message
 
     async def update_conversation_timestamp(self, conversation_id: UUID) -> None:
@@ -262,6 +279,76 @@ class ConversationStore:
                 f"increment_token_count: conversation {conversation_id} not found"
             )
         await self.db.flush()
+
+    async def _increment_summary_counters(self, conversation_id: UUID, token_count: int) -> None:
+        """Increment summary counters after saving a message."""
+
+        stmt = (
+            update(AgentConversation)
+            .where(AgentConversation.id == conversation_id)
+            .values(
+                tokens_since_last_summary=AgentConversation.tokens_since_last_summary + token_count,
+                messages_since_last_summary=AgentConversation.messages_since_last_summary + 1,
+            )
+        )
+        await self.db.execute(stmt)
+        await self.db.flush()
+
+    async def reset_summary_counters(self, conversation_id: UUID) -> None:
+        """Reset summary counters after a successful summary."""
+
+        stmt = (
+            update(AgentConversation)
+            .where(AgentConversation.id == conversation_id)
+            .values(
+                tokens_since_last_summary=0,
+                messages_since_last_summary=0,
+            )
+        )
+        await self.db.execute(stmt)
+        await self.db.flush()
+
+    async def get_messages_since(
+        self,
+        conversation_id: UUID,
+        last_summary_message_id: UUID | None = None,
+    ) -> list[AgentMessage]:
+        """Fetch messages since the last summarized message, in chronological order.
+
+        Uses last_summary_message_id as the stable cursor by resolving it to the
+        message's timestamp. If last_summary_message_id is None, returns all messages.
+        """
+
+        if last_summary_message_id is None:
+            stmt = (
+                select(AgentMessage)
+                .where(AgentMessage.conversation_id == conversation_id)
+                .order_by(AgentMessage.created_at.asc())
+            )
+            result = await self.db.execute(stmt)
+            return list(result.scalars().all())
+
+        cursor_stmt = select(AgentMessage.created_at).where(
+            AgentMessage.id == last_summary_message_id
+        )
+        cursor_result = await self.db.execute(cursor_stmt)
+        cursor_ts = cursor_result.scalar_one_or_none()
+
+        if cursor_ts is None:
+            stmt = (
+                select(AgentMessage)
+                .where(AgentMessage.conversation_id == conversation_id)
+                .order_by(AgentMessage.created_at.asc())
+            )
+        else:
+            stmt = (
+                select(AgentMessage)
+                .where(AgentMessage.conversation_id == conversation_id)
+                .where(AgentMessage.created_at > cursor_ts)
+                .order_by(AgentMessage.created_at.asc())
+            )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
 
     async def update_conversation_title(self, conversation_id: UUID, title: str) -> AgentConversation | None:
         """Update conversation title."""

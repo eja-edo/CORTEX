@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.ai.agents.tool_context import ToolContext
-from app.services.zep_memory import search_semantic_memories
+from app.services.semantic_memory_provider import get_semantic_memory_provider
 from app.services.workspace_permission import WorkspacePermission
 from app.utils.logger import get_logger
 
@@ -52,12 +52,14 @@ async def extract_memory_handler(args: dict, ctx: ToolContext) -> dict:
     query = args.get("query", "")
     limit = args.get("limit", 10)
 
-    # ── 1. Search Zep semantic memory ──
-    memories = await search_semantic_memories(
-        user_id=ws_id,
-        query=query,
-        limit=limit,
-    )
+    # ── 1. Search semantic memory (fallback-aware) ──
+    async with ctx.async_db() as db:
+        provider = get_semantic_memory_provider(db)
+        memories = await provider.search_semantic_memories(
+            user_id=ws_id,
+            query=query,
+            limit=limit,
+        )
 
     # ── 2. Fetch episodic summary from PostgreSQL ──
     episodic_summary = ""

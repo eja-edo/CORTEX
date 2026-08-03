@@ -11,7 +11,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 
-from app.database_async import AsyncSessionLocal
+from app.database_async import make_async_sessionmaker
 from app.models import Schedule, SyncOperation
 from app.services.google_calendar_sync import GoogleCalendarSyncService
 from app.services.redis.google_sync_task import (
@@ -39,6 +39,8 @@ class GoogleSyncWorker:
         self._running = False
         self._redis_service: Optional[RedisStreamService] = None
         self._consume_task: Optional[asyncio.Task] = None
+        self._db_engine = None
+        self._session_maker = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -47,6 +49,12 @@ class GoogleSyncWorker:
     async def start(self) -> None:
         if self._running:
             return
+
+        # Per-worker async DB engine: bound to this thread's event loop.
+        # Reusing the module-level AsyncSessionLocal would give us
+        # connections owned by the FastAPI request loop and raise
+        # "Future attached to a different loop" here.
+        self._db_engine, self._session_maker = make_async_sessionmaker()
 
         # FIX: Dùng constructor trực tiếp thay vì get_instance() singleton.
         # get_instance() trả cached instance có thể đã bind với loop khác
@@ -95,6 +103,15 @@ class GoogleSyncWorker:
             await self._redis_service.stop_background_tasks()
             await self._redis_service.disconnect(release_pending=True)
             self._redis_service = None
+        # Dispose per-worker DB engine so asyncpg connections held by this
+        # loop are released cleanly.
+        if self._db_engine is not None:
+            try:
+                await self._db_engine.dispose()
+            except Exception as exc:
+                logger.warning("GoogleSyncWorker: DB engine dispose failed: %s", exc)
+            self._db_engine = None
+            self._session_maker = None
         logger.info("GoogleSyncWorker stopped")
 
     # ------------------------------------------------------------------
@@ -178,7 +195,7 @@ class GoogleSyncWorker:
             return
 
         # Bước 1: load schedule qua async session.
-        async with AsyncSessionLocal() as async_db:
+        async with self._session_maker() as async_db:
             schedule = (
                 await async_db.execute(
                     select(Schedule).where(Schedule.id == UUID(task.schedule_id))

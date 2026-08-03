@@ -1,10 +1,17 @@
-"""MemoryTriggerService — triggers memory extraction with advisory lock to prevent races."""
+"""MemoryTriggerService — triggers memory extraction with advisory lock to prevent races.
+
+Hybrid trigger: fires when either the message-count threshold or the token-count
+threshold is crossed since the last summary. Uses the incremental counters
+(messages_since_last_summary, tokens_since_last_summary) rather than total
+conversation metrics.
+"""
 
 from uuid import UUID
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models import AgentConversation
 from app.ai.agents.conversation_summarizer import ConversationSummarizer
 from app.utils.logger import get_logger
 
@@ -22,7 +29,11 @@ class MemoryTriggerService:
         summarizer: ConversationSummarizer | None,
         conv,
     ) -> None:
-        """Trigger memory extraction when conversation crosses message-count threshold.
+        """Trigger memory extraction when message or token threshold is crossed.
+
+        Hybrid trigger:
+        - messages_since_last_summary >= MESSAGE_THRESHOLD (20), OR
+        - tokens_since_last_summary >= TOKEN_THRESHOLD (20000)
 
         Wrapped in a Postgres transaction-scoped advisory lock keyed on
         conv.id so concurrent requests on the same conversation cannot both
@@ -31,13 +42,29 @@ class MemoryTriggerService:
 
         Args:
             summarizer: ConversationSummarizer instance or None (no-op).
-            conv: AgentConversation — the latest message_count should be
-                  current (already incremented by caller).
+            conv: AgentConversation (may be stale — fresh counters are read from DB).
         """
         if summarizer is None:
             return
-        threshold = summarizer.MESSAGE_THRESHOLD
-        if conv.message_count < threshold or conv.message_count % threshold >= 2:
+
+        # Read fresh counters from DB (conv object may be stale)
+        stmt = select(
+            AgentConversation.messages_since_last_summary,
+            AgentConversation.tokens_since_last_summary,
+        ).where(AgentConversation.id == conv.id)
+        result = await self.db.execute(stmt)
+        row = result.one_or_none()
+        if row is None:
+            return
+        fresh_msg_count, fresh_token_count = row
+
+        msg_threshold = summarizer.MESSAGE_THRESHOLD
+        token_threshold = summarizer.TOKEN_THRESHOLD
+
+        msg_ok = fresh_msg_count >= msg_threshold
+        token_ok = fresh_token_count >= token_threshold
+
+        if not msg_ok and not token_ok:
             return
 
         lock_key = conv.id.hex if isinstance(conv.id, UUID) else str(conv.id).replace("-", "")
@@ -55,13 +82,16 @@ class MemoryTriggerService:
         if not acquired:
             logger.info(
                 f"Skipping memory extraction — another request holds the "
-                f"advisory lock for conv {conv.id} (message_count={conv.message_count})"
+                f"advisory lock for conv {conv.id} "
+                f"(msgs_since={fresh_msg_count}, "
+                f"tokens_since={fresh_token_count})"
             )
             return
 
         logger.info(
             f"Triggering memory extraction | conversation={conv.id} | "
-            f"messages={conv.message_count} (lock acquired)"
+            f"msgs_since={fresh_msg_count} | "
+            f"tokens_since={fresh_token_count} (lock acquired)"
         )
         try:
             summary_result = await summarizer.summarize_conversation(conv.id)

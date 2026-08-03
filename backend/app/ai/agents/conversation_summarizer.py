@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AgentConversation, AgentMessage
+from app.ai.agents.conversation_store import ConversationStore
 from app.services.memory_extraction_service import extract_and_store
 from app.utils.logger import get_logger
 
@@ -23,24 +24,17 @@ class ConversationSummarizer:
     """
 
     MESSAGE_THRESHOLD = 20
+    TOKEN_THRESHOLD = 20000
 
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
-    async def should_summarize(self, conversation_id: UUID) -> bool:
-        """Check if the conversation has enough messages to trigger extraction."""
-        stmt = select(AgentConversation).where(
-            AgentConversation.id == conversation_id
-        )
-        result = await self.db.execute(stmt)
-        conv = result.scalar_one_or_none()
-        if not conv:
-            return False
-        return conv.message_count is not None and conv.message_count >= self.MESSAGE_THRESHOLD
-
     async def summarize_conversation(self, conversation_id: UUID) -> dict:
         """
         Run memory extraction on a conversation.
+
+        On success, resets summary counters (tokens_since_last_summary,
+        messages_since_last_summary) and updates last_summary_message_id.
 
         Returns dict with keys: success, episodic_stored, semantic_count, model_used, title
         """
@@ -52,6 +46,8 @@ class ConversationSummarizer:
         )
 
         if result.get("success"):
+            store = ConversationStore(self.db)
+            await store.reset_summary_counters(conversation_id)
             logger.info(
                 f"Memory extraction complete | conversation={conversation_id} | "
                 f"episodic={result.get('episodic_stored')} | "
@@ -74,7 +70,7 @@ class ConversationSummarizer:
         """Get the episodic summary with boundary timestamp for context injection.
 
         Marks where the summary ends and recent conversation begins so the LLM
-        understands the temporal scope of each section (Issue 4c).
+        understands the temporal scope of each section.
         """
         if not include_summary:
             return ""
@@ -85,10 +81,14 @@ class ConversationSummarizer:
         result = await self.db.execute(stmt)
         conv = result.scalar_one_or_none()
 
-        if not conv or not conv.summary or not conv.last_extracted_at:
+        if not conv or not conv.summary or not conv.last_summary_message_id:
             return ""
 
-        cutoff = conv.last_extracted_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+        last_msg = await self.db.get(AgentMessage, conv.last_summary_message_id)
+        if not last_msg:
+            return ""
+
+        cutoff = last_msg.created_at.strftime("%Y-%m-%d %H:%M:%S UTC")
         return (
             f"=== PREVIOUS CONVERSATION HISTORY (events up to {cutoff}) ===\n"
             f"{conv.summary}\n\n"

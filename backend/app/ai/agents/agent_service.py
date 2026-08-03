@@ -36,7 +36,6 @@ MAX_CONVERSATION_HISTORY = 10
 MAX_TOOL_TURNS = 30
 MAX_SAME_TOOL_CALLS = 20
 MAX_TOKENS_PER_DAY_PER_USER = 2_000_000
-MAX_HISTORY_TOKENS = 8000
 MAX_TURN_RETRIES = 3
 
 _model_client = ModelClient()
@@ -87,7 +86,7 @@ class AgentService:
         summarizer = await self.conversation_service.get_summarizer()
         system_prompt = await self.conversation_service.build_system_prompt(conv, message, context, summarizer, SYSTEM_PROMPT)
 
-        recent_messages = await self.conversation_service.load_history(conv.id)
+        recent_messages = await self.conversation_service.load_history(conv.id, conv.last_summary_message_id)
         self.conversation_service.log_raw_messages(recent_messages, "handle")
 
         await self.conversation_service.save_user_message(conv.id, message, context)
@@ -117,6 +116,7 @@ class AgentService:
         turn = 0
         reply_text = None
         tool_call_counts = {}
+        _last_assistant_completion = 0
         source_id_counter = 0
         if settings.AGENT_TOOL_CALL_COUNT_SCOPE not in ("turn", "request"):
             logger.warning(f"Unknown AGENT_TOOL_CALL_COUNT_SCOPE='{settings.AGENT_TOOL_CALL_COUNT_SCOPE}'. Expected 'turn' or 'request'. Defaulting to 'request' behavior.")
@@ -136,6 +136,7 @@ class AgentService:
                 if response and response.usage:
                     for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
                         total_usage[k] = total_usage.get(k, 0) + (response.usage.get(k) or 0)
+                    _last_assistant_completion = response.usage.get("completion_tokens", 0)
             except AllModelsExhaustedError as api_error:
                 logger.warning(f"All models rate-limited: {str(api_error)[:200]}")
                 reply_text = "All AI models are currently rate-limited. Please wait a moment and try again."
@@ -197,12 +198,16 @@ class AgentService:
                 synthesis_config = GenerationConfig(system_instruction=gen_config.system_instruction, temperature=gen_config.temperature)
                 _, synthesis_response = await _model_client.generate(messages, synthesis_config, tools=None)
                 reply_text = synthesis_response.content if synthesis_response and synthesis_response.content else "I reached my processing limit for this request. Please try a simpler or more specific question."
+                if synthesis_response and synthesis_response.usage:
+                    for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                        total_usage[k] = total_usage.get(k, 0) + (synthesis_response.usage.get(k) or 0)
+                    _last_assistant_completion = synthesis_response.usage.get("completion_tokens", 0)
             except Exception as synth_exc:
                 logger.warning(f"Synthesis turn failed (non-fatal): {synth_exc}")
                 reply_text = "I reached my processing limit for this request. Please try a simpler or more specific question."
 
         if reply_text:
-            await self.conversation_service.store.save_message(conversation_id=conv.id, role="assistant", content=reply_text)
+            await self.conversation_service.store.save_message(conversation_id=conv.id, role="assistant", content=reply_text, token_count=_last_assistant_completion or None)
         await self.conversation_service.update_timestamp(conv.id)
         await self.conversation_service.increment_message_count(conv.id)
 
@@ -248,7 +253,7 @@ class AgentService:
                 return
 
             summarizer = await self.conversation_service.get_summarizer()
-            recent_messages = await self.conversation_service.load_history(conv.id)
+            recent_messages = await self.conversation_service.load_history(conv.id, conv.last_summary_message_id)
             self.conversation_service.log_raw_messages(recent_messages, "streaming")
 
             await self.conversation_service.save_user_message(conv.id, message, context)
@@ -301,6 +306,8 @@ class AgentService:
 
                 turn_text = ""
                 tool_calls = []
+                _turn_completion_before = total_usage.get("completion_tokens", 0)
+                _turn_completion = 0
 
                 try:
                     async for chunk in _model_client.stream_with_fallback(messages, gen_config, tools=tools, preferred_model=preferred_model):
@@ -316,6 +323,7 @@ class AgentService:
                             for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
                                 total_usage[k] = total_usage.get(k, 0) + (chunk.usage.get(k) or 0)
 
+                    _turn_completion = total_usage.get("completion_tokens", 0) - _turn_completion_before
                     reply_text += turn_text
                     logger.info(f"Stream turn {turn + 1} complete | text_len={len(turn_text)} tool_calls={len(tool_calls)}")
 
@@ -341,7 +349,7 @@ class AgentService:
 
                 if turn_text:
                     try:
-                        saved_msg = await self.conversation_service.store.save_message(conversation_id=conv.id, role="assistant", content=turn_text)
+                        saved_msg = await self.conversation_service.store.save_message(conversation_id=conv.id, role="assistant", content=turn_text, token_count=_turn_completion or None)
                         if saved_msg is not None:
                             saved_assistant_count += 1
                     except Exception as save_err:
@@ -442,25 +450,33 @@ class AgentService:
 
                 turn += 1
 
+            _synth_completion = 0
+
             if turn >= MAX_TOOL_TURNS and not reply_text and not hard_error_occurred:
                 logger.warning(f"event=max_tool_turns_hit turn_count={turn} conversation_id={conv.id} streaming=true")
                 try:
                     synthesis_config = GenerationConfig(system_instruction=gen_config.system_instruction, temperature=gen_config.temperature)
                     synthesis_text = ""
+                    _synth_completion_before = total_usage.get("completion_tokens", 0)
                     async for chunk in _model_client.stream_with_fallback(messages, synthesis_config, tools=None, preferred_model=preferred_model):
                         if chunk.content:
                             synthesis_text += chunk.content
                             yield {"event": "token", "text": chunk.content}
+                        if chunk.usage:
+                            for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                                total_usage[k] = total_usage.get(k, 0) + (chunk.usage.get(k) or 0)
+                    _synth_completion = total_usage.get("completion_tokens", 0) - _synth_completion_before
                     reply_text = synthesis_text or "I reached my processing limit for this request. Please try a simpler or more specific question."
                 except Exception as synth_exc:
                     logger.warning(f"Streaming synthesis turn failed (non-fatal): {synth_exc}")
                     limit_text = "I reached my processing limit for this request. Please try a simpler or more specific question."
                     reply_text = limit_text
                     yield {"event": "token", "text": limit_text}
+                    _synth_completion = 0
 
             if reply_text and saved_assistant_count == 0:
                 try:
-                    await self.conversation_service.store.save_message(conversation_id=conv.id, role="assistant", content=reply_text)
+                    await self.conversation_service.store.save_message(conversation_id=conv.id, role="assistant", content=reply_text, token_count=_synth_completion or None)
                 except Exception as save_err:
                     logger.warning(f"Could not save final reply (non-fatal): {save_err}")
 

@@ -34,6 +34,8 @@ _SKILL_SIGNATURES: dict[str, list[str]] = {
         "nghiên cứu", "tìm kiếm", "tra cứu", "tìm hiểu",
         "thông tin", "bài báo", "tin tức", "web",
         "giải thích", "là gì", "như thế nào", "tại sao",
+        "mở quán", "kinh doanh", "thị trường", "đối thủ",
+        "ngân sách", "vốn", "địa điểm", "giá thuê", "khởi nghiệp",
     ],
     "planning": [
         "plan", "schedule", "time", "calendar", "deadline", "task",
@@ -41,12 +43,43 @@ _SKILL_SIGNATURES: dict[str, list[str]] = {
         "free slot", "available", "busy", "conflict", "prioritize",
         "this week", "this month", "today", "tomorrow", "upcoming",
         "goal", "routine", "habit", "time-block",
+        "roadmap", "milestone", "checklist", "learning plan", "business plan",
+        "study", "learn", "want to", "would like", "workout", "weight loss",
+        "deadline", "proposal", "submit", "nộp",
         # Vietnamese
         "kế hoạch", "lịch", "thời gian", "tuần này", "tháng này",
+        "tuần sau", "tháng sau", "cuối tuần",
         "hôm nay", "ngày mai", "deadline", "hạn chót",
         "sắp xếp", "tổ chức", "chuẩn bị", "ưu tiên",
         "rảnh", "bận", "xung đột", "lịch trình",
         "mục tiêu", "thói quen", "công việc", "việc cần làm",
+        "học", "học tập", "lộ trình", "cột mốc", "danh sách",
+        "muốn", "tôi muốn", "mình muốn", "em muốn", "ước",
+        "giảm cân", "mở quán", "kinh doanh", "thi ielts",
+        "tập gym", "chạy bộ", "marathon", "nộp", "phải nộp", "proposal",
+    ],
+    "schedule": [
+        "meeting", "appointment", "event", "trip", "travel", "flight",
+        "doctor", "hospital", "booking", "reminder", "arrange time",
+        "have a", "attend", "go to",
+        # Vietnamese
+        "họp", "cuộc họp", "gặp khách", "gặp", "hẹn", "lịch hẹn",
+        "khám bệnh", "bệnh viện", "bay", "máy bay", "sân bay",
+        "đi du lịch", "đi đà nẵng", "đi chơi", "đi công tác",
+        "đặt vé", "đặt phòng", "nhắc", "nhắc nhở", "chuẩn bị",
+        "mai tôi", "ngày mai tôi", "cuối tuần", "cuối tuần này",
+    ],
+    "goal": [
+        "goal", "aim", "target", "want to achieve", "long-term",
+        "progress", "milestone", "accomplish", "complete", "done",
+        "finished", "sent", "submitted", "paid", "learned", "finished unit",
+        "I want", "I'm learning", "I've been", "cv", "resume",
+        # Vietnamese
+        "mục tiêu", "muốn đạt", "tiến độ", "hoàn thành", "xong",
+        "đã gửi", "đã nộp", "đã thanh toán", "thanh toán rồi",
+        "học xong", "làm xong", "xong rồi", "cuối cùng cũng",
+        "giảm", "tăng", "chạy được", "đạt được", "vừa gửi", "gửi cv",
+        "tôi muốn", "mình muốn", "em muốn",
     ],
     "reasoning": [
         "reason", "think", "analyze", "compare", "evaluate",
@@ -112,7 +145,7 @@ class SkillRetriever:
         self,
         message: str,
         context: dict | None = None,
-        max_skills: int = 2,
+        max_skills: int = 3,
     ) -> list[SkillMetadata]:
         """Return the top-N skills relevant to the current user message.
 
@@ -132,7 +165,7 @@ class SkillRetriever:
         self,
         message: str,
         context: dict | None = None,
-        max_skills: int = 2,
+        max_skills: int = 3,
     ):
         """Convenience: select skills and load them in one call."""
         selected = self.select(message, context, max_skills)
@@ -144,7 +177,7 @@ class SkillRetriever:
         self,
         message: str,
         context: dict | None = None,
-        max_skills: int = 2,
+        max_skills: int = 3,
     ) -> list[SkillMetadata]:
         all_meta = self._registry.list_metadata()
         if not all_meta:

@@ -21,7 +21,6 @@ import asyncio
 import json
 import logging
 import sys
-from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
@@ -31,7 +30,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 
 from app.config import Settings
-from app.models import Note
+from app.models import Note, _utcnow
 from app.ai.agents.embedding_service import EmbeddingService
 
 logger = logging.getLogger(__name__)
@@ -77,12 +76,15 @@ class EmbeddingWorker:
             expire_on_commit=False,
         )
         
-        # Create consumer group (idempotent)
+        # Create consumer group (idempotent, mkstream=True to create stream key if absent)
         try:
-            await self.redis_client.xgroup_create(self.STREAM_KEY, self.CONSUMER_GROUP, id="0")
+            await self.redis_client.xgroup_create(self.STREAM_KEY, self.CONSUMER_GROUP, id="0", mkstream=True)
             logger.info("embedding_worker_consumer_group_created", extra={"group": self.CONSUMER_GROUP})
-        except redis.ResponseError:
-            logger.info("embedding_worker_consumer_group_exists", extra={"group": self.CONSUMER_GROUP})
+        except redis.ResponseError as e:
+            if "BUSYGROUP" in str(e):
+                logger.info("embedding_worker_consumer_group_exists", extra={"group": self.CONSUMER_GROUP})
+            else:
+                logger.warning(f"embedding_worker_group_create_error: {e}")
     
     async def shutdown(self):
         """Cleanup connections."""
@@ -112,8 +114,9 @@ class EmbeddingWorker:
         try:
             # Read messages from stream
             messages = await self.redis_client.xreadgroup(
-                {self.STREAM_KEY: ">"},
                 self.CONSUMER_GROUP,
+                "worker-1",
+                {self.STREAM_KEY: ">"},
                 count=self.BATCH_SIZE,
                 block=5000,  # 5 second timeout
             )
@@ -201,15 +204,12 @@ class EmbeddingWorker:
         """Store embedding in PostgreSQL."""
         async with self.async_session_maker() as session:
             try:
-                # Update note with embedding using raw SQL
-                embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
-                
                 stmt = update(Note).where(
                     Note.id == note_id,
                     Note.user_id == user_id,
                 ).values(
-                    embedding=embedding_str,
-                    embedding_generated_at=datetime.utcnow(),
+                    embedding=embedding,
+                    embedding_generated_at=_utcnow(),
                 )
                 
                 await session.execute(stmt)

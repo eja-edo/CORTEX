@@ -22,13 +22,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import AgentConversation, AgentMessage
+from app.ai.agents.conversation_store import ConversationStore
 from app.ai.agents.model_client import ModelClient
 from app.ai.agents.provider_types import Message, GenerationConfig
 from app.services.memory_extraction_prompt import build_extraction_messages
-from app.services.zep_memory import (
-    ensure_user,
-    add_semantic_memories_batch,
-)
+from app.services.semantic_memory_provider import get_semantic_memory_provider
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -91,22 +89,8 @@ async def extract_and_store(
 
     workspace_id_str = str(conv.workspace_id) if conv.workspace_id else None
 
-    # Fetch only messages since last extraction (or all if first time)
-    if conv.last_extracted_at:
-        msg_stmt = (
-            select(AgentMessage)
-            .where(AgentMessage.conversation_id == conversation_id)
-            .where(AgentMessage.created_at > conv.last_extracted_at)
-            .order_by(AgentMessage.created_at.asc())
-        )
-    else:
-        msg_stmt = (
-            select(AgentMessage)
-            .where(AgentMessage.conversation_id == conversation_id)
-            .order_by(AgentMessage.created_at.asc())
-        )
-    result = await db.execute(msg_stmt)
-    new_messages = result.scalars().all()
+    store = ConversationStore(db)
+    new_messages = await store.get_messages_since(conversation_id, conv.last_summary_message_id)
 
     if len(new_messages) < 5:
         return {"success": False, "reason": "Not enough new messages to extract memory"}
@@ -155,6 +139,7 @@ async def extract_and_store(
         conv.summary = episodic_summary
         if title:
             conv.title = title
+        conv.last_summary_message_id = new_messages[-1].id
         conv.last_extracted_at = datetime.utcnow()
         conv.updated_at = datetime.utcnow()
         await db.flush()
@@ -164,17 +149,18 @@ async def extract_and_store(
         logger.error(f"Failed to store episodic summary: {exc}")
         episodic_stored = False
 
-    # ── 2. Store Semantic Memories in Zep ──
+    # ── 2. Store Semantic Memories ──
     semantic_memories = result_data.get("semantic_memories", [])
     semantic_count = 0
 
     if semantic_memories:
         if not workspace_id_str:
-            logger.warning(f"No workspace_id for conversation {conversation_id} — skipping Zep storage")
+            logger.warning(f"No workspace_id for conversation {conversation_id} — skipping semantic memory storage")
         else:
-            await ensure_user(user_id=workspace_id_str)
+            provider = get_semantic_memory_provider(db)
+            await provider.ensure_user(user_id=workspace_id_str)
 
-            semantic_count = await add_semantic_memories_batch(
+            semantic_count = await provider.add_semantic_memories_batch(
                 user_id=workspace_id_str,
                 memories=semantic_memories,
             )
@@ -225,10 +211,18 @@ def _parse_extraction_response(content: str) -> dict | None:
     if "semantic_memories" not in data or not isinstance(data["semantic_memories"], list):
         data["semantic_memories"] = []
 
-    # Filter by confidence
-    data["semantic_memories"] = [
-        m for m in data["semantic_memories"]
-        if isinstance(m, dict) and m.get("confidence", 0) >= 0.7
-    ]
+    # Normalize string memories to dict format with defaults
+    normalized = []
+    for m in data["semantic_memories"]:
+        if isinstance(m, str):
+            normalized.append({
+                "content": m,
+                "category": "unknown",
+                "confidence": 0.8,
+                "expected_lifetime": "medium",
+            })
+        elif isinstance(m, dict) and m.get("confidence", 0) >= 0.7:
+            normalized.append(m)
+    data["semantic_memories"] = normalized
 
     return data

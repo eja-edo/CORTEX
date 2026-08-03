@@ -38,7 +38,7 @@ from app.services.redis.redis_stream_service import RedisStreamService
 from app.utils.decorator import singleton
 from app.utils.logger import get_logger
 from app.models import AssetStatus, Asset
-from app.database_async import AsyncSessionLocal
+from app.database_async import make_async_sessionmaker
 
 logger = get_logger(__name__)
 
@@ -142,11 +142,19 @@ class LLMProcessorWorker:
         self._redis_service: Optional[RedisStreamService] = None
         self._mongo_ocr_service = MongoOCRService()
         self._consume_task: Optional[asyncio.Task] = None
+        self._db_engine = None
+        self._session_maker = None
 
     async def start(self) -> None:
         """Start the LLM worker with standardized Redis service."""
         if self._running:
             return
+
+        # Per-worker async DB engine: bound to this thread's event loop.
+        # Reusing the module-level AsyncSessionLocal would give us
+        # connections owned by the FastAPI request loop and raise
+        # "Future attached to a different loop" here.
+        self._db_engine, self._session_maker = make_async_sessionmaker()
 
         # Initialize standardized Redis stream service
         self._redis_service = RedisStreamService.get_instance(
@@ -171,7 +179,7 @@ class LLMProcessorWorker:
     async def stop(self) -> None:
         """Stop the LLM worker gracefully."""
         self._running = False
-        
+
         # Cancel consume task first, wait for it to exit blocking call
         if self._consume_task and not self._consume_task.done():
             self._consume_task.cancel()
@@ -179,13 +187,23 @@ class LLMProcessorWorker:
                 await self._consume_task
             except asyncio.CancelledError:
                 pass
-        
+
         # Now safe to disconnect Redis
         if self._redis_service:
             # Stop background tasks (heartbeat, recovery)
             await self._redis_service.stop_background_tasks()
             # Disconnect and release pending tasks
             await self._redis_service.disconnect(release_pending=True)
+
+        # Dispose per-worker DB engine so asyncpg connections held by this
+        # loop are released cleanly.
+        if self._db_engine is not None:
+            try:
+                await self._db_engine.dispose()
+            except Exception as exc:
+                logger.warning("LLM worker: DB engine dispose failed: %s", exc)
+            self._db_engine = None
+            self._session_maker = None
             self._redis_service = None
         
         logger.info("🛑 LLM Processor Worker stopped")
@@ -410,7 +428,7 @@ class LLMProcessorWorker:
             status="completed",
         )
         # Update status in assets table (PostgreSQL)
-        async with AsyncSessionLocal() as db:
+        async with self._session_maker() as db:
             try:
                 asset = (
                     await db.execute(select(Asset).where(Asset.id == task.asset_id))

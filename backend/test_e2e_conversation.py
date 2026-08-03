@@ -117,7 +117,7 @@ def mock_user():
 @pytest.fixture
 def mock_db():
     db = AsyncMock()
-    db.execute = AsyncMock()
+    db.execute = AsyncMock(return_value=MagicMock(one_or_none=MagicMock(return_value=(0, 0))))
     db.commit = AsyncMock()
     db.rollback = AsyncMock()
     return db
@@ -138,6 +138,9 @@ class E2EHarness:
         self.conv.total_token_count = 0
         self.conv.message_count = 0
         self.conv.summary = None
+        self.conv.last_summary_message_id = None
+        self.conv.tokens_since_last_summary = 0
+        self.conv.messages_since_last_summary = 0
 
         self.log = ConversationLog("unnamed")
         self.saved_messages: list[dict] = []
@@ -153,6 +156,8 @@ class E2EHarness:
             side_effect=lambda cid: setattr(self.conv, 'message_count', self.conv.message_count + 1))
         store.update_conversation_timestamp = AsyncMock()
         store.increment_token_count = AsyncMock()
+        store.get_messages_since = AsyncMock(return_value=[])
+        store.reset_summary_counters = AsyncMock()
         self.service.store = store
 
     def _capture_save(self, **kwargs):

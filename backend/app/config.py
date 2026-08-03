@@ -118,8 +118,6 @@ class Settings:
     OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "http://localhost:20128/v1")
     OPENAI_DEFAULT_MODEL: str = os.getenv("OPENAI_DEFAULT_MODEL", "oc/qwen3.6-plus-free")
     OPENAI_VISION_MODEL: str = os.getenv("OPENAI_VISION_MODEL", "oc/qwen3.6-plus-free")
-    OPENAI_EMBEDDING_MODEL: str = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
-
     # Zep Configuration
     ZEP_API_KEY: str = os.getenv("ZEP_API_KEY", "")
     ZEP_API_URL: str = os.getenv("ZEP_API_URL", "https://api.getzep.com")
@@ -147,7 +145,7 @@ class Settings:
             return explicit
         return f"redis://{self.MEMORY_REDIS_HOST}:{self.MEMORY_REDIS_PORT}/{self.MEMORY_REDIS_DB}"
 
-    EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+    EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "gemini/gemini-embedding-2-preview")
     EMBEDDING_DIMENSIONS: int = int(os.getenv("EMBEDDING_DIMENSIONS", "768"))
     EMBEDDING_BATCH_SIZE: int = int(os.getenv("EMBEDDING_BATCH_SIZE", "16"))
 

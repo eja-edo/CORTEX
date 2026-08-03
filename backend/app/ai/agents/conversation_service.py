@@ -41,10 +41,17 @@ def _inject_context_into_text(text: str, ctx: dict | None) -> str:
         return text
     parts = []
     pills = ctx.get('pills', [])
+    page = ctx.get('page', None)
     runtime = ctx.get('runtime', None)
     if pills:
         pills_text = '\n\n---\n\n'.join(p['text'] for p in pills if p.get('text'))
         parts.append(f"Context:\n\n{pills_text}")
+    if page:
+        if isinstance(page, dict):
+            page_lines = [f"{k}: {v}" for k, v in page.items() if v]
+            parts.append("Page Context:\n\n" + '\n'.join(page_lines))
+        else:
+            parts.append(f"Page Context:\n\n{page}")
     if runtime:
         if isinstance(runtime, dict):
             runtime_lines = [f"{k}: {v}" for k, v in runtime.items() if v]
@@ -251,8 +258,25 @@ class ConversationService:
 
         return system_prompt
 
-    async def load_history(self, conv_id: UUID) -> list:
-        """Load recent messages using token-budget or message-count strategy."""
+    async def load_history(self, conv_id: UUID, last_summary_id: UUID | None = None) -> list:
+        """Load messages since the last summary cursor.
+
+        When last_summary_id is available, only loads messages after that cursor
+        (un-summarized region). The summary injected in the system prompt covers
+        everything before the cursor, so loading from the end would waste budget
+        on already-summarized content.
+
+        Falls back to the old token-budget or message-count strategy when
+        no cursor exists (pre-first-extraction conversations).
+        """
+        if last_summary_id is not None:
+            recent_messages = await self.store.get_messages_since(conv_id, last_summary_id)
+            logger.info(
+                f"Loaded {len(recent_messages)} messages since cursor "
+                f"(conversation {conv_id}, cursor={str(last_summary_id)[:8]}…)"
+            )
+            return recent_messages
+
         if settings.AGENT_TOKEN_BUDGET_HISTORY:
             recent_messages = await self.store.get_recent_messages_by_token_budget(
                 conv_id, max_tokens=MAX_HISTORY_TOKENS,
@@ -261,7 +285,7 @@ class ConversationService:
             recent_messages = await self.store.get_recent_messages(
                 conv_id, limit=MAX_CONVERSATION_HISTORY
             )
-        logger.info(f"Loaded {len(recent_messages)} historical messages for conversation {conv_id}")
+        logger.info(f"Loaded {len(recent_messages)} historical messages (no cursor, conversation {conv_id})")
         return recent_messages
 
     async def save_user_message(self, conv_id: UUID, message: str, context: dict | None) -> None:
@@ -362,7 +386,7 @@ Return ONLY the title, no quotes or explanation."""
         try:
             retriever = get_skill_retriever()
             registry = get_skill_registry()
-            selected = retriever.select(message, context, max_skills=2)
+            selected = retriever.select(message, context, max_skills=3)
             if not selected:
                 return ""
 

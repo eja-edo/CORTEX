@@ -105,7 +105,7 @@ async def test_handle_injects_context():
 
 async def test_message_full_text_uses_inject_context():
     """_message_full_text should delegate to _inject_context_into_text."""
-    from app.ai.agents.agent_service import _message_full_text
+    from app.ai.agents.conversation_service import _message_full_text
 
     class FakeMsg:
         content = "Hello"
@@ -114,6 +114,60 @@ async def test_message_full_text_uses_inject_context():
     result = _message_full_text(FakeMsg())
     assert "Test" in result
     assert "Hello" in result
+
+
+async def test_inject_context_into_text_with_page():
+    """Page context dict is rendered as key: value lines."""
+    from app.ai.agents.agent_service import _inject_context_into_text
+    ctx = {
+        "page": {
+            "type": "note",
+            "note_id": "note-123",
+            "note_title": "Kế hoạch tuần",
+            "route": "note_detail",
+        }
+    }
+    result = _inject_context_into_text("Tóm tắt note này", ctx)
+    assert "Page Context:" in result
+    assert "type: note" in result
+    assert "note_id: note-123" in result
+    assert "note_title: Kế hoạch tuần" in result
+    assert "route: note_detail" in result
+    assert "Tóm tắt note này" in result
+
+
+async def test_inject_context_into_text_page_plain_string():
+    """Page as a plain string is handled."""
+    from app.ai.agents.agent_service import _inject_context_into_text
+    ctx = {"page": "home"}
+    result = _inject_context_into_text("Hi", ctx)
+    assert "Page Context:" in result
+    assert "home" in result
+
+
+async def test_inject_context_into_text_page_pills_and_runtime():
+    """All three sections present: pills, page, runtime in that order."""
+    from app.ai.agents.agent_service import _inject_context_into_text
+    ctx = {
+        "pills": [{"text": "File: foo.py"}],
+        "page": {"type": "note", "route": "note_detail"},
+        "runtime": "page=Dashboard",
+    }
+    result = _inject_context_into_text("Refactor this", ctx)
+    assert result.index("Context:") < result.index("Page Context:") < result.index("Runtime UI Context:")
+    assert "File: foo.py" in result
+    assert "type: note" in result
+    assert "page=Dashboard" in result
+    assert "Refactor this" in result
+
+
+async def test_inject_context_into_text_empty_page():
+    """Empty page dict should not produce a page section."""
+    from app.ai.agents.agent_service import _inject_context_into_text
+    ctx = {"page": {}}
+    result = _inject_context_into_text("Hi", ctx)
+    assert "Page Context:" not in result
+    assert result == "Hi"
 
 
 async def main():
@@ -133,6 +187,14 @@ async def main():
     print("✓ test_handle_injects_context")
     await test_message_full_text_uses_inject_context()
     print("✓ test_message_full_text_uses_inject_context")
+    await test_inject_context_into_text_with_page()
+    print("✓ test_inject_context_into_text_with_page")
+    await test_inject_context_into_text_page_plain_string()
+    print("✓ test_inject_context_into_text_page_plain_string")
+    await test_inject_context_into_text_page_pills_and_runtime()
+    print("✓ test_inject_context_into_text_page_pills_and_runtime")
+    await test_inject_context_into_text_empty_page()
+    print("✓ test_inject_context_into_text_empty_page")
     print("All Issue-3 tests passed.")
 
 

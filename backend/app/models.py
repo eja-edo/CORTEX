@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 import uuid
 
@@ -6,8 +6,13 @@ from sqlalchemy import BigInteger, Boolean, Column, DateTime, Enum as SQLEnum, F
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import JSONB, UUID
+from pgvector.sqlalchemy import Vector
 
 Base = declarative_base()
+
+
+def _utcnow():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _enum_values(enum_cls: type[Enum]) -> list[str]:
@@ -125,8 +130,8 @@ class Asset(Base):
     failed_reason = Column(Text, nullable=True)
     meta = Column("metadata", JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
     deleted_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
 
     __table_args__ = (
         Index("ix_assets_user_created", "user_id", "created_at"),
@@ -151,7 +156,7 @@ class Notification(Base):
     actions = Column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
     payload = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
     read_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
 
     __table_args__ = (
         Index("ix_notifications_user_read_created", "user_id", "read_at", "created_at"),
@@ -169,8 +174,8 @@ class User(Base):
     full_name = Column(String(255), nullable=True)
     hashed_password = Column(String(255), nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
 
 class RefreshToken(Base):
@@ -182,7 +187,7 @@ class RefreshToken(Base):
     jti = Column(UUID(as_uuid=True), nullable=False, unique=True, index=True)
     expires_at = Column(DateTime, nullable=False)
     revoked_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
 class AuthorizationCode(Base):
     """One-time authorization code for OAuth2 Authorization Code + PKCE."""
@@ -197,7 +202,7 @@ class AuthorizationCode(Base):
     code_challenge_method = Column(String(10), nullable=False, default="S256")
     expires_at = Column(DateTime, nullable=False)
     used_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
 class Schedule(Base):
     """Schedule/Event model"""
@@ -227,8 +232,8 @@ class Schedule(Base):
     version = Column(Integer, nullable=False, default=1, server_default=text("1"))
     updated_by = Column(String(20), nullable=False, default="INTERNAL", server_default=text("'INTERNAL'"))
     
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
     
     # Relationships
     reminders = relationship("ScheduleReminder", back_populates="schedule", cascade="all, delete-orphan")
@@ -256,8 +261,8 @@ class CalendarConnection(Base):
     channel_id = Column(String(64), nullable=True)
     channel_resource_id = Column(String(255), nullable=True)
     channel_expiration = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
 
     __table_args__ = (
         UniqueConstraint("user_id", "provider", "provider_calendar_id", name="uq_calendar_connections_user_provider_calendar"),
@@ -280,8 +285,8 @@ class ScheduleExternalMap(Base):
     last_sync_source = Column(SQLEnum(SyncSource), nullable=False, default=SyncSource.INTERNAL)
     last_synced_at = Column(DateTime, nullable=True)
     is_deleted_remote = Column(Boolean, nullable=False, default=False, server_default=text("false"))
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
 
     __table_args__ = (
         UniqueConstraint("schedule_id", "provider", name="uq_schedule_external_maps_schedule_provider"),
@@ -305,8 +310,8 @@ class ScheduleReminder(Base):
     sent_at = Column(DateTime(timezone=True), nullable=True)
     failed_reason = Column(Text, nullable=True)
     retry_count = Column(Integer, nullable=False, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     schedule = relationship("Schedule", back_populates="reminders")
 
@@ -328,7 +333,7 @@ class ScheduleSyncQueue(Base):
     status = Column(SQLEnum(SyncQueueStatus, values_callable=_enum_values, name="syncqueuestatus"), nullable=False, default=SyncQueueStatus.PENDING)
     retry_count = Column(Integer, nullable=False, default=0)
     last_error = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
     processed_at = Column(DateTime, nullable=True)
 
     __table_args__ = (
@@ -346,7 +351,7 @@ class OAuthState(Base):
     state_hash = Column(String(128), nullable=False, unique=True, index=True)
     expires_at = Column(DateTime, nullable=False)
     used_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
 
     __table_args__ = (
         Index("ix_oauth_states_provider_expires_at", "provider", "expires_at"),
@@ -384,11 +389,10 @@ class Note(Base):
     version = Column(Integer, nullable=False, default=1, server_default=text("1"))
     checkpoint_version = Column(Integer, nullable=False, default=1, server_default=text("1"))
     is_deleted = Column(Boolean, nullable=False, default=False, server_default=text("false"))
-    created_at = Column(DateTime, default=datetime.utcnow, server_default=text("NOW()"))
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=text("NOW()"))
+    created_at = Column(DateTime, default=_utcnow, server_default=text("NOW()"))
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, server_default=text("NOW()"))
     # Vector embedding for semantic search
-    # Stored as PostgreSQL vector type via pgvector extension
-    embedding = Column(JSONB, nullable=True)  # Fallback: store as JSON array until proper vector type
+    embedding = Column(Vector(768), nullable=True)
     embedding_generated_at = Column(DateTime, nullable=True)  # Track when embedding was computed
 
     __table_args__ = (
@@ -411,7 +415,7 @@ class NoteRevision(Base):
     patch = Column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
     patch_format = Column(String(32), nullable=False, default="text_diff", server_default=text("'text_diff'"))
     content_length = Column(Integer, nullable=False, default=0, server_default=text("0"))
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
 
     __table_args__ = (
         UniqueConstraint("note_id", "version", name="uq_note_revisions_note_version"),
@@ -430,7 +434,7 @@ class NoteImage(Base):
     original_filename = Column(String(255), nullable=True)
     content_type = Column(String(100), nullable=False, default="image/png")
     file_size = Column(Integer, nullable=False, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, server_default=text("NOW()"))
+    created_at = Column(DateTime, default=_utcnow, nullable=False, server_default=text("NOW()"))
 
     __table_args__ = (
         Index("ix_note_images_note_id", "note_id"),
@@ -463,8 +467,8 @@ class Upload(Base):
     filename = Column(String(255), nullable=True)
     content_type = Column(String(255), nullable=True)
     completed_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, server_default=text("NOW()"))
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, server_default=text("NOW()"))
+    created_at = Column(DateTime, default=_utcnow, nullable=False, server_default=text("NOW()"))
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False, server_default=text("NOW()"))
 
     __table_args__ = (
         Index("ix_uploads_user_status_created_at", "user_id", "status", "created_at"),
@@ -480,8 +484,8 @@ class UploadPart(Base):
     part_number = Column(Integer, nullable=False)
     etag = Column(String(255), nullable=False)
     size = Column(Integer, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, server_default=text("NOW()"))
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, server_default=text("NOW()"))
+    created_at = Column(DateTime, default=_utcnow, nullable=False, server_default=text("NOW()"))
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False, server_default=text("NOW()"))
 
     __table_args__ = (
         UniqueConstraint("upload_record_id", "part_number", name="uq_upload_parts_upload_part_number"),
@@ -498,8 +502,8 @@ class Workspace(Base):
     name = Column(String(255), nullable=False)
     slug = Column(String(255), nullable=True, unique=True)
     is_personal = Column(Boolean, nullable=False, default=False, server_default=text("false"))
-    created_at = Column(DateTime, default=datetime.utcnow, server_default=text("NOW()"))
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=text("NOW()"))
+    created_at = Column(DateTime, default=_utcnow, server_default=text("NOW()"))
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, server_default=text("NOW()"))
 
     members = relationship("WorkspaceMember", back_populates="workspace", cascade="all, delete-orphan")
 
@@ -513,7 +517,7 @@ class WorkspaceMember(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     role = Column(SQLEnum(WorkspaceRole, values_callable=_enum_values, name="workspacerole"), nullable=False, default=WorkspaceRole.VIEWER)
     invited_by = Column(UUID(as_uuid=True), nullable=True)
-    joined_at = Column(DateTime, default=datetime.utcnow, server_default=text("NOW()"))
+    joined_at = Column(DateTime, default=_utcnow, server_default=text("NOW()"))
 
     workspace = relationship("Workspace", back_populates="members")
 
@@ -552,8 +556,8 @@ class NoteEditProposal(Base):
     expires_at = Column(DateTime, nullable=False)
     conversation_id = Column(UUID, nullable=True)
 
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, server_default=text("NOW()"))
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, server_default=text("NOW()"))
+    created_at = Column(DateTime, default=_utcnow, nullable=False, server_default=text("NOW()"))
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False, server_default=text("NOW()"))
 
     __table_args__ = (
         Index("ix_proposals_note_status", "note_id", "status"),
@@ -570,12 +574,15 @@ class AgentConversation(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=True, index=True)
     title = Column(String(255), nullable=True)
-    summary = Column(Text, nullable=True)  # Stores compressed summary of older messages
-    message_count = Column(Integer, nullable=False, default=0, server_default=text("0"))  # Track total messages
-    total_token_count = Column(Integer, nullable=False, default=0, server_default=text("0"))  # Total tokens in conversation
-    last_extracted_at = Column(DateTime, nullable=True)  # When memory was last extracted
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, server_default=text("NOW()"))
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, server_default=text("NOW()"))
+    summary = Column(Text, nullable=True)
+    message_count = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    total_token_count = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    last_extracted_at = Column(DateTime, nullable=True)
+    last_summary_message_id = Column(UUID(as_uuid=True), ForeignKey("agent_messages.id", ondelete="SET NULL"), nullable=True, index=True)
+    tokens_since_last_summary = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    messages_since_last_summary = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    created_at = Column(DateTime, default=_utcnow, nullable=False, server_default=text("NOW()"))
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False, server_default=text("NOW()"))
 
     __table_args__ = (
         Index("ix_agent_conversations_user_id", "user_id"),
@@ -599,7 +606,7 @@ class AgentMessage(Base):
     tool_call_id = Column(String(100), nullable=True)
     turn_id = Column(UUID(as_uuid=True), nullable=True, index=True)
     token_count = Column(Integer, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, server_default=text("NOW()"))
+    created_at = Column(DateTime, default=_utcnow, nullable=False, server_default=text("NOW()"))
 
     __table_args__ = (
         Index("ix_agent_messages_conversation_created", "conversation_id", "created_at"),

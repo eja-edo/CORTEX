@@ -7,7 +7,7 @@ from typing import Optional
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database_async import AsyncSessionLocal
+from app.database_async import make_async_sessionmaker
 from app.models import ScheduleReminder, Schedule, ReminderStatus, Notification
 from app.utils.logger import get_logger
 
@@ -23,9 +23,16 @@ class ReminderWorker:
     def __init__(self):
         self._running = False
         self._task: Optional[asyncio.Task] = None
+        self._db_engine = None
+        self._session_maker = None
 
     async def start(self):
         """Start the reminder worker."""
+        # Per-worker async DB engine: bound to this thread's event loop.
+        # Reusing the module-level AsyncSessionLocal would give us
+        # connections owned by the FastAPI request loop and raise
+        # "Future attached to a different loop" here.
+        self._db_engine, self._session_maker = make_async_sessionmaker()
         self._running = True
         self._task = asyncio.create_task(self._run_loop())
         logger.info("ReminderWorker started with poll interval=%ds", self.POLL_INTERVAL_SECONDS)
@@ -45,6 +52,15 @@ class ReminderWorker:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        # Dispose per-worker DB engine so asyncpg connections held by this
+        # loop are released cleanly.
+        if self._db_engine is not None:
+            try:
+                await self._db_engine.dispose()
+            except Exception as exc:
+                logger.warning("ReminderWorker: DB engine dispose failed: %s", exc)
+            self._db_engine = None
+            self._session_maker = None
 
     async def _run_loop(self):
         """Main loop with proper cancellation handling."""
@@ -62,7 +78,7 @@ class ReminderWorker:
 
     async def _process_due_reminders(self):
         """Fetch and process reminders that are due within the next poll window."""
-        async with AsyncSessionLocal() as db:
+        async with self._session_maker() as db:
             try:
                 now = datetime.utcnow()
                 window_end = now + timedelta(seconds=self.POLL_INTERVAL_SECONDS)

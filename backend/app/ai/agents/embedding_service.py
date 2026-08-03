@@ -90,6 +90,7 @@ class EmbeddingService:
             response = await client.embeddings.create(
                 model=self.MODEL,
                 input=text,
+                dimensions=settings.EMBEDDING_DIMENSIONS,
             )
 
             embedding = response.data[0].embedding

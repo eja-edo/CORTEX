@@ -25,6 +25,7 @@ from app.api.internal import router as internal_router
 from app.api.workspaces import router as workspaces_router
 from app.api.proposals import router as proposals_router
 from app.api.sse import notification_sse_router, sync_sse_router
+from app.database_async import init_async_engine, close_async_engine
 from app.services.transcription_results_consumer import transcription_results_consumer
 from app.services.llm_processor_worker import get_llm_processor_worker
 from app.services.reminder_worker import ReminderWorker
@@ -138,6 +139,14 @@ async def lifespan(app: FastAPI):
     """Manage application startup and shutdown lifecycle."""
     global _llm_worker_thread, _reminder_worker_thread, _google_sync_worker_thread
     
+    # Initialise the async engine on the main event loop so that
+    # asyncpg connections and the internal asyncio.Lock are bound
+    # to the correct loop before any worker threads start.
+    try:
+        await init_async_engine()
+    except Exception as exc:
+        logger.warning(f"Async engine initialisation failed: {exc}")
+
     # Start transcription results consumer
     try:
         await transcription_results_consumer.start()
@@ -174,6 +183,13 @@ async def lifespan(app: FastAPI):
             _google_sync_worker_thread.stop()
         if _llm_worker_thread:
             _llm_worker_thread.stop()
+
+        # Dispose the async engine so its pool connections are released
+        # cleanly on this event loop.
+        try:
+            await close_async_engine()
+        except Exception as exc:
+            logger.warning(f"Async engine dispose failed: {exc}")
 
 # Initialize FastAPI app
 app = FastAPI(

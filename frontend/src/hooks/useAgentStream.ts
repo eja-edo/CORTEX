@@ -14,6 +14,13 @@ type ContextPill = {
     label: string
 }
 
+type PageContext =
+    | { type: 'home'; route: 'home' }
+    | { type: 'schedule'; route: 'schedule' }
+    | { type: 'note'; route: 'note_detail'; note_id: string; note_title?: string }
+    | { type: 'records'; route: 'records' }
+    | { type: 'workflow'; route: 'workflow' | 'workflow_detail'; workflow_id?: string }
+
 export type AgentMessage = {
     id: string
     role: 'user' | 'assistant'
@@ -213,7 +220,7 @@ interface UseAgentStreamOptions {
 }
 
 export function useAgentStream(options: UseAgentStreamOptions) {
-    const { workspaceId, onToolNavigate, onNoteDiff } = options
+    const { workspaceId, noteTitle, onToolNavigate, onNoteDiff } = options
     const navigate = useNavigate()
     const { updateTokenUsage } = useConversationStore()
 
@@ -415,6 +422,48 @@ export function useAgentStream(options: UseAgentStreamOptions) {
         }
     }, [])
 
+    const buildPageContext = useCallback((): PageContext | undefined => {
+        if (typeof window === 'undefined') return undefined
+        const path = window.location.pathname
+
+        if (path === '/') return { type: 'home', route: 'home' }
+        if (path === '/schedule' || /^\/w\/[^/]+\/schedule$/.test(path)) {
+            return { type: 'schedule', route: 'schedule' }
+        }
+
+        const wsMatch = path.match(/^\/w\/([^/]+)/)
+        if (!wsMatch) return undefined
+        const wsId = wsMatch[1]
+
+        const noteMatch = path.match(/^\/w\/[^/]+\/notes\/([^/]+)$/)
+        if (noteMatch) {
+            const page: PageContext = {
+                type: 'note',
+                route: 'note_detail',
+                note_id: noteMatch[1],
+            }
+            if (noteTitle) page.note_title = noteTitle
+            return page
+        }
+
+        if (path === `/w/${wsId}` || path === `/w/${wsId}/notes`) {
+            return { type: 'home', route: 'home' }
+        }
+
+        if (path === `/w/${wsId}/records`) {
+            return { type: 'records', route: 'records' }
+        }
+
+        const wfMatch = path.match(/^\/w\/[^/]+\/workflows(?:\/([^/]+))?$/)
+        if (wfMatch) {
+            return wfMatch[1]
+                ? { type: 'workflow', route: 'workflow_detail', workflow_id: wfMatch[1] }
+                : { type: 'workflow', route: 'workflow' }
+        }
+
+        return undefined
+    }, [noteTitle])
+
     const loadSession = useCallback(async (sessionId: string) => {
         try {
             setIsLoading(true)
@@ -554,9 +603,11 @@ export function useAgentStream(options: UseAgentStreamOptions) {
 
         try {
             const runtimeText = buildRuntimeContextText()
+            const page = buildPageContext()
             const pillsArray = addedPills.map(p => ({ id: p.id, text: p.text, label: p.label }))
             const context: Record<string, unknown> = {}
             if (pillsArray.length > 0) context.pills = pillsArray
+            if (page) context.page = page
             if (runtimeText) context.runtime = runtimeText
 
             let finalConversationId: string | null = null
@@ -768,7 +819,7 @@ export function useAgentStream(options: UseAgentStreamOptions) {
             abortRef.current = null
             setIsLoading(false)
         }
-    }, [isLoading, conversationId, updateTokenUsage, buildRuntimeContextText, navigate, workspaceId, onToolNavigate, saveConversationIdToStorage, selectedModel, onNoteDiff])
+    }, [isLoading, conversationId, updateTokenUsage, buildRuntimeContextText, buildPageContext, navigate, workspaceId, onToolNavigate, saveConversationIdToStorage, selectedModel, onNoteDiff])
 
     const acceptChange = useCallback((changeId: string, actionId: string) => {
         persistDismissedActionId(actionId)

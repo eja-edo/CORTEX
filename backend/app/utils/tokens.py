@@ -10,6 +10,9 @@ logger = get_logger(__name__)
 
 CHARS_PER_TOKEN_ESTIMATE = 3.5
 
+TOOL_TOKEN_WEIGHT = 0.25
+TOOL_TOKEN_CAP = 800
+
 
 def _get_encoding_name(model: str | None = None) -> str:
     if model and "gpt-4" in model:
@@ -75,3 +78,17 @@ def estimate_message_tokens(role: str, content: str | None, tool_name: str | Non
 
     total += 4
     return total
+
+
+def estimate_weighted_message_tokens(role: str, content: str | None, tool_name: str | None = None, tool_output: dict | None = None) -> int:
+    """Estimate tokens with tool weighting policy applied.
+
+    User/assistant messages: full estimated token count (weight = 1.0).
+    Tool messages: min(estimated_tokens * TOOL_WEIGHT, TOOL_TOKEN_CAP).
+
+    This is the authoritative function for tokens_since_last_summary.
+    """
+    raw = estimate_message_tokens(role, content, tool_name, tool_output)
+    if role == "tool":
+        return min(int(raw * TOOL_TOKEN_WEIGHT), TOOL_TOKEN_CAP)
+    return raw
