@@ -99,9 +99,8 @@ Before executing ANY task:
 
 1. Read `.opencode/protocol.md` in full.
 2. Read `.opencode/state/TASK.md`. That file, not the chat message, is the task.
-3. Read `.opencode/state/FACTS.md` for established facts. Do not re-verify them.
-4. Follow the mode contract in protocol.md section 1.
-5. Write `.opencode/state/REPORT.md` using the template, and append to LOG.md.
+3. Follow the mode contract in protocol.md section 1.
+4. Write `.opencode/state/REPORT.md` using the template, and append to LOG.md.
 
 `.opencode/protocol.md` takes priority over your default execution habits.
 You are an executor, not a planner: never invent the next task, never widen scope.
