@@ -6,12 +6,16 @@ Google Calendar via GoogleCalendarSyncService.
 """
 
 import asyncio
+import time
 from typing import Optional
 from uuid import UUID
 
 from sqlalchemy import select
 
 from app.database_async import make_async_sessionmaker
+from app.events.event_bus import get_event_bus
+from app.events.payloads import GoogleCalendarSyncedPayload
+from app.events.schemas import EventEnvelope
 from app.models import Schedule, SyncOperation
 from app.services.google_calendar_sync import GoogleCalendarSyncService
 from app.services.redis.google_sync_task import (
@@ -215,6 +219,7 @@ class GoogleSyncWorker:
 
         # Bước 2: chạy sync service (sync code) trong thread riêng để
         # không block event loop.
+        start_time = time.time()
         try:
             if task.operation == SyncOperation.UPSERT.value:
                 await asyncio.to_thread(self._sync_upsert, schedule)
@@ -226,11 +231,48 @@ class GoogleSyncWorker:
                     task.operation,
                     task.task_id,
                 )
-        except Exception:
+                return
+        except Exception as exc:
             logger.exception(
                 "GoogleSyncWorker: sync service raised for task %s", task.task_id
             )
+            await self._publish_sync_event(schedule, task, time.time() - start_time, success=False, error=str(exc))
             raise
+
+        await self._publish_sync_event(schedule, task, time.time() - start_time, success=True)
+
+    async def _publish_sync_event(
+        self,
+        schedule: Schedule,
+        task: "GoogleSyncTask",
+        duration_seconds: float,
+        *,
+        success: bool,
+        error: Optional[str] = None,
+    ) -> None:
+        """Publish google_calendar.synced. One event per processed schedule —
+        this worker syncs one schedule per task, not a batched job, so
+        events_added/updated/deleted here reflect that single schedule
+        (never break the sync operation on publish failure)."""
+        try:
+            bus = await get_event_bus()
+            is_upsert = task.operation == SyncOperation.UPSERT.value
+            await bus.publish(EventEnvelope(
+                type="google_calendar.synced",
+                source="GoogleSyncWorker",
+                user_id=schedule.user_id,
+                payload=GoogleCalendarSyncedPayload(
+                    user_id=schedule.user_id,
+                    sync_direction="push",
+                    events_added=0,
+                    events_updated=1 if success and is_upsert else 0,
+                    events_deleted=1 if success and not is_upsert else 0,
+                    sync_duration_ms=int(duration_seconds * 1000),
+                    errors=[error] if error else [],
+                ).model_dump(),
+            ))
+        except Exception as exc:
+            logger.warning(f"Failed to publish google_calendar.synced event: {exc}")
 
     @staticmethod
     def _sync_upsert(schedule: Schedule) -> None:

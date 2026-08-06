@@ -753,16 +753,28 @@ async def test_context_to_llm_string(async_db, test_user, test_workspace):
 
 ## ✅ Milestone 1.7 Definition of Done
 
-- [ ] Unified context model defined
-- [ ] ContextService implemented
-- [ ] Integration with AgentService
-- [ ] Integration with ConversationService
-- [ ] Context filtering by relevance
-- [ ] Recent activity fetching
-- [ ] to_llm_string with token budget
-- [ ] Integration tests pass
-- [ ] Token usage reduced (measure before/after)
-- [ ] No regression in chat functionality
+- [x] Unified context model defined — `backend/app/context/schemas.py` (thiết kế lại bám theo shape context thật của frontend, không theo `RuntimeContext`/`ViewType`/`CurrentObject` tưởng tượng trong plan gốc — xem ghi chú dưới)
+- [x] ContextService implemented — `backend/app/context/context_service.py`
+- [x] Integration with AgentService — `AgentService._build_context_string()` helper, gọi từ cả `handle()` lẫn `handle_streaming_generator()`
+- [x] Integration with ConversationService — `build_system_prompt()` nhận thêm `context_string` optional
+- [x] Context filtering by relevance — `_filter_by_relevance()`, kích hoạt khi có `intent` (chuẩn bị sẵn cho Milestone 1.8)
+- [x] Recent activity fetching — recent notes (loại trừ đã xoá) + upcoming schedules (7 ngày tới, loại trừ đã hoàn thành)
+- [x] `to_llm_string()` — **không** có "token budget" param như plan (không cần thiết ở quy mô hiện tại: tối đa 5 note + 5 schedule, luôn ngắn); có `max_items` để giới hạn số lượng
+- [x] Integration tests pass — `backend/tests/unit/test_context_schemas.py` (9 test) + `backend/tests/integration/test_context_service.py` (20 test) chạy với DB thật
+- [ ] Token usage reduced (measure before/after) — chưa đo, cần bật trong môi trường có traffic thật để so sánh trước/sau
+- [x] No regression in chat functionality — full suite 185/185 (trừ 7 lỗi pre-existing không liên quan), `agent_service.py`/`conversation_service.py` compile + import sạch
+
+**Status: hoàn thành 2026-08-06** (trừ đo lường token usage thực tế — cần môi trường production).
+
+### Điều chỉnh quan trọng so với plan gốc
+
+Đây là milestone rủi ro cao nhất trong Phase 1 vì đụng trực tiếp vào **pipeline chat AI đang chạy thật** (`agent_service.py` — 500+ dòng, gồm cả `handle()` không-streaming và `handle_streaming_generator()` streaming với tool-calling loop, retry, token budget). Quyết định thiết kế:
+
+1. **KHÔNG thay thế `_inject_context_into_text`** (cơ chế inject `pills`/`page`/`runtime` vào từng message — cả tin nhắn hiện tại lẫn lịch sử — đồng thời cũng feed vào skill retrieval). Plan gốc muốn "ContextService thay thế logic build context rải rác" hoàn toàn, nhưng rewrite cơ chế này rủi ro rất cao (ảnh hưởng cả streaming lẫn non-streaming, cả lịch sử hội thoại, cả skill selection) so với giá trị mang lại. Thay vào đó, `ContextService` là **phụ trợ (additive)**: thêm phần thông tin hoàn toàn mới (workspace/recent notes/upcoming schedules — trước đây AI không hề biết trừ khi tự gọi tool tìm kiếm) vào system prompt, không đụng vào cơ chế pills/page/runtime hiện có.
+2. **Không dùng `RuntimeContext`/`ViewType`/`CurrentObject`** như plan — frontend thực tế gửi `context: dict` tự do với 3 key `pills`/`page`/`runtime` (dict lồng nhau tuỳ ý, không có contract cố định). Ép vào Pydantic schema chặt sẽ vỡ với payload thật (ValidationError trên traffic thật). Giữ `page`/`runtime` là `dict` lỏng lẻo, dung sai (không phải dict thì trả `{}` thay vì raise).
+3. **`to_llm_string()` không render `pills`/`page`/`runtime`** — chúng đã được đưa vào tin nhắn qua `_inject_context_into_text`; render lại trong system prompt sẽ trùng lặp thông tin, đi ngược mục tiêu giảm token của chính milestone này.
+4. **Toàn bộ `ContextService`/helper integration được bọc try/except, không bao giờ raise** — nếu context enrichment lỗi, chat vẫn tiếp tục hoạt động bình thường (không có phần workspace/recent activity trong prompt), giống nguyên tắc "event publish failure không phá service" đã áp dụng xuyên suốt Phase 1.
+5. Không viết test end-to-end gọi `AgentService.handle()` thật vì cần LLM call thật (tốn phí, non-deterministic, cần API key) — test trực tiếp `ContextService`, `build_system_prompt()`, và helper `_build_context_string()` (đều là string-building + DB, không gọi model).
 
 ---
 

@@ -240,8 +240,19 @@ class ConversationService:
         context: dict | None,
         summarizer: ConversationSummarizer | None,
         system_prompt: str,
+        context_string: str | None = None,
+        recent_messages: list | None = None,
     ) -> str:
-        """Build system prompt with summary context and skill section."""
+        """Build system prompt with summary context, skill section, and
+        (Milestone 1.7) ContextService's workspace/recent-activity section.
+
+        `context_string` comes from `UnifiedContext.to_llm_string()`
+        (app/context/) — it's the NEW, DB-sourced part (workspace/recent
+        notes/upcoming schedules). It's separate from `context` (the
+        frontend's raw pills/page/runtime dict), which still goes through
+        `_inject_context_into_text` per-message as before — not duplicated
+        here.
+        """
         if summarizer and conv.summary:
             try:
                 summary_context = await summarizer.get_conversation_context(
@@ -252,7 +263,10 @@ class ConversationService:
             except Exception as exc:
                 logger.warning(f"Error getting summary context: {exc}")
 
-        skill_section = self._build_skill_section(message, context)
+        if context_string:
+            system_prompt = f"{system_prompt}\n\n{context_string}"
+
+        skill_section = self._build_skill_section(message, context, recent_messages)
         if skill_section:
             system_prompt = f"{system_prompt}\n\n{skill_section}"
 
@@ -382,15 +396,38 @@ Return ONLY the title, no quotes or explanation."""
     # Skill injection
     # ------------------------------------------------------------------
 
-    def _build_skill_section(self, message: str, context: dict | None = None) -> str:
+    def _extract_recent_user_texts(self, recent_messages: list | None, limit: int = 2) -> str:
+        """Last `limit` user-turn texts from history, oldest-first.
+
+        Short follow-up replies ("6 tháng", "09:00") carry no keywords of
+        their own — without the preceding user turns, skill retrieval goes
+        blank right when the ASK->PLAN handoff needs it most.
+        """
+        if not recent_messages:
+            return ""
+        texts: list[str] = []
+        for msg in reversed(recent_messages):
+            if getattr(msg, "role", None) == "user" and getattr(msg, "content", None):
+                texts.append(msg.content)
+                if len(texts) >= limit:
+                    break
+        texts.reverse()
+        return " ".join(texts)
+
+    def _build_skill_section(self, message: str, context: dict | None = None, recent_messages: list | None = None) -> str:
         try:
             retriever = get_skill_retriever()
             registry = get_skill_registry()
-            selected = retriever.select(message, context, max_skills=3)
+
+            history_text = self._extract_recent_user_texts(recent_messages)
+            retrieval_text = f"{history_text} {message}".strip() if history_text else message
+
+            selected = retriever.select(retrieval_text, context, max_skills=4)
             if not selected:
                 return ""
 
-            skills = registry.load_all([s.name for s in selected])
+            resolved_names = registry.resolve_dependencies([s.name for s in selected])
+            skills = registry.load_all(resolved_names)
             blocks: list[str] = []
             for skill in skills:
                 blocks.append(
@@ -398,8 +435,9 @@ Return ONLY the title, no quotes or explanation."""
                 )
             section = "\n\n".join(blocks)
             logger.info(
-                "Injected skills: %s (%d total chars)",
+                "Injected skills: primary=%s resolved=%s (%d total chars)",
                 [s.name for s in selected],
+                resolved_names,
                 len(section),
             )
             return section

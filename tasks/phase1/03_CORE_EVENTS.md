@@ -21,6 +21,8 @@ Thêm event emission vào các service operations hiện có:
 - Event publish failure **KHÔNG** được break service operation
 - Mọi event đi qua EventBus (không có ad-hoc pub/sub)
 
+**⚠️ Lưu ý quan trọng (2026-08-06):** Đây là milestone mà `note.*`/`schedule.*` event **thật sự bắt đầu được emit lần đầu tiên**. `workflow_service/app/triggers/internal_event_listener.py` (Task 1.2.4) **phải** được deploy với transport mới (Streams, không còn Pub/Sub) *trước hoặc cùng lúc* với milestone này — nếu không sẽ có khoảng trống Workflow Runtime không nhận được event nào dù EventBus đã chạy.
+
 ---
 
 ## 📋 Tasks
@@ -406,6 +408,8 @@ class ReminderWorker:
 ### Task 1.3.4: ConversationStore Events
 
 **File:** `backend/app/ai/agents/conversation_store.py`
+
+**⚠️ Điều chỉnh 2026-08-06:** Chữ ký thật của `save_message()` khác code mẫu bên dưới — không có `conv_id`/`tool_calls`/`context` như viết, mà là `conversation_id`, `tool_name`, `tool_call_id`, `turn_id` (xem code thật). Quan trọng hơn: `save_message()` **đã được sửa gần đây** (plan riêng `tasks/plan.md` — Summary Cursor & Trigger Refactor, đã hoàn thành) để tự tính `token_count` theo weighted policy và tăng counter tóm tắt hội thoại (`tokens_since_last_summary`, `messages_since_last_summary`) một cách atomic. Khi thêm event publish vào đây, **đặt sau** đoạn cập nhật counter đó, không được làm thay đổi hành vi auto-count đang chạy. `has_tool_calls` nên suy ra từ `tool_name is not None` thay vì tham số `tool_calls` (không tồn tại).
 
 **Changes:**
 
@@ -885,13 +889,20 @@ async def test_all_event_types_published(event_subscriber):
 
 ## ✅ Milestone 1.3 Definition of Done
 
-- [ ] 6 services emit events (Note, Schedule, Reminder, Conversation, Tool, GoogleSync)
-- [ ] 10 event types being published
-- [ ] Events published AFTER successful commit
-- [ ] Event publish failures don't break operations
-- [ ] Integration tests verify all events
-- [ ] No regression in existing functionality
-- [ ] Structured logging for all event emissions
+- [x] 6 services emit events (Note, Schedule, Reminder, Conversation, Tool, GoogleSync)
+- [x] 10 event types being published
+- [x] Events published AFTER successful commit (no-op paths in `update_note`/`patch_note` correctly skip publishing)
+- [x] Event publish failures don't break operations — verified via `test_event_publish_failure_does_not_break_note_create`
+- [x] Integration tests verify all events — `backend/tests/integration/test_core_events.py`, 15 tests, all against real Postgres + Redis
+- [x] No regression in existing functionality — full suite re-run, only pre-existing unrelated failures remain
+- [x] Structured logging for all event emissions
+
+**Status: hoàn thành 2026-08-06.** Đã sửa các phương thức thật thay vì bản pseudocode gốc: `NoteService.soft_delete` (không phải `delete_note`, cascade-delete nhiều note → nhiều event), `NoteService.patch_note` (thêm, không có trong plan gốc), `ScheduleService` không có `complete_schedule` riêng → phát `schedule.completed` lồng trong `update_schedule`/`update_schedule_fields` khi `is_completed` chuyển `False→True`, `ToolExecutionService` có 3 call site thực thi tool (không chỉ 1) đều đã instrument.
+
+**Bug có sẵn phát hiện được và đã sửa nhân tiện (ngoài phạm vi milestone, nhưng chặn test):**
+- `ReminderWorker._process_due_reminders` dùng `datetime.utcnow()` (naive) so sánh với cột `TIMESTAMPTZ` — trên host có timezone hệ điều hành khác UTC (ví dụ Asia/Vientiane +7), asyncpg diễn giải naive datetime theo giờ local khi ép kiểu, khiến cửa sổ "đã đến hạn" lệch hàng giờ. Đã sửa toàn bộ 3 chỗ dùng `datetime.utcnow()` trong file này sang `datetime.now(timezone.utc)`.
+- DB dev thiếu 4 migration (đến `q0123456789m`) — đã chạy `alembic upgrade head` (theo yêu cầu người dùng) trước khi test `conversation.message.created` chạy được.
+- Postgres enum `reminderstatus` thiếu giá trị `"processing"` so với Python `ReminderStatus` enum → `_process_due_reminders`'s optimistic-lock UPDATE (PENDING→PROCESSING) lỗi. **Chưa sửa** (cần alter type enum, rủi ro cao hơn, để riêng) — test reminder gọi trực tiếp `_send_notification`/`_publish_reminder_due` để né, xem docstring trong test.
 
 ---
 

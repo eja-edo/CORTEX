@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 
 from app.core.security import get_current_user, CurrentUser
 from app.actions.registry import action_registry
+from app.triggers.internal_event_listener import load_implemented_event_types
 
 router = APIRouter()
 
@@ -17,13 +18,20 @@ async def list_actions(current_user: CurrentUser = Depends(get_current_user)):
                 "description": "Trigger khi có sự kiện trong Cortex",
                 "config_schema": {
                     "properties": {
+                        # Milestone 1.9: sourced from the shared event
+                        # vocabulary (backend/app/events/vocabulary.py, via
+                        # event_vocabulary.json) instead of a 4th hardcoded
+                        # list — this used to only list 8 of the 12 known
+                        # event types (missing schedule.reminder.due,
+                        # conversation.message.created, tool.executed,
+                        # google_calendar.synced entirely), and included 2
+                        # reserved types nothing publishes. Only
+                        # has_payload_schema=true types are offered here —
+                        # a user shouldn't be able to pick a trigger event
+                        # that will never fire.
                         "event": {
                             "type": "string",
-                            "enum": [
-                                "note.created", "note.updated", "note.deleted",
-                                "schedule.created", "schedule.updated", "schedule.completed",
-                                "asset.uploaded", "asset.processed"
-                            ]
+                            "enum": load_implemented_event_types(),
                         },
                         "filters": {"type": "object"}
                     }

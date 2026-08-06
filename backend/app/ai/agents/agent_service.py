@@ -74,6 +74,42 @@ class AgentService:
     async def _check_knowledge_suggestions(self, tool_result, history, ctx):
         await self.tool_service._check_knowledge_suggestions(tool_result, history, ctx)
 
+    def _detect_intent(self, message: str) -> str | None:
+        """Milestone 1.8 (IntentDetectionService): L1 rule-based intent
+        detection, used only to sharpen ContextService's relevance filter.
+        Never raises, never changes tool-calling behavior — UNKNOWN/no-match
+        falls through to the existing full loop exactly as before this
+        milestone existed."""
+        try:
+            from app.intents.intent_service import get_intent_service
+            from app.intents.schemas import IntentType
+            detected = get_intent_service().detect(message)
+            if detected.intent_type == IntentType.UNKNOWN:
+                return None
+            return detected.intent_type.value
+        except Exception as exc:
+            logger.warning(f"Intent detection failed (non-fatal): {exc}")
+            return None
+
+    async def _build_context_string(self, workspace_id: UUID | None, conv_id: UUID, context: dict | None, message: str = "") -> str | None:
+        """Milestone 1.7 (ContextService): workspace/recent-notes/upcoming-
+        schedules section appended to the system prompt. Never raises —
+        this is an enrichment, not a requirement for the chat flow."""
+        try:
+            from app.context.context_service import ContextService
+            context_service = ContextService(self.db)
+            unified_context = await context_service.build_context(
+                user_id=self.user.id,
+                workspace_id=workspace_id,
+                conversation_id=conv_id,
+                runtime_context=context,
+                intent=self._detect_intent(message),
+            )
+            return unified_context.to_llm_string()
+        except Exception as exc:
+            logger.warning(f"ContextService failed to build context (non-fatal): {exc}")
+            return None
+
     async def handle(self, message: str, conversation_id: UUID | None = None, workspace_id: UUID | None = None, context: dict | None = None) -> dict:
         conv, title = await self.conversation_service.get_or_create(conversation_id, workspace_id, message)
         if conv is None:
@@ -84,10 +120,11 @@ class AgentService:
             return {"conversation_id": str(conv.id), "reply": budget_err}
 
         summarizer = await self.conversation_service.get_summarizer()
-        system_prompt = await self.conversation_service.build_system_prompt(conv, message, context, summarizer, SYSTEM_PROMPT)
-
         recent_messages = await self.conversation_service.load_history(conv.id, conv.last_summary_message_id)
         self.conversation_service.log_raw_messages(recent_messages, "handle")
+
+        context_string = await self._build_context_string(workspace_id, conv.id, context, message)
+        system_prompt = await self.conversation_service.build_system_prompt(conv, message, context, summarizer, SYSTEM_PROMPT, context_string=context_string, recent_messages=recent_messages)
 
         await self.conversation_service.save_user_message(conv.id, message, context)
         await self.conversation_service.increment_message_count(conv.id)
@@ -259,7 +296,8 @@ class AgentService:
             await self.conversation_service.save_user_message(conv.id, message, context)
             await self.conversation_service.increment_message_count(conv.id)
 
-            system_prompt = await self.conversation_service.build_system_prompt(conv, message, context, summarizer, SYSTEM_PROMPT)
+            context_string = await self._build_context_string(workspace_id, conv.id, context, message)
+            system_prompt = await self.conversation_service.build_system_prompt(conv, message, context, summarizer, SYSTEM_PROMPT, context_string=context_string, recent_messages=recent_messages)
 
             ctx = ToolContext(user_id=user_id, async_db=self.db, workspace_id=workspace_id, conversation_id=conv.id)
 

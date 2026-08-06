@@ -1,13 +1,11 @@
-"""Update schedule tool — dùng ScheduleService thay vì query DB trực tiếp."""
+"""Update schedule tool — thin wrapper around the schedule.update command."""
 
 from datetime import datetime
 from typing import Optional
 from uuid import UUID
 from pydantic import BaseModel, Field
 
-from app.ai.agents.action_snapshot_store import ActionSnapshot, get_snapshot_store
 from app.ai.agents.tool_context import ToolContext
-from app.services.schedule_service import ScheduleService
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -23,90 +21,59 @@ class UpdateScheduleInput(BaseModel):
 
 
 async def update_schedule_handler(args: dict, ctx: ToolContext) -> dict:
+    """Update a schedule.
+
+    Permission: schedule.update has no workspace_id on its Command (Schedule
+    has no workspace concept — only user_id) — same ownership-only check as
+    before migration.
+    """
+    from app.commands.registry import get_command_registry
+    from app.commands.schemas import Command
+
     try:
         schedule_id = UUID(args["schedule_id"])
     except ValueError:
         raise ValueError(f"Invalid schedule_id: {args['schedule_id']}")
 
-    start_time = None
     if args.get("start_time"):
         try:
-            start_time = datetime.fromisoformat(args["start_time"])
+            datetime.fromisoformat(args["start_time"])
         except ValueError:
             raise ValueError(f"Invalid start_time: {args['start_time']}")
 
-    end_time = None
     if args.get("end_time"):
         try:
-            end_time = datetime.fromisoformat(args["end_time"])
+            datetime.fromisoformat(args["end_time"])
         except ValueError:
             raise ValueError(f"Invalid end_time: {args['end_time']}")
 
-    from app.database import SessionLocal
-
-    db = SessionLocal()
-    result_data = {}
-    schedule = None
-    try:
-        svc = ScheduleService(db)
-
-        # --- CAPTURE PREV STATE ---
-        existing = svc.get_schedule_by_id(schedule_id=schedule_id, user_id=ctx.user_id)
-        if not existing:
-            raise ValueError("Schedule not found or permission denied")
-
-        prev_fields = {
-            "title": existing.title,
-            "start_time": existing.start_time.isoformat(),
-            "end_time": existing.end_time.isoformat(),
-            "description": existing.description,
-            "is_completed": existing.is_completed,
-        }
-        # --------------------------
-
-        schedule = svc.update_schedule_fields(
-            schedule_id=schedule_id,
-            user_id=ctx.user_id,
-            title=args.get("title"),
-            start_time=start_time,
-            end_time=end_time,
-            description=args.get("description"),
-            is_completed=args.get("is_completed"),
-        )
-
-        result_data = {
-            "id": str(schedule.id),
-            "title": schedule.title,
-            "start_time": schedule.start_time.isoformat(),
-            "end_time": schedule.end_time.isoformat(),
-            "is_completed": schedule.is_completed,
-            "updated_at": schedule.updated_at.isoformat() if schedule.updated_at else None,
-            "prev_fields": prev_fields,
-        }
-    except Exception as exc:
-        logger.error("update_schedule failed: %s", exc, exc_info=True)
-        raise
-    finally:
-        db.close()
-
-    # --- REVERT SNAPSHOT (outside sync DB context) ---
-    snapshot = ActionSnapshot(
-        tool_name="update_schedule",
-        user_id=str(ctx.user_id),
-        conversation_id=str(getattr(ctx, "conversation_id", "")),
-        snapshot={
-            "op": "update_schedule",
+    command = Command(
+        command_name="schedule.update",
+        args={
             "schedule_id": str(schedule_id),
-            "prev_fields": prev_fields,
+            "title": args.get("title"),
+            "start_time": args.get("start_time"),
+            "end_time": args.get("end_time"),
+            "description": args.get("description"),
+            "is_completed": args.get("is_completed"),
         },
+        requested_by=ctx.user_id,
+        conversation_id=ctx.conversation_id,
+        source="AI",
     )
-    action_id = await get_snapshot_store().save(snapshot)
-    # --------------------------------------------------
 
-    result_data["action_id"] = action_id
-    result_data["revert_hint"] = "Bạn có thể hoàn tác cập nhật lịch này bằng action_id trên."
-    result_data["success"] = True
-    return result_data
+    result = await get_command_registry().execute(command, ctx)
+
+    if not result.success:
+        raise ValueError(result.error)
+
+    data = {k: v for k, v in result.data.items() if k != "prev_state"}  # internal-only, prev_fields stays
+    return {
+        **data,
+        "action_id": result.action_id,
+        "revert_hint": "Bạn có thể hoàn tác cập nhật lịch này bằng action_id trên.",
+        "success": True,
+    }
 
 
 UPDATE_SCHEDULE_SCHEMA = {

@@ -396,14 +396,16 @@ class GoogleCalendarSyncedPayload(BaseModel):
 
 ## ✅ Milestone 1.1 Definition of Done
 
-- [ ] EventEnvelope schema với JSON serialization
-- [ ] Event naming convention documented
-- [ ] 10 payload schemas implemented
-- [ ] README.md với architecture docs
-- [ ] Versioning strategy documented
-- [ ] Unit tests cho schemas
-- [ ] All schemas pass validation tests
-- [ ] Documentation reviewed by team
+- [x] EventEnvelope schema với JSON serialization — `backend/app/events/schemas.py`
+- [x] Event naming convention documented — `backend/app/events/README.md`
+- [x] 10 payload schemas implemented — `backend/app/events/payloads.py`
+- [x] README.md với architecture docs
+- [x] Versioning strategy documented
+- [x] Unit tests cho schemas — `backend/tests/unit/test_event_schemas.py` (27 tests)
+- [x] All schemas pass validation tests — `pytest tests/unit/test_event_schemas.py` 27 passed
+- [ ] Documentation reviewed by team (pending human review)
+
+**Status: hoàn thành 2026-08-06** (trừ review của team, không tự động hoá được)
 
 ---
 

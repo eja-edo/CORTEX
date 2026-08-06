@@ -80,7 +80,7 @@ class ActionSnapshotStore:
                              action_id, before_state, created_at)
                         VALUES
                             (:uid, :conv_id, :tool, :atype,
-                             :aid, :state::jsonb, to_timestamp(:created))
+                             :aid, CAST(:state AS jsonb), to_timestamp(:created))
                         ON CONFLICT DO NOTHING
                     """),
                     {
@@ -97,6 +97,15 @@ class ActionSnapshotStore:
                 logger.info(f"Saved action snapshot to PG: {snapshot.action_id}")
             except Exception as exc:
                 logger.warning(f"Failed to save action snapshot to PG (non-fatal): {exc}")
+                # A failed statement leaves the session's transaction aborted
+                # at the Postgres protocol level — every later query on this
+                # same session would fail with "current transaction is
+                # aborted" until rolled back. db_session is caller-owned (may
+                # be reused well beyond this call), so it must be left usable.
+                try:
+                    await db_session.rollback()
+                except Exception as rb_exc:
+                    logger.warning(f"Rollback after PG snapshot save failure also failed: {rb_exc}")
 
         return snapshot.action_id
 
@@ -150,6 +159,10 @@ class ActionSnapshotStore:
                     await db_session.commit()
                 except Exception as exc:
                     logger.warning(f"Failed to mark_reverted in PG (non-fatal): {exc}")
+                    try:
+                        await db_session.rollback()
+                    except Exception as rb_exc:
+                        logger.warning(f"Rollback after PG mark_reverted failure also failed: {rb_exc}")
 
             return True
         except Exception as exc:

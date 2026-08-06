@@ -177,7 +177,17 @@ class NoteCreateArgs(BaseModel):
 
 
 class NoteUpdateArgs(BaseModel):
-    """Arguments for note.update command."""
+    """
+    Arguments for note.update command.
+
+    ⚠️ 2026-08-06: `update_note_handler` thật (backend/app/ai/tools/update_note.py)
+    KHÔNG apply thay đổi trực tiếp — nó gọi `ProposalService.create_proposal()`
+    và trả về `proposal_id` chờ người dùng duyệt. Command `note.update` vì vậy
+    KHÔNG mang ngữ nghĩa "revertable qua snapshot" như note.create/note.delete —
+    kết quả thành công của nó là "đã tạo đề xuất", không phải "đã sửa xong".
+    Xem điều chỉnh handler ở 05_COMMAND_REGISTRY.md / 06_TOOL_MIGRATION.md.
+    Field `content` ở đây là nội dung MỚI đề xuất (full text), không phải patch.
+    """
     note_id: UUID
     version: int = Field(..., ge=1, description="Optimistic lock version")
     title: Optional[str] = Field(None, min_length=1, max_length=255)
@@ -542,15 +552,17 @@ assert result.action_id is not None  # Revertable
 
 ## ✅ Milestone 1.4 Definition of Done
 
-- [ ] Command envelope schema với validation
-- [ ] CommandResult schema
-- [ ] 7 command argument schemas với Pydantic validation
-- [ ] Naming convention documented
-- [ ] Command architecture documented
-- [ ] Permission scope enum
-- [ ] Schema versioning strategy
-- [ ] Unit tests cho schemas (serialization, validation)
-- [ ] README.md explaining Command architecture
+- [x] Command envelope schema với validation — `backend/app/commands/schemas.py` (pydantic v2: bỏ `class Config`/`json_encoders`, dùng `model_dump(mode="json")` sẵn có)
+- [x] CommandResult schema
+- [x] 7 command argument schemas với Pydantic validation — `backend/app/commands/args.py` (pydantic v2: `@field_validator`/`@model_validator` thay `@validator`, `schedule_type: ScheduleType` enum thật thay vì regex string tay)
+- [x] Naming convention documented
+- [x] Command architecture documented
+- [x] Permission scope enum
+- [x] Schema versioning strategy
+- [x] Unit tests cho schemas (serialization, validation) — `backend/tests/unit/test_command_schemas.py`, 23 test, pass
+- [x] README.md explaining Command architecture — `backend/app/commands/README.md`
+
+**Status: hoàn thành 2026-08-06.**
 
 ---
 

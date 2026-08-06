@@ -169,7 +169,8 @@ class SkillRetriever:
     ):
         """Convenience: select skills and load them in one call."""
         selected = self.select(message, context, max_skills)
-        return self._registry.load_all([s.name for s in selected])
+        resolved_names = self._registry.resolve_dependencies([s.name for s in selected])
+        return self._registry.load_all(resolved_names)
 
     # -- keyword strategy ---------------------------------------------------
 

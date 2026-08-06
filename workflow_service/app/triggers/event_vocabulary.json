@@ -1,0 +1,66 @@
+{
+  "_generated_by": "backend/scripts/generate_event_vocabulary.py \u2014 do not edit by hand",
+  "_source": "backend/app/events/vocabulary.py",
+  "event_types": [
+    {
+      "event_type": "asset.processed",
+      "description": "Reserved \u2014 not yet published by any backend service",
+      "has_payload_schema": false
+    },
+    {
+      "event_type": "asset.uploaded",
+      "description": "Reserved \u2014 not yet published by any backend service",
+      "has_payload_schema": false
+    },
+    {
+      "event_type": "conversation.message.created",
+      "description": "A chat message was saved",
+      "has_payload_schema": true
+    },
+    {
+      "event_type": "google_calendar.synced",
+      "description": "A Google Calendar sync batch finished",
+      "has_payload_schema": true
+    },
+    {
+      "event_type": "note.created",
+      "description": "A note was created",
+      "has_payload_schema": true
+    },
+    {
+      "event_type": "note.deleted",
+      "description": "A note was soft-deleted",
+      "has_payload_schema": true
+    },
+    {
+      "event_type": "note.updated",
+      "description": "A note was updated (metadata or content patch)",
+      "has_payload_schema": true
+    },
+    {
+      "event_type": "schedule.completed",
+      "description": "A schedule transitioned to completed",
+      "has_payload_schema": true
+    },
+    {
+      "event_type": "schedule.created",
+      "description": "A schedule was created",
+      "has_payload_schema": true
+    },
+    {
+      "event_type": "schedule.reminder.due",
+      "description": "A reminder fired",
+      "has_payload_schema": true
+    },
+    {
+      "event_type": "schedule.updated",
+      "description": "A schedule was updated",
+      "has_payload_schema": true
+    },
+    {
+      "event_type": "tool.executed",
+      "description": "An AI tool call finished",
+      "has_payload_schema": true
+    }
+  ]
+}

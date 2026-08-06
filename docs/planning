@@ -1,4 +1,4 @@
-# Cortex — Kế Hoạch Triển Khai Chi Tiết Theo Từng Phase
+# Cortex — Kế Hoạch Triển Khai Chi Tiết Theo Từng Phase (Bản 2)
 
 > Tài liệu này triển khai chi tiết từ **Phase Roadmap** trong bản Product & Architecture Analysis Report (mục 12–13). Mỗi phase được chia thành các **hạng mục (workstream)**, mỗi hạng mục có đầy đủ: **Title — Mục tiêu — Mô tả — Milestones**, để team có thể lập backlog, giao việc và track tiến độ trực tiếp.
 
@@ -11,6 +11,105 @@
 
 Thứ tự phase giữ nguyên theo critical path đã xác định:
 `Phase 0 → Phase 1 → Phase 2 → Phase 3/4/5 (có thể song song) → Phase 6`, Phase 7 chạy song song xuyên suốt.
+
+**Quy ước đánh số:** số hạng mục của Bản 1 được **giữ nguyên** để không phá vỡ tham chiếu trong `tasks/` và trong các tài liệu khác. Hạng mục bị loại bỏ được đánh dấu `[ĐÃ BỎ]` kèm lý do và nơi chuyển đến, thay vì xoá và đánh số lại. Hạng mục mới lấy số tiếp theo trong phase.
+
+---
+
+# Thay Đổi So Với Bản 1
+
+Bản 1 giả định proactive = `Event → Rule → Notification`, và mỗi thành phần (ReminderWorker, workflow action, Rule Engine) tự gửi thông báo. Rà soát lại code cho thấy điều này đã tạo ra **nhiều nguồn notification độc lập** — chính là mô hình dẫn tới notification fatigue mà mục 10 của Product Requirement muốn tránh.
+
+Bản 2 sửa 6 điểm:
+
+| # | Thay đổi | Ở đâu |
+|---|---|---|
+| 1 | Thêm **Attention Gate** — cổng duy nhất cho mọi thứ làm phiền user | 6.1 (viết lại) |
+| 2 | **Bỏ Rule Engine.** Detection hợp nhất vào Workflow Engine | 6.3 `[ĐÃ BỎ]` → Phase 4 |
+| 3 | System workflow **tham chiếu, không copy** vào từng workspace | 4.0 (mới) |
+| 4 | **State Evaluator** biến thay đổi trạng thái thành event → chỉ cần một cơ chế trigger | 4.6 (mới) |
+| 5 | Task sở hữu `due_date`; Schedule là projection read-only (bỏ đồng bộ hai chiều) | 2.6 (viết lại) |
+| 6 | `attention_log` phải có từ Phase 2, không đợi Phase 6 | 2.9 (mới) |
+
+Kèm 2 điểm sửa trong Phase 1 (chặn cứng, phát hiện khi rà soát code):
+
+| # | Thay đổi | Ở đâu |
+|---|---|---|
+| 7 | Hợp nhất event vocabulary giữa backend ↔ workflow_service | 1.9 (mới) |
+| 8 | Durable consumer ở backend — hiện `subscribe()` không có ai gọi | 1.10 (mới) |
+
+---
+
+# Nguyên Tắc Xuyên Suốt
+
+Bốn nguyên tắc dưới đây ràng buộc mọi phase. Khi một thiết kế mâu thuẫn với chúng, sửa thiết kế chứ không sửa nguyên tắc.
+
+### P1 — Every interruption must earn the user's attention
+
+Một workflow thành công không phải là workflow **đã chạy**, mà là workflow **tạo ra đúng hành động, đúng thời điểm, với mức làm phiền thấp nhất**.
+
+Hệ quả kỹ thuật: **không component nào được ghi thẳng vào bảng `notifications`.** Mọi thứ muốn làm phiền user đều đi qua Attention Gate (6.1). Đây là ràng buộc kiến trúc, không phải khuyến nghị.
+
+### P2 — Detection ≠ Delivery
+
+Hai trách nhiệm tách hẳn, hai thành phần khác nhau:
+
+| | Câu hỏi | Ai lo |
+|---|---|---|
+| **Detection** | Có chuyện gì đáng chú ý không? | Workflow Engine (Phase 4) |
+| **Delivery** | Có nên nói không? Lúc nào? Gộp với gì? | Attention Gate (6.1) |
+
+Lý do Gate không thể là một workflow: bundling hoạt động **trên output của tất cả workflow**. Không workflow nào biết các workflow khác đang định nói gì. Nó là state toàn cục theo user, không phải một graph.
+
+### P3 — Hành vi hệ thống tham chiếu, không copy
+
+System workflow sống **một chỗ duy nhất**. Workspace chỉ lưu **override** (`enabled` + config). Không seed bản sao definition vào từng workspace.
+
+Lý do: copy = fork. Ship bản sửa thì các bản copy không nhận được, và không phân biệt được bản nào user đã chỉnh. Chi tiết ở 4.0.
+
+### P4 — Thay đổi trạng thái phải trở thành event
+
+"Task quá hạn 3 ngày" không phải event — không có gì *xảy ra*, chỉ là thời gian trôi. Phải có State Evaluator (4.6) đi hỏi và **publish** `task.overdue`.
+
+Hệ quả: `TriggerType` giữ nguyên 4 giá trị mãi mãi. Mọi trigger mới đều là `INTERNAL_EVENT` với `event_type` khác nhau. Thêm trigger cho user = thêm dòng vào catalog, **không sửa code**.
+
+### Ba ranh giới không được vượt
+
+Ba lỗi dưới đây, mỗi lỗi đủ để phá vỡ sản phẩm ngay cả khi mọi thứ khác đúng:
+
+1. **Workflow đề xuất, không gửi.** Workflow phát *attention candidate*. Gate quyết định. Nếu workflow gọi thẳng `send_notification`, thì N workflow = N nguồn spam — và do user tạo nên không fix được bằng code.
+2. **Toggle để TẮT, không phải để BẬT.** Bộ mặc định do Cortex chọn (~5), bật sẵn. Trang danh sách là nơi **audit và tắt**, không phải nơi cấu hình. Phép thử: *nếu user không bao giờ mở trang đó, Cortex có còn hữu ích không?* Phải là **có**.
+3. **Hành vi cốt lõi ship thành system workflow, không thành template copy.** Template chỉ dành cho thứ đặc thù từng người.
+
+---
+
+# Trạng Thái Hiện Tại (rà soát code, 2026-08-06)
+
+Phase 0 và Phase 1 phần lớn **đã được implement**. Kế hoạch dưới đây phản ánh trạng thái thật, không viết lại như chưa làm gì.
+
+**Đã có:**
+
+- `app/ai/agents/`: `conversation_service.py`, `tool_execution_service.py`, `conversation_store.py` → 0.1 phần lớn xong
+- `app/events/`: `event_bus.py` (Redis Streams, DLQ, retry, pattern matching), `schemas.py`, `payloads.py` → 1.1, 1.2 xong
+- `app/commands/`: `registry.py`, `schemas.py`, `args.py`, `handlers/{note,schedule}_commands.py` → 1.4, 1.5, 1.6 phần lớn xong
+- `app/context/`: `context_service.py`, `schemas.py` → 1.7 xong
+- `app/intents/`: `intent_service.py`, `rule_detector.py` → 1.8 xong
+- `backend/tests/{unit,integration,load}/` → 0.3 đã bắt đầu
+- Publisher đã gắn vào: `notes.py`, `schedule_service.py`, `reminder_worker.py`, `google_sync_worker.py`, `tool_execution_service.py`, `commands/registry.py` → 1.3 xong
+- `workflow_service`: engine kiểu n8n khá đầy đủ — `ActionRegistry` + 10 builtin action, `BaseAction` có `config_schema` và template resolver `{{trigger.x}}`, Temporal, `WorkflowStatus.ACTIVE/PAUSED`
+- `internal_event_listener.py` đã consume Redis Streams qua consumer group → **4.1 phần lớn đã xong trước hạn**
+
+**Lỗ hổng đã xác định (là nguồn gốc của các hạng mục mới):**
+
+| Lỗ hổng | Bằng chứng | Sửa ở |
+|---|---|---|
+| Không có ai gọi `subscribe()` trong backend; không có `XREADGROUP` | grep toàn bộ `backend/app/` = 0 kết quả | **1.10** |
+| Hai nguồn sự thật về event type, đã lệch nhau | `EVENT_PAYLOAD_REGISTRY` (10) vs `SUPPORTED_EVENTS` (8) | **1.9** |
+| `send_notification` POST thẳng `/internal/notifications` | `workflow_service/app/actions/builtin/send_notification.py` | **4.3** |
+| `ReminderWorker` tạo `Notification` trực tiếp | `reminder_worker.py` | **6.1** |
+| `_handle_event` load **toàn bộ** workflow ACTIVE mỗi event, lọc bằng Python | `internal_event_listener.py` | **4.0** |
+| `Notification` không có importance / bundling key / trạng thái phản hồi | `models.py` | **2.9** |
+| `ActionRegistry` là global mutable singleton (cùng anti-pattern với `ToolRegistry`) | `workflow_service/app/actions/registry.py` | **1.5** |
 
 ---
 
@@ -25,202 +124,228 @@ Thứ tự phase giữ nguyên theo critical path đã xác định:
 
 ### 0.1 — Refactor AgentService thành các service độc lập
 
-- **Mục tiêu:** Tách trách nhiệm của `AgentService` (hiện ~1000 dòng, xử lý conversation + tool loop + memory + streaming trong một class) thành các service nhỏ, dễ test, dễ mở rộng khi thêm Intent/Command/Event ở Phase 1.
-- **Mô tả:** Trích xuất `ConversationService` (quản lý conversation, title, sliding window), `ToolExecutionService` (vòng lặp gọi tool, snapshot undo, giới hạn turn), `MemoryExtractionService` (trigger + gọi `ConversationSummarizer`). `AgentService` chỉ còn là orchestrator mỏng gọi 3 service này theo thứ tự.
+- **Mục tiêu:** Tách trách nhiệm của `AgentService` thành các service nhỏ, dễ test, dễ mở rộng khi thêm Intent/Command/Event ở Phase 1.
+- **Mô tả:** Trích xuất `ConversationService`, `ToolExecutionService`, `MemoryExtractionService`. `AgentService` chỉ còn là orchestrator mỏng.
 - **Milestones:**
   - M1: `ConversationService` tách xong, có unit test cho get/create conversation, sliding window, token-budget loading.
   - M2: `ToolExecutionService` tách xong, giữ nguyên hành vi snapshot/undo và giới hạn 30 turn / 20 lần gọi cùng tool.
-  - M3: `MemoryExtractionService` tách xong, giữ nguyên advisory lock chống race condition khi trigger extraction đồng thời.
-  - M4: `AgentService` còn lại < 200 dòng, chỉ làm nhiệm vụ điều phối; toàn bộ luồng chat streaming hiện tại chạy không đổi hành vi (regression test pass).
+  - M3: `MemoryExtractionService` tách xong, giữ nguyên advisory lock chống race condition.
+  - M4: `AgentService` còn lại < 200 dòng; luồng chat streaming chạy không đổi hành vi.
 
 ---
 
 ### 0.2 — Refactor AskAI (frontend)
 
-- **Mục tiêu:** Giảm rủi ro bảo trì của component chat chính, vì đây sẽ là nơi hiển thị các UI mới (tool progress, proactive suggestion, approval flow) ở các phase sau.
-- **Mô tả:** Tách `AskAI.tsx` (hiện 1365 dòng) thành các component nhỏ: `MessageList`, `ToolExecutionIndicator`, `StreamingComposer`, `TokenBudgetBar`. State streaming/SSE giữ ở custom hook riêng (`useAgentStream`) thay vì nằm trong component.
+- **Mục tiêu:** Giảm rủi ro bảo trì của component chat chính, vì đây sẽ là nơi hiển thị UI mới (tool progress, proactive suggestion, approval flow).
+- **Mô tả:** Tách `AskAI.tsx` thành `MessageList`, `ToolExecutionIndicator`, `StreamingComposer`, `TokenBudgetBar`. State SSE giữ ở hook `useAgentStream`.
 - **Milestones:**
-  - M1: `useAgentStream` hook tách xong, xử lý toàn bộ SSE event (token, tool_start, tool_result, done) độc lập với UI.
-  - M2: `MessageList` và `ToolExecutionIndicator` tách thành component riêng, có thể test bằng Storybook/unit test.
-  - M3: `AskAI.tsx` còn lại < 300 dòng, chỉ compose các component con.
-  - M4: Không có regression về UX streaming (đo bằng manual QA checklist trước/sau).
+  - M1: `useAgentStream` xử lý toàn bộ SSE event độc lập với UI.
+  - M2: `MessageList` và `ToolExecutionIndicator` tách thành component riêng.
+  - M3: `AskAI.tsx` còn lại < 300 dòng.
+  - M4: Không có regression về UX streaming.
 
 ---
 
 ### 0.3 — Integration tests cho luồng AI + Tool
 
-- **Mục tiêu:** Đảm bảo mọi thay đổi kiến trúc ở Phase 1+ không âm thầm phá vỡ hành vi AI hiện tại (không có test này thì refactor Intent/Command rất rủi ro).
-- **Mô tả:** Viết bộ test end-to-end giả lập: user message → tool call → tool result → response, cho ít nhất 5 tool quan trọng nhất (`create_note`, `create_schedule`, `search_notes`, `get_schedules`, `revert_action`). Dùng mock LLM response để test không phụ thuộc model thật.
+- **Mục tiêu:** Đảm bảo thay đổi kiến trúc ở Phase 1+ không âm thầm phá vỡ hành vi AI hiện tại.
+- **Mô tả:** Test end-to-end giả lập: user message → tool call → tool result → response, cho 5 tool quan trọng nhất. Dùng mock LLM.
 - **Milestones:**
-  - M1: Test harness có khả năng mock ModelClient trả về tool_call giả định.
-  - M2: 5 test case E2E cho 5 tool trọng yếu, chạy pass trong CI (hoặc local nếu CI chưa có).
-  - M3: Test cho luồng undo/revert (snapshot → revert → verify state khôi phục đúng).
-  - M4: Test suite chạy được trong < 2 phút, tích hợp vào quy trình trước khi merge.
+  - M1: Test harness mock `ModelClient` trả về tool_call giả định.
+  - M2: 5 test case E2E cho 5 tool trọng yếu.
+  - M3: Test cho luồng undo/revert.
+  - M4: Test suite chạy < 2 phút, tích hợp vào quy trình trước khi merge.
 
 ---
 
 ### 0.4 — Fix sync-in-async anti-pattern
 
-- **Mục tiêu:** Loại bỏ rủi ro block event loop khi các background worker (`reminder_worker.py`, `schedule_service.py`) dùng sync SQLAlchemy session (`next(get_db())`) trong context async.
-- **Mô tả:** Thay toàn bộ session sync bằng `AsyncSession` (`database_async.py` đã có sẵn), cập nhật `ReminderWorker`, `GoogleSyncWorker` và các nơi còn dùng `next(get_db())`.
+- **Mục tiêu:** Loại bỏ rủi ro block event loop khi worker dùng sync SQLAlchemy session trong context async.
+- **Mô tả:** Thay session sync bằng `AsyncSession`, cập nhật `ReminderWorker`, `GoogleSyncWorker`.
 - **Milestones:**
-  - M1: Audit toàn bộ codebase, liệt kê danh sách file/dòng còn dùng sync session trong async context.
-  - M2: `ReminderWorker` chuyển sang async session, test polling loop vẫn hoạt động đúng chu kỳ 30s.
-  - M3: `GoogleSyncWorker` chuyển sang async session, test sync queue vẫn xử lý đúng thứ tự priority.
-  - M4: Không còn instance nào của `next(get_db())` trong worker code (grep xác nhận = 0 kết quả).
+  - M1: Audit toàn bộ codebase, liệt kê file/dòng còn dùng sync session trong async context.
+  - M2: `ReminderWorker` chuyển sang async session.
+  - M3: `GoogleSyncWorker` chuyển sang async session.
+  - M4: `grep next(get_db())` trong worker code = 0 kết quả.
 
 ---
 
 ### 0.5 — Migrate embeddings sang pgvector column thực sự
 
-- **Mục tiêu:** Cho phép dùng index vector thực sự của pgvector (hiện đang lưu JSONB nên không index được), là điều kiện để semantic search và Zep fallback (0.6) hoạt động hiệu quả.
-- **Mô tả:** Đổi cột embedding trong `models.py` từ JSONB sang kiểu `vector(N)` của pgvector, viết migration script chuyển dữ liệu cũ, cập nhật `EmbeddingService`/`SemanticSearch` để query bằng toán tử `<->` thay vì parse JSON thủ công.
+- **Mục tiêu:** Cho phép dùng index vector thực sự của pgvector (hiện lưu JSONB nên không index được).
+- **Mô tả:** Đổi cột embedding từ JSONB sang `vector(N)`, migration dữ liệu cũ, cập nhật `EmbeddingService`/`SemanticSearch` dùng toán tử `<->`.
 - **Milestones:**
-  - M1: Migration script chuyển đổi dữ liệu embedding cũ sang cột vector mới, chạy thử trên bản sao dữ liệu.
-  - M2: Tạo index (ivfflat hoặc hnsw) trên cột vector mới.
-  - M3: `SemanticSearch` cập nhật để query bằng cosine distance, benchmark thời gian query trước/sau.
-  - M4: Migration chạy trên production, không mất dữ liệu, `search_notes`/`neural_search` vẫn trả kết quả đúng.
+  - M1: Migration script chạy thử trên bản sao dữ liệu.
+  - M2: Tạo index (ivfflat hoặc hnsw).
+  - M3: `SemanticSearch` query bằng cosine distance, benchmark trước/sau.
+  - M4: Migration chạy trên production không mất dữ liệu.
 
 ---
 
 ### 0.6 — Zep fallback (self-hosted semantic memory)
 
-- **Mục tiêu:** Loại bỏ single point of failure khi Zep Cloud không khả dụng — hiện memory bán ngữ nghĩa phụ thuộc hoàn toàn vào dịch vụ ngoài.
-- **Mô tả:** Xây một lớp semantic memory tối thiểu dựa trên pgvector (đã có sau 0.5) làm fallback: khi Zep lỗi hoặc timeout, ghi/đọc memory qua bảng nội bộ thay vì fail toàn bộ luồng extraction.
+- **Mục tiêu:** Loại bỏ single point of failure khi Zep Cloud không khả dụng.
+- **Mô tả:** Lớp semantic memory tối thiểu dựa trên pgvector làm fallback.
 - **Milestones:**
-  - M1: Thiết kế interface `SemanticMemoryProvider` chung cho cả Zep và pgvector-based implementation.
-  - M2: Implement `PgVectorMemoryProvider` (write + similarity search).
-  - M3: `ZepMemory` service tự động fallback sang `PgVectorMemoryProvider` khi Zep trả lỗi/timeout (circuit breaker đơn giản).
-  - M4: Test giả lập Zep down hoàn toàn — hệ thống vẫn ghi/đọc được memory qua fallback, không crash luồng chat.
+  - M1: Interface `SemanticMemoryProvider` chung.
+  - M2: `PgVectorMemoryProvider` (write + similarity search).
+  - M3: `ZepMemory` tự động fallback khi Zep lỗi/timeout (circuit breaker đơn giản).
+  - M4: Test giả lập Zep down — hệ thống vẫn ghi/đọc được memory.
 
 ---
 
 ### 0.7 — Structured logging cho tool calls
 
-- **Mục tiêu:** Có khả năng debug và audit mọi lần AI gọi tool — cần thiết trước khi thêm Command Registry (Phase 1) và Proactive Engine (Phase 6) vì cả hai đều cần audit trail đáng tin cậy.
-- **Mô tả:** Chuẩn hóa log format (JSON structured) cho mọi tool execution: `{tool_name, args, user_id, conversation_id, duration_ms, success, error}`. Ghi vào log tập trung, có thể query.
+- **Mục tiêu:** Có audit trail đáng tin cậy trước khi thêm Command Registry và Attention Gate.
+- **Mô tả:** Chuẩn hoá log JSON cho mọi tool execution.
 - **Milestones:**
-  - M1: Định nghĩa schema log chuẩn, áp dụng cho `ToolRegistry.execute()`.
-  - M2: Toàn bộ 16 tool hiện có log theo schema mới.
-  - M3: Có thể query log theo user_id/tool_name/time-range (qua log aggregator hoặc bảng DB tối thiểu).
-  - M4: Log không chứa dữ liệu nhạy cảm không cần thiết (audit privacy check).
+  - M1: Schema log chuẩn, áp dụng cho `ToolRegistry.execute()`.
+  - M2: Toàn bộ 16 tool log theo schema mới.
+  - M3: Query được theo user_id/tool_name/time-range.
+  - M4: Log không chứa dữ liệu nhạy cảm không cần thiết.
 
 ---
 
 ### 0.8 — Token usage tracking per request
 
-- **Mục tiêu:** Có số liệu chi tiết theo từng request để làm nền cho AI Cost Optimization (Phase 7) — hiện chỉ có giới hạn tổng 2M token/ngày, không biết request nào tốn nhất.
-- **Mô tả:** Ghi lại token input/output cho mỗi lần gọi LLM (chat, title generation, memory extraction, tool arg generation), gắn với model được dùng.
+- **Mục tiêu:** Có số liệu chi tiết theo request làm nền cho Phase 7.
+- **Mô tả:** Ghi token input/output cho mỗi lần gọi LLM, gắn với model được dùng.
 - **Milestones:**
-  - M1: Thêm bảng/field lưu token usage per request (model, input_tokens, output_tokens, feature_type).
-  - M2: Áp dụng tracking cho luồng chat streaming.
-  - M3: Áp dụng tracking cho memory extraction và title generation.
-  - M4: Có dashboard/query đơn giản: top request tốn token nhất theo feature_type, theo user.
+  - M1: Bảng/field lưu token usage per request.
+  - M2: Tracking cho luồng chat streaming.
+  - M3: Tracking cho memory extraction và title generation.
+  - M4: Query "top request tốn token nhất" theo feature_type và user.
 
 ---
 
 # PHASE 1 — Intent & Event Bus
 
-**Thời lượng dự kiến:** 4–6 tuần
-**Mục tiêu tổng:** Xây nền tảng kiến trúc mà mọi năng lực proactive, planning, và workflow đều phụ thuộc vào: một Event Bus thống nhất và một lớp Command tách biệt giữa AI và execution.
-**Điều kiện tiên quyết:** Phase 0 hoàn thành (đặc biệt 0.1, 0.4, 0.7).
-**Definition of Done:** Mọi thao tác quan trọng (note, schedule, conversation) phát ra event theo schema chuẩn; AI không còn gọi thẳng vào DB mà đi qua Command Registry có validation/permission/audit.
+**Thời lượng dự kiến:** 4–6 tuần (phần lớn đã xong; 1.9 và 1.10 là phần còn lại)
+**Mục tiêu tổng:** Xây nền tảng kiến trúc mà mọi năng lực proactive, planning, và workflow đều phụ thuộc vào.
+**Điều kiện tiên quyết:** Phase 0 (đặc biệt 0.1, 0.4, 0.7).
+**Definition of Done:** Mọi thao tác quan trọng phát ra event theo schema chuẩn; AI đi qua Command Registry; **và event thực sự được consume một cách durable bởi cả backend lẫn workflow_service, dùng chung một vocabulary.**
 
 ---
 
-### 1.1 — Event Schema Design
+### 1.1 — Event Schema Design ✅
 
-- **Mục tiêu:** Có một định dạng event chuẩn, nhất quán cho toàn hệ thống, thay vì mỗi nơi tự định nghĩa (Redis stream cho transcription, pub/sub cho sync, SSE cho frontend).
-- **Mô tả:** Định nghĩa envelope chung: `{event_id, type, source, timestamp, correlation_id, user_id, payload, version}`. Version field để cho phép tiến hoá schema sau này mà không breaking consumer cũ.
+- **Mục tiêu:** Có định dạng event chuẩn, nhất quán cho toàn hệ thống.
+- **Mô tả:** Envelope `{event_id, type, source, timestamp, correlation_id, user_id, workspace_id, conversation_id, payload, version}`.
 - **Milestones:**
-  - M1: Schema envelope được document và review với team.
-  - M2: Pydantic model cho envelope, dùng chung cho publisher và subscriber.
-  - M3: Naming convention cho event type được chuẩn hoá (`domain.entity.action`, ví dụ `schedule.reminder.due`).
-  - M4: Có ví dụ đầy đủ cho ít nhất 10 event type dự kiến dùng ở Phase 2–6.
+  - M1: ✅ Schema envelope được document.
+  - M2: ✅ Pydantic model dùng chung cho publisher và subscriber (`app/events/schemas.py`).
+  - M3: ✅ Naming convention `domain.entity.action`.
+  - M4: ✅ 10 payload schema trong `app/events/payloads.py`.
 
 ---
 
-### 1.2 — Event Bus Implementation
+### 1.2 — Event Bus Implementation ✅
 
-- **Mục tiêu:** Có nơi trung tâm để publish và route event, thay thế việc mỗi tính năng tự implement cơ chế riêng.
-- **Mô tả:** Mở rộng Redis Streams (đã có sẵn trong stack cho transcription) thành Event Bus dùng chung: publisher API, router theo event type, subscriber registration, dead-letter cho event xử lý lỗi.
+- **Mục tiêu:** Có nơi trung tâm để publish và route event.
+- **Mô tả:** Redis Streams làm backend, publisher API, router theo pattern, dead-letter queue.
 - **Milestones:**
-  - M1: `EventBus.publish(event)` implement xong, dùng Redis Stream làm backend.
-  - M2: Router cho phép nhiều subscriber đăng ký theo pattern (`schedule.*`, `note.created`).
-  - M3: Dead-letter queue cho event xử lý thất bại, có retry policy cơ bản.
-  - M4: Load test: publish 1000 event liên tục, không mất event, latency chấp nhận được (< 100ms routing).
+  - M1: ✅ `EventBus.publish()` với Redis Stream.
+  - M2: ✅ Router cho phép nhiều subscriber theo pattern.
+  - M3: ✅ DLQ + retry policy.
+  - M4: Load test 1000 event, latency routing < 100ms.
 
 ---
 
-### 1.3 — Core Event Definitions
+### 1.3 — Core Event Definitions ✅
 
-- **Mục tiêu:** Có danh sách event thực tế được phát ra từ các thao tác hiện có, làm nguyên liệu cho Goals/Commitments/Proactive sau này.
-- **Mô tả:** Thêm publish call vào các service hiện có: `note.created/updated/deleted`, `schedule.created/updated/completed`, `schedule.reminder.due`, `conversation.message.created`, `tool.executed`, `google_calendar.synced`.
+- **Mục tiêu:** Có danh sách event thực tế được phát ra từ thao tác hiện có.
+- **Mô tả:** Publish call đã gắn vào các service hiện có.
 - **Milestones:**
-  - M1: `NoteService` phát event cho create/update/delete.
-  - M2: `ScheduleService` phát event cho create/update/complete + `ReminderWorker` phát `schedule.reminder.due`.
-  - M3: `AgentService`/`ToolExecutionService` phát `tool.executed` sau mỗi lần chạy tool.
-  - M4: Có thể subscribe và log toàn bộ 8 event type trên trong môi trường dev để verify.
+  - M1: ✅ `NoteService` phát event create/update/delete.
+  - M2: ✅ `ScheduleService` + `ReminderWorker` phát event.
+  - M3: ✅ `ToolExecutionService` phát `tool.executed`.
+  - M4: Subscribe và log toàn bộ event type trong dev để verify — **chặn bởi 1.10**.
 
 ---
 
-### 1.4 — Command Schema Design
+### 1.4 — Command Schema Design ✅
 
-- **Mục tiêu:** Định nghĩa "Command" như một internal representation tách biệt hoàn toàn khỏi natural language, để AI không thao tác trực tiếp vào DB (theo đúng Product Requirement mục 8).
-- **Mô tả:** Chuẩn hoá schema: `{command_name, args, schema_version, requested_by, permission_scope}`. Ví dụ: `reminder.create`, `task.update`, `goal.create` — mỗi command có JSON schema validation riêng.
+- **Mục tiêu:** "Command" là internal representation tách biệt khỏi natural language.
+- **Mô tả:** `{command_name, args, schema_version, requested_by, permission_scope}`.
 - **Milestones:**
-  - M1: Document schema Command, review với cấu trúc tool hiện có để đảm bảo tương thích migration.
-  - M2: Định nghĩa danh sách command ban đầu tương ứng 1-1 với 16 tool hiện có.
-  - M3: Cơ chế versioning cho command schema (để sửa sau không breaking).
-  - M4: Có ít nhất 3 command mẫu (`task.create`, `reminder.create`, `note.create`) có schema đầy đủ.
+  - M1: ✅ Document schema Command.
+  - M2: ✅ Danh sách command ban đầu tương ứng tool hiện có.
+  - M3: ✅ Versioning cho command schema.
+  - M4: ✅ Command mẫu có schema đầy đủ.
 
 ---
 
-### 1.5 — Command Registry
+### 1.5 — Command Registry ✅ (+ 1 hạng mục bổ sung)
 
-- **Mục tiêu:** Có một lớp trung gian bắt buộc mọi hành động đi qua: validation → permission check → execution → audit — thay thế `ToolRegistry` global mutable singleton hiện tại.
-- **Mô tả:** Xây `CommandRegistry` với: đăng ký command (giống tool nhưng có thêm permission/audit built-in), validate theo schema (1.4), execute qua handler, ghi audit log tự động (dùng structured logging từ 0.7).
+- **Mục tiêu:** Lớp trung gian bắt buộc: validation → permission → execution → audit.
+- **Mô tả:** `CommandRegistry` với validation Pydantic, permission check, audit tự động.
 - **Milestones:**
-  - M1: `CommandRegistry.register()` và `.execute()` implement xong với validation Pydantic.
-  - M2: Permission check tích hợp (workspace role, ownership) trước khi execute.
-  - M3: Audit tự động ghi mọi command execution (ai gọi, khi nào, kết quả gì).
-  - M4: Undo/revert tích hợp sẵn trong Command Registry (kế thừa cơ chế snapshot hiện có), không cần code riêng cho từng command.
+  - M1: ✅ `register()` và `execute()` với validation.
+  - M2: ✅ Permission check (workspace role, ownership).
+  - M3: ✅ Audit tự động.
+  - M4: ✅ Undo/revert tích hợp sẵn.
+  - **M5 (mới): Xử lý luôn `ActionRegistry` của workflow_service** — hiện là global mutable singleton, đúng anti-pattern mà 1.5 muốn loại bỏ ở `ToolRegistry`. Làm một lần cho cả hai để nhất quán.
 
 ---
 
-### 1.6 — Migrate tools sang commands
+### 1.6 — Migrate tools sang commands ✅
 
-- **Mục tiêu:** Chuyển 16 tool hiện có sang chạy qua Command Registry, để AI không còn thao tác DB trực tiếp.
-- **Mô tả:** Với mỗi tool ghi (create_note, update_note, create_schedule, update_schedule…), viết command tương ứng và cập nhật tool handler để gọi qua `CommandRegistry.execute()` thay vì gọi service trực tiếp. Tool đọc (search_notes, get_schedules…) có thể giữ nguyên vì không cần permission/audit nặng.
+- **Mục tiêu:** AI không còn thao tác DB trực tiếp.
+- **Mô tả:** Tool ghi gọi qua `CommandRegistry.execute()`. Tool đọc giữ nguyên.
 - **Milestones:**
-  - M1: 4 tool mutating (create/update note, create/update schedule) migrate xong, test regression pass.
-  - M2: `revert_action` tương thích với cơ chế undo mới của Command Registry.
-  - M3: Toàn bộ luồng chat streaming hoạt động không đổi hành vi sau migration (dùng bộ test từ 0.3).
-  - M4: Không còn tool nào gọi thẳng vào DB session mà không qua Command Registry.
+  - M1: ✅ 4 tool mutating migrate xong.
+  - M2: ✅ `revert_action` tương thích cơ chế undo mới.
+  - M3: Luồng chat streaming không đổi hành vi (dùng test 0.3).
+  - M4: Không tool nào gọi thẳng DB session ngoài Command Registry.
 
 ---
 
-### 1.7 — Context Service (Unified Context Builder)
+### 1.7 — Context Service (Unified Context Builder) ✅
 
-- **Mục tiêu:** Thay thế việc mỗi component tự build context dict riêng (context pills, runtime context) bằng một service trung tâm — nền tảng cho "Cortex hiểu người dùng đang ở đâu".
-- **Mô tả:** Xây `ContextService` tổng hợp: runtime context (time, timezone, URL), current view/object, active workspace, recent conversation, active goal/task (sẽ có ở Phase 2). Trả về context đã được lọc theo relevance cho intent hiện tại, không gửi toàn bộ context vào mọi LLM call.
+- **Mục tiêu:** Một service trung tâm build context — nền tảng cho "Cortex hiểu người dùng đang ở đâu".
+- **Mô tả:** Tổng hợp `pills`/`page`/`runtime` từ frontend + workspace/recent_notes/recent_schedules từ DB.
 - **Milestones:**
-  - M1: Định nghĩa unified context model (theo cấu trúc trong Product Requirement mục 15).
-  - M2: `ContextService.build(user_id, request_context)` implement xong, thay thế context pill logic hiện tại trong AgentService.
-  - M3: Cơ chế lọc relevance (chỉ lấy phần context liên quan tới intent hiện tại thay vì gửi tất cả).
-  - M4: AgentService dùng `ContextService` thay vì tự build context, giảm được token trung bình mỗi request (đo bằng số liệu từ 0.8).
+  - M1: ✅ Unified context model (`app/context/schemas.py`).
+  - M2: ✅ `ContextService.build()` thay thế context pill logic trong AgentService.
+  - M3: Cơ chế lọc relevance theo intent.
+  - M4: Đo giảm token trung bình mỗi request.
+  - **M5 (mới): Phát event `context.view.changed` khi `page`/`runtime` đổi.** Đây là nguồn dữ liệu rẻ nhất cho Context Trigger ở 4.2 — frontend **đã gửi sẵn** thông tin này mỗi request, chỉ cần phát thành event. Không cần desktop agent hay browser extension.
 
 ---
 
-### 1.8 — Intent Detection Layer
+### 1.8 — Intent Detection Layer ✅
 
-- **Mục tiêu:** Bắt đầu tách "hiểu ý định" ra khỏi "thực thi", chuẩn bị cho AI Routing (L0–L3) ở Phase 7.
-- **Mô tả:** Thêm bước phân loại intent trước khi vào tool-calling loop: L1 (rule/regex/small model cho intent rõ ràng như "nhắc tôi...") hoặc fallback L2 (LLM hiện tại) cho intent phức tạp. Chưa cần multi-model routing đầy đủ, chỉ cần tách được bước này ra làm module riêng.
+- **Mục tiêu:** Tách "hiểu ý định" khỏi "thực thi", chuẩn bị cho AI Routing ở Phase 7.
+- **Mô tả:** Phân loại intent trước tool-calling loop: L1 rule-based, fallback L2 LLM.
 - **Milestones:**
-  - M1: Danh sách intent pattern rõ ràng (reminder, note creation, schedule query) với rule-based classifier đơn giản.
-  - M2: Intent classifier trả về `{intent, confidence}`, nếu confidence thấp thì fallback sang LLM hiện tại.
-  - M3: Tích hợp vào luồng chat: intent rõ ràng → gọi thẳng command tương ứng, bỏ qua LLM reasoning không cần thiết.
-  - M4: Đo được tỷ lệ % request được xử lý bằng L1 (không cần LLM) trên tổng số request.
+  - M1: ✅ Rule-based classifier (`app/intents/rule_detector.py`).
+  - M2: ✅ Trả về `{intent, confidence}`, fallback khi confidence thấp.
+  - M3: Intent rõ ràng → gọi thẳng command, bỏ qua LLM.
+  - M4: Đo % request xử lý bằng L1.
+
+---
+
+### 1.9 — Event Vocabulary Thống Nhất 🆕
+
+- **Mục tiêu:** Chỉ có **một** nguồn sự thật về "hệ thống có những event nào", dùng chung cho backend, workflow_service, và Trigger Catalog (4.2). Đây là điều kiện tiên quyết của Phase 2 và Phase 4.
+- **Mô tả:** Hiện có hai list và **chúng đã lệch nhau**: `EVENT_PAYLOAD_REGISTRY` trong `backend/app/events/payloads.py` khai báo 10 type; `SUPPORTED_EVENTS` trong `workflow_service/app/triggers/internal_event_listener.py` hardcode 8 type. workflow_service nghe `asset.uploaded`/`asset.processed` — không có trong registry; registry có `schedule.reminder.due`, `tool.executed`, `conversation.message.created` — workflow_service không nghe. Thêm `goal.*`/`task.*`/`commitment.*` ở Phase 2 sẽ làm lệch thêm. Ngoài ra consumer group chỉ được tạo lúc startup, nên thêm event type = phải sửa list + restart service.
+- **Milestones:**
+  - M1: Một module vocabulary dùng chung (shared package hoặc file sinh tự động), là nguồn duy nhất định nghĩa event type + payload schema.
+  - M2: `workflow_service` đọc vocabulary từ nguồn chung thay vì hardcode `SUPPORTED_EVENTS`.
+  - M3: Consumer group được tạo **động** theo vocabulary, thêm event type mới không cần sửa code listener.
+  - M4: Test: thêm một event type mới → cả hai service nhận ra nó mà không sửa dòng code nào ở phía consumer.
+
+---
+
+### 1.10 — Durable Event Consumer ở Backend 🆕
+
+- **Mục tiêu:** Làm cho `EventBus.subscribe()` thực sự hoạt động xuyên process. **Đây là chặn cứng** — không có nó thì 2.2 (goal progress tracking), 3.4 (dynamic re-planning) và 6.x đều không chạy được.
+- **Mô tả:** `EventBus.publish()` hiện gọi `route_event()` **in-process** ngay sau `XADD`. Backend **không có** `XREADGROUP` nào, và grep cho thấy hiện **không có một `subscribe()` nào được gọi** trong toàn bộ `backend/app/`. Hệ quả: subscriber chỉ chạy nếu nằm cùng process với publisher. Task complete từ worker hay từ workflow_service → goal progress **không bao giờ** cập nhật, và **không có gì báo lỗi**. Đây là loại bug âm thầm, không phải crash.
+- **Milestones:**
+  - M1: Consumer loop `XREADGROUP` ở backend với consumer group riêng, độc lập với in-process fast path.
+  - M2: Subscriber đăng ký qua `subscribe()` chạy được kể cả khi event publish từ process khác.
+  - M3: Ack/retry/DLQ hoạt động đúng khi handler lỗi hoặc process chết giữa chừng.
+  - M4: Test: publish event từ process A → handler đăng ký ở process B thực sự chạy. Test: kill process B giữa chừng → event được xử lý lại sau khi khởi động lại.
 
 ---
 
@@ -228,104 +353,148 @@ Thứ tự phase giữ nguyên theo critical path đã xác định:
 
 **Thời lượng dự kiến:** 6–8 tuần
 **Mục tiêu tổng:** Cho phép Cortex trả lời được "Tôi đang cố đạt điều gì?" và "Tôi đã hứa gì với ai?" — đây là gap sản phẩm lớn nhất hiện tại (điểm maturity = 0).
-**Điều kiện tiên quyết:** Phase 1 (Event Bus để phát goal/commitment event; Command Registry để CRUD có audit).
-**Definition of Done:** Có thể tạo Goal → thấy Task liên quan → AI trích xuất được Commitment từ hội thoại → có dashboard hiển thị.
+**Điều kiện tiên quyết:** Phase 1 **bao gồm 1.9 và 1.10** (không có 1.10 thì 2.2 không chạy).
+**Definition of Done:** Có thể tạo Goal → thấy Task liên quan → AI trích xuất được Commitment từ hội thoại → có màn hình "Hôm nay" hiển thị. **Và mọi entity mới đều có sẵn state phục vụ Attention Gate, không phải migration lại ở Phase 6.**
 
 ---
 
 ### 2.1 — Goal Data Model + API
 
-- **Mục tiêu:** Có entity Goal thực sự trong hệ thống, thay vì hoàn toàn không tồn tại như hiện tại.
-- **Mô tả:** Bảng `goals`: `{id, user_id, title, description, why, status, target_date, progress, milestones (jsonb hoặc bảng con), related_project_id}`. CRUD API chuẩn + command `goal.create`, `goal.update`.
+- **Mục tiêu:** Có entity Goal thực sự trong hệ thống.
+- **Mô tả:** Bảng `goals`: `{id, user_id, title, description, why, status, target_date, progress, milestones, related_project_id}`. CRUD API + command `goal.create`, `goal.update`.
 - **Milestones:**
   - M1: Migration tạo bảng `goals` + `goal_milestones`.
   - M2: CRUD API (`/api/goals`) hoàn chỉnh, có test.
-  - M3: Command `goal.create`/`goal.update` đăng ký trong Command Registry (Phase 1).
-  - M4: Phát event `goal.created`/`goal.updated` lên Event Bus.
+  - M3: Command `goal.create`/`goal.update` đăng ký trong Command Registry.
+  - M4: Phát event `goal.created`/`goal.updated`, **khai báo trong vocabulary chung (1.9)** chứ không thêm rời rạc vào hai chỗ.
 
 ---
 
 ### 2.2 — Goal Progress Tracking
 
-- **Mục tiêu:** Goal không phải là văn bản tĩnh — tiến độ phải tự cập nhật dựa trên Task liên quan, không cần user nhập tay.
-- **Mô tả:** Progress = tỷ lệ task hoàn thành trong các task liên kết với goal (deterministic, không cần AI — theo đúng nguyên tắc mục 9 của Product Requirement: "code trước, AI sau"). Subscribe event `task.completed` để tự động cập nhật `goals.progress`.
+- **Mục tiêu:** Goal không phải văn bản tĩnh — tiến độ tự cập nhật dựa trên Task liên quan.
+- **Mô tả:** Progress = tỷ lệ task hoàn thành (deterministic, không cần AI — theo mục 9 Product Requirement). Subscribe `task.completed` để tự cập nhật.
+- **⚠️ Phụ thuộc:** Hạng mục này **không chạy được nếu thiếu 1.10**. Subscriber hiện chỉ nhận event publish trong cùng process. Đừng bắt đầu 2.2 trước khi 1.10 xong.
 - **Milestones:**
-  - M1: Công thức tính progress đơn giản (completed_tasks / total_tasks) implement xong.
-  - M2: Subscriber lắng nghe `task.completed`/`task.created` để tự động recalculate.
+  - M1: Công thức progress (completed_tasks / total_tasks).
+  - M2: Subscriber lắng nghe `task.completed`/`task.created` qua **durable consumer (1.10)** để recalculate.
   - M3: API trả về goal kèm progress real-time, không cần cron job riêng.
-  - M4: Test: tạo goal + 3 task, complete 1 task, verify progress = 33%.
+  - M4: Test: tạo goal + 3 task, complete 1 task **từ một process khác** → verify progress = 33%.
 
 ---
 
 ### 2.3 — Commitment Extraction từ Conversations
 
-- **Mục tiêu:** Đây là feature "killer" theo đánh giá trong roadmap gốc — Cortex tự nhận diện khi user hoặc người khác hứa làm gì đó, không cần user tự nhập.
-- **Mô tả:** Thêm bước extraction (LLM-based, chạy ở tier L2 — fast model, không cần reasoning nặng) sau mỗi conversation turn hoặc theo batch giống `ConversationSummarizer` hiện có: phát hiện pattern "Tôi sẽ...", "X sẽ gửi cho tôi...", trích xuất thành candidate commitment.
+- **Mục tiêu:** Cortex tự nhận diện khi user hoặc người khác hứa làm gì đó, không cần user tự nhập.
+- **Mô tả:** Bước extraction LLM-based ở tier L2 sau mỗi conversation turn hoặc theo batch, giống `ConversationSummarizer` hiện có.
 - **Milestones:**
   - M1: Prompt + extraction pipeline chạy thử trên tập hội thoại mẫu, đo precision/recall thủ công.
-  - M2: Chỉ extract commitment tường minh (explicit), tránh false positive (theo risk đã xác định trong report mục 15).
-  - M3: Candidate commitment được lưu ở trạng thái "pending confirm" trước khi thành commitment chính thức (giảm rủi ro sai).
-  - M4: Tích hợp vào luồng conversation hiện có (giống cách `memory_extraction_service` đang chạy), có advisory lock tránh chạy trùng.
+  - M2: Chỉ extract commitment tường minh (explicit), tránh false positive.
+  - M3: Candidate ở trạng thái "pending confirm" trước khi thành commitment chính thức.
+  - M4: Tích hợp vào luồng conversation hiện có, có advisory lock tránh chạy trùng.
 
 ---
 
 ### 2.4 — Commitment Data Model + API
 
-- **Mục tiêu:** Có nơi lưu trữ và query commitment có cấu trúc, phục vụ cho follow-up và risk detection ở Phase 6.
-- **Mô tả:** Bảng `commitments`: `{id, user_id, owner, subject_person, expected_action, deadline, related_goal_id, related_project_id, status, source_conversation_id}`. CRUD API + command `commitment.create/update/complete`.
+- **Mục tiêu:** Có nơi lưu trữ và query commitment có cấu trúc, phục vụ follow-up và risk detection.
+- **Mô tả:** Bảng `commitments`: `{id, user_id, owner, subject_person, expected_action, deadline, related_goal_id, related_project_id, status, source_conversation_id}`.
 - **Milestones:**
   - M1: Migration tạo bảng `commitments`.
   - M2: CRUD API hoàn chỉnh.
   - M3: Liên kết được với `conversations` (source) và `goals` (related).
-  - M4: Phát event `commitment.created`/`commitment.overdue` lên Event Bus.
+  - M4: Phát event `commitment.created`; `commitment.overdue` **do State Evaluator (4.6) phát**, không phải do service tự phát — vì "overdue" là trạng thái, không phải hành động.
 
 ---
 
 ### 2.5 — Task Data Model + API
 
-- **Mục tiêu:** Tách Task ra khỏi Schedule (hiện đang bị conflate qua loại `DEADLINE`), vì Task và Calendar Event là hai khái niệm khác nhau về bản chất.
-- **Mô tả:** Bảng `tasks`: `{id, user_id, title, status (todo/in_progress/done), priority, related_goal_id, related_project_id, due_date, related_commitment_id}`. State machine rõ ràng cho status.
+- **Mục tiêu:** Tách Task ra khỏi Schedule (hiện bị conflate qua loại `DEADLINE`).
+- **Mô tả:** Bảng `tasks`: `{id, user_id, title, status, priority, related_goal_id, related_project_id, due_date, related_commitment_id}`. State machine rõ ràng cho status.
+- **Lưu ý thiết kế:** `related_goal_id` **không phải nice-to-have** — nó là input trực tiếp của công thức importance ở Attention Gate (6.1). Importance được **suy ra** (task này có chặn goal không × goal còn bao nhiêu ngày), **không phải do user nhập**, theo mục 12 Product Requirement (không biến user thành người quản lý Cortex).
 - **Milestones:**
-  - M1: Migration tạo bảng `tasks`, có foreign key tới `goals` và `commitments`.
+  - M1: Migration tạo bảng `tasks`, foreign key tới `goals` và `commitments`.
   - M2: CRUD API + command `task.create/update/complete`.
-  - M3: State machine validation (không cho chuyển thẳng từ `todo` sang `done` nếu cần enforce workflow — tuỳ policy).
-  - M4: Phát event `task.created/completed/overdue` lên Event Bus (dùng cho 2.2 và Phase 6).
+  - M3: State machine validation cho status.
+  - M4: Phát event `task.created/completed`; `task.overdue` do State Evaluator (4.6) phát.
 
 ---
 
-### 2.6 — Task ↔ Schedule Integration
+### 2.6 — Task → Schedule Projection (viết lại)
 
-- **Mục tiêu:** Task có deadline nên xuất hiện trên Calendar mà không cần user tự tạo event thủ công lần nữa.
-- **Mô tả:** Khi Task có `due_date`, tự động tạo/cập nhật một Schedule liên kết (loại DEADLINE hiện có, hoặc loại mới). Đồng bộ hai chiều: task complete → schedule cập nhật trạng thái; schedule bị dời → task due_date cập nhật.
+- **Mục tiêu:** Task có deadline xuất hiện trên Calendar mà không cần user tạo event thủ công — **và không tạo ra vòng lặp dual-write**.
+- **Thay đổi so với Bản 1:** Bản 1 yêu cầu đồng bộ **hai chiều** (task ↔ schedule). Điều này tạo vòng lặp: `task.completed` → sửa schedule → phát `schedule.completed` → sửa task → lặp vô hạn. Bản 2 bỏ chiều ngược.
+- **Mô tả:** **Task là owner** của "việc phải làm + due_date". Schedule chỉ là **projection read-only** lên calendar, đúng như `ScheduleExternalMap` đang làm cho Google Calendar. Muốn dời deadline thì đi qua command `task.reschedule`, không phải sửa Schedule rồi để trigger DB đồng bộ ngược.
+- **Ghi chú:** Nếu về sau bắt buộc phải có chiều ngược, codebase **đã có sẵn lời giải cho đúng bài toán này**: `Schedule.updated_by` (`INTERNAL`/`PROVIDER`) + `Schedule.version` + bảng `schedule_external_maps`. Tái dùng pattern đó, đừng phát minh cơ chế mới.
 - **Milestones:**
-  - M1: Logic tự động tạo Schedule khi Task có due_date.
-  - M2: Đồng bộ complete: Task hoàn thành → Schedule tương ứng đánh dấu completed.
-  - M3: Đồng bộ ngược: đổi thời gian Schedule → cập nhật due_date của Task liên kết.
-  - M4: Test integration đầy đủ cho cả hai chiều đồng bộ.
+  - M1: Logic tự động tạo Schedule (projection) khi Task có due_date.
+  - M2: Task hoàn thành → Schedule tương ứng đánh dấu completed.
+  - M3: Sửa Schedule projection trực tiếp bị **từ chối** ở tầng API, kèm thông báo hướng user sang `task.reschedule`.
+  - M4: Test: không có vòng lặp event nào giữa `task.*` và `schedule.*` (đếm số event phát ra trong một lần complete task = hữu hạn và đúng như kỳ vọng).
 
 ---
 
-### 2.7 — Frontend Goal Dashboard
+### 2.7 — Màn Hình "Hôm Nay" (viết lại — thay cho Goal Dashboard)
 
-- **Mục tiêu:** Người dùng cần nhìn thấy Goal/Task/Commitment của mình ở một nơi, không chỉ qua chat.
-- **Mô tả:** Trang dashboard mới: danh sách Goal với progress bar, task liên quan, commitment sắp đến hạn. Tái sử dụng design pattern hiện có của `CalendarView`/`GlobalHome`.
+- **Mục tiêu:** Người dùng có **một** nơi trả lời đúng 4 câu hỏi ở mục 3 Product Requirement: *Tôi đang ở đâu? Tôi nên làm gì? Tôi có bỏ lỡ gì không? Cortex giúp được gì?*
+- **Thay đổi so với Bản 1:** Bản 1 mô tả "danh sách Goal + progress bar + task liên quan". Đó là giao diện của **mọi** PM tool, và nó vi phạm mục 12: bắt user tự đọc số rồi tự suy ra hành động. Bản 2 đảo ngược — màn hình chính hiển thị **quyết định**, Goal là màn phụ.
+- **Mô tả:**
+
+```
+┌────────────────────────────────────────────┐
+│ Hôm nay bạn có 4 tiếng trống.              │  ← 1 câu, không phải số
+│ MVP còn 12 ngày — đang chậm 2 ngày.        │
+├────────────────────────────────────────────┤
+│ NÊN LÀM BÂY GIỜ                            │
+│ ┌────────────────────────────────────────┐ │
+│ │ Viết API spec                          │ │
+│ │ Đang chặn 3 task khác của MVP.         │ │  ← WHY, không phải priority=high
+│ │ Làm hôm nay thì deadline vẫn an toàn.  │ │
+│ │              [Bắt đầu]  [Để mai]       │ │
+│ └────────────────────────────────────────┘ │
+├────────────────────────────────────────────┤
+│ ĐANG CHỜ                                   │
+│ · John chưa gửi API spec (trễ 2 ngày)      │
+│   [Soạn nhắc]                              │
+│ · Bạn hứa gửi proposal — thứ 6             │
+└────────────────────────────────────────────┘
+```
+
+- **Ba quyết định thiết kế:**
+  1. **Goal không có màn hình riêng ở cấp một.** Goal xuất hiện *bên trong lý do* của mỗi card ("đang chặn 3 task của MVP"). Click tên goal mới sang màn chi tiết. Progress bar sống ở đó, không phải trang chủ.
+  2. **Không hiển thị số mà user phải tự diễn giải.** "progress 33%" là số; "chậm 2 ngày so với target" là quyết định. Progress vẫn tồn tại như metric nội bộ (2.2), chỉ không làm UI chính.
+  3. **Đây cũng là bề mặt bundle của Attention Gate.** "Trong lúc bạn họp có 3 việc cần chú ý" không phải notification đặc biệt — nó là trạng thái của màn này sau cuộc họp. Push notification chỉ là con trỏ tới đây. Vì chỉ có **một** bề mặt làm phiền, hệ thống **buộc** phải xếp hạng — đó chính là P1 được ép ở tầng UI.
 - **Milestones:**
-  - M1: Wireframe/UX cho Goal Dashboard (danh sách goal + chi tiết).
-  - M2: Component hiển thị Goal card (title, progress, deadline, related tasks).
-  - M3: Component hiển thị danh sách Commitment sắp đến hạn/quá hạn.
-  - M4: Tích hợp vào navigation chính, có thể tạo/sửa Goal trực tiếp từ dashboard (không chỉ qua chat).
+  - M1: Wireframe/UX cho màn "Hôm nay", tái dùng design pattern của `CalendarView`/`GlobalHome`.
+  - M2: Component card "nên làm bây giờ" — bắt buộc có trường lý do, không render được nếu thiếu.
+  - M3: Section "Đang chờ" (commitment: ai chờ tôi / tôi chờ ai).
+  - M4: Màn Goal detail (progress bar, milestone, task liên quan) là **màn phụ**, vào từ card.
+  - M5: Tích hợp vào navigation chính; tạo/sửa Goal trực tiếp được, không chỉ qua chat.
 
 ---
 
 ### 2.8 — AI Skills cho Goal/Commitment Management
 
-- **Mục tiêu:** Cho phép AI thao tác Goal/Task/Commitment qua ngôn ngữ tự nhiên trong chat, tận dụng hạ tầng Command Registry đã có.
-- **Mô tả:** Thêm skill mới (giống cấu trúc `skills/planning/` hiện có) hướng dẫn LLM khi nào tạo Goal, khi nào breakdown thành Task, khi nào hỏi lại user để confirm commitment candidate (từ 2.3).
+- **Mục tiêu:** AI thao tác Goal/Task/Commitment qua ngôn ngữ tự nhiên, tận dụng Command Registry đã có.
+- **Mô tả:** Skill mới (giống cấu trúc `skills/planning/`) hướng dẫn LLM khi nào tạo Goal, khi nào breakdown thành Task, khi nào hỏi lại user để confirm commitment candidate.
 - **Milestones:**
-  - M1: SKILL.md mới cho Goal/Commitment management, theo pattern skill hiện có.
-  - M2: Tool/command mapping đầy đủ để AI có thể gọi `goal.create`, `task.create`, `commitment.confirm`.
-  - M3: Test hội thoại mẫu: "Tôi muốn launch v2 trong tháng 9" → AI tạo Goal + đề xuất milestone.
-  - M4: Test hội thoại mẫu: "Tôi sẽ gửi proposal cho John thứ 6" → candidate commitment được tạo và user được hỏi confirm.
+  - M1: SKILL.md mới cho Goal/Commitment management.
+  - M2: Tool/command mapping đầy đủ (`goal.create`, `task.create`, `commitment.confirm`).
+  - M3: Test hội thoại: "Tôi muốn launch v2 trong tháng 9" → AI tạo Goal + đề xuất milestone.
+  - M4: Test hội thoại: "Tôi sẽ gửi proposal cho John thứ 6" → candidate commitment được tạo, user được hỏi confirm.
+
+---
+
+### 2.9 — Attention Log 🆕
+
+- **Mục tiêu:** Trả lời được câu hỏi **"user đã biết chuyện này chưa?"** — câu hỏi quyết định giữa một trợ lý hữu ích và một cái máy nhắc lặp.
+- **Vì sao ở Phase 2 mà không phải Phase 6:** state này gắn trên chính **item** (task/goal/commitment), không phải trên bảng notification. Nếu Phase 2 tạo 3 bảng mà không có nó, đến Phase 6 phải migration lại cả 3. Một migration nhỏ bây giờ đổi lấy một migration lớn sau.
+- **Mô tả:** Bảng `attention_log`: `{id, user_id, item_type, item_id, surfaced_at, level, channel, response}` — `level` theo 5 cấp ở mục 13 Product Requirement (Silent/Inform/Recommend/Ask/Act), `response` là `accepted/dismissed/ignored/no_response`. Đây đồng thời là nguồn dữ liệu cho Feedback Loop (6.9) — không cần xây lại.
+- **Milestones:**
+  - M1: Migration bảng `attention_log`.
+  - M2: API ghi/đọc; query được "item này đã surface cho user chưa, bao nhiêu lần, phản hồi ra sao".
+  - M3: Chỉ số dedup cơ bản: cùng item + cùng lý do trong khoảng thời gian N → không surface lại.
+  - M4: Test: surface một task 2 lần liên tiếp → lần 2 bị chặn bởi dedup.
 
 ---
 
@@ -334,391 +503,514 @@ Thứ tự phase giữ nguyên theo critical path đã xác định:
 **Thời lượng dự kiến:** 4–6 tuần
 **Mục tiêu tổng:** Cortex giúp người dùng quyết định "nên làm gì tiếp theo", không chỉ lưu trữ thông tin.
 **Điều kiện tiên quyết:** Phase 2 (Goals, Tasks phải tồn tại trước khi planning có ý nghĩa).
-**Definition of Done:** User hỏi "Hôm nay tôi nên làm gì?" và nhận được câu trả lời dựa trên dữ liệu thật (deadline, calendar, goal priority), không phải câu trả lời chung chung.
+**Definition of Done:** User hỏi "Hôm nay tôi nên làm gì?" và nhận được câu trả lời dựa trên dữ liệu thật, không phải câu trả lời chung chung.
 
 ---
 
 ### 3.1 — Daily Planning Engine
 
-- **Mục tiêu:** Trả lời câu hỏi cốt lõi "Hôm nay tôi nên làm gì?" bằng logic có thể giải thích được, không phải hộp đen LLM.
-- **Mô tả:** Engine tổng hợp: task due hôm nay/quá hạn, schedule hôm nay, goal đang có risk (sẽ có ở 6.8), độ ưu tiên task. Trả về danh sách được xếp hạng kèm lý do ("A trước vì đang block B và deadline còn 2 ngày").
+- **Mục tiêu:** Trả lời "Hôm nay tôi nên làm gì?" bằng logic giải thích được, không phải hộp đen LLM.
+- **Mô tả:** Tổng hợp task due/quá hạn, schedule hôm nay, goal đang risk, độ ưu tiên. Trả về danh sách xếp hạng kèm lý do.
+- **Liên kết:** Đây là nguồn dữ liệu trực tiếp của màn "Hôm nay" (2.7). Trường lý do của engine chính là trường lý do của card — thiết kế chung một schema, đừng làm hai.
 - **Milestones:**
-  - M1: Logic xếp hạng deterministic (không cần AI) dựa trên deadline + priority + dependency.
-  - M2: Endpoint `/api/planning/today` trả về danh sách task đã xếp hạng.
-  - M3: Thêm lý do giải thích (explainability) cho mỗi item trong danh sách.
-  - M4: AI skill gọi engine này khi user hỏi "hôm nay làm gì" thay vì tự suy luận từ đầu.
+  - M1: Logic xếp hạng deterministic dựa trên deadline + priority + dependency.
+  - M2: Endpoint `/api/planning/today` trả về danh sách đã xếp hạng.
+  - M3: Explainability cho mỗi item.
+  - M4: AI skill gọi engine này thay vì tự suy luận từ đầu.
 
 ---
 
 ### 3.2 — AI Planner (Goal → Plan)
 
-- **Mục tiêu:** Chuyển một mục tiêu mơ hồ ("launch sản phẩm tháng 9") thành milestone và task cụ thể.
-- **Mô tả:** Dùng LLM (tier L3 — reasoning, vì đây là tác vụ cần suy luận thật) để breakdown Goal thành Milestone → Task, dựa trên Goal data model đã có (2.1). Kết quả là **đề xuất**, không tự động tạo — user phải approve (theo Proactive Interaction Policy cấp độ "Recommend"/"Ask Approval").
+- **Mục tiêu:** Chuyển mục tiêu mơ hồ thành milestone và task cụ thể.
+- **Mô tả:** LLM tier L3 breakdown Goal → Milestone → Task. Kết quả là **đề xuất**, user phải approve.
 - **Milestones:**
   - M1: Prompt template cho goal breakdown, test trên 5-10 goal mẫu.
-  - M2: Kết quả breakdown trả về dạng structured (milestone list + task list), không phải free text.
-  - M3: UI cho phép user review và approve/edit trước khi tạo task thật.
-  - M4: Sau approve, dùng `task.create`/`goal.update` command (không tạo trực tiếp qua LLM).
+  - M2: Kết quả structured (milestone list + task list), không free text.
+  - M3: UI review và approve/edit trước khi tạo task thật.
+  - M4: Sau approve, dùng command `task.create`/`goal.update`.
 
 ---
 
 ### 3.3 — Calendar-aware Scheduling
 
-- **Mục tiêu:** Khi đề xuất thời gian làm task, Cortex phải biết lịch hiện tại của user, tránh đề xuất giờ đã bận.
-- **Mô tả:** Query Schedule hiện có (bao gồm Google Calendar đã sync) để tìm slot trống, đề xuất thời gian cho task chưa có deadline cụ thể.
+- **Mục tiêu:** Đề xuất thời gian làm task phải biết lịch hiện tại, tránh giờ đã bận.
+- **Mô tả:** Query Schedule (gồm Google Calendar đã sync) tìm slot trống.
+- **Ghi chú:** Cùng query này được Attention Gate (6.2) tái dùng cho câu hỏi "user có đang họp không". Viết một lần, dùng hai chỗ.
 - **Milestones:**
-  - M1: Logic tìm free slot dựa trên Schedule hiện có trong khoảng thời gian cho trước.
-  - M2: Tích hợp vào Daily Planning Engine (3.1) để đề xuất "nên làm task X lúc mấy giờ".
-  - M3: Xử lý trường hợp không có slot trống (đề xuất dời sang ngày khác thay vì im lặng).
-  - M4: Test với lịch Google Calendar đã sync, đảm bảo không đề xuất trùng giờ họp.
+  - M1: Logic tìm free slot trong khoảng thời gian cho trước.
+  - M2: Tích hợp vào Daily Planning Engine.
+  - M3: Xử lý trường hợp không có slot trống (đề xuất dời, không im lặng).
+  - M4: Test với Google Calendar đã sync, không đề xuất trùng giờ họp.
 
 ---
 
 ### 3.4 — Dynamic Re-planning
 
-- **Mục tiêu:** Khi một task bị trễ, Cortex phải hiểu ảnh hưởng tới Goal và đề xuất điều chỉnh, thay vì im lặng.
-- **Mô tả:** Subscribe event `task.overdue` (từ Event Bus) → tính lại impact tới goal progress → nếu ảnh hưởng đáng kể, tạo đề xuất re-plan (dùng lại AI Planner ở 3.2 nhưng ở chế độ "điều chỉnh" thay vì "tạo mới").
+- **Mục tiêu:** Task bị trễ → Cortex hiểu ảnh hưởng tới Goal và đề xuất điều chỉnh.
+- **Mô tả:** Subscribe `task.overdue` (do State Evaluator 4.6 phát) → tính impact → nếu đáng kể, tạo đề xuất re-plan.
+- **⚠️ Phụ thuộc:** cần **1.10** (durable consumer) và **4.6** (State Evaluator phát `task.overdue`).
 - **Milestones:**
-  - M1: Subscriber lắng nghe `task.overdue`, tính impact tới goal liên quan (deterministic).
-  - M2: Ngưỡng quyết định khi nào cần re-plan (ví dụ: overdue > 2 ngày VÀ đang block goal có deadline gần).
-  - M3: Đề xuất re-plan được tạo ở dạng "Recommend" (không tự động thay đổi).
-  - M4: Test kịch bản: task trễ 3 ngày, block goal có deadline còn 5 ngày → hệ thống tạo đề xuất đúng.
+  - M1: Subscriber tính impact tới goal liên quan (deterministic).
+  - M2: Ngưỡng quyết định khi nào cần re-plan.
+  - M3: Đề xuất ở dạng "Recommend", **gửi qua Attention Gate** chứ không notify thẳng.
+  - M4: Test: task trễ 3 ngày, block goal deadline còn 5 ngày → tạo đề xuất đúng.
 
 ---
 
 ### 3.5 — "What should I do next?" Endpoint
 
-- **Mục tiêu:** Có một entry point rõ ràng, nhất quán cho câu hỏi trung tâm của sản phẩm (theo Product Requirement mục 16), thay vì để AI tự suy luận lại mỗi lần.
-- **Mô tả:** Endpoint tổng hợp kết quả từ 3.1 (daily planning) + risk từ goal đang theo dõi + commitment sắp đến hạn, trả về một câu trả lời thống nhất.
+- **Mục tiêu:** Một entry point rõ ràng cho câu hỏi trung tâm của sản phẩm.
+- **Mô tả:** Tổng hợp 3.1 + risk từ goal + commitment sắp đến hạn.
 - **Milestones:**
-  - M1: Endpoint `/api/planning/next-action` implement, tổng hợp từ các nguồn trên.
-  - M2: AI skill dùng endpoint này thay vì tự gọi rời rạc nhiều tool.
-  - M3: Test với các kịch bản: không có gì khẩn cấp / có deadline gấp / có commitment quá hạn.
-  - M4: Response time chấp nhận được (< 2s) vì đây là câu hỏi user hỏi thường xuyên nhất.
+  - M1: Endpoint `/api/planning/next-action`.
+  - M2: AI skill dùng endpoint này thay vì gọi rời rạc nhiều tool.
+  - M3: Test các kịch bản: không có gì khẩn cấp / deadline gấp / commitment quá hạn.
+  - M4: Response time < 2s.
 
 ---
 
-# PHASE 4 — Workflow Integration
+# PHASE 4 — Workflow như Detection Engine
 
-**Thời lượng dự kiến:** 4–6 tuần
-**Mục tiêu tổng:** Kết nối `workflow_service` (Temporal-based, hiện đang tách rời) với hệ thống Event Bus mới, để Workflow có thể được trigger từ các sự kiện thật của Cortex thay vì chỉ chạy độc lập.
-**Điều kiện tiên quyết:** Phase 1 (Event Bus), Phase 1 (Command Registry cho Built-in Actions).
-**Definition of Done:** Một event core (ví dụ `schedule.reminder.due`) có thể trigger một Temporal workflow đã định nghĩa, không cần custom code riêng cho từng trường hợp.
+**Thời lượng dự kiến:** 6–8 tuần *(tăng so với Bản 1 — phase này gánh thêm phần việc của Rule Engine cũ)*
+**Mục tiêu tổng:** **Thay đổi lớn nhất của Bản 2.** Workflow Engine không còn là một tính năng phụ để user tự động hoá vặt — nó trở thành **cơ chế detection duy nhất** của toàn hệ thống. Mọi hành vi "khi X xảy ra thì làm Y" đều là workflow, kể cả hành vi built-in của Cortex.
+**Điều kiện tiên quyết:** Phase 1 **bao gồm 1.9, 1.10**.
+**Definition of Done:** Hành vi proactive built-in của Cortex chạy dưới dạng system workflow, user **nhìn thấy được và tắt được**, và ship bản sửa tới mọi user mà không cần migration.
 
----
+**Vì sao hợp nhất:** có hai lý do, lý do thứ hai quan trọng hơn.
+1. *Kỹ thuật:* một codebase cho "khi nào Cortex hành động" thay vì hai. Một chỗ để debug.
+2. *Sản phẩm:* Rule Engine ẩn trong code là **hộp đen** — user không biết vì sao Cortex nhắc mình. Một danh sách workflow bật/tắt được là **auditable**. Đây là lập luận mạnh hơn lập luận kỹ thuật, vì nó trực tiếp phục vụ trụ cột Trust ở mục 5.
 
-### 4.1 — Event Bus → Workflow Trigger Bridge
-
-- **Mục tiêu:** Cho phép Workflow Service nhận event từ Event Bus của core backend, thay vì chỉ nhận qua webhook thủ công.
-- **Mô tả:** Viết bridge service subscribe Event Bus (Redis Streams từ Phase 1), chuyển tiếp event phù hợp thành Temporal workflow trigger (gọi `workflow_service` qua REST hoặc internal API).
-- **Milestones:**
-  - M1: Bridge service subscribe được ít nhất 3 event type từ Event Bus.
-  - M2: Bridge gọi đúng API `workflow_service` để start Temporal workflow tương ứng.
-  - M3: Xử lý lỗi khi `workflow_service` không phản hồi (retry/dead-letter, tái dùng cơ chế từ 1.2).
-  - M4: Test end-to-end: publish event `schedule.reminder.due` → Temporal workflow thực sự chạy.
+**Ranh giới còn lại:** Workflow lo **Detection**. Attention Gate (6.1) lo **Delivery**. Xem P2.
 
 ---
 
-### 4.2 — Built-in Triggers cho Core Events
+### 4.0 — System Workflow Reference Model 🆕
 
-- **Mục tiêu:** Người dùng không cần tự cấu hình webhook để dùng event core — Workflow Builder có sẵn trigger cho các event quan trọng.
-- **Mô tả:** Thêm trigger type mới trong `app/triggers/` của workflow_service tương ứng 1-1 với event core: `on_note_created`, `on_schedule_approaching`, `on_task_overdue`, `on_goal_at_risk` (sau Phase 6.8).
+- **Mục tiêu:** Cho phép Cortex ship hành vi mặc định mà **không copy** definition vào từng workspace — điều kiện để vừa có "bật sẵn X workflow mỗi workspace", vừa ship được bản sửa, vừa không sập DB.
+- **Vấn đề nếu copy (seed rows per workspace):**
+  - *Scale:* `_handle_event` trong `internal_event_listener.py` hiện **load toàn bộ** `WorkflowDefinition` đang ACTIVE từ DB mỗi khi có event, rồi lọc bằng Python — không scope theo user, không index theo event type. Với 5 workflow mặc định × 10.000 workspace = **50.000 row load lại mỗi event**. Không sống được.
+  - *Nâng cấp:* ship bản sửa cho một workflow mặc định → phải migration trên 50.000 bản copy, và không phân biệt được bản nào user đã chỉnh (sửa đè = mất công của họ).
+  - *Version drift:* workspace tạo tháng 1 chạy v1, workspace tạo tháng 3 chạy v2, vĩnh viễn.
+- **Mô tả:** System workflow sống **một chỗ duy nhất** (ship theo code hoặc một bảng global `owner=system`). Mỗi workspace chỉ lưu override:
+
+```
+workspace_workflow_settings
+  workspace_id, workflow_key, enabled, config_overrides
+```
+
+  - Tắt một workflow = ghi 1 row. Không đụng definition.
+  - Ship bản sửa → mọi user nhận ngay, toggle của họ giữ nguyên.
+  - Runtime query = N system workflow + workflow riêng của user. Không phải 50.000.
+  - **Copy-on-write:** user *sửa* một system workflow → lúc đó mới fork thành của họ, và thôi nhận update. Hành vi này tự nhiên và user hiểu được ("tôi đã sửa nên nó là của tôi").
 - **Milestones:**
-  - M1: Định nghĩa 4 trigger type mới trong Trigger Engine.
-  - M2: Trigger UI xuất hiện trong React Flow Workflow Builder hiện có.
-  - M3: Test tạo 1 workflow mẫu dùng trigger `on_task_overdue`.
-  - M4: Document cho user (hoặc AI) biết trigger nào available.
+  - M1: Bảng `workspace_workflow_settings` + resolver gộp system workflow với override của workspace.
+  - M2: Sửa `_handle_event` lọc theo event type **trong SQL** (index trên `trigger_config->>'event'`), không load hết rồi lọc Python. *Việc này cần làm bất kể chọn hướng nào.*
+  - M3: Copy-on-write khi user sửa system workflow.
+  - M4: Bộ ~5 system workflow mặc định, bật sẵn cho workspace mới, không seed row definition nào.
+  - M5: Test scale: 1.000 workspace × 5 system workflow → số row load mỗi event không tăng theo số workspace.
 
 ---
 
-### 4.3 — Built-in Actions
+### 4.1 — Event Bus → Workflow Trigger Bridge ✅ (phần lớn đã xong)
 
-- **Mục tiêu:** Workflow cần các action sẵn có để tương tác với hệ thống core, thay vì mỗi lần phải gọi REST thủ công.
-- **Mô tả:** Bổ sung Action Registry (`app/actions/builtin/`) với action gọi qua Command Registry (Phase 1.5): `create_task`, `create_note`, `send_notification`, `call_ai_completion`.
+- **Mục tiêu:** Workflow Service nhận event từ Event Bus của core backend.
+- **Trạng thái:** `internal_event_listener.py` **đã** consume Redis Streams qua consumer group, đã có xack. Phần còn thiếu là vocabulary chung (1.9) và query hiệu quả (4.0 M2).
 - **Milestones:**
-  - M1: 4 built-in action implement xong, gọi qua Command Registry (có audit tự động).
-  - M2: Action `send_notification` tích hợp với hệ thống notification/SSE hiện có.
-  - M3: Action `call_ai_completion` dùng model routing tier phù hợp (L1/L2, không mặc định dùng reasoning model).
-  - M4: Test workflow mẫu dùng đủ 4 action.
+  - M1: ✅ Consume event từ Event Bus qua consumer group.
+  - M2: ✅ Start Temporal workflow tương ứng.
+  - M3: Xử lý lỗi khi Temporal không phản hồi (retry/DLQ, tái dùng cơ chế 1.2).
+  - M4: Test end-to-end: publish `schedule.reminder.due` → Temporal workflow thực sự chạy.
 
 ---
 
-### 4.4 — Workflow → Goal Linking
+### 4.2 — Trigger Catalog (viết lại — không thêm TriggerType)
 
-- **Mục tiêu:** Cho phép một workflow đóng góp trực tiếp vào tiến độ goal (ví dụ: workflow tự động hoàn thành một bước lặp lại của một mục tiêu).
-- **Mô tả:** Thêm field `related_goal_id` vào `WorkflowInstance`, khi workflow hoàn thành action liên quan tới task, tự động trigger cập nhật goal progress (tái dùng logic 2.2).
+- **Mục tiêu:** User thấy nhiều lựa chọn trigger trong builder, trong khi code chỉ có **một** cơ chế trigger.
+- **Thay đổi so với Bản 1:** Bản 1 nói "thêm trigger type mới trong `app/triggers/`" cho mỗi loại. Rà soát code cho thấy **không cần**: `_handle_event` match bằng `trigger_config["event"] == event_type` + filters. Nghĩa là **thêm một trigger mới = thêm một chuỗi vào `trigger_config`, không sửa một dòng code nào.**
+- **Mô tả:** Tách hai khái niệm đang bị lẫn:
+  - **Trigger trong UI** — catalog để user chọn: "khi task quá hạn", "khi goal có nguy cơ trễ", "khi tôi mở Calendar", "khi có email từ…". Đây là một file JSON map 1-1 sang event type.
+  - **Trigger trong code** — `TriggerType` giữ nguyên **4 giá trị mãi mãi**. Mọi thứ mới đều là `INTERNAL_EVENT`.
+- **Nếu làm ngược lại** (thêm `TriggerType` cho mỗi loại): mỗi cái cần một đường ingest riêng trong code. 20 trigger = 20 đường = đúng cái "handle ngầm" cần tránh.
+- **Điều kiện:** catalog chỉ phong phú được khi có **4.6 State Evaluator** phát các event trạng thái, và **1.7 M5** phát `context.view.changed`.
 - **Milestones:**
-  - M1: Migration thêm `related_goal_id` vào workflow model.
-  - M2: Khi workflow action tạo/hoàn thành task có gắn goal, event `task.completed` được phát đúng để 2.2 tự cập nhật.
-  - M3: UI Workflow Builder cho phép chọn goal liên quan khi tạo workflow.
-  - M4: Test: workflow hoàn thành → goal progress cập nhật tự động, không cần thao tác thủ công.
+  - M1: Trigger catalog dạng dữ liệu (không phải code), sinh từ vocabulary chung (1.9).
+  - M2: Builder UI render danh sách trigger từ catalog, có mô tả tiếng Việt dễ hiểu cho từng cái.
+  - M3: Thêm một trigger mới vào catalog → xuất hiện trong UI mà không deploy lại backend.
+  - M4: `TriggerType` enum vẫn đúng 4 giá trị sau khi catalog có ≥ 15 mục.
 
 ---
 
-### 4.5 — Frontend Workflow Templates
+### 4.3 — Built-in Actions + `request_attention` (viết lại)
 
-- **Mục tiêu:** Giảm rào cản tạo workflow — user không nên phải tự vẽ workflow phức tạp từ đầu cho các use case phổ biến.
-- **Mô tả:** Thêm bộ template dựng sẵn trong `WorkflowBuilder.tsx`: "Nhắc tôi trước meeting 30 phút", "Follow-up nếu commitment quá hạn 2 ngày" — user chỉ cần điền tham số.
+- **Mục tiêu:** Workflow tương tác được với hệ thống core — **và không có đường nào cho workflow tự gửi notification**.
+- **Thay đổi so với Bản 1:** Bản 1 liệt kê `send_notification` như một action bình thường. Đây là lỗ hổng lớn nhất: `send_notification.py` hiện POST thẳng vào `/internal/notifications`, không qua cổng nào. Mỗi workflow bật lên là một nguồn spam độc lập — và vì do user tạo, **không fix được bằng code**.
+- **Mô tả:** Đổi `action.send_notification` → `action.request_attention`. Giữ nguyên config schema (title/body/content/actions) để không phá workflow đã có, nhưng POST vào **Attention Gate (6.1)** thay vì vào bảng notification. Gate quyết định có gửi không, lúc nào, gộp với gì.
+- **Lưu ý về AI:** `call_ai` là một **action**, không phải trigger — thiết kế này đã đúng và phải giữ. Workflow không có node `call_ai` thì tốn **0 token**, đúng mục 9 Product Requirement. System workflow mặc định **không dùng AI**; AI là opt-in từng node.
 - **Milestones:**
-  - M1: 3 template phổ biến nhất được thiết kế (dựa trên use case ở Product Requirement mục 20).
-  - M2: UI chọn template → tự động điền sẵn trigger + action tương ứng.
-  - M3: User có thể chỉnh sửa template sau khi chọn (không bị khoá cứng).
-  - M4: Test tạo workflow từ template, verify chạy đúng qua Temporal.
+  - M1: Endpoint Attention Gate + `action.request_attention` thay thế `send_notification`.
+  - M2: `send_notification` cũ deprecate, tự động map sang `request_attention` (workflow cũ không vỡ).
+  - M3: Grep xác nhận **không còn đường nào** ghi thẳng vào `notifications` ngoài Gate — kể cả `ReminderWorker`.
+  - M4: Action `action.compute_*` cho công thức (xem 4.4), gọi qua Command Registry để có audit.
+
+---
+
+### 4.4 — Công Thức là Action, Không Phải Graph
+
+- **Mục tiêu:** Hợp nhất vào workflow mà không biến mọi thứ thành sơ đồ khó đọc.
+- **Mô tả:** Có thứ không hợp làm graph. Risk score = f(progress, days_left, velocity) là **công thức**, không phải luồng. Vẽ nó thành 6 node điều kiện thì vừa khó đọc vừa khó test.
+- **Nguyên tắc:** **Action là code, workflow là dây nối.** Công thức viết bằng Python trong một action (`action.compute_risk_score`), workflow chỉ gọi. Vẫn một engine, mà logic phức tạp vẫn nằm trong code có unit test.
+- **Milestones:**
+  - M1: Danh sách các phép tính nên là action, không nên là graph (risk score, progress, free-slot, importance).
+  - M2: Implement dưới dạng action có `config_schema` và unit test riêng.
+  - M3: System workflow dùng các action này thay vì chuỗi node điều kiện.
+  - M4: Review: không system workflow nào có > 8 node. Vượt ngưỡng = dấu hiệu logic nên chuyển vào action.
+
+---
+
+### 4.5 — Workflow List UI (viết lại — thay cho Templates)
+
+- **Mục tiêu:** User **nhìn thấy** Cortex đang tự làm gì cho mình, và tắt được thứ không muốn — thực thi ranh giới #2.
+- **Thay đổi so với Bản 1:** Bản 1 mô tả template dựng sẵn để user tự chọn và bật. Bản 2 đảo chiều theo P3 và ranh giới #2.
+
+| Sai | Đúng |
+|---|---|
+| Danh sách 30 workflow, mặc định tắt, user tự bật | ~5 hành vi mặc định **bật sẵn** do Cortex chọn |
+| Trang này là nơi **cấu hình** | Trang này là nơi **audit + tắt** |
+| Phải vào đây thì mới có giá trị | Không vào bao giờ vẫn có giá trị |
+
+- **Mô tả:** Danh sách hiển thị system workflow (bật sẵn) và workflow riêng của user, mỗi dòng có toggle + mô tả tiếng Việt + lần chạy gần nhất. Toggle off = ghi override (4.0), không xoá gì.
+- **Toggle tốt nhất không nằm ở đây:** nó nằm ngay trên notification — *"đừng nhắc kiểu này nữa"*. Zero effort, và nó chính là 6.9 ghi vào `attention_log` (2.9). Trang list chỉ là chỗ xem lại và bật lại thứ đã lỡ tắt.
+- **Template vẫn giữ**, nhưng đúng vai trò: công cụ **dạy user viết workflow riêng**, không phải kênh giao hành vi cốt lõi.
+- **Milestones:**
+  - M1: Danh sách gộp system workflow + workflow user, có toggle.
+  - M2: Mỗi dòng có mô tả người thường đọc hiểu ("Nhắc bạn khi có việc quá hạn chặn mục tiêu") và lần chạy gần nhất.
+  - M3: Nút "đừng nhắc kiểu này nữa" trên notification → ghi `attention_log`, hạ cấp hoặc tắt loại đó.
+  - M4: Template library cho workflow user tự viết (3 template phổ biến, có thể sửa sau khi chọn).
+  - M5: Kiểm chứng ranh giới #2: user mới không mở trang này trong 7 ngày vẫn nhận được giá trị proactive.
+
+---
+
+### 4.6 — State Evaluator 🆕
+
+- **Mục tiêu:** Biến thay đổi trạng thái thành event, để **chỉ cần một cơ chế trigger duy nhất** (P4).
+- **Mô tả:** "Task overdue 3 ngày" không phải event — không có gì *xảy ra*, chỉ là thời gian trôi. Phải có ai đó đi hỏi. Evaluator chạy định kỳ, quét các predicate trạng thái, và **publish event** lên Event Bus: `task.overdue`, `goal.at_risk`, `commitment.due_soon`, `commitment.overdue`.
+- **Lợi ích kép:** Workflow Engine, Attention Gate, và Planning (3.4) đều ăn chung một nguồn. Không có ba đường code song song làm cùng một việc.
+- **Chống lặp:** evaluator phải idempotent — task đã overdue 5 ngày không được phát `task.overdue` mỗi lần quét. Dùng `attention_log` (2.9) hoặc state riêng để chỉ phát khi **chuyển trạng thái**.
+- **Milestones:**
+  - M1: Evaluator chạy định kỳ, danh sách predicate ban đầu (5–8).
+  - M2: Publish event trạng thái lên Event Bus, khai báo trong vocabulary chung (1.9).
+  - M3: Idempotency: chỉ phát khi có **chuyển** trạng thái, không phát lặp mỗi chu kỳ quét.
+  - M4: Test: task quá hạn liên tục 7 ngày → chỉ phát `task.overdue` **một lần**.
+
+---
+
+### 4.7 — Workflow → Goal Linking
+
+- **Mục tiêu:** Workflow đóng góp trực tiếp vào tiến độ goal.
+- **Mô tả:** Thêm `related_goal_id` vào `WorkflowInstance`; workflow hoàn thành action liên quan task → `task.completed` được phát đúng để 2.2 tự cập nhật.
+- **Milestones:**
+  - M1: Migration thêm `related_goal_id`.
+  - M2: Workflow action tạo/hoàn thành task có gắn goal → event phát đúng.
+  - M3: UI Builder cho phép chọn goal liên quan.
+  - M4: Test: workflow hoàn thành → goal progress cập nhật tự động.
 
 ---
 
 # PHASE 5 — External Context / Integrations
 
 **Thời lượng dự kiến:** 8–12 tuần
-**Mục tiêu tổng:** Cortex bắt đầu hiểu những gì xảy ra bên ngoài hệ thống của chính nó — hiện tại chỉ có Google Calendar.
-**Điều kiện tiên quyết:** Phase 1 (Event Bus để phát event từ integration), Phase 2 (Commitment để liên kết với follow-up qua email).
-**Definition of Done:** Ít nhất Email integration hoạt động: đọc được commitment/follow-up từ Gmail, có Integration SDK để thêm integration mới nhanh hơn.
+**Mục tiêu tổng:** Cortex bắt đầu hiểu những gì xảy ra bên ngoài hệ thống của chính nó.
+**Điều kiện tiên quyết:** Phase 1 (Event Bus), Phase 2 (Commitment).
+**Definition of Done:** Ít nhất Email integration hoạt động, có Integration SDK để thêm integration mới nhanh hơn.
+
+**Ghi chú Bản 2:** mọi integration phát event **theo vocabulary chung (1.9)**. Nhờ 4.2, mỗi event mới tự động trở thành một trigger khả dụng trong builder mà không cần code UI riêng.
 
 ---
 
 ### 5.1 — Email Integration (Gmail)
 
-- **Mục tiêu:** Đây là integration giá trị cao nhất theo phân tích (mục 7.2 report) — email chứa phần lớn commitment và follow-up thực tế của người dùng.
-- **Mô tả:** OAuth Gmail (tương tự pattern Google Calendar hiện có), đọc email liên quan, dùng Commitment Extraction (2.3) để phát hiện lời hứa trong email, phát event `email.received`/`email.commitment_detected`.
+- **Mục tiêu:** Integration giá trị cao nhất — email chứa phần lớn commitment và follow-up thực tế.
+- **Mô tả:** OAuth Gmail, đọc email liên quan, dùng Commitment Extraction (2.3) phát hiện lời hứa, phát `email.received`/`email.commitment_detected`.
 - **Milestones:**
-  - M1: OAuth flow cho Gmail, lưu token tương tự `CalendarConnection` hiện có.
-  - M2: Đọc email mới (polling hoặc push notification qua Gmail API), lưu vào hệ thống ở dạng normalized entity.
-  - M3: Áp dụng Commitment Extraction cho nội dung email, tạo candidate commitment.
-  - M4: Test end-to-end: nhận email có nội dung hứa hẹn → candidate commitment xuất hiện, chờ user confirm.
+  - M1: OAuth flow cho Gmail, lưu token tương tự `CalendarConnection`.
+  - M2: Đọc email mới, lưu ở dạng normalized entity.
+  - M3: Áp dụng Commitment Extraction, tạo candidate commitment.
+  - M4: Test end-to-end: email có nội dung hứa hẹn → candidate xuất hiện, chờ confirm.
 
 ---
 
 ### 5.2 — Multi-calendar Support
 
-- **Mục tiêu:** Không giới hạn chỉ Google Calendar — mở rộng cho Outlook/iCloud để phù hợp nhiều nhóm người dùng hơn.
-- **Mô tả:** Trừu tượng hoá `CalendarConnection` hiện tại thành interface chung, thêm implementation cho Outlook (Microsoft Graph API).
+- **Mục tiêu:** Mở rộng ngoài Google Calendar (Outlook/iCloud).
+- **Mô tả:** Trừu tượng hoá `CalendarConnection` thành interface chung, thêm Outlook (Microsoft Graph API).
 - **Milestones:**
-  - M1: Refactor `google_calendar_sync.py` để tách interface chung `CalendarProvider`.
-  - M2: Implement `OutlookCalendarProvider` theo interface đó.
-  - M3: UI Settings cho phép kết nối nhiều loại calendar.
-  - M4: Test đồng bộ hai chiều với Outlook tương tự đã có với Google.
+  - M1: Refactor `google_calendar_sync.py`, tách interface `CalendarProvider`.
+  - M2: Implement `OutlookCalendarProvider`.
+  - M3: UI Settings kết nối nhiều loại calendar.
+  - M4: Test đồng bộ hai chiều với Outlook.
 
 ---
 
 ### 5.3 — Messaging Integration (Telegram Bot)
 
-- **Mục tiêu:** Có kênh gửi thông báo proactive tốt hơn browser notification/SSE (vốn cần tab mở) — chuẩn bị cho Phase 6.
-- **Mô tả:** Bot Telegram đơn giản: nhận lệnh cơ bản, và quan trọng hơn — là kênh push cho Proactive Engine (Phase 6) gửi reminder/follow-up.
+- **Mục tiêu:** Kênh push tốt hơn browser notification (vốn cần tab mở).
+- **Mô tả:** Bot Telegram nhận lệnh cơ bản, và quan trọng hơn — là **một channel của Attention Gate**, không phải một nguồn notification độc lập.
 - **Milestones:**
-  - M1: Bot Telegram cơ bản kết nối được với tài khoản user (link qua token).
-  - M2: Gửi được notification từ hệ thống hiện có (notifications table) qua Telegram.
+  - M1: Bot kết nối được với tài khoản user (link qua token).
+  - M2: Telegram đăng ký như **channel** trong Attention Gate; Gate chọn channel theo preference (6.2).
   - M3: Nhận lệnh đơn giản từ Telegram (ví dụ trả lời "đã gửi" để đóng commitment).
-  - M4: Test: notification tạo trong hệ thống → xuất hiện trên Telegram trong vài giây.
+  - M4: Test: Gate quyết định gửi → xuất hiện trên Telegram trong vài giây; Gate quyết định im lặng → không có gì gửi đi.
 
 ---
 
 ### 5.4 — GitHub Integration
 
-- **Mục tiêu:** Phục vụ nhóm người dùng developer/productivity — PR và issue chứa commitment công việc thực tế.
-- **Mô tả:** OAuth GitHub, đọc PR/issue được assign cho user, phát event `github.pr.opened`, `github.issue.assigned`, liên kết với Task/Commitment nếu có.
+- **Mục tiêu:** Phục vụ nhóm developer — PR và issue chứa commitment công việc thực tế.
+- **Mô tả:** OAuth GitHub, đọc PR/issue được assign, phát `github.pr.opened`, `github.issue.assigned`.
 - **Milestones:**
-  - M1: OAuth GitHub flow, lưu token.
-  - M2: Đọc PR/issue liên quan tới user (polling hoặc webhook GitHub App).
-  - M3: Phát event chuẩn hoá cho các thao tác GitHub quan trọng.
-  - M4: Test: PR mới được assign → xuất hiện trong danh sách "cần chú ý" của user.
+  - M1: OAuth GitHub flow.
+  - M2: Đọc PR/issue liên quan (polling hoặc webhook GitHub App).
+  - M3: Phát event chuẩn hoá theo vocabulary chung.
+  - M4: Test: PR mới được assign → xuất hiện trong "cần chú ý" của user.
 
 ---
 
 ### 5.5 — Integration SDK
 
-- **Mục tiêu:** Không xây mỗi integration hoàn toàn từ đầu — cần một khung chung để thêm integration mới nhanh hơn (đã có 3 integration ở trên làm ví dụ thực tế).
-- **Mô tả:** Trừu tượng hoá pattern chung: OAuth handling, Normalized Entity, Normalized Event, mapping vào Event Bus. Rút ra từ kinh nghiệm implement 5.1/5.3/5.4.
+- **Mục tiêu:** Thêm integration mới nhanh hơn, không xây lại từ đầu.
+- **Mô tả:** Trừu tượng hoá pattern chung: OAuth handling, Normalized Entity, Normalized Event, mapping vào Event Bus.
 - **Milestones:**
-  - M1: Định nghĩa interface `IntegrationAdapter` chung (connect, sync, normalize, emit_event).
-  - M2: Refactor Gmail/Telegram/GitHub integration để dùng chung interface này.
-  - M3: Document hướng dẫn thêm integration mới theo SDK.
-  - M4: Chứng minh bằng cách thêm 1 integration thử nghiệm mới trong < 1 tuần nhờ SDK.
+  - M1: Interface `IntegrationAdapter` (connect, sync, normalize, emit_event).
+  - M2: Refactor Gmail/Telegram/GitHub dùng chung interface.
+  - M3: Document hướng dẫn thêm integration mới.
+  - M4: Chứng minh: thêm 1 integration thử nghiệm trong < 1 tuần.
 
 ---
 
-# PHASE 6 — Proactive Assistant
+# PHASE 6 — Attention Gate (Proactive Delivery)
 
-**Thời lượng dự kiến:** 8–10 tuần
-**Mục tiêu tổng:** Đây là điểm khác biệt cốt lõi của sản phẩm — Cortex chủ động xuất hiện đúng lúc, thay vì chỉ phản hồi khi được hỏi.
-**Điều kiện tiên quyết:** Phase 1 (Event Bus), Phase 2 (Goals/Commitments/Tasks), Phase 3 (Planning), Phase 5 (khuyến khích có Email/Messaging để follow-up thực sự hữu ích).
-**Definition of Done:** Có ít nhất 3 loại proactive action hoạt động thật (smart reminder, commitment follow-up, risk detection) với decision engine phân biệt được Silent/Inform/Recommend/Ask/Act, và có cơ chế đo false-positive.
+**Thời lượng dự kiến:** 6–8 tuần *(giảm so với Bản 1 — phần detection đã chuyển sang Phase 4)*
+**Mục tiêu tổng:** Đây là điểm khác biệt cốt lõi của sản phẩm. Bản 1 gọi phase này là "Proactive Assistant" và gộp cả detection lẫn delivery. Bản 2 chỉ giữ lại **delivery** — nhưng làm nó cho tới nơi.
+**Điều kiện tiên quyết:** Phase 2 (2.9 `attention_log`), Phase 4 (workflow phát attention candidate), Phase 3 (planning để có nội dung đáng nói).
+**Definition of Done:** Mỗi lần Cortex xuất hiện đều đáng đọc. Đo được bằng tỷ lệ `accepted` vs `dismissed` trong `attention_log`, không phải bằng số notification đã gửi.
 
----
+**Nguyên tắc chi phối phase này:**
 
-### 6.1 — Proactive Engine Design
+> Người dùng không muốn notification. Họ muốn **decision support**.
+>
+> "🔔 Nhớ làm task A" → *"Biết rồi."* → vuốt đi.
+> "Bạn có 4 tiếng trống. Làm task A bây giờ thì deadline MVP vẫn an toàn; để mai thì rủi ro trễ tăng." → đáng đọc.
 
-- **Mục tiêu:** Có kiến trúc rõ ràng cho câu hỏi "khi nào Cortex nên chủ động lên tiếng", tránh rơi vào notification spam (rủi ro đã xác định rõ trong cả hai bản gốc).
-- **Mô tả:** Thiết kế pipeline: `Event → Rule Evaluation → Policy Evaluation → (AI Reasoning nếu cần) → Decision (Silent/Inform/Recommend/Ask/Act) → Action`. Đây là bản thiết kế/kiến trúc trước khi implement từng phần.
-- **Milestones:**
-  - M1: Document kiến trúc đầy đủ, review với team trước khi code.
-  - M2: Định nghĩa rõ 5 cấp độ hành động (theo Product Requirement mục 13) và tiêu chí chuyển giữa các cấp.
-  - M3: Xác định danh sách event nào sẽ đi qua Proactive Engine (không phải mọi event đều cần).
-  - M4: Prototype pipeline chạy được end-to-end với logic giả (stub), chưa cần AI thật.
+Và:
 
----
-
-### 6.2 — Policy/Preference Store
-
-- **Mục tiêu:** Người dùng phải kiểm soát được mức độ Cortex làm phiền mình — đây là điều kiện tiên quyết để tin tưởng proactive engine.
-- **Mô tả:** Bảng `user_preferences` (không còn chỉ theme trong localStorage): quiet hours, kênh thông báo ưu tiên (in-app/Telegram/email), ngưỡng importance tối thiểu để interrupt.
-- **Milestones:**
-  - M1: Migration bảng `user_preferences`, API CRUD.
-  - M2: UI Settings cho phép cấu hình quiet hours và kênh ưu tiên.
-  - M3: Proactive Engine đọc preference trước khi quyết định gửi thông báo.
-  - M4: Test: notification không được gửi trong quiet hours (trừ khi importance = critical).
+> Một workflow **im lặng đúng lúc** cũng thành công như một workflow đã chạy.
 
 ---
 
-### 6.3 — Rule Engine
+### 6.1 — Attention Gate (viết lại — thay cho Proactive Engine Design)
 
-- **Mục tiêu:** Xử lý phần lớn quyết định proactive bằng logic xác định (deterministic), không tốn chi phí AI — theo đúng nguyên tắc "AI chỉ dùng khi cần" (Product Requirement mục 9).
-- **Mô tả:** Rule engine đơn giản kiểm tra các điều kiện cứng: "task overdue > 3 ngày", "commitment quá hạn", "2 event trùng giờ trên calendar". Không cần rule engine phức tạp dạng Drools — if/else có cấu trúc là đủ ở giai đoạn này.
+- **Mục tiêu:** Có **một** cổng duy nhất mà mọi thứ muốn làm phiền user phải đi qua. Đây là thành phần quan trọng nhất của Bản 2.
+- **Thay đổi so với Bản 1:** Bản 1 mô tả pipeline `Event → Rule → Policy → Decision → Action` xử lý **từng event một**. Pipeline đó **không thể** biểu diễn "8 reminder trong lúc họp → 1 thông báo sau khi họp", vì nó không có khái niệm giữ lại và gộp. Bản 2 thay bằng một cổng **có state**.
+- **Mô tả:** Gate nhận *attention candidate* (từ workflow qua 4.3, từ ReminderWorker, từ planning) và chạy qua 5 bước:
+
+```
+Attention candidate
+   ↓
+1. Đáng nói không?      ← importance suy ra: chặn goal? goal sắp deadline?
+   ↓
+2. User đã biết chưa?   ← attention_log (2.9)
+   ↓
+3. User có rảnh không?  ← query schedules: đang họp? quiet hours?
+   ↓
+4. Gộp với gì?          ← hàng đợi có state, gom theo user + khoảng thời gian
+   ↓
+5. Thời điểm nào tốt?   ← thoát khỏi trạng thái bận / mốc tự nhiên trong ngày
+   ↓
+Silent | Inform | Recommend | Ask | Act      (mục 13 Product Requirement)
+```
+
+- **Vì sao Gate không thể là một workflow:** bundling hoạt động **trên output của tất cả workflow**. Không workflow nào biết các workflow khác đang định nói gì. Nó là state toàn cục theo user. Đây là lý do bỏ được Rule Engine nhưng **không** bỏ được Gate.
+- **Bước 4 là phần chưa từng có trong Bản 1** và là phần khó nhất — nó cần hàng đợi có trạng thái, không phải một hàm thuần.
 - **Milestones:**
-  - M1: Danh sách rule ban đầu (5-8 rule) được implement, có thể bật/tắt độc lập.
-  - M2: Rule engine chạy như subscriber của Event Bus, output ra quyết định sơ bộ (candidate cho Policy Evaluation).
-  - M3: Test riêng từng rule với input giả định.
-  - M4: Đo được bao nhiêu % quyết định proactive được rule engine xử lý mà không cần AI (mục tiêu > 70%).
+  - M1: Interface Gate + endpoint nhận candidate; ban đầu **stub cho qua hết** để mọi producer chuyển sang gọi Gate trước, tinh chỉnh sau. *(Chuyển producer sớm là điểm mấu chốt — khi đã có 3 nơi ghi thẳng notification thì retrofit rất đau.)*
+  - M2: Bước 1–3 (importance, đã-biết-chưa, rảnh-không) hoạt động deterministic, không cần AI.
+  - M3: Bước 4–5: hàng đợi bundling theo user, gom nhiều candidate thành một thông báo, chọn thời điểm phát.
+  - M4: Grep xác nhận: **không producer nào** ghi thẳng vào `notifications`. `ReminderWorker` cũng đi qua Gate.
+  - M5: Test kịch bản chuẩn: user có meeting 60 phút, trong đó phát sinh 8 candidate → trong lúc họp gửi **0**, sau họp gửi **1** thông báo gộp 3 mục đáng chú ý, 5 mục còn lại giữ Silent.
+
+---
+
+### 6.2 — Policy / Preference Store (mở rộng)
+
+- **Mục tiêu:** User kiểm soát được mức độ Cortex làm phiền — điều kiện tiên quyết để tin tưởng.
+- **Thay đổi so với Bản 1:** Bản 1 chỉ có quiet hours (tĩnh). Bản 2 thêm **interruptibility động** — và đây là thứ **rẻ nhất, tác động lớn nhất** trong toàn phase: hệ thống **đã biết** user đang họp vì nó có bảng `schedules`. Đó là một query SQL deterministic, không cần AI, không cần integration mới. Tái dùng logic free-slot của 3.3.
+- **Mô tả:** Bảng `user_preferences`: quiet hours, kênh ưu tiên (in-app/Telegram/email), ngưỡng importance tối thiểu. Cộng với interruptibility tính real-time từ `schedules`.
+- **Milestones:**
+  - M1: Migration `user_preferences` + API CRUD.
+  - M2: **Interruptibility check từ `schedules`** (đang họp / sắp họp trong N phút), dùng chung logic với 3.3.
+  - M3: UI Settings cho quiet hours và kênh ưu tiên — giữ tối thiểu, theo ranh giới #2 (nơi audit, không phải nơi cấu hình).
+  - M4: Test: notification không gửi trong quiet hours và trong lúc họp, trừ khi importance = critical.
+
+---
+
+### 6.3 — Rule Engine `[ĐÃ BỎ]`
+
+- **Lý do bỏ:** trách nhiệm detection chuyển hoàn toàn sang **Workflow Engine (Phase 4)**. Giữ cả hai nghĩa là câu hỏi "vì sao Cortex nhắc tôi cái này" có hai câu trả lời ở hai codebase.
+- **Đi đâu:**
+  - Predicate trạng thái ("overdue > 3 ngày") → **4.6 State Evaluator**
+  - Logic "nếu X thì làm Y" → **system workflow (4.0)**
+  - Công thức (risk score) → **action (4.4)**
+  - Quyết định có nói hay không → **6.1 Attention Gate**
+- **Đánh đổi đã chấp nhận:** chạy qua Temporal tốn hơn if/else in-process. Với tải của một app productivity cá nhân, chênh lệch này không đáng kể. Đừng để điểm này cản quyết định.
+- **Lợi ích đổi lại:** hành vi built-in trở nên **nhìn thấy được và tắt được** — trực tiếp phục vụ trụ cột Trust (mục 5 Product Requirement).
 
 ---
 
 ### 6.4 — AI Proactive Reasoning
 
-- **Mục tiêu:** Xử lý các trường hợp mơ hồ mà rule không quyết định được rõ ràng (ví dụ: "goal này có thực sự đang risk không, hay chỉ là chậm bình thường").
-- **Mô tả:** Khi Rule Engine (6.3) không đủ tự tin, gọi LLM (tier phù hợp, không mặc định reasoning nặng) với context đã được ContextService (1.7) lọc sẵn, LLM output quyết định + độ tin cậy.
+- **Mục tiêu:** Xử lý trường hợp mơ hồ mà logic deterministic không quyết được ("goal này thực sự risk hay chỉ chậm bình thường").
+- **Mô tả:** Khi bước 1–3 của Gate không đủ tự tin, gọi LLM (tier phù hợp, không mặc định reasoning nặng) với context đã lọc bởi ContextService (1.7).
+- **Ràng buộc:** AI **chỉ tham gia ở bước quyết định của Gate**, không phải ở mỗi event. Nếu > 30% candidate cần AI thì logic deterministic đang thiếu — sửa logic, đừng tăng AI.
 - **Milestones:**
-  - M1: Prompt template cho proactive reasoning, input là candidate từ rule engine + context liên quan.
-  - M2: Output có cấu trúc: `{decision_level, reason, confidence}`.
-  - M3: Ngưỡng confidence tối thiểu để hành động tự động vs. cần hỏi user.
-  - M4: Test trên 10-15 kịch bản mơ hồ, đánh giá chất lượng quyết định thủ công.
+  - M1: Prompt template, input là candidate + context liên quan.
+  - M2: Output structured `{decision_level, reason, confidence}`.
+  - M3: Ngưỡng confidence để hành động tự động vs. hỏi user.
+  - M4: Test 10–15 kịch bản mơ hồ, đánh giá thủ công. Đo % candidate cần tới AI (mục tiêu < 30%).
 
 ---
 
 ### 6.5 — Smart Reminders
 
-- **Mục tiêu:** Reminder không chỉ dựa vào giờ cố định — phải tính đến hành vi thực tế của user (theo ví dụ trong roadmap gốc: "bạn thường hoàn thành task này vào buổi sáng").
-- **Mô tả:** Nâng cấp `ReminderWorker` hiện có: thay vì chỉ check `scheduled_at`, kết hợp thêm lịch sử hoàn thành task loại tương tự (nếu có đủ dữ liệu) để đề xuất thời điểm nhắc tối ưu hơn.
+- **Mục tiêu:** Reminder tính đến hành vi thực tế của user, không chỉ giờ cố định.
+- **Mô tả:** `ReminderWorker` không còn tự gửi — nó phát **candidate** vào Gate. Phần "smart" nằm ở việc bổ sung tín hiệu hành vi (giờ user thường hoàn thành task loại này) cho bước 5 của Gate.
 - **Milestones:**
-  - M1: Thu thập dữ liệu lịch sử hoàn thành task theo loại/giờ trong ngày (query đơn giản, không cần ML phức tạp ở bản đầu).
-  - M2: Logic đề xuất giờ nhắc tối ưu dựa trên pattern đơn giản (giờ hoàn thành phổ biến nhất).
-  - M3: Fallback về reminder giờ cố định nếu chưa đủ dữ liệu lịch sử.
-  - M4: A/B so sánh tỷ lệ hoàn thành task giữa reminder cố định vs. smart reminder (nếu có đủ user để đo).
+  - M1: `ReminderWorker` chuyển sang phát candidate qua Gate, bỏ ghi thẳng `Notification`.
+  - M2: Thu thập lịch sử hoàn thành task theo loại/giờ (query đơn giản, chưa cần ML).
+  - M3: Tín hiệu này thành input cho bước 5 (chọn thời điểm) của Gate.
+  - M4: So sánh tỷ lệ hoàn thành task giữa reminder cố định vs. smart reminder.
 
 ---
 
 ### 6.6 — Meeting Intelligence (Chuẩn bị + Follow-up)
 
-- **Mục tiêu:** Đây là "killer feature" được đánh giá cao trong cả hai tài liệu gốc — chuẩn bị context trước meeting và tự tạo task/commitment sau meeting.
-- **Mô tả:** Trước meeting (dựa vào Calendar event): tổng hợp note/email/commitment liên quan tới người tham dự hoặc chủ đề. Sau meeting: nếu có transcript/note (tận dụng pipeline OCR/transcription hiện có), extract decision → tạo Task/Commitment.
+- **Mục tiêu:** Chuẩn bị context trước meeting và tự tạo task/commitment sau meeting.
+- **Mô tả:** Trước meeting: tổng hợp note/email/commitment liên quan người tham dự hoặc chủ đề. Sau meeting: extract decision từ transcript/note → tạo candidate Task/Commitment.
+- **Ghi chú Bản 2:** cả hai đều là **system workflow** (4.0) với trigger từ catalog (4.2), không phải code riêng. Output đi qua Gate.
 - **Milestones:**
-  - M1: Trigger "before meeting" (dựa vào Calendar event sắp tới, ví dụ 15-30 phút trước) tổng hợp context liên quan.
-  - M2: Notification/summary gửi trước meeting qua kênh ưu tiên của user (6.2).
-  - M3: Sau meeting, nếu có ghi chú/transcript, chạy extraction tạo candidate Task/Commitment (tái dùng 2.3).
-  - M4: Test end-to-end với 1 kịch bản meeting thật: có context chuẩn bị trước, có task được tạo sau.
+  - M1: System workflow "before meeting" (trigger 15–30 phút trước) tổng hợp context.
+  - M2: Kết quả gửi qua Gate, Gate chọn channel theo preference (6.2).
+  - M3: System workflow "after meeting" chạy extraction tạo candidate Task/Commitment (tái dùng 2.3).
+  - M4: Test end-to-end với 1 kịch bản meeting thật.
 
 ---
 
 ### 6.7 — Follow-up Detection
 
-- **Mục tiêu:** Trả lời câu hỏi "ai đang chờ tôi phản hồi?" — một trong những câu hỏi cốt lõi của sản phẩm.
-- **Mô tả:** Kết hợp Commitment (2.4) + Email (5.1): nếu commitment có deadline gần/quá hạn và chưa có hành động tương ứng (email trả lời, task complete), tạo proactive follow-up ở cấp độ "Recommend" hoặc "Inform".
+- **Mục tiêu:** Trả lời "ai đang chờ tôi phản hồi?" — một trong những câu hỏi cốt lõi của sản phẩm.
+- **Mô tả:** Commitment (2.4) + Email (5.1): commitment deadline gần/quá hạn mà chưa có hành động tương ứng → candidate follow-up.
+- **Ghi chú Bản 2:** trigger là `commitment.due_soon`/`commitment.overdue` từ State Evaluator (4.6); logic là system workflow; quyết định gửi là Gate.
 - **Milestones:**
-  - M1: Logic xác định commitment "cần follow-up" (deadline gần/quá hạn + chưa complete).
-  - M2: Tích hợp với Rule Engine (6.3) để đây là một trong các rule chính.
-  - M3: Nội dung follow-up được soạn sẵn (draft message), không tự động gửi — cần approval (cấp độ "Ask Approval").
-  - M4: Test kịch bản: "John chưa gửi API spec như đã hứa" → notification xuất hiện đúng thời điểm.
+  - M1: Predicate "cần follow-up" trong State Evaluator.
+  - M2: System workflow tương ứng trong bộ mặc định (4.0 M4).
+  - M3: Nội dung follow-up soạn sẵn (draft), không tự gửi — cấp độ "Ask Approval".
+  - M4: Test: "John chưa gửi API spec như đã hứa" → thông báo xuất hiện đúng thời điểm, không lặp lại mỗi ngày.
 
 ---
 
 ### 6.8 — Risk Detection (Goal/Task/Deadline)
 
-- **Mục tiêu:** Phát hiện sớm nguy cơ trễ deadline của Goal, trước khi quá muộn để xử lý.
-- **Mô tả:** Kết hợp Goal progress (2.2) + Task overdue + Dependency (nếu có) → tính risk score deterministic trước, chỉ dùng AI reasoning (6.4) khi cần giải thích lý do phức tạp.
+- **Mục tiêu:** Phát hiện sớm nguy cơ trễ deadline của Goal.
+- **Mô tả:** Goal progress (2.2) + task overdue + dependency → risk score deterministic, chỉ dùng AI khi cần giải thích phức tạp.
+- **Ghi chú Bản 2:** risk score là **action** (`action.compute_risk_score`, theo 4.4), không phải graph. `goal.at_risk` do State Evaluator phát (4.6).
 - **Milestones:**
-  - M1: Công thức risk score đơn giản (progress vs. thời gian còn lại vs. tốc độ hoàn thành trung bình).
-  - M2: Ngưỡng risk (low/medium/high) và rule tương ứng cho từng ngưỡng.
-  - M3: Notification "Goal này có nguy cơ trễ" kèm lý do cụ thể (không chung chung).
-  - M4: Test: goal có 60% progress, 14 ngày còn lại, đang bị block → hệ thống đánh dấu risk = high đúng như ví dụ trong roadmap gốc.
+  - M1: Công thức risk score (progress vs. thời gian còn lại vs. tốc độ hoàn thành) implement dưới dạng action có unit test.
+  - M2: Ngưỡng risk (low/medium/high) và system workflow tương ứng.
+  - M3: Thông báo "Goal này có nguy cơ trễ" kèm **lý do cụ thể**, không chung chung — đây là ví dụ chuẩn của decision support.
+  - M4: Test: goal 60% progress, 14 ngày còn lại, đang bị block → risk = high.
 
 ---
 
-### 6.9 — Feedback Loop (Học từ tương tác)
+### 6.9 — Feedback Loop
 
-- **Mục tiêu:** Proactive Engine phải học được recommendation nào hữu ích, tránh lặp lại sai lầm gây notification fatigue.
-- **Mô tả:** Ghi lại phản hồi của user với mỗi proactive action (accepted/dismissed/ignored), dùng số liệu này để điều chỉnh ngưỡng importance/confidence theo thời gian (bắt đầu bằng rule đơn giản, chưa cần ML phức tạp).
+- **Mục tiêu:** Gate học được thứ gì hữu ích, tránh lặp lại sai lầm gây notification fatigue.
+- **Ghi chú Bản 2:** dữ liệu **đã có sẵn** trong `attention_log` (2.9) — không cần xây lại kho lưu trữ, chỉ cần phần đọc và điều chỉnh.
 - **Milestones:**
-  - M1: Ghi nhận trạng thái phản hồi cho mỗi proactive notification (accepted/dismissed/ignored/no-response).
-  - M2: Dashboard nội bộ xem tỷ lệ chấp nhận theo loại proactive action.
-  - M3: Rule điều chỉnh đơn giản: nếu một loại action bị dismiss liên tục > N lần, tự động hạ cấp độ (từ "Ask" xuống "Inform" hoặc tắt hẳn cho loại đó).
-  - M4: Test: giả lập user dismiss liên tục 1 loại reminder → tần suất/cấp độ notification loại đó giảm.
+  - M1: Ghi `response` (accepted/dismissed/ignored/no_response) vào `attention_log` cho mọi lần surface.
+  - M2: Dashboard nội bộ: tỷ lệ chấp nhận theo loại, theo system workflow.
+  - M3: Rule điều chỉnh: một loại bị dismiss > N lần → tự hạ cấp (Ask → Inform → Silent). Nút "đừng nhắc kiểu này nữa" (4.5 M3) là đường tắt thủ công của cùng cơ chế.
+  - M4: Test: giả lập user dismiss liên tục 1 loại → tần suất/cấp độ giảm.
 
 ---
 
 # PHASE 7 — AI Cost Optimization
 
-**Thời lượng dự kiến:** 4–6 tuần (chạy song song xuyên suốt các phase khác)
-**Mục tiêu tổng:** Giảm 60–80% chi phí AI bằng cách route đúng tầng model cho đúng loại việc — hiện tại mọi request đều dùng model reasoning-class.
-**Điều kiện tiên quyết:** Phase 0 (0.8 token tracking), Phase 1 (1.8 Intent Detection).
-**Definition of Done:** Có model routing 4 tầng (L0–L3) hoạt động thật, đo được % request không cần LLM reasoning.
+**Thời lượng dự kiến:** 4–6 tuần (chạy song song xuyên suốt)
+**Mục tiêu tổng:** Giảm 60–80% chi phí AI bằng cách route đúng tầng model cho đúng loại việc.
+**Điều kiện tiên quyết:** Phase 0 (0.8), Phase 1 (1.8).
+**Definition of Done:** Model routing 4 tầng (L0–L3) hoạt động thật, đo được % request không cần LLM reasoning.
+
+**Ghi chú Bản 2:** kiến trúc mới **tự nó** giảm chi phí đáng kể — phần lớn detection giờ là workflow deterministic (0 token), và AI chỉ tham gia ở bước quyết định của Gate (6.4, mục tiêu < 30% candidate). Đo lại baseline sau Phase 4/6 trước khi kết luận cần tối ưu tiếp ở đâu.
 
 ---
 
 ### 7.1 — Model Routing Tiers (L0–L3)
 
-- **Mục tiêu:** Chính thức hoá 4 tầng xử lý đã mô tả trong Product Requirement mục 9, thay vì hiện tại mọi thứ đều đi qua model reasoning.
-- **Mô tả:** `ModelClient` mở rộng để hỗ trợ chọn tier: L0 (code thuần, không gọi model), L1 (parser/small model), L2 (fast LLM), L3 (reasoning — hiện tại). Mỗi loại request (chat, title gen, memory extraction, tool arg gen) được gán tier mặc định.
+- **Mục tiêu:** Chính thức hoá 4 tầng xử lý ở mục 9 Product Requirement.
+- **Mô tả:** `ModelClient` hỗ trợ chọn tier: L0 (code thuần), L1 (parser/small model), L2 (fast LLM), L3 (reasoning).
 - **Milestones:**
-  - M1: Định nghĩa tier cho từng loại request hiện có (dựa trên bảng phân tích trong report mục 8.4).
-  - M2: `ModelClient` hỗ trợ tham số tier khi gọi.
-  - M3: Title generation và memory extraction chuyển sang L1/L2 (không cần reasoning model).
-  - M4: Đo lại token cost trước/sau cho 2 loại request này (dùng tracking từ 0.8).
+  - M1: Định nghĩa tier cho từng loại request hiện có.
+  - M2: `ModelClient` hỗ trợ tham số tier.
+  - M3: Title generation và memory extraction chuyển sang L1/L2.
+  - M4: Đo lại token cost trước/sau (dùng 0.8).
 
 ---
 
-### 7.2 — Small Model Integration cho Intent Classification
+### 7.2 — Small Model cho Intent Classification
 
-- **Mục tiêu:** Hoàn thiện phần L1 của Intent Detection (đã bắt đầu ở 1.8) bằng model nhỏ thực sự thay vì chỉ rule-based.
-- **Mô tả:** Tích hợp một small/fast model (hoặc model nhỏ hơn trong cùng provider) chuyên cho phân loại intent, dùng trước khi fallback lên L2/L3.
+- **Mục tiêu:** Hoàn thiện phần L1 của Intent Detection bằng model nhỏ thực sự.
+- **Mô tả:** Tích hợp small/fast model chuyên phân loại intent, dùng trước khi fallback L2/L3.
 - **Milestones:**
-  - M1: Chọn model phù hợp cho tier L1 (đánh giá tốc độ/chi phí/độ chính xác).
-  - M2: Tích hợp vào Intent Detection layer, benchmark độ chính xác so với rule-based thuần.
-  - M3: Fallback logic: intent classification confidence thấp → lên L2/L3.
-  - M4: Đo % request được xử lý ở L1 mà không cần lên tầng cao hơn.
+  - M1: Chọn model phù hợp cho L1.
+  - M2: Tích hợp, benchmark so với rule-based thuần.
+  - M3: Fallback khi confidence thấp.
+  - M4: Đo % request xử lý ở L1.
 
 ---
 
 ### 7.3 — Deterministic Command Execution
 
-- **Mục tiêu:** Với các command có pattern rõ ràng (ví dụ "nhắc tôi 8h gọi John"), không cần LLM sinh tool call — parser đơn giản là đủ.
-- **Mô tả:** Regex/NLU pattern nhỏ cho các command phổ biến nhất (reminder, task create đơn giản), bỏ qua hoàn toàn LLM cho các trường hợp này (tier L0).
+- **Mục tiêu:** Command có pattern rõ ràng không cần LLM sinh tool call.
+- **Mô tả:** Parser nhỏ cho command phổ biến nhất, bỏ qua hoàn toàn LLM (tier L0).
 - **Milestones:**
-  - M1: Danh sách 5-10 pattern phổ biến nhất được xác định (dựa trên log sử dụng thực tế nếu có).
-  - M2: Parser L0 implement cho các pattern này, output trực tiếp thành Command (Phase 1).
-  - M3: Fallback lên L1/L2 nếu parser không match được pattern.
-  - M4: Đo % request reminder/task-create đơn giản được xử lý hoàn toàn không cần LLM.
+  - M1: 5–10 pattern phổ biến nhất (dựa trên log thực tế).
+  - M2: Parser L0 output trực tiếp thành Command.
+  - M3: Fallback L1/L2 khi không match.
+  - M4: Đo % request reminder/task-create đơn giản xử lý không cần LLM.
 
 ---
 
 ### 7.4 — Context Caching
 
-- **Mục tiêu:** Tránh gửi lại toàn bộ context giống nhau nhiều lần trong cùng phiên làm việc, giảm token input.
-- **Mô tả:** Cache kết quả `ContextService.build()` (từ 1.7) theo user_id + thời gian ngắn (vài phút), invalidate khi có event liên quan (note mới, schedule mới) xảy ra.
+- **Mục tiêu:** Tránh gửi lại context giống nhau nhiều lần trong cùng phiên.
+- **Mô tả:** Cache `ContextService.build()` theo user_id + thời gian ngắn, invalidate khi có event liên quan.
 - **Milestones:**
-  - M1: Cơ chế cache đơn giản dùng Redis, key theo user_id + context type.
-  - M2: Invalidation logic: cache bị xoá khi Event Bus phát event liên quan tới phần context đó.
-  - M3: Đo tỷ lệ cache hit trong một phiên chat thông thường.
-  - M4: Đo giảm token input trung bình mỗi request nhờ caching.
+  - M1: Cache Redis, key theo user_id + context type.
+  - M2: Invalidation khi Event Bus phát event liên quan.
+  - M3: Đo tỷ lệ cache hit.
+  - M4: Đo giảm token input trung bình mỗi request.
 
 ---
 
 ### 7.5 — Usage Analytics Dashboard
 
-- **Mục tiêu:** Có cái nhìn tổng thể về chi phí AI theo thời gian, theo feature, theo user — để biết tối ưu tiếp theo nên nhắm vào đâu.
-- **Mô tả:** Dashboard nội bộ (không cần fancy) tổng hợp dữ liệu từ token tracking (0.8): chi phí theo feature_type, theo tier (L0-L3), xu hướng theo thời gian.
+- **Mục tiêu:** Biết tối ưu tiếp theo nên nhắm vào đâu.
+- **Mô tả:** Dashboard nội bộ tổng hợp từ token tracking (0.8): chi phí theo feature_type, theo tier, theo thời gian.
 - **Milestones:**
-  - M1: Query tổng hợp token usage theo feature_type và theo tier.
-  - M2: Biểu đồ xu hướng chi phí theo ngày/tuần.
-  - M3: Cảnh báo khi một feature_type tăng đột biến chi phí bất thường.
-  - M4: Dashboard được dùng thực tế để ra quyết định tối ưu tiếp theo (ví dụ xác nhận L1 routing đã giảm chi phí đúng như kỳ vọng).
+  - M1: Query tổng hợp theo feature_type và tier.
+  - M2: Biểu đồ xu hướng theo ngày/tuần.
+  - M3: Cảnh báo khi một feature_type tăng đột biến.
+  - M4: Dashboard được dùng thực tế để ra quyết định tối ưu.
 
 ---
 
@@ -729,26 +1021,52 @@ Phase 0 (Foundation)
    └── điều kiện của tất cả các phase sau
 
 Phase 1 (Intent & Event Bus)
-   ├── Phase 2 (Goals & Commitments)
-   ├── Phase 4 (Workflow Integration)
-   └── Phase 5 (External Context)
+   ├── 1.9  Event Vocabulary  ─┐
+   └── 1.10 Durable Consumer  ─┴─→ CHẶN CỨNG cho 2.2, 3.4, 4.x, 6.x
 
 Phase 2 (Goals & Commitments)
-   ├── Phase 3 (Planning & Scheduling)
-   └── Phase 6 (Proactive Assistant)
+   ├── 2.9 attention_log ──────→ điều kiện của 6.1 và 6.9
+   ├── Phase 3 (Planning)
+   └── Phase 6 (Attention Gate)
 
-Phase 3 → Phase 6
-Phase 4 → Phase 6
-Phase 5 → Phase 6 (khuyến khích, không bắt buộc 100%)
+Phase 4 (Workflow = Detection Engine)
+   ├── 4.0 System Workflow Reference ──→ điều kiện của mọi hành vi built-in
+   ├── 4.3 request_attention ──────────→ điều kiện của 6.1
+   └── 4.6 State Evaluator ────────────→ điều kiện của 3.4, 6.7, 6.8
 
-Phase 7 (AI Cost Optimization) — chạy song song xuyên suốt mọi phase
+Phase 5 (External Context) → Phase 6 (khuyến khích, không bắt buộc)
+
+Phase 6 (Attention Gate) — phụ thuộc 2.9, 4.3, 4.6, và 3.x để có nội dung đáng nói
+
+Phase 7 (AI Cost) — chạy song song xuyên suốt
 ```
 
-**Critical path:** Phase 0 → Phase 1 → Phase 2 → Phase 6
-**Có thể làm song song:** Phase 3, Phase 4, Phase 5 (sau khi Phase 1–2 xong), và Phase 7 xuyên suốt.
+**Critical path:** Phase 0 → Phase 1 (**gồm 1.9, 1.10**) → Phase 2 → Phase 4 → Phase 6
+**Có thể song song:** Phase 3 và Phase 5 (sau Phase 2), Phase 7 xuyên suốt.
+
+**Thay đổi critical path so với Bản 1:** Bản 1 đi `Phase 0 → 1 → 2 → 6`, coi Phase 4 là nhánh phụ. Bản 2 đưa **Phase 4 vào critical path**, vì Workflow Engine giờ là cơ chế detection duy nhất — Phase 6 không có nguyên liệu nếu Phase 4 chưa xong.
+
+---
+
+# Thứ Tự Thực Thi Đề Xuất
+
+Bốn việc dưới đây nên làm **trước tiên**, không theo thứ tự phase, vì làm muộn thì đắt hơn nhiều:
+
+| # | Việc | Vì sao phải sớm |
+|---|---|---|
+| 1 | **1.9** Event vocabulary chung | Hai list đã lệch. Càng nhiều event càng khó gộp |
+| 2 | **1.10** Durable consumer | Chặn cứng — thiếu nó thì 2.2, 3.4, 6.x đều không chạy, và **không báo lỗi** |
+| 3 | **6.1 M1 + 4.3** Gate stub + `request_attention` | Khi đã có 3 nơi ghi thẳng notification thì retrofit rất đau. Gate ban đầu chỉ cần cho qua hết |
+| 4 | **4.0 M2** Lọc workflow trong SQL | Cần làm bất kể chọn hướng nào. Hiện load toàn bộ workflow ACTIVE mỗi event |
+
+**Chưa cần làm sớm:** thư viện template, trigger UI, marketplace, phần lớn Phase 5. Những cái đó đứng *trên* 4 mục trên nên xây sau vẫn rẻ.
 
 ---
 
 # Cách Dùng Tài Liệu Này Cho Backlog
 
-Mỗi hạng mục (ví dụ "1.5 — Command Registry") có thể trở thành một **Epic** trong công cụ quản lý dự án; mỗi Milestone (M1–M4) trở thành một **Story/Task** có thể assign và track riêng. Định dạng Milestone được viết theo kiểu "có thể verify" (không phải "đã code xong") để tránh tình trạng một hạng mục bị đánh dấu "done" khi thực chất chưa hoạt động đúng end-to-end.
+- Mỗi **hạng mục** (ví dụ 4.0, 6.1) = một Epic.
+- Mỗi **Milestone** = một Story có thể verify độc lập.
+- Mục **Mục tiêu** là tiêu chí nghiệm thu — nếu code xong mà mục tiêu chưa đạt thì chưa done.
+- Hạng mục đánh 🆕 là mới ở Bản 2; đánh ✅ là đã có implementation trong codebase; đánh `[ĐÃ BỎ]` giữ lại để không mất tham chiếu.
+- Khi một thiết kế mâu thuẫn với **P1–P4** hoặc **ba ranh giới**, sửa thiết kế trước khi viết code.

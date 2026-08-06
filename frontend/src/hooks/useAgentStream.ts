@@ -4,6 +4,11 @@ import { streamAgentMessage, listConversations, getConversation, revertAction, A
 import { useConversationStore } from '../stores/conversationStore'
 import { knowledgeRoute, noteRoute, scheduleRoute } from '../services/routes'
 
+// Stable ids for the step currently being streamed into, so it can be replaced
+// on every delta and swapped out when the segment is finalized.
+const LIVE_TEXT_ID = 'text-live'
+const LIVE_THINKING_ID = 'thinking-live'
+
 const DISMISSED_KEY = 'cortex_dismissed_actions'
 const MODEL_KEY = 'cortex_chat_model'
 const STORAGE_KEY = 'cortex_chatbot_state'
@@ -657,6 +662,8 @@ export function useAgentStream(options: UseAgentStreamOptions) {
                 }
             }
 
+            // Flushing replaces the live placeholder instead of appending next to
+            // it — otherwise the same text ends up in the list twice.
             const flushPendingText = () => {
                 if (!currentTextText) return
                 const textStep = {
@@ -664,7 +671,7 @@ export function useAgentStream(options: UseAgentStreamOptions) {
                     type: 'text' as const,
                     text: currentTextText,
                 }
-                thinkingSteps = [...thinkingSteps, textStep]
+                thinkingSteps = [...thinkingSteps.filter(s => s.id !== LIVE_TEXT_ID), textStep]
                 currentTextText = ''
             }
 
@@ -675,7 +682,7 @@ export function useAgentStream(options: UseAgentStreamOptions) {
                     type: 'thinking' as const,
                     text: currentThinkingText,
                 }
-                thinkingSteps = [...thinkingSteps, thinkingStep]
+                thinkingSteps = [...thinkingSteps.filter(s => s.id !== LIVE_THINKING_ID), thinkingStep]
                 currentThinkingText = ''
             }
 
@@ -700,9 +707,11 @@ export function useAgentStream(options: UseAgentStreamOptions) {
             )) {
                 if (event.type === 'text' && event.text) {
                     currentTextText += event.text
-                    const stepsWithoutTrailingText = thinkingSteps.filter(s => s.type !== 'text')
+                    // Only the live placeholder is replaced; segments already
+                    // flushed before a tool call must stay in the list.
+                    const stepsWithoutTrailingText = thinkingSteps.filter(s => s.id !== LIVE_TEXT_ID)
                     const newTextStep = {
-                        id: 'text-live',
+                        id: LIVE_TEXT_ID,
                         type: 'text' as const,
                         text: currentTextText,
                     }
@@ -715,9 +724,9 @@ export function useAgentStream(options: UseAgentStreamOptions) {
                     )
                 } else if (event.type === 'thinking' && event.text) {
                     currentThinkingText += event.text
-                    const stepsWithoutTrailingThinking = thinkingSteps.filter(s => s.type !== 'thinking')
+                    const stepsWithoutTrailingThinking = thinkingSteps.filter(s => s.id !== LIVE_THINKING_ID)
                     const newThinkingStep = {
-                        id: 'thinking-live',
+                        id: LIVE_THINKING_ID,
                         type: 'thinking' as const,
                         text: currentThinkingText,
                     }

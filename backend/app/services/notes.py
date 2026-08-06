@@ -7,12 +7,18 @@ import bleach
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import SessionLocal
+from app.events.event_bus import get_event_bus
+from app.events.payloads import NoteCreatedPayload, NoteDeletedPayload, NoteUpdatedPayload
+from app.events.schemas import EventEnvelope
 from app.models import Note
 from app.repositories.notes import NoteRepository
 from app.schemas import NoteCreate, NotePatchRequest, NoteResponse, NoteSummary, NoteUpdate
 from app.services.markdown_config import build_markdown_renderer
 from app.services.workspace_permission import WorkspacePermission
+from app.utils.logger import get_logger
 from app.utils.note_delta import apply_text_patch, build_text_patch
+
+logger = get_logger(__name__)
 
 PATCH_COMPACTION_THRESHOLD = 20
 
@@ -48,6 +54,26 @@ class NoteService:
         self.repository = NoteRepository(session)
         # Mirror of frontend/src/utils/markdown/config.ts — keep in sync.
         self.markdown = build_markdown_renderer()
+        self._event_bus = None  # Lazy init, avoids connecting to Redis unless needed
+
+    async def _get_event_bus(self):
+        if self._event_bus is None:
+            self._event_bus = await get_event_bus()
+        return self._event_bus
+
+    async def _publish_event(self, event_type: str, user_id: UUID, workspace_id: UUID | None, payload: dict) -> None:
+        """Publish a note.* event. Never raises — a broken EventBus must not break note mutations."""
+        try:
+            bus = await self._get_event_bus()
+            await bus.publish(EventEnvelope(
+                type=event_type,
+                source="NoteService",
+                user_id=user_id,
+                workspace_id=workspace_id,
+                payload=payload,
+            ))
+        except Exception as exc:
+            logger.warning(f"Failed to publish {event_type} event: {exc}")
 
     async def create_note(self, payload: NoteCreate, user_id: UUID) -> Note:
         # Check user has write permission in the workspace
@@ -80,10 +106,23 @@ class NoteService:
         try:
             created = await self.repository.create(note)
             await self.session.commit()
-            return created
         except Exception:
             await self.session.rollback()
             raise
+
+        await self._publish_event(
+            "note.created",
+            user_id=user_id,
+            workspace_id=created.workspace_id,
+            payload=NoteCreatedPayload(
+                note_id=created.id,
+                workspace_id=created.workspace_id,
+                title=created.title,
+                parent_note_id=created.parent_note_id,
+                content_type=created.content_type,
+            ).model_dump(),
+        )
+        return created
 
     async def get_notes(self, user_id: UUID) -> list[Note]:
         notes = await self.repository.list_active_by_user(user_id)
@@ -126,6 +165,17 @@ class NoteService:
                 updates=normalized_updates,
             )
             await self.session.commit()
+            if updated is not None:
+                await self._publish_event(
+                    "note.updated",
+                    user_id=user_id,
+                    workspace_id=updated.workspace_id,
+                    payload=NoteUpdatedPayload(
+                        note_id=updated.id,
+                        version=updated.version,
+                        fields_changed=list(update_payload.keys()),
+                    ).model_dump(),
+                )
             return updated
 
         current_content = await self._materialize_note_content(current_note)
@@ -160,7 +210,20 @@ class NoteService:
                 await self._compact_checkpoint(note_id=note_id, user_id=user_id, full_content=content, version=new_version)
 
         await self.session.commit()
-        return await self.repository.get_active_by_id_and_user(note_id, user_id)
+        final_note = await self.repository.get_active_by_id_and_user(note_id, user_id)
+        if final_note is not None:
+            fields_changed = list(payload.model_dump(exclude_unset=True, exclude={"version"}).keys())
+            await self._publish_event(
+                "note.updated",
+                user_id=user_id,
+                workspace_id=final_note.workspace_id,
+                payload=NoteUpdatedPayload(
+                    note_id=final_note.id,
+                    version=final_note.version,
+                    fields_changed=fields_changed,
+                ).model_dump(),
+            )
+        return final_note
 
     async def patch_note(self, note_id: UUID, user_id: UUID, payload: NotePatchRequest) -> Note | None:
         current_note = await self.repository.get_active_by_id_and_user(note_id, user_id)
@@ -205,14 +268,31 @@ class NoteService:
 
 
         await self.session.commit()
-        return await self.repository.get_active_by_id_and_user(note_id, user_id)
+        final_note = await self.repository.get_active_by_id_and_user(note_id, user_id)
+        if final_note is not None:
+            fields_changed = ["content"] if new_content != current_content else []
+            fields_changed += [k for k in ("position", "size", "style") if k in metadata_updates]
+            await self._publish_event(
+                "note.updated",
+                user_id=user_id,
+                workspace_id=final_note.workspace_id,
+                payload=NoteUpdatedPayload(
+                    note_id=final_note.id,
+                    version=final_note.version,
+                    fields_changed=fields_changed,
+                ).model_dump(),
+            )
+        return final_note
 
     async def soft_delete(self, note_id: UUID, user_id: UUID) -> bool:
+        deleted_ids: list[UUID] = []
+        workspace_by_id: dict[UUID, UUID] = {}
         async with self.session.begin():
             notes = await self.repository.list_active_by_user(user_id)
             children_by_parent: dict[UUID | None, list[UUID]] = {}
             for note in notes:
                 children_by_parent.setdefault(note.parent_note_id, []).append(note.id)
+                workspace_by_id[note.id] = note.workspace_id
 
             to_delete: list[UUID] = []
             stack = [note_id]
@@ -227,8 +307,19 @@ class NoteService:
 
             deleted_any = False
             for target_id in to_delete:
-                deleted_any = await self.repository.soft_delete(target_id, user_id) or deleted_any
-            return deleted_any
+                if await self.repository.soft_delete(target_id, user_id):
+                    deleted_any = True
+                    deleted_ids.append(target_id)
+
+        for deleted_id in deleted_ids:
+            await self._publish_event(
+                "note.deleted",
+                user_id=user_id,
+                workspace_id=workspace_by_id.get(deleted_id),
+                payload=NoteDeletedPayload(note_id=deleted_id).model_dump(),
+            )
+
+        return deleted_any
 
     async def materialize_note_content(self, note: Note) -> str:
         return await self._materialize_note_content(note)

@@ -294,79 +294,55 @@ async def revert_action(
 ):
     """
     Revert a mutating action performed by the agent (undo).
-    
-    Uses the same revert logic as the revert_action tool, but callable
-    directly via REST API (no LLM needed).
-    
+
+    Uses the same revert logic as the revert_action tool (both call
+    CommandRegistry.revert_command() — see app/commands/registry.py), but
+    callable directly via REST API (no LLM needed).
+
     Args:
         action_id: UUID of the action to revert
-        
+
     Returns:
         Revert result with success status and message
-        
-    Raises:
-        HTTPException: 400 if revert fails
-    """
-    from app.ai.agents.action_snapshot_store import get_snapshot_store
-    from app.ai.tools.revert_action import (
-        _revert_create_note,
-        _revert_update_note,
-        _revert_create_schedule,
-        _revert_update_schedule,
-    )
-    from app.ai.agents.tool_context import ToolContext
 
-    store = get_snapshot_store()
-    user_id_str = str(current_user.id)
-    
-    snapshot = await store.get(user_id_str, action_id)
-    if snapshot is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Action '{action_id}' not found or expired.",
-        )
-    
-    if snapshot.reverted_at is not None:
-        from datetime import datetime, timezone
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Action already reverted at {datetime.fromtimestamp(snapshot.reverted_at, tz=timezone.utc).isoformat()}.",
-        )
-    
-    op = snapshot.snapshot.get("op")
+    Raises:
+        HTTPException: 404 if the action doesn't exist, 400 if revert fails
+    """
+    from app.ai.agents.tool_context import ToolContext
+    from app.commands.registry import get_command_registry
+
     ctx = ToolContext(user_id=current_user.id, async_db=db)
-    
-    try:
-        if op == "create_note":
-            result = await _revert_create_note(snapshot.snapshot, ctx)
-        elif op == "update_note":
-            result = await _revert_update_note(snapshot.snapshot, ctx)
-        elif op == "create_schedule":
-            result = await _revert_create_schedule(snapshot.snapshot, ctx)
-        elif op == "update_schedule":
-            result = await _revert_update_schedule(snapshot.snapshot, ctx)
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Unsupported revert operation: '{op}'.",
-            )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Revert failed: {str(exc)}",
+    result = await get_command_registry().revert_command(action_id, ctx)
+
+    if not result.success:
+        status_code = (
+            status.HTTP_404_NOT_FOUND
+            if result.error and "not found" in result.error.lower()
+            else status.HTTP_400_BAD_REQUEST
         )
-    
-    await store.mark_reverted(user_id_str, snapshot.action_id)
-    
+        raise HTTPException(status_code=status_code, detail=result.error)
+
     return {
         "success": True,
-        "action_id": snapshot.action_id,
-        "tool_name": snapshot.tool_name,
-        "op": op,
-        "message": result.get("message", f"Reverted {op} successfully"),
+        "action_id": action_id,
+        "message": f"Action {action_id} reverted successfully",
     }
+
+
+@router.get("/intent-stats")
+async def get_intent_stats(
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    L1 (rule-based) intent detection hit-rate stats (Milestone 1.8).
+
+    In-process counters only — not persisted, resets on restart. Exists to
+    make the L1-vs-L2 tradeoff measurable before any L2 (LLM-based) tier is
+    scoped (Phase 7).
+    """
+    from app.intents.intent_service import get_intent_service
+
+    return get_intent_service().get_stats()
 
 
 @router.delete("/conversations/{conversation_id}")

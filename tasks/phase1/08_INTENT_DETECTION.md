@@ -819,3 +819,36 @@ All 8 milestones finished:
 - ✅ 1.8: Intent Detection Layer
 
 **Next:** Phase 2 - Goals & Commitments
+
+---
+
+## Status: hoàn thành 2026-08-06
+
+Đã triển khai đầy đủ, có test thật, tích hợp thật vào `AgentService`. Các điểm khác với bản kế hoạch gốc:
+
+1. **`IntentType` bám theo tool/command thật, không phải danh mục tưởng tượng.** Bỏ `NOTE_DELETE`, `SCHEDULE_DELETE`, `REMINDER_CREATE` khỏi enum — không có AI tool nào expose delete (xem 06_TOOL_MIGRATION.md), và reminder trong codebase thực tế chỉ là `schedule.create` với reminder config, không phải command riêng. Một pattern cho intent không thể tới được sẽ chỉ là noise không test được.
+
+2. **Bilingual EN + Vietnamese ngay từ đầu**, không phải extension sau này. Chuỗi tool-facing thực tế trong codebase (`revert_action.py`, v.v.) là tiếng Việt — một lớp L1 chỉ tiếng Anh sẽ hầu như không bao giờ khớp traffic thật, khiến cả milestone thành dead weight. Mỗi `IntentPattern` có cả pattern EN và VI.
+
+3. **`_INTENT_TO_COMMAND` chỉ map các intent thực sự đi qua `CommandRegistry.execute()`** (`note.create`, `note.update`, `schedule.create`, `schedule.update`). `NOTE_SEARCH`/`SCHEDULE_QUERY`/`KNOWLEDGE_SEARCH`/`WEB_SEARCH`/`HELP` không phải CommandRegistry command (đều là read-only tool calls). `ACTION_REVERT` cố tình KHÔNG map — revert đi qua `CommandRegistry.revert_command(action_id, ctx)` trực tiếp, không qua `execute()`/command_name dispatch (xem Milestone 1.6).
+
+4. **`IntentDetectionService.detect()` không phải async, không nhận `context` param** như bản kế hoạch gốc — rule-based matching là CPU-bound thuần túy, không có I/O, nên `async def` chỉ thêm overhead giả. Method trả về `DetectedIntent` luôn (không bao giờ `None`) để caller (`AgentService`) không cần xử lý `Optional` — khác với `RuleBasedDetector.detect()` (trả `None` khi không khớp).
+
+5. **Tích hợp vào `AgentService` tối giản, an toàn**: thêm `_detect_intent(message) -> str | None` (wrap trong try/except, không bao giờ raise), gọi từ `_build_context_string()` — vốn đã có sẵn tham số `intent` cho `ContextService.build_context()` từ Milestone 1.7. Không có routing logic mới, không đổi hành vi tool-calling loop hiện tại — intent detection thuần túy chỉ sharpen bộ lọc relevance của ContextService và tăng số liệu thống kê.
+
+6. **`GET /agent/intent-stats`** trả trực tiếp dict stats (không bọc thêm `{"stats": ..., "message": ...}` như bản kế hoạch gốc) — nhất quán với style response phẳng của các endpoint khác trong `agent.py`.
+
+7. Đã sửa 3 lỗi regex phát hiện qua test câu thật (EN + VI), không có trong kế hoạch gốc:
+   - "remind me to X tomorrow" (không có preposition trước time) — thêm pattern riêng cho bare relative-day.
+   - "what is on my schedule" (dạng đầy đủ, không phải "what's") — mở rộng alternation `(?:'s| is)`.
+   - "lịch của tôi hôm nay có gì?" — tách timeframe và suffix "có gì"/"là gì" thành hai optional group riêng thay vì một alternation gộp.
+
+**Tests:**
+- `backend/tests/unit/test_intent_schemas.py` (5 tests) — pydantic model validation.
+- `backend/tests/unit/test_rule_detector.py` (80 tests) — mọi `IntentType`, cả EN lẫn VI, positive + negative cases, confidence/requires_confirmation wiring.
+- `backend/tests/unit/test_intent_service.py` (9 tests) — L1 hit/fallback tracking, stats snapshot, singleton reset.
+- `backend/tests/unit/test_agent_intent_integration.py` (4 tests) — `AgentService._detect_intent()` qua `AgentService.__new__()` (không cần DB session/LLM thật, cùng pattern với test Milestone 1.7).
+
+Full regression (`tests/unit` + `tests/integration`): 257 passed, 0 failed (10 lỗi collection ở root `tests/*.py` là do các file test cũ, tiền-tồn-tại tham chiếu module đã xóa từ trước — không liên quan Milestone 1.8, không phải regression mới).
+
+**Phase 1 hoàn thành toàn bộ 8 milestone.**

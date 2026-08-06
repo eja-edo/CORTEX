@@ -8,15 +8,21 @@
 
 ## 🎯 Mục tiêu
 
-Mở rộng Redis Streams infrastructure thành Event Bus tập trung với:
+Xây Event Bus tập trung với:
 - Unified publish API
 - Pattern-based routing (wildcard support)
-- Multiple subscribers per event type
+- Multiple subscribers per event type (cả trong-process lẫn cross-process)
 - Dead-letter queue cho failed events
 - Retry logic với exponential backoff
 - Event replay capability
 
-**Không xây từ đầu:** Extend existing `RedisStreamService` thay vì rewrite.
+**⚠️ Điều chỉnh 2026-08-06 (đối chiếu codebase thật):** Bản gốc plan giả định "extend `RedisStreamService` thay vì rewrite". Sau khi đọc code thật (`backend/app/services/redis/redis_stream_service.py`), điều này **không khả thi**: `RedisStreamService` là một task-queue kiểu Celery (`Generic[T]`, bắt buộc `task_class` implement `StreamTaskProtocol`, 1 consumer-group cố định mỗi instance, model pull qua `XREADGROUP` + heartbeat/XCLAIM để recover worker chết). Nó không có `add_message()`/`publish()`, và không hỗ trợ nhiều subscriber độc lập cùng nhận 1 event (fan-out) — đúng nghĩa hàng đợi task point-to-point, không phải event bus.
+
+**Thiết kế lại:** EventBus dùng `redis.asyncio` **trực tiếp** (không qua `RedisStreamService`) với 2 tầng:
+1. **Persistence/cross-process fan-out:** `XADD` vào stream `events:{event.type}` — bất kỳ process nào (kể cả `workflow_service`, xem Task 1.2.4 mới) đều có thể mở consumer-group riêng để đọc.
+2. **In-process fan-out (fast path):** ngay sau khi `XADD` thành công, `publish()` gọi luôn `route_event()` để các subscriber đăng ký trong cùng process (`bus.subscribe(...)`) nhận event ngay lập tức — không cần chờ một consumer loop đọc lại từ stream. (Bản code gốc bên dưới có gap này: `publish()` chỉ ghi vào stream, không có gì tự động gọi `route_event()` — test phải gọi tay. Đã sửa trong code mẫu bên dưới.)
+
+Đồng thời, quyết định kiến trúc: EventBus mới sẽ **thay thế hoàn toàn** kênh Pub/Sub cũ `cortex:workflow:events` (`backend/app/services/redis/workflow_event_publisher.py`) mà `workflow_service` đang chờ sẵn (hiện chưa ai gọi `publish_workflow_event()`). Task 1.2.4 (mới) sẽ viết lại `workflow_service/app/triggers/internal_event_listener.py` để tiêu thụ trực tiếp từ Streams `events:*` thay vì Pub/Sub.
 
 ---
 
@@ -34,10 +40,13 @@ Built on top of Redis Streams for persistence and replay capability.
 """
 
 import asyncio
+import json
 from typing import Callable, Optional, Any
 from datetime import datetime
 
-from app.services.redis.redis_stream_service import RedisStreamService
+import redis.asyncio as aioredis
+
+from app.config import settings
 from app.events.schemas import EventEnvelope
 from app.utils.logger import get_logger
 
@@ -47,17 +56,25 @@ logger = get_logger(__name__)
 class EventBus:
     """
     Unified Event Bus using Redis Streams as backend.
-    
+
+    KHÔNG dùng `RedisStreamService` (class đó là task-queue 1-consumer-group/
+    instance, không hỗ trợ multi-subscriber fan-out) — dùng `redis.asyncio`
+    trực tiếp.
+
     Features:
     - Publish events with envelope validation
-    - Subscribe to event patterns (e.g., "schedule.*")
+    - Subscribe to event patterns (e.g., "schedule.*") — in-process fast path
     - Multiple subscribers per event type
     - Dead-letter queue for failed events
     - Event replay capability
     - Async processing with error isolation
-    
+    - Persisted vào Redis Stream để cross-process consumer (vd `workflow_service`,
+      xem Task 1.2.4) tự mở consumer-group riêng mà đọc lại/replay
+
     Architecture:
-      Publisher → EventBus → Redis Stream → Router → Subscribers
+      Publisher → EventBus.publish()
+                    ├─ XADD vào Redis Stream events:{type} (persistence + cross-process)
+                    └─ route_event() ngay lập tức (in-process fast path)
                                               ↓ (on error)
                                          Dead Letter Queue
     """
@@ -67,37 +84,35 @@ class EventBus:
     MAX_RETRIES = 3
     RETRY_DELAYS = [1, 5, 15]  # seconds
     
-    def __init__(self, redis_stream: Optional[RedisStreamService] = None):
+    def __init__(self, redis_client: Optional[aioredis.Redis] = None):
         """
         Initialize EventBus.
-        
+
         Args:
-            redis_stream: Optional RedisStreamService instance (for DI/testing)
+            redis_client: Optional redis.asyncio.Redis instance (for DI/testing)
         """
-        self._stream = redis_stream
+        self._redis = redis_client
         self._subscribers: dict[str, list[Callable]] = {}
         self._running = False
     
     async def connect(self):
         """Initialize Redis connection."""
-        if self._stream is None:
-            # Lazy init - will use default RedisStreamService
-            from app.services.redis.redis_stream_service import create_stream_service
-            self._stream = await create_stream_service()
-        
-        await self._stream.connect()
-        logger.info("EventBus connected to Redis Streams")
+        if self._redis is None:
+            self._redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        await self._redis.ping()
+        logger.info("EventBus connected to Redis")
     
     async def disconnect(self):
         """Close Redis connection."""
-        if self._stream:
-            await self._stream.disconnect()
+        if self._redis:
+            await self._redis.close()
         logger.info("EventBus disconnected")
     
     async def publish(self, event: EventEnvelope) -> str:
         """
-        Publish event to bus.
-        
+        Publish event to bus: ghi vào Redis Stream (persistence + cross-process
+        fan-out) rồi route ngay cho subscriber trong cùng process.
+
         Args:
             event: EventEnvelope with type, source, payload, etc.
         
@@ -119,9 +134,11 @@ class EventBus:
         stream_key = f"{self.STREAM_PREFIX}{event.type}"
         
         try:
-            message_id = await self._stream.add_message(
-                stream_key=stream_key,
-                data=event_dict
+            message_id = await self._redis.xadd(
+                stream_key,
+                {"data": json.dumps(event_dict)},
+                maxlen=100_000,
+                approximate=True,
             )
             
             logger.info(
@@ -135,7 +152,12 @@ class EventBus:
                     "message_id": message_id
                 }
             )
-            
+
+            # In-process fast path: route ngay cho subscriber cùng process.
+            # (Cross-process subscriber, vd workflow_service, tự đọc lại
+            # stream_key qua consumer-group riêng — xem Task 1.2.4)
+            await self.route_event(event)
+
             return event.event_id
         
         except Exception as exc:
@@ -310,9 +332,9 @@ class EventBus:
         }
         
         try:
-            await self._stream.add_message(
-                stream_key=self.DLQ_STREAM,
-                data=dlq_data
+            await self._redis.xadd(
+                self.DLQ_STREAM,
+                {"data": json.dumps(dlq_data)},
             )
             
             logger.warning(
@@ -810,17 +832,111 @@ async def test_concurrent_publishers():
 
 ---
 
+### Task 1.2.4 (MỚI): Rewrite `workflow_service` internal event listener
+
+**Bối cảnh:** `workflow_service/app/triggers/internal_event_listener.py` hiện subscribe qua Redis Pub/Sub channel `cortex:workflow:events` (raw dict `{"event": ..., **data}`), publish bởi `backend/app/services/redis/workflow_event_publisher.py::publish_workflow_event()` — hàm này **hiện chưa được gọi ở đâu cả**. Theo quyết định thay thế hoàn toàn (không dual-publish), khi Milestone 1.3 bắt đầu emit event thật từ `NoteService`/`ScheduleService` qua `EventBus` mới, `workflow_service` phải đọc từ **Redis Stream** (`events:{type}`) thay vì Pub/Sub, nếu không Workflow Runtime sẽ im lặng ngừng nhận event vĩnh viễn.
+
+**Output:** `workflow_service/app/triggers/internal_event_listener.py` (viết lại)
+
+```python
+import asyncio
+import json
+import redis.asyncio as aioredis
+from sqlalchemy import select
+
+from app.config import settings
+from app.models.workflow import WorkflowDefinition, WorkflowStatus, TriggerType
+from app.database import AsyncSessionLocal
+
+STREAM_PREFIX = "events:"
+CONSUMER_GROUP = "workflow_service"
+
+SUPPORTED_EVENTS = [
+    "note.created",
+    "note.updated",
+    "note.deleted",
+    "schedule.created",
+    "schedule.updated",
+    "schedule.completed",
+    "asset.uploaded",
+    "asset.processed",
+]
+
+
+async def start_internal_event_listener():
+    """
+    Đọc từ các Redis Stream events:{type} qua consumer-group riêng
+    ("workflow_service") — không còn phụ thuộc vào Pub/Sub cortex:workflow:events.
+    Mỗi stream cần XGROUP CREATE trước (idempotent, MKSTREAM=True).
+    """
+    redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+
+    for event_type in SUPPORTED_EVENTS:
+        stream_key = f"{STREAM_PREFIX}{event_type}"
+        try:
+            await redis.xgroup_create(stream_key, CONSUMER_GROUP, id="0", mkstream=True)
+        except Exception as e:
+            if "BUSYGROUP" not in str(e):
+                raise
+
+    print(f"[TriggerEngine] Listening on Redis Streams: {SUPPORTED_EVENTS}")
+
+    while True:
+        try:
+            streams = {f"{STREAM_PREFIX}{t}": ">" for t in SUPPORTED_EVENTS}
+            result = await redis.xreadgroup(
+                groupname=CONSUMER_GROUP,
+                consumername="listener-1",
+                streams=streams,
+                count=10,
+                block=5000,
+            )
+            for stream_key, messages in result or []:
+                event_type = stream_key.removeprefix(STREAM_PREFIX)
+                for message_id, fields in messages:
+                    try:
+                        envelope = json.loads(fields["data"])
+                        await _handle_event(event_type, envelope.get("payload", {}) | {
+                            "user_id": envelope.get("user_id"),
+                        })
+                    except Exception as e:
+                        print(f"[TriggerEngine] Error handling event: {e}")
+                    finally:
+                        await redis.xack(stream_key, CONSUMER_GROUP, message_id)
+        except Exception as e:
+            print(f"[TriggerEngine] Listener loop error: {e}")
+            await asyncio.sleep(1)
+
+
+async def _handle_event(event_type: str, event_data: dict):
+    # Giữ nguyên logic cũ — xem app/triggers/internal_event_listener.py hiện tại
+    ...
+```
+
+**Checklist:**
+- [ ] Đổi transport từ Pub/Sub sang Streams (`XGROUP CREATE` + `XREADGROUP` + `XACK`) với consumer-group riêng `workflow_service`
+- [ ] Payload format đổi từ flat dict sang `EventEnvelope.payload` — cập nhật `_matches_filters()` và `_trigger_workflow_instance()` cho khớp field mới
+- [ ] Xoá/deprecate `backend/app/services/redis/workflow_event_publisher.py` sau khi xác nhận không còn nơi nào định dùng
+- [ ] Test end-to-end: publish `note.created` qua `EventBus` mới → xác nhận workflow có trigger config tương ứng được kích hoạt qua Temporal
+- [ ] Deploy/restart `workflow_service` đồng bộ với thời điểm Milestone 1.3 bắt đầu emit event thật (tránh cửa sổ mất event)
+
+---
+
 ## ✅ Milestone 1.2 Definition of Done
 
-- [ ] EventBus implementation complete với publish/subscribe
-- [ ] Pattern matching works (exact + wildcard)
-- [ ] Retry logic với exponential backoff
-- [ ] Dead-letter queue implementation
-- [ ] Error isolation working
-- [ ] Integration tests pass
-- [ ] Load tests pass (< 100ms latency)
-- [ ] Global singleton pattern
-- [ ] Documentation complete
+- [x] EventBus implementation complete với publish/subscribe — `backend/app/events/event_bus.py` (dùng `redis.asyncio` trực tiếp, không qua `RedisStreamService`)
+- [x] Pattern matching works (exact + wildcard)
+- [x] Retry logic với exponential backoff
+- [x] Dead-letter queue implementation
+- [x] Error isolation working
+- [x] Integration tests pass — `backend/tests/integration/test_event_bus.py` (13 tests, chạy với Redis thật `cortex-redis`)
+- [x] Load tests pass (< 100ms latency) — `backend/tests/load/test_event_bus_load.py`: ~0.42ms avg latency thực đo, 1000 events
+- [x] Global singleton pattern
+- [x] Documentation complete
+- [x] `workflow_service` internal event listener migrated sang Streams (Task 1.2.4), verified end-to-end — `workflow_service/app/triggers/internal_event_listener.py` viết lại, test `workflow_service/tests/test_internal_event_listener.py` xác nhận: tạo workflow internal_event thật qua API → activate → publish event vào Stream mới → listener nhận & match đúng workflow (Temporal execution được mock để không tạo Note thật trong lúc test)
+- [x] `backend/app/services/redis/workflow_event_publisher.py` đã xoá (0 caller, thay thế hoàn toàn bởi EventBus)
+
+**Status: hoàn thành 2026-08-06**
 
 ---
 

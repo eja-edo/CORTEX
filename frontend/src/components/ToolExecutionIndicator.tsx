@@ -1,17 +1,32 @@
 import { type AgentMessage, toolSemanticDescription, toolResultSummary } from '../hooks/useAgentStream'
 
+type Step = NonNullable<AgentMessage['thinkingSteps']>[number]
+
 interface ToolExecutionIndicatorProps {
     msg: AgentMessage
     onToggleThinking: (messageId: string) => void
 }
 
+function dotTone(step: Step, isLast: boolean, loading: boolean): string {
+    if (step.type === 'tool_result') {
+        return step.success === false ? 'error' : 'success'
+    }
+    if (isLast && loading) return 'active'
+    return 'muted'
+}
+
 export function ToolExecutionIndicator({ msg, onToggleThinking }: ToolExecutionIndicatorProps) {
+    const steps = msg.thinkingSteps ?? []
+    const timelineSteps = steps.filter(s => s.type !== 'text')
+
     return (
         <div className="ask-ai-thinking-container">
-            <div className="ask-ai-thinking">
-                <span /><span /><span />
-            </div>
-            {msg.thinkingSteps && msg.thinkingSteps.length > 0 && (
+            {timelineSteps.length === 0 && (
+                <div className="ask-ai-thinking">
+                    <span /><span /><span />
+                </div>
+            )}
+            {timelineSteps.length > 0 && (
                 <div className="ask-ai-thinking-wrapper">
                     <button
                         type="button"
@@ -24,20 +39,18 @@ export function ToolExecutionIndicator({ msg, onToggleThinking }: ToolExecutionI
                         </span>
                     </button>
                     {msg.thinkingOpen && (
-                        <div className="ask-ai-thinking-steps">
-                            {msg.thinkingSteps.map(step => (
-                                <div key={step.id} className="ask-ai-thinking-step">
-                                    {step.type === 'thinking' && step.text && (
-                                        <div className="ask-ai-step-item ask-ai-step-thinking">
-                                            <span className="ask-ai-step-badge">💭</span>
+                        <div className="ask-ai-timeline">
+                            {timelineSteps.map((step, i) => {
+                                const tone = dotTone(step, i === timelineSteps.length - 1, !!msg.loading)
+                                return (
+                                    <div key={step.id} className="ask-ai-timeline-step">
+                                        <span className={`ask-ai-timeline-dot ask-ai-timeline-dot--${tone}`} />
+                                        {step.type === 'thinking' && step.text && (
                                             <span className="ask-ai-step-text ask-ai-step-text-thinking">
                                                 {step.text}
                                             </span>
-                                        </div>
-                                    )}
-                                    {step.type === 'tool_start' && (
-                                        <div className="ask-ai-step-item">
-                                            <span className="ask-ai-step-badge">📌</span>
+                                        )}
+                                        {step.type === 'tool_start' && (
                                             <span className="ask-ai-step-text">
                                                 <strong>{step.toolName}</strong>
                                                 <span className="ask-ai-step-detail"> → {toolSemanticDescription(step.toolName ?? '', step.toolArgs)}</span>
@@ -51,19 +64,16 @@ export function ToolExecutionIndicator({ msg, onToggleThinking }: ToolExecutionI
                                                     </details>
                                                 )}
                                             </span>
-                                        </div>
-                                    )}
-                                    {step.type === 'tool_result' && (
-                                        <div className="ask-ai-step-item">
-                                            <span className="ask-ai-step-badge">{step.success === false ? '✗' : '✓'}</span>
+                                        )}
+                                        {step.type === 'tool_result' && (
                                             <span className="ask-ai-step-text">
                                                 <strong>{step.toolName}</strong>
                                                 <span className="ask-ai-step-detail"> {toolResultSummary(step.toolName ?? '', step.result, step.success !== false)}</span>
                                             </span>
-                                        </div>
-                                    )}
-                                </div>
-                            ))}
+                                        )}
+                                    </div>
+                                )
+                            })}
                         </div>
                     )}
                 </div>

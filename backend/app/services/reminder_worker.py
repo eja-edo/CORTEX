@@ -1,13 +1,16 @@
 """Background worker for processing schedule reminders."""
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database_async import make_async_sessionmaker
+from app.events.event_bus import get_event_bus
+from app.events.payloads import ReminderDuePayload
+from app.events.schemas import EventEnvelope
 from app.models import ScheduleReminder, Schedule, ReminderStatus, Notification
 from app.utils.logger import get_logger
 
@@ -25,6 +28,12 @@ class ReminderWorker:
         self._task: Optional[asyncio.Task] = None
         self._db_engine = None
         self._session_maker = None
+        self._event_bus = None  # Lazy init
+
+    async def _get_event_bus(self):
+        if self._event_bus is None:
+            self._event_bus = await get_event_bus()
+        return self._event_bus
 
     async def start(self):
         """Start the reminder worker."""
@@ -80,7 +89,12 @@ class ReminderWorker:
         """Fetch and process reminders that are due within the next poll window."""
         async with self._session_maker() as db:
             try:
-                now = datetime.utcnow()
+                # timezone-aware: scheduled_at is TIMESTAMPTZ. A naive
+                # datetime.utcnow() here gets encoded by asyncpg using the
+                # OS-local timezone when compared to a tz-aware column — on a
+                # non-UTC host this silently shifts the "due" window by the
+                # local UTC offset, so reminders miss their window entirely.
+                now = datetime.now(timezone.utc)
                 window_end = now + timedelta(seconds=self.POLL_INTERVAL_SECONDS)
 
                 # Fetch reminders due in the next window
@@ -116,20 +130,23 @@ class ReminderWorker:
                         continue  # Another worker grabbed it
 
                     try:
-                        await self._send_notification(reminder, db)
+                        schedule = await self._send_notification(reminder, db)
 
                         sent_stmt = (
                             update(ScheduleReminder)
                             .where(ScheduleReminder.id == reminder.id)
                             .values(
                                 status=ReminderStatus.SENT,
-                                sent_at=datetime.utcnow(),
+                                sent_at=datetime.now(timezone.utc),
                             )
                             .execution_options(synchronize_session=False)
                         )
                         await db.execute(sent_stmt)
                         await db.commit()
                         logger.info("Reminder %s sent successfully", reminder.id)
+
+                        if schedule is not None:
+                            await self._publish_reminder_due(reminder, schedule)
 
                     except Exception as e:
                         logger.exception("Failed to send reminder %s", reminder.id)
@@ -145,7 +162,7 @@ class ReminderWorker:
                         # Exponential backoff for retries
                         new_scheduled_at = reminder.scheduled_at
                         if new_status == ReminderStatus.PENDING:
-                            new_scheduled_at = datetime.utcnow() + timedelta(minutes=2 ** retry_count)
+                            new_scheduled_at = datetime.now(timezone.utc) + timedelta(minutes=2 ** retry_count)
 
                         fail_stmt = (
                             update(ScheduleReminder)
@@ -165,15 +182,34 @@ class ReminderWorker:
                 logger.exception("Error processing due reminders")
                 await db.rollback()
 
-    async def _send_notification(self, reminder: ScheduleReminder, db: AsyncSession):
-        """Send notification for a reminder."""
+    async def _publish_reminder_due(self, reminder: ScheduleReminder, schedule: Schedule) -> None:
+        try:
+            event_bus = await self._get_event_bus()
+            await event_bus.publish(EventEnvelope(
+                type="schedule.reminder.due",
+                source="ReminderWorker",
+                user_id=schedule.user_id,
+                payload=ReminderDuePayload(
+                    reminder_id=reminder.id,
+                    schedule_id=reminder.schedule_id,
+                    schedule_title=schedule.title,
+                    scheduled_at=reminder.scheduled_at,
+                    reminder_offset_minutes=reminder.minutes_before,
+                ).model_dump(),
+            ))
+        except Exception as exc:
+            logger.warning(f"Failed to publish schedule.reminder.due event: {exc}")
+
+    async def _send_notification(self, reminder: ScheduleReminder, db: AsyncSession) -> Optional[Schedule]:
+        """Send notification for a reminder. Returns the schedule (for event
+        emission by the caller), or None if the schedule no longer exists."""
         schedule = (
             await db.execute(select(Schedule).where(Schedule.id == reminder.schedule_id))
         ).scalar_one_or_none()
 
         if not schedule:
             logger.warning("Schedule %s not found for reminder %s", reminder.schedule_id, reminder.id)
-            return
+            return None
 
         if reminder.method == "push":
             # Create notification record
@@ -205,4 +241,5 @@ class ReminderWorker:
         elif reminder.method == "email":
             # TODO: Integrate email service
             logger.info("Email reminder not yet implemented for reminder %s", reminder.id)
-            pass
+
+        return schedule

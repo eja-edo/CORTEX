@@ -6,6 +6,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, and_, delete, func, update, text
 from sqlalchemy.orm import Session
 
+from app.events.event_bus import get_event_bus
+from app.events.payloads import ConversationMessageCreatedPayload
+from app.events.schemas import EventEnvelope
 from app.utils.logger import get_logger
 from app.utils.tokens import estimate_weighted_message_tokens, estimate_message_tokens
 
@@ -20,6 +23,35 @@ class ConversationStore:
     def __init__(self, async_db: AsyncSession):
         """Initialize store with async database session."""
         self.db = async_db
+        self._event_bus = None  # Lazy init
+
+    async def _get_event_bus(self):
+        if self._event_bus is None:
+            self._event_bus = await get_event_bus()
+        return self._event_bus
+
+    async def _publish_message_created(self, conversation_id: UUID, message: AgentMessage, token_count: int | None) -> None:
+        """Publish conversation.message.created. user_id is intentionally left
+        unset here — save_message() is a hot path called on every turn/tool
+        result, and fetching AgentConversation just to populate an optional
+        envelope field isn't worth an extra query; conversation_id already
+        gives consumers enough to correlate."""
+        try:
+            bus = await self._get_event_bus()
+            await bus.publish(EventEnvelope(
+                type="conversation.message.created",
+                source="ConversationStore",
+                conversation_id=conversation_id,
+                payload=ConversationMessageCreatedPayload(
+                    conversation_id=conversation_id,
+                    message_id=message.id,
+                    role=message.role,
+                    has_tool_calls=message.tool_name is not None,
+                    token_count=token_count,
+                ).model_dump(),
+            ))
+        except Exception as exc:
+            logger.warning(f"Failed to publish conversation.message.created event: {exc}")
 
     async def get_or_create_conversation(
         self,
@@ -198,6 +230,7 @@ class ConversationStore:
                 last_msg.created_at = datetime.utcnow()
                 await self.db.flush()
                 await self._increment_summary_counters(conversation_id, token_count)
+                await self._publish_message_created(conversation_id, last_msg, token_count)
                 return last_msg
 
         elif normalized_role == "tool":
@@ -229,6 +262,7 @@ class ConversationStore:
         self.db.add(message)
         await self.db.flush()
         await self._increment_summary_counters(conversation_id, token_count)
+        await self._publish_message_created(conversation_id, message, token_count)
         return message
 
     async def update_conversation_timestamp(self, conversation_id: UUID) -> None:

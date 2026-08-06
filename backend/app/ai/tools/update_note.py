@@ -1,14 +1,12 @@
-"""Update note tool that creates a reviewable proposal instead of applying directly."""
+"""Update note tool — thin wrapper around the note.update command (which
+creates a reviewable proposal instead of applying directly)."""
 
 from uuid import UUID
 from pydantic import BaseModel, Field
 
 from app.schemas import MAX_NOTE_CONTENT_LENGTH
 from app.ai.agents.tool_context import ToolContext
-from app.services.notes import NoteService
-from app.services.proposal_service import ProposalService
 from app.utils.logger import get_logger
-from app.utils.note_delta import build_text_patch
 
 logger = get_logger(__name__)
 
@@ -27,8 +25,14 @@ async def update_note_handler(args: dict, ctx: ToolContext) -> dict:
     before changes are applied to the note.
 
     Security:
-    - Note must belong to ctx.user_id
+    - Note must belong to ctx.user_id (note.update has no workspace_id on
+      its Command — see app/commands/registry.py::_check_permission's
+      ownership-only branch; matches this tool's pre-migration behavior,
+      which never gated on workspace role either).
     """
+    from app.commands.registry import get_command_registry
+    from app.commands.schemas import Command
+
     try:
         note_id = UUID(args["note_id"])
     except ValueError:
@@ -36,62 +40,25 @@ async def update_note_handler(args: dict, ctx: ToolContext) -> dict:
 
     content = args["content"]
 
-    try:
-        async with ctx.async_db() as async_db:
-            note_service = NoteService(async_db)
-            proposal_service = ProposalService(async_db)
+    # No version pre-fetch: NoteUpdateArgs.version is optional and unused by
+    # note_update_handler (the Proposal flow has no in-place write to
+    # optimistic-lock against) — see app/commands/args.py. Fetching the note
+    # here would just be a redundant read; note_update_handler does its own
+    # lookup anyway (and raises "Note not found" the same way).
+    command = Command(
+        command_name="note.update",
+        args={"note_id": str(note_id), "content": content},
+        requested_by=ctx.user_id,
+        conversation_id=ctx.conversation_id,
+        source="AI",
+    )
 
-            current = await note_service.get_note(note_id=note_id, user_id=ctx.user_id)
-            if current is None:
-                raise ValueError("Note not found")
+    result = await get_command_registry().execute(command, ctx)
 
-            current_content = await note_service.materialize_note_content(current)
-            if current_content == content:
-                return {
-                    "id": str(current.id),
-                    "version": current.version,
-                    "proposal_id": None,
-                    "updated": False,
-                    "success": True,
-                }
+    if not result.success:
+        raise ValueError(result.error)
 
-            patch = build_text_patch(current_content, content)
-            if not patch:
-                return {
-                    "id": str(current.id),
-                    "version": current.version,
-                    "proposal_id": None,
-                    "updated": False,
-                    "success": True,
-                }
-
-            # Create a proposal instead of applying directly
-            proposal = await proposal_service.create_proposal(
-                note=current,
-                user_id=ctx.user_id,
-                old_content=current_content,
-                new_content=content,
-                patch=patch,
-                creator_type="AGENT",
-                creator_id=f"agent:{ctx.user_id}",
-                conversation_id=getattr(ctx, "conversation_id", None),
-            )
-
-            logger.info(
-                f"update_note: created proposal {proposal.id} for note {current.id} "
-                f"(version={current.version})"
-            )
-            return {
-                "id": str(current.id),
-                "version": current.version,
-                "proposal_id": str(proposal.id),
-                "updated": False,
-                "success": True,
-            }
-
-    except Exception as exc:
-        logger.error("update_note failed: %s", exc, exc_info=True)
-        raise
+    return {**result.data, "success": True}
 
 
 UPDATE_NOTE_SCHEMA = {

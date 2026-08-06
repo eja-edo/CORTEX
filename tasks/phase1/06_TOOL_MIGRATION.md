@@ -41,6 +41,8 @@ from app.commands.schemas import Command
 from app.commands.args import NoteCreateArgs, NoteUpdateArgs, NoteDeleteArgs
 from app.ai.agents.tool_context import ToolContext
 from app.services.notes import NoteService
+from app.services.proposal_service import ProposalService
+from app.utils.note_delta import build_text_patch
 from app.schemas import NoteCreate, NoteUpdate
 from app.utils.logger import get_logger
 
@@ -84,51 +86,55 @@ async def note_create_handler(command: Command, ctx: ToolContext) -> dict:
 async def note_update_handler(command: Command, ctx: ToolContext) -> dict:
     """
     Update note command handler.
-    
-    Creates snapshot of previous state for revert.
+
+    ⚠️ 2026-08-06: `NoteService.update_note()` áp dụng thay đổi trực tiếp
+    (dùng bởi REST API PATCH /notes/{id}), nhưng khi command này được gọi
+    TỪ AI (source="AI"), luồng thật đang dùng phải là tạo Proposal chờ
+    duyệt (`ProposalService.create_proposal`), giống `update_note_handler`
+    hiện tại trong `backend/app/ai/tools/update_note.py` — KHÔNG apply
+    ngay. Handler dưới đây phản ánh đúng luồng đó thay vì update trực tiếp
+    như bản gốc của milestone này. Không có `prev_state`/snapshot vì chưa
+    có gì thay đổi để revert — muốn huỷ, dùng command `note.proposal.reject`.
     """
     args = NoteUpdateArgs(**command.args)
-    
+
     async with ctx.async_db() as db:
-        service = NoteService(db)
-        
-        # Get current state for snapshot
-        current = await service.get_note(args.note_id, ctx.user_id)
+        note_service = NoteService(db)
+        proposal_service = ProposalService(db)
+
+        current = await note_service.get_note(args.note_id, ctx.user_id)
         if not current:
             raise ValueError(f"Note not found: {args.note_id}")
-        
-        # Save prev state for snapshot
-        prev_fields = {
-            "note_id": str(args.note_id),
-            "title": current.title,
-            "content": await service.materialize_note_content(current),
-            "parent_note_id": str(current.parent_note_id) if current.parent_note_id else None,
-            "version": current.version
-        }
-        
-        # Update note
-        updated = await service.update_note(
-            note_id=args.note_id,
+
+        current_content = await note_service.materialize_note_content(current)
+        if args.content is None or current_content == args.content:
+            return {
+                "id": str(current.id),
+                "version": current.version,
+                "proposal_id": None,
+                "updated": False,
+            }
+
+        patch = build_text_patch(current_content, args.content)
+        proposal = await proposal_service.create_proposal(
+            note=current,
             user_id=ctx.user_id,
-            payload=NoteUpdate(
-                version=args.version,
-                title=args.title,
-                content=args.content,
-                parent_note_id=args.parent_note_id
-            )
+            old_content=current_content,
+            new_content=args.content,
+            patch=patch,
+            creator_type="AGENT",
+            creator_id=f"agent:{ctx.user_id}",
+            conversation_id=command.conversation_id,
         )
-        
-        if not updated:
-            raise ValueError("Update failed (version conflict or not found)")
-        
-        logger.info(f"Note updated: {updated.id}")
-        
+
+        logger.info(f"note.update: created proposal {proposal.id} for note {current.id}")
+
         return {
-            "id": str(updated.id),
-            "version": updated.version,
-            "title": updated.title,
-            "updated_at": updated.updated_at.isoformat() if updated.updated_at else None,
-            "prev_state": prev_fields  # For revert
+            "id": str(current.id),
+            "version": current.version,
+            "proposal_id": str(proposal.id),
+            "updated": False,
+            # KHÔNG có "prev_state" — command này không revertable, xem docstring
         }
 
 
@@ -187,11 +193,11 @@ def register_note_commands():
     
     registry.register(
         name="note.update",
-        description="Update existing note",
+        description="Propose an update to an existing note (chờ duyệt, không apply ngay)",
         args_schema=NoteUpdateArgs,
         handler=note_update_handler,
         permission_scope=PermissionScope.WRITE,
-        revertable=True
+        revertable=False  # tạo Proposal, không có state để revert — xem note_update_handler
     )
     
     registry.register(
@@ -232,6 +238,7 @@ from app.commands.schemas import Command
 from app.commands.args import ScheduleCreateArgs, ScheduleUpdateArgs, ScheduleDeleteArgs
 from app.ai.agents.tool_context import ToolContext
 from app.services.schedule_service import ScheduleService
+from app.schemas import ScheduleCreate
 from app.models import ScheduleType
 from app.utils.logger import get_logger
 
@@ -241,23 +248,31 @@ logger = get_logger(__name__)
 async def schedule_create_handler(command: Command, ctx: ToolContext) -> dict:
     """
     Create schedule command handler.
+
+    ⚠️ 2026-08-06: `ScheduleService` không có phương thức `create_schedule_simple`
+    (bản gốc milestone này gọi nhầm). Chữ ký thật là
+    `create_schedule(self, user_id: UUID, data: ScheduleCreate)` — sửa lại dưới đây.
     """
     args = ScheduleCreateArgs(**command.args)
-    
+
     # Use sync DB (ScheduleService is sync)
     with ctx:
         db = ctx.get_sync_db()
         service = ScheduleService(db)
-        
+
         # Create schedule
-        schedule = service.create_schedule_simple(
+        schedule = service.create_schedule(
             user_id=ctx.user_id,
-            title=args.title,
-            schedule_type=ScheduleType(args.schedule_type),
-            start_time=args.start_time,
-            end_time=args.end_time,
-            location=args.location,
-            description=args.description
+            data=ScheduleCreate(
+                title=args.title,
+                type=ScheduleType(args.schedule_type),
+                start_time=args.start_time,
+                end_time=args.end_time,
+                location=args.location,
+                description=args.description,
+                recurrence=args.recurrence,
+                reminders=args.reminders,
+            ),
         )
         
         logger.info(f"Schedule created: {schedule.id}")
@@ -510,10 +525,14 @@ async def revert_action_handler(args: dict, ctx: ToolContext) -> dict:
     }
 ```
 
+**⚠️ Điều chỉnh 2026-08-06:** Ngoài tool `revert_action_handler`, đã có sẵn **REST endpoint riêng** `POST /agent/actions/{action_id}/revert` (`backend/app/api/agent.py::revert_action`) dùng **cùng** logic revert thủ công (`_revert_create_note`, `_revert_update_note`, `_revert_create_schedule`, `_revert_update_schedule` trong `revert_action.py`). Nếu chỉ migrate tool mà bỏ sót endpoint này, sẽ tồn tại 2 đường revert khác nhau (1 qua `CommandRegistry.revert_command()` mới, 1 qua logic cũ) — dễ drift và khó bảo trì. Endpoint REST phải được sửa để gọi `CommandRegistry.revert_command()` trong cùng lần migrate này.
+
 **Checklist:**
 - [ ] Simplify `revert_action_handler` to call CommandRegistry
 - [ ] Remove manual revert logic
-- [ ] Test revert for all 4 command types
+- [ ] **Migrate `backend/app/api/agent.py::revert_action` (REST endpoint) sang gọi `CommandRegistry.revert_command()` — không để 2 đường revert song song**
+- [ ] Test revert cho note.create/note.delete/schedule.create/schedule.update/schedule.delete qua CommandRegistry (note.update không revertable — xem 05_COMMAND_REGISTRY.md)
+- [ ] Test revert qua cả tool lẫn REST endpoint đều dùng chung 1 code path
 
 ---
 
@@ -660,16 +679,29 @@ python backend/scripts/verify_tool_migration.py
 
 ## ✅ Milestone 1.6 Definition of Done
 
-- [ ] Note command handlers implemented (create/update/delete)
-- [ ] Schedule command handlers implemented (create/update/delete)
-- [ ] 4 tool handlers migrated to use CommandRegistry
-- [ ] `revert_action` tool simplified
-- [ ] Commands registered at app startup
-- [ ] Regression tests pass
-- [ ] No direct DB access from mutating tools
-- [ ] Backward compatibility maintained
-- [ ] Tool response format unchanged
-- [ ] Performance: no significant overhead
+- [x] Note command handlers implemented (create/update[proposal]/delete) — `backend/app/commands/handlers/note_commands.py`
+- [x] Schedule command handlers implemented (create/update/delete) — `backend/app/commands/handlers/schedule_commands.py`, gồm cả Google Calendar sync enqueue mà tool gốc vẫn làm
+- [x] 4 tool handlers migrated to use CommandRegistry (`create_note`, `update_note`, `create_schedule`, `update_schedule`)
+- [x] `revert_action` tool simplified — delegate 100% cho `CommandRegistry.revert_command()`
+- [x] `backend/app/api/agent.py::revert_action` (REST endpoint) migrated sang cùng code path với tool — verified bằng test gọi cả 2 và so sánh kết quả
+- [x] Commands registered on import — theo đúng convention có sẵn của `ToolRegistry` (auto-register tại module import, KHÔNG phải factory `create_app()` như plan gốc giả định — codebase này không có factory pattern)
+- [x] Regression tests pass — 135/135 test mới + cũ (integration/unit/load), 7 lỗi pre-existing không liên quan giữ nguyên
+- [x] No direct DB access from mutating tools — `backend/scripts/verify_tool_migration.py`, cả 4 tool pass
+- [x] Backward compatibility maintained — response shape của cả 4 tool giữ nguyên chính xác (kể cả các bất đối xứng có sẵn: `update_schedule` lộ `prev_fields` ra ngoài, `create_note`/`create_schedule` thì không)
+- [x] Tool response format unchanged
+- [x] Performance: no significant overhead (kế thừa từ benchmark Milestone 1.5, <1ms)
+
+**Status: hoàn thành 2026-08-06.**
+
+### Sai lệch so với plan gốc (phát hiện khi đọc code thật)
+- **`create_note` tool thật KHÔNG nhận `title`/`workspace_id`/`parent_note_id`/`content_type` từ LLM** — chỉ có `content` + `style_color`; `workspace_id` lấy từ `ctx.workspace_id`, title tự suy ra từ nội dung. `NoteCreateArgs` thiếu field `style` (tool gốc set `style={"color": style_color}`) — đã bổ sung, nếu không sẽ mất tính năng chọn màu note khi migrate.
+- **`create_schedule` tool thật có side-effect Google Calendar sync** (`_enqueue_google_sync`) không nằm trong `ScheduleService.create_schedule()` — đã đưa vào `schedule_create_handler` để mọi caller của `schedule.create` (không chỉ tool này) đều được sync, thay vì chỉ ở tool wrapper.
+- **`update_schedule` tool thật KHÔNG gọi Google sync** (bất đối xứng có sẵn so với create) và KHÔNG hỗ trợ `location` — giữ nguyên, không "sửa" thành nhất quán vì ngoài phạm vi.
+- **Response shape của mỗi tool khác nhau, không theo 1 khuôn chung**: `create_note`/`create_schedule` không lộ `prev_state` ra ngoài, nhưng `update_schedule` LỘ `prev_fields` (hành vi có sẵn, giữ nguyên) — phải strip `prev_state` (key CommandRegistry dùng nội bộ) khỏi response của tool nhưng giữ `prev_fields` (key khác, cùng data, để tương thích ngược).
+- **`note.update` không cần permission workspace-role** (tool gốc không check quyền workspace, chỉ check ownership qua `user_id`) — Command không gắn `workspace_id` để CommandRegistry rơi vào nhánh ownership-only, không vô tình siết chặt quyền hơn trước.
+- **Backend không có `create_app()` factory** như plan Task 1.6.5 giả định — dùng đúng pattern auto-register-on-import có sẵn (`app/ai/tools/__init__.py`). `CommandRegistry.register()` raise lỗi khi đăng ký trùng (khác `ToolRegistry.register()` cho phép ghi đè) — gọi `register_all_commands()` 2 lần sẽ crash, chỉ import module là đủ để trigger.
+- **`note.delete`/`schedule.delete` được đăng ký `revertable=True` nhưng `_default_revert` (Milestone 1.5) chưa có nhánh xử lý** — đã bổ sung (un-delete cho note, recreate-from-snapshot cho schedule vì là hard delete) để không "claim khống" khả năng revert.
+- Test `test_command_registry.py`'s fixture gọi `reset_command_registry()` (global singleton) mỗi test — vô tình xoá luôn registration thật mà tool handlers cần khi chạy chung 1 pytest session với `test_tool_command_migration.py`. Sửa fixture dùng `CommandRegistry()` cục bộ, không đụng singleton global.
 
 ---
 

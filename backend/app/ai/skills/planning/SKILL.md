@@ -15,7 +15,6 @@ tools:
   - create_note
 dependencies:
   - memory
-  - research
 ---
 
 ## PLAN SKILL
@@ -38,23 +37,26 @@ A good plan answers, in order:
 
 ### Workflow
 
-When the user states a want ("Tôi muốn X"), follow this FIXED order — it is
-the same flow as the system prompt. Do not propose the full plan before the
-critical facts, and do not keep asking after they are known.
+When the user states a want ("Tôi muốn X"), decide low-stakes vs high-stakes
+first (same rule as the system prompt) — most of these goal types are low
+stakes, so the default is to propose, not interrogate.
 
 1. **DETECT** — Name the goal type (learning, business, health, exam, skill).
 2. **CHECK** — Search memory/notes/schedules for existing context. Never ask
    for something you can already know.
-3. **ASK only critical facts** — The minimum needed to plan correctly:
-   - Learning: mục tiêu (IELTS/TOEIC/Giao tiếp/Công việc) + mốc thời gian
-     (3/6/12 tháng)
-   - Health: timeframe (3/6 tháng) + current routine
-   - Business: loại hình + vốn dự kiến + địa điểm (nếu có)
-   - Exam: target score + deadline
-   Always as concrete options with a recommended default, max 1-3 questions.
-   Never open questions ("Bạn muốn học thế nào?").
-4. **PLAN** — Once the critical facts are known (or user says "tùy bạn"),
-   present phases → milestones → schedule → checklist → review compactly.
+3. **GAUGE & branch**:
+   - **Learning / Health / Exam / Skill → low stakes.** Skip straight to
+     PLAN with a stated default — wrong guess costs one correction message,
+     nothing is booked or spent yet:
+     - Learning: assume Giao tiếp – 6 tháng unless the message implies
+       otherwise ("giả định Giao tiếp – 6 tháng, đổi được ngay").
+     - Health: assume a 3-month timeframe at a safe rate (~1.5kg/tháng).
+     - Exam: use the deadline if stated; assume a common target score for
+       that exam if not stated (e.g. IELTS 6.5).
+   - **Business → high stakes.** Vốn and địa điểm reshape the entire plan.
+     ASK those two first — concrete ranges/options with a default, max 2
+     questions — before proposing.
+4. **PLAN** — phases → milestones → schedule → checklist → review, compact.
 5. **CONFIRM** — "Áp dụng luôn?" / "Bạn muốn điều chỉnh gì?"
 6. **ACT** — Once approved, save the plan to a note, schedule the milestones,
    and set reminders.

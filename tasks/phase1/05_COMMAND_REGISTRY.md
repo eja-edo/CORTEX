@@ -276,35 +276,51 @@ class CommandRegistry:
         
         Permission rules:
         - READ: Anyone can read
-        - WRITE: Must be editor in workspace
+        - WRITE: Must be editor in workspace (nếu command có workspace_id)
+                 hoặc phải là owner của resource (nếu domain không workspace-scoped,
+                 vd Schedule — xem cảnh báo bên dưới)
         - ADMIN: Must be admin in workspace
+
+        ⚠️ 2026-08-06: Bản gốc có early-return "if command.workspace_id is None:
+        return # allow" — với domain Schedule (model `Schedule` không có cột
+        `workspace_id`, chỉ có `user_id`), MỌI `schedule.*` command sẽ luôn
+        `workspace_id=None` → permission check bị bỏ qua hoàn toàn, biến DoD
+        "Permission checking integrated" thành no-op cho cả domain Schedule.
+        Đã sửa: domain không có workspace_id phải qua ownership check riêng
+        thay vì auto-allow.
         """
         from app.database import SessionLocal
         from app.services.workspace_permission import WorkspacePermission
-        
+
         if handler_def.permission_scope == PermissionScope.READ:
             return  # Always allowed
-        
-        if command.workspace_id is None:
-            return  # No workspace context - allow
-        
-        # Sync DB check (WorkspacePermission uses sync session)
-        with SessionLocal() as sync_db:
-            try:
-                member = WorkspacePermission.require_member(
-                    command.workspace_id,
-                    command.requested_by,
-                    sync_db
-                )
-                
-                if handler_def.permission_scope == PermissionScope.WRITE:
-                    WorkspacePermission.require_editor(member)
-                elif handler_def.permission_scope == PermissionScope.ADMIN:
-                    WorkspacePermission.require_admin(member)
-            
-            except ValueError as exc:
-                raise PermissionError(f"Permission denied: {exc}")
-        
+
+        if command.workspace_id is not None:
+            # Sync DB check (WorkspacePermission uses sync session)
+            with SessionLocal() as sync_db:
+                try:
+                    member = WorkspacePermission.require_member(
+                        command.workspace_id,
+                        command.requested_by,
+                        sync_db
+                    )
+
+                    if handler_def.permission_scope == PermissionScope.WRITE:
+                        WorkspacePermission.require_editor(member)
+                    elif handler_def.permission_scope == PermissionScope.ADMIN:
+                        WorkspacePermission.require_admin(member)
+
+                except ValueError as exc:
+                    raise PermissionError(f"Permission denied: {exc}")
+        else:
+            # Domain không workspace-scoped (vd Schedule): ownership check.
+            # command.requested_by LUÔN đến từ ctx.user_id (session xác thực),
+            # KHÔNG BAO GIỜ từ command.args — handler tự lọc theo user_id khi
+            # query/update resource (giống ScheduleService hiện tại), nên ở
+            # đây chỉ cần đảm bảo có user đã xác thực.
+            if command.requested_by is None:
+                raise PermissionError(f"Permission denied: no authenticated user for {command.command_name}")
+
         logger.debug(
             f"Permission granted: {command.command_name}",
             extra={"user_id": str(command.requested_by)}
@@ -538,9 +554,17 @@ class CommandRegistry:
                 await service.delete_note(UUID(note_id), ctx.user_id)
         
         elif command_name == "note.update":
-            # Restore previous fields
-            # TODO: Implement restore logic
-            logger.warning(f"Revert not fully implemented for: {command_name}")
+            # ⚠️ 2026-08-06: note.update KHÔNG nên được register với revertable=True.
+            # Handler thật của nó chỉ tạo một Proposal (ProposalService) chờ
+            # duyệt — chưa có gì thay đổi trên Note để mà "revert". "Hoàn tác"
+            # ở đây có nghĩa là huỷ/reject proposal (ProposalService.reject_proposal),
+            # không phải restore field cũ. Nếu cần huỷ đề xuất, dùng một command
+            # riêng (vd `note.proposal.reject`), không tái dùng cơ chế snapshot
+            # revert chung này.
+            raise ValueError(
+                f"{command_name} không hỗ trợ revert qua CommandRegistry — "
+                f"đây là proposal, dùng note.proposal.reject để huỷ đề xuất"
+            )
         
         elif command_name == "schedule.create":
             # Delete created schedule
@@ -838,17 +862,31 @@ async def test_list_commands(registry):
 
 ## ✅ Milestone 1.5 Definition of Done
 
-- [ ] CommandRegistry implementation complete
-- [ ] Permission checking integrated (basic)
-- [ ] Snapshot creation/revert integrated
-- [ ] Audit logging automatic
-- [ ] Event publishing automatic
-- [ ] Revert command implementation
-- [ ] Default revert logic for 4 commands
-- [ ] Global registry singleton
-- [ ] Integration tests pass
-- [ ] Documentation complete
-- [ ] Performance: command execution < 50ms overhead vs direct service call
+- [x] CommandRegistry implementation complete — `backend/app/commands/registry.py`
+- [x] Permission checking integrated — workspace role (editor/owner via `WorkspacePermission.get_member`, not `require_member`/`require_editor`/`require_admin` which raise `HTTPException` not `ValueError` as the original plan assumed) + ownership check for non-workspace domains
+- [x] Snapshot creation/revert integrated — `ActionSnapshotStore` (real methods: `save()`/`get()`/`mark_reverted()`, no `save_sync()` — doesn't exist)
+- [x] Audit logging automatic
+- [x] Event publishing automatic (`command.{name}`)
+- [x] Revert command implementation
+- [x] Default revert logic for note.create / schedule.create / schedule.update (note.update excluded — Proposal flow, nothing to restore)
+- [x] Global registry singleton
+- [x] Integration tests pass — `backend/tests/integration/test_command_registry.py`, **37 tests** covering registration, validation, all permission-scope × role combinations, event publishing, audit logging, snapshot creation, generic revert mechanics, and real default-revert against actual DB rows (not just dummy handlers)
+- [x] Documentation complete — `backend/app/commands/README.md`
+- [x] Performance: command execution < 50ms overhead vs direct service call — measured, overhead is sub-millisecond in this environment
+
+**Status: hoàn thành 2026-08-06.**
+
+### Bugs sửa trong plan gốc (so với code thật)
+- `WorkspacePermission.require_admin` **không tồn tại** — method thật là `require_owner`. Registry code không dùng `require_member`/`require_editor`/`require_owner` nữa (chúng raise `HTTPException` cho FastAPI route, không phải `ValueError` như plan gốc `except` — dùng `get_member()` + logic permission tự viết cho `PermissionError` sạch hơn.
+- `NoteService.delete_note` **không tồn tại** trong `_default_revert` — dùng `soft_delete`. Nhưng ngay cả `soft_delete()` cũng không dùng được trực tiếp ở đây (xem bug dưới).
+- `ScheduleService.delete_schedule(UUID(schedule_id))` thiếu tham số `user_id` bắt buộc.
+- `CommandHandler` đổi từ Pydantic `BaseModel` (`class Config: arbitrary_types_allowed`) sang `@dataclass` — đơn giản hơn cho một struct nội bộ chỉ chứa Callable, không cần validate/serialize.
+
+### Bug thật phát hiện qua test (đã sửa, ngoài phạm vi milestone nhưng chặn test)
+- **`ActionSnapshotStore.save()`**: SQL `:state::jsonb` bị SQLAlchemy `text()` parse sai (`asyncpg` báo "syntax error at or near ':'") — sửa thành `CAST(:state AS jsonb)`. Đồng thời **thiếu `rollback()`** trong except-handler của cả `save()` và `mark_reverted()`: khi PG insert lỗi (bảng `action_history` không tồn tại trong DB dev — schema drift khác, chưa sửa), session truyền vào bị "poisoned" (transaction aborted) cho mọi query sau đó trên cùng session — nghiêm trọng vì `db_session` là session request-scoped dùng chung xuyên suốt request. Đã thêm rollback an toàn ở cả hai chỗ.
+- **`_default_revert`'s note.create branch**: gọi `NoteService.soft_delete()` (dùng `async with self.session.begin()`) trên một session đã có transaction implicit đang mở → lỗi "A transaction is already begun on this Session". Sửa bằng cách query + `flush()` trực tiếp (giống `app/ai/tools/revert_action.py::_revert_create_note` — code thật đã né đúng vấn đề này từ trước). Đồng thời phải `commit()` (không chỉ `flush()`) vì `mark_reverted()` chạy ngay sau có thể `rollback()` transaction nếu PG audit lỗi, cuốn theo cả thay đổi chưa commit.
+- Cột `workspace_members.role` trong DB dev là `VARCHAR` dù model khai báo `SQLEnum(name="workspacerole")` — INSERT qua ORM lỗi "type workspacerole does not exist" (SELECT vẫn đọc được). Test dùng raw SQL để né, **chưa sửa schema/model** (ngoài phạm vi, cần quyết định thêm).
+- `EventBus` singleton (`get_event_bus()`) bị stale giữa các test do pytest-asyncio tạo event loop mới mỗi test — bất kỳ test nào (kể cả không quan tâm tới event) mà gián tiếp trigger publish event (qua NoteService/ScheduleService) đều cần reset singleton. Thêm autouse fixture trong test file.
 
 ---
 

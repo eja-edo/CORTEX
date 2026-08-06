@@ -1,14 +1,10 @@
-"""Create schedule tool — dùng ScheduleService thay vì query DB trực tiếp."""
+"""Create schedule tool — thin wrapper around the schedule.create command."""
 
 from datetime import datetime, timezone
 from typing import Optional
 from pydantic import BaseModel, Field
 
-from app.models import ScheduleType, SyncOperation
-from app.ai.agents.action_snapshot_store import ActionSnapshot, get_snapshot_store
 from app.ai.agents.tool_context import ToolContext
-from app.services.schedule_service import ScheduleService
-from app.schemas import ScheduleCreate, RecurrenceRuleInput
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -65,84 +61,68 @@ def _parse_iso_with_tz(value: str, field_name: str) -> datetime:
 
 
 async def create_schedule_handler(args: dict, ctx: ToolContext) -> dict:
-    """Create schedule with optional recurrence and Google sync."""
+    """Create schedule with optional recurrence and Google sync.
+
+    Permission: schedule.create has no workspace_id on its Command (Schedule
+    has no workspace concept — only user_id), so CommandRegistry falls back
+    to its ownership-only check; matches this tool's pre-migration behavior,
+    which never did a workspace-role check either.
+    """
+    from app.commands.registry import get_command_registry
+    from app.commands.schemas import Command
+
     try:
         start_time = _parse_iso_with_tz(args["start_time"], "start_time")
         end_time = _parse_iso_with_tz(args["end_time"], "end_time")
     except ValueError as exc:
         raise ValueError(f"Invalid datetime format: {exc}")
 
-    from app.database import SessionLocal
-    from app.api.schedules import _enqueue_google_sync
-
-    db = SessionLocal()
-    result_data = {}
-    schedule = None
-    try:
-        # Build ScheduleCreate input with optional recurrence
-        recurrence_data = None
-        if args.get("recurrence_rule"):
-            recurrence_input = args["recurrence_rule"]
-            # Parse until datetime if provided
-            until = None
-            if recurrence_input.get("until"):
-                until = _parse_iso_with_tz(recurrence_input["until"], "recurrence_rule.until")
-
-            recurrence_data = RecurrenceRuleInput(
-                freq=recurrence_input["freq"],
-                interval=recurrence_input.get("interval", 1),
-                until=until,
-                count=recurrence_input.get("count"),
-                tzid=recurrence_input.get("tzid", "Asia/Ho_Chi_Minh"),
-            )
-
-        schedule_create = ScheduleCreate(
-            title=args["title"],
-            type=ScheduleType[args["type"]],
-            start_time=start_time,
-            end_time=end_time,
-            location=args.get("location"),
-            description=args.get("description"),
-            recurrence=recurrence_data,
-        )
-
-        svc = ScheduleService(db)
-        schedule = svc.create_schedule(user_id=ctx.user_id, data=schedule_create)
-
-        # Sync with Google Calendar
-        await _enqueue_google_sync(schedule, SyncOperation.UPSERT)
-
-        result_data = {
-            "id": str(schedule.id),
-            "title": schedule.title,
-            "start_time": schedule.start_time.isoformat(),
-            "end_time": schedule.end_time.isoformat(),
-            "recurrence": schedule.recurrence_rule,
-            "created_at": schedule.created_at.isoformat() if schedule.created_at else None,
+    # Build recurrence dict with optional until-parsing (same strict
+    # tz-offset validation as start_time/end_time — kept here rather than in
+    # ScheduleCreateArgs since it's an AI-prompt-engineering concern, not a
+    # domain rule other Command callers should be forced into).
+    recurrence_data = None
+    if args.get("recurrence_rule"):
+        recurrence_input = args["recurrence_rule"]
+        until = None
+        if recurrence_input.get("until"):
+            until = _parse_iso_with_tz(recurrence_input["until"], "recurrence_rule.until")
+        recurrence_data = {
+            "freq": recurrence_input["freq"],
+            "interval": recurrence_input.get("interval", 1),
+            "until": until.isoformat() if until else None,
+            "count": recurrence_input.get("count"),
+            "tzid": recurrence_input.get("tzid", "Asia/Ho_Chi_Minh"),
         }
-    except Exception as exc:
-        logger.error("create_schedule failed: %s", exc, exc_info=True)
-        raise
-    finally:
-        db.close()
 
-    # --- REVERT SNAPSHOT (outside sync DB context) ---
-    snapshot = ActionSnapshot(
-        tool_name="create_schedule",
-        user_id=str(ctx.user_id),
-        conversation_id=str(getattr(ctx, "conversation_id", "")),
-        snapshot={
-            "op": "create_schedule",
-            "schedule_id": str(schedule.id) if schedule else result_data.get("id", ""),
+    command = Command(
+        command_name="schedule.create",
+        args={
+            "title": args["title"],
+            "schedule_type": args["type"],
+            "start_time": start_time.isoformat(),
+            "end_time": end_time.isoformat(),
+            "location": args.get("location"),
+            "description": args.get("description"),
+            "recurrence": recurrence_data,
         },
+        requested_by=ctx.user_id,
+        conversation_id=ctx.conversation_id,
+        source="AI",
     )
-    action_id = await get_snapshot_store().save(snapshot)
-    # --------------------------------------------------
 
-    result_data["action_id"] = action_id
-    result_data["revert_hint"] = "Bạn có thể hoàn tác tạo lịch này bằng action_id trên. Lưu ý: Google Calendar sync đã chạy, cần xóa thủ công trên Google."
-    result_data["success"] = True
-    return result_data
+    result = await get_command_registry().execute(command, ctx)
+
+    if not result.success:
+        raise ValueError(result.error)
+
+    data = {k: v for k, v in result.data.items() if k != "prev_state"}  # internal-only, not for the LLM
+    return {
+        **data,
+        "action_id": result.action_id,
+        "revert_hint": "Bạn có thể hoàn tác tạo lịch này bằng action_id trên. Lưu ý: Google Calendar sync đã chạy, cần xóa thủ công trên Google.",
+        "success": True,
+    }
 
 
 

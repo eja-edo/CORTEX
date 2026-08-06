@@ -26,6 +26,7 @@ from app.api.workspaces import router as workspaces_router
 from app.api.proposals import router as proposals_router
 from app.api.sse import notification_sse_router, sync_sse_router
 from app.database_async import init_async_engine, close_async_engine
+from app.events.event_bus import get_event_bus
 from app.services.transcription_results_consumer import transcription_results_consumer
 from app.services.llm_processor_worker import get_llm_processor_worker
 from app.services.reminder_worker import ReminderWorker
@@ -153,6 +154,16 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning(f"Transcription results consumer disabled: {exc}")
 
+    # Start EventBus's durable cross-process consumer (Milestone 1.10).
+    # Without this, subscribe() only ever fires via the in-process fast
+    # path — an event published from another process (workflow_service, a
+    # future worker) would XADD successfully and then be seen by nobody.
+    try:
+        event_bus = await get_event_bus()
+        await event_bus.start_consumer()
+    except Exception as exc:
+        logger.warning(f"EventBus durable consumer disabled: {exc}")
+
     # OCR processing is handled by external OCR service
     logger.info("🔧 OCR Service Mode: EXTERNAL (OCR service handles processing)")
 
@@ -175,7 +186,13 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await transcription_results_consumer.stop()
-        
+
+        try:
+            event_bus = await get_event_bus()
+            await event_bus.stop_consumer()
+        except Exception as exc:
+            logger.warning(f"EventBus durable consumer stop failed: {exc}")
+
         # Stop all workers
         if _reminder_worker_thread:
             _reminder_worker_thread.stop()

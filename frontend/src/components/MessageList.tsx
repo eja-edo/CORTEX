@@ -26,16 +26,13 @@ export function MessageList({
     messagesEndRef,
 }: MessageListProps) {
     const [copiedId, setCopiedId] = useState<string | null>(null)
-    const [thinkingOpenIds, setThinkingOpenIds] = useState<Set<string>>(new Set())
+    // Thinking steps are expanded by default; this only records messages the
+    // user explicitly toggled, so their choice wins over the default.
+    const [thinkingOverrides, setThinkingOverrides] = useState<Record<string, boolean>>({})
     const renderMarkdown = useMemo(() => renderMarkdownToSanitizedHtml, [])
 
     const toggleThinking = useCallback((messageId: string) => {
-        setThinkingOpenIds(prev => {
-            const next = new Set(prev)
-            if (next.has(messageId)) next.delete(messageId)
-            else next.add(messageId)
-            return next
-        })
+        setThinkingOverrides(prev => ({ ...prev, [messageId]: !(prev[messageId] ?? true) }))
     }, [])
 
     const handleCopy = useCallback(async (id: string, content: string) => {
@@ -108,76 +105,73 @@ export function MessageList({
                 messages.map(msg => (
                     <div key={msg.id} className={`ask-ai-msg ask-ai-msg--${msg.role}`}>
                         <div className="ask-ai-msg-bubble">
-                            {msg.loading ? (
-                                <ToolExecutionIndicator
-                                    msg={{ ...msg, thinkingOpen: thinkingOpenIds.has(msg.id) }}
-                                    onToggleThinking={toggleThinking}
-                                />
+                            {msg.role === 'user' ? (
+                                <div className="ask-ai-msg-content">{msg.content}</div>
                             ) : (
-                                <>
-                                    {msg.role === 'user' ? (
-                                        <div className="ask-ai-msg-content">{msg.content}</div>
-                                    ) : (
-                                        <div className="ask-ai-stream">
-                                            {(msg.thinkingSteps ?? []).filter(s => s.type === 'text').map(s => (
-                                                <div key={s.id} className="ask-ai-step ask-ai-step--text">
-                                                    <span
-                                                        className="ask-ai-step-body ask-ai-step-body--text"
-                                                        dangerouslySetInnerHTML={{
-                                                            __html: renderMarkdown(s.text ?? '')
-                                                        }}
-                                                    />
-                                                </div>
-                                            ))}
-                                            {(msg.thinkingSteps ?? []).filter(s => s.type === 'text').length === 0 && msg.content && (
-                                                <div className="ask-ai-step ask-ai-step--text">
-                                                    <span
-                                                        className="ask-ai-step-body ask-ai-step-body--text"
-                                                        dangerouslySetInnerHTML={{
-                                                            __html: renderMarkdown(msg.content)
-                                                        }}
-                                                    />
-                                                </div>
-                                            )}
+                                <div className="ask-ai-stream">
+                                    {msg.loading && (
+                                        <ToolExecutionIndicator
+                                            msg={{ ...msg, thinkingOpen: thinkingOverrides[msg.id] ?? true }}
+                                            onToggleThinking={toggleThinking}
+                                        />
+                                    )}
+                                    {(msg.thinkingSteps ?? []).filter(s => s.type === 'text').map(s => (
+                                        <div key={s.id} className="ask-ai-step ask-ai-step--text">
+                                            <span
+                                                className="ask-ai-step-body ask-ai-step-body--text"
+                                                dangerouslySetInnerHTML={{
+                                                    __html: renderMarkdown(s.text ?? '')
+                                                }}
+                                            />
+                                        </div>
+                                    ))}
+                                    {(msg.thinkingSteps ?? []).filter(s => s.type === 'text').length === 0 && msg.content && (
+                                        <div className="ask-ai-step ask-ai-step--text">
+                                            <span
+                                                className="ask-ai-step-body ask-ai-step-body--text"
+                                                dangerouslySetInnerHTML={{
+                                                    __html: renderMarkdown(msg.content)
+                                                }}
+                                            />
+                                        </div>
+                                    )}
 
-                                            {msg.role === 'assistant' && !msg.loading && (
-                                                <div className="ask-ai-msg-actions">
-                                                    <button
-                                                        type="button"
-                                                        className="ask-ai-msg-action-btn"
-                                                        title="Copy full reply"
-                                                        onClick={() => {
-                                                            const steppedText = (msg.thinkingSteps ?? [])
-                                                                .filter(s => s.type === 'text')
-                                                                .map(s => s.text ?? '')
-                                                                .join('')
-                                                            const text = steppedText || msg.content || ''
-                                                            void handleCopy(msg.id, text)
-                                                        }}
-                                                    >
-                                                        {copiedId === msg.id ? <Check size={11} /> : <Copy size={11} />}
-                                                    </button>
-                                                    {onInsert && (
-                                                        <button
-                                                            type="button"
-                                                            className="ask-ai-msg-action-btn"
-                                                            title="Insert into note"
-                                                            onClick={() => {
-                                                                const steppedText = (msg.thinkingSteps ?? [])
-                                                                    .filter(s => s.type === 'text')
-                                                                    .map(s => s.text ?? '')
-                                                                    .join('')
-                                                                onInsert(steppedText || msg.content || '')
-                                                            }}
-                                                        >
-                                                            Insert
-                                                        </button>
-                                                    )}
-                                                </div>
+                                    {!msg.loading && (
+                                        <div className="ask-ai-msg-actions">
+                                            <button
+                                                type="button"
+                                                className="ask-ai-msg-action-btn"
+                                                title="Copy full reply"
+                                                onClick={() => {
+                                                    const steppedText = (msg.thinkingSteps ?? [])
+                                                        .filter(s => s.type === 'text')
+                                                        .map(s => s.text ?? '')
+                                                        .join('')
+                                                    const text = steppedText || msg.content || ''
+                                                    void handleCopy(msg.id, text)
+                                                }}
+                                            >
+                                                {copiedId === msg.id ? <Check size={11} /> : <Copy size={11} />}
+                                            </button>
+                                            {onInsert && (
+                                                <button
+                                                    type="button"
+                                                    className="ask-ai-msg-action-btn"
+                                                    title="Insert into note"
+                                                    onClick={() => {
+                                                        const steppedText = (msg.thinkingSteps ?? [])
+                                                            .filter(s => s.type === 'text')
+                                                            .map(s => s.text ?? '')
+                                                            .join('')
+                                                        onInsert(steppedText || msg.content || '')
+                                                    }}
+                                                >
+                                                    Insert
+                                                </button>
                                             )}
                                         </div>
                                     )}
-                                </>
+                                </div>
                             )}
                         </div>
                     </div>

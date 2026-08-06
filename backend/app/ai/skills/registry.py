@@ -180,6 +180,28 @@ class SkillRegistry:
         """Batch lazy-load skills."""
         return [s for n in names if (s := self.load(n)) is not None]
 
+    def resolve_dependencies(self, names: list[str], max_total: int = 6) -> list[str]:
+        """Expand primary skill names with their declared `dependencies`
+        (BFS), primaries first. Bounded by `max_total` so a heavy
+        dependency chain can't blow up the injected prompt size.
+
+        Without this, the `dependencies` field in SKILL.md frontmatter is
+        metadata only — nothing actually loads the dependency's content.
+        """
+        resolved = [n for n in names if n in self._metadata]
+        frontier = list(resolved)
+        while frontier and len(resolved) < max_total:
+            meta = self._metadata.get(frontier.pop(0))
+            if not meta:
+                continue
+            for dep in meta.dependencies:
+                if dep in self._metadata and dep not in resolved:
+                    resolved.append(dep)
+                    frontier.append(dep)
+                    if len(resolved) >= max_total:
+                        break
+        return resolved
+
     def unload(self, name: str) -> None:
         self._loaded.pop(name, None)
         logger.debug("SkillRegistry: unloaded '%s'", name)

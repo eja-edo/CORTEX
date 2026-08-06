@@ -2,12 +2,16 @@
 
 import asyncio
 import json
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.events.event_bus import get_event_bus
+from app.events.payloads import ToolExecutedPayload
+from app.events.schemas import EventEnvelope
 from app.ai.agents.model_client import (
     ModelClient,
     AllModelsExhaustedError,
@@ -236,6 +240,41 @@ class ToolExecutionService:
         self.db = db
         self.store = store
         self.registry = registry
+        self._event_bus = None  # Lazy init
+
+    async def _get_event_bus(self):
+        if self._event_bus is None:
+            self._event_bus = await get_event_bus()
+        return self._event_bus
+
+    async def _publish_tool_executed(
+        self,
+        tool_name: str,
+        ctx: ToolContext,
+        *,
+        success: bool,
+        duration_ms: int,
+        action_id: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        try:
+            bus = await self._get_event_bus()
+            await bus.publish(EventEnvelope(
+                type="tool.executed",
+                source="ToolExecutionService",
+                user_id=ctx.user_id,
+                conversation_id=ctx.conversation_id,
+                payload=ToolExecutedPayload(
+                    tool_name=tool_name,
+                    conversation_id=ctx.conversation_id,
+                    success=success,
+                    duration_ms=duration_ms,
+                    action_id=action_id,
+                    error=error,
+                ).model_dump(),
+            ))
+        except Exception as exc:
+            logger.warning(f"Failed to publish tool.executed event: {exc}")
 
     async def execute_tools_pass(
         self,
@@ -272,12 +311,21 @@ class ToolExecutionService:
             if settings.AGENT_PARALLEL_TOOL_EXECUTION:
                 async def _exec_parallel(tc, name, args):
                     logger.info(f"Parallel executing tool: {name} with args: {args}")
+                    start_time = time.time()
                     try:
                         result = await self.registry.execute(name, args, ctx)
                         logger.info(f"Tool '{name}' executed | result: {str(result)[:200]}")
                     except Exception as tool_exc:
                         logger.error(f"Tool '{name}' raised exception: {tool_exc}", exc_info=True)
                         result = {"error": str(tool_exc), "success": False}
+                    duration_ms = int((time.time() - start_time) * 1000)
+                    await self._publish_tool_executed(
+                        name, ctx,
+                        success=result.get("success", True),
+                        duration_ms=duration_ms,
+                        action_id=result.get("action_id"),
+                        error=result.get("error"),
+                    )
                     return tc, name, result
 
                 exec_results = await asyncio.gather(
@@ -286,12 +334,21 @@ class ToolExecutionService:
             else:
                 for tc, tool_name, tool_args in execution_list:
                     logger.info(f"Sequential executing tool: {tool_name} with args: {tool_args}")
+                    start_time = time.time()
                     try:
                         result = await self.registry.execute(tool_name, tool_args, ctx)
                         logger.info(f"Tool '{tool_name}' executed | result: {str(result)[:200]}")
                     except Exception as tool_exc:
                         logger.error(f"Tool '{tool_name}' raised exception: {tool_exc}", exc_info=True)
                         result = {"error": str(tool_exc), "success": False}
+                    duration_ms = int((time.time() - start_time) * 1000)
+                    await self._publish_tool_executed(
+                        tool_name, ctx,
+                        success=result.get("success", True),
+                        duration_ms=duration_ms,
+                        action_id=result.get("action_id"),
+                        error=result.get("error"),
+                    )
                     exec_results.append((tc, tool_name, result))
 
             for tc, tool_name, result in exec_results:
@@ -368,14 +425,24 @@ class ToolExecutionService:
         return execution_list, should_break, reply_text
 
     async def execute_single_tool(self, tool_name: str, tool_args: dict, ctx: ToolContext) -> dict:
+        start_time = time.time()
         try:
             logger.info(f"Executing tool: {tool_name} with args: {tool_args}")
             result = await self.registry.execute(tool_name, tool_args, ctx)
             logger.info(f"Tool '{tool_name}' executed | result: {str(result)[:200]}")
-            return result
         except Exception as tool_exc:
             logger.error(f"Tool '{tool_name}' raised exception: {tool_exc}", exc_info=True)
-            return {"error": str(tool_exc), "success": False}
+            result = {"error": str(tool_exc), "success": False}
+
+        duration_ms = int((time.time() - start_time) * 1000)
+        await self._publish_tool_executed(
+            tool_name, ctx,
+            success=result.get("success", True),
+            duration_ms=duration_ms,
+            action_id=result.get("action_id"),
+            error=result.get("error"),
+        )
+        return result
 
     async def execute_single_tool_streaming(
         self,

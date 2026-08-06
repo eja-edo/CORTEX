@@ -9,12 +9,16 @@ Single source of truth cho toàn bộ business logic liên quan đến Schedule.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta
 from typing import Optional
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.events.event_bus import get_event_bus
+from app.events.payloads import ScheduleCompletedPayload, ScheduleCreatedPayload, ScheduleUpdatedPayload
+from app.events.schemas import EventEnvelope
 from app.models import (
     CalendarProvider,
     Schedule,
@@ -32,6 +36,38 @@ from app.services.reminder_service import ReminderService
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+async def _safe_publish_event(event: EventEnvelope) -> None:
+    """Publish via EventBus, swallowing all errors (never break the caller)."""
+    try:
+        bus = await get_event_bus()
+        await bus.publish(event)
+    except Exception as exc:
+        logger.warning(f"Failed to publish {event.type} event: {exc}")
+
+
+def _fire_event(event: EventEnvelope) -> None:
+    """
+    Fire-and-forget event publish from ScheduleService's sync methods.
+
+    ScheduleService is called from both async contexts (agent tools, most API
+    routes running inside FastAPI's event loop) and genuinely sync contexts
+    (no running loop). Bridge accordingly; either way, publish failures never
+    propagate to the caller.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is not None:
+        loop.create_task(_safe_publish_event(event))
+    else:
+        try:
+            asyncio.run(_safe_publish_event(event))
+        except Exception as exc:
+            logger.warning(f"Failed to publish {event.type} event (sync fallback): {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -172,6 +208,20 @@ class ScheduleService:
         self.db.commit()
         self.db.refresh(db_schedule)
         _attach_google_sync_flags([db_schedule], self.db)
+        _fire_event(EventEnvelope(
+            type="schedule.created",
+            source="ScheduleService",
+            user_id=user_id,
+            payload=ScheduleCreatedPayload(
+                schedule_id=db_schedule.id,
+                title=db_schedule.title,
+                schedule_type=db_schedule.type.value,
+                start_time=db_schedule.start_time,
+                end_time=db_schedule.end_time,
+                location=db_schedule.location,
+                is_recurring=bool(db_schedule.recurrence_rule),
+            ).model_dump(),
+        ))
         return db_schedule
 
     def create_schedule_simple(
@@ -203,6 +253,20 @@ class ScheduleService:
         self.db.flush()
         self.db.commit()
         self.db.refresh(db_schedule)
+        _fire_event(EventEnvelope(
+            type="schedule.created",
+            source="ScheduleService",
+            user_id=user_id,
+            payload=ScheduleCreatedPayload(
+                schedule_id=db_schedule.id,
+                title=db_schedule.title,
+                schedule_type=db_schedule.type.value,
+                start_time=db_schedule.start_time,
+                end_time=db_schedule.end_time,
+                location=db_schedule.location,
+                is_recurring=False,
+            ).model_dump(),
+        ))
         return db_schedule
 
     # ------------------------------------------------------------------
@@ -338,6 +402,8 @@ class ScheduleService:
             raise ValueError("Schedule not found")
 
         update_data = data.model_dump(exclude_unset=True)
+        fields_changed = list(update_data.keys())
+        was_completed = schedule.is_completed
 
         if "recurrence" in update_data:
             recurrence_val = update_data.pop("recurrence")
@@ -365,6 +431,20 @@ class ScheduleService:
         self.db.commit()
         self.db.refresh(schedule)
         _attach_google_sync_flags([schedule], self.db)
+
+        _fire_event(EventEnvelope(
+            type="schedule.updated",
+            source="ScheduleService",
+            user_id=user_id,
+            payload=ScheduleUpdatedPayload(schedule_id=schedule.id, fields_changed=fields_changed).model_dump(),
+        ))
+        if schedule.is_completed and not was_completed:
+            _fire_event(EventEnvelope(
+                type="schedule.completed",
+                source="ScheduleService",
+                user_id=user_id,
+                payload=ScheduleCompletedPayload(schedule_id=schedule.id, completed_at=datetime.utcnow()).model_dump(),
+            ))
         return schedule
 
     def update_schedule_fields(
@@ -392,16 +472,24 @@ class ScheduleService:
                 "Schedule not found or you don't have permission to update it"
             )
 
+        fields_changed: list[str] = []
+        was_completed = schedule.is_completed
+
         if title is not None:
             schedule.title = title
+            fields_changed.append("title")
         if start_time is not None:
             schedule.start_time = start_time
+            fields_changed.append("start_time")
         if end_time is not None:
             schedule.end_time = end_time
+            fields_changed.append("end_time")
         if description is not None:
             schedule.description = description
+            fields_changed.append("description")
         if is_completed is not None:
             schedule.is_completed = is_completed
+            fields_changed.append("is_completed")
 
         if schedule.start_time >= schedule.end_time:
             raise ValueError("start_time must be before end_time")
@@ -410,6 +498,21 @@ class ScheduleService:
         schedule.updated_at = datetime.utcnow()
         self.db.commit()
         self.db.refresh(schedule)
+
+        if fields_changed:
+            _fire_event(EventEnvelope(
+                type="schedule.updated",
+                source="ScheduleService",
+                user_id=user_id,
+                payload=ScheduleUpdatedPayload(schedule_id=schedule.id, fields_changed=fields_changed).model_dump(),
+            ))
+            if schedule.is_completed and not was_completed:
+                _fire_event(EventEnvelope(
+                    type="schedule.completed",
+                    source="ScheduleService",
+                    user_id=user_id,
+                    payload=ScheduleCompletedPayload(schedule_id=schedule.id, completed_at=datetime.utcnow()).model_dump(),
+                ))
         return schedule
 
     # ------------------------------------------------------------------

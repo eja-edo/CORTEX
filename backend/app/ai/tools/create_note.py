@@ -1,15 +1,8 @@
-"""Create note tool."""
+"""Create note tool — thin wrapper around the note.create command."""
 
-from uuid import UUID
 from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
 
-from app.models import Note
-from app.ai.agents.action_snapshot_store import ActionSnapshot, get_snapshot_store
 from app.ai.agents.tool_context import ToolContext
-from app.services.notes import NoteService
-from app.services.workspace_permission import WorkspacePermission
-from app.schemas import NoteCreate
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -28,11 +21,16 @@ class CreateNoteInput(BaseModel):
 async def create_note_handler(args: dict, ctx: ToolContext) -> dict:
     """
     Create a new note for the user.
-    
+
     Security:
-    - User must be editor in the workspace
+    - Workspace editor check + user_id are enforced by CommandRegistry
+      (WRITE scope + Command.workspace_id → WorkspacePermission), not
+      manually here — see app/commands/registry.py::_check_permission.
     - user_id comes from ctx (never from args)
     """
+    from app.commands.registry import get_command_registry
+    from app.commands.schemas import Command
+
     content = args["content"]
     style_color = args.get("style_color", "yellow")
 
@@ -40,50 +38,34 @@ async def create_note_handler(args: dict, ctx: ToolContext) -> dict:
     if workspace_id is None:
         raise ValueError("workspace_id is required but not available in context")
 
-    # Check workspace permission (sync check)
-    with ctx.get_sync_db() as sync_db:
-        member = WorkspacePermission.require_member(workspace_id, ctx.user_id, sync_db)
-        WorkspacePermission.require_editor(member)
+    command = Command(
+        command_name="note.create",
+        args={
+            "workspace_id": str(workspace_id),
+            "content": content,
+            "style": {"color": style_color},
+        },
+        requested_by=ctx.user_id,
+        workspace_id=workspace_id,
+        conversation_id=ctx.conversation_id,
+        source="AI",
+    )
 
-    # Create note
-    try:
-        async with ctx.async_db() as async_db:
-            service = NoteService(async_db)
-            payload = NoteCreate(
-                workspace_id=workspace_id,
-                content=content,
-                style={"color": style_color},
-            )
-            note = await service.create_note(payload, ctx.user_id)
+    result = await get_command_registry().execute(command, ctx)
 
-            # --- REVERT SNAPSHOT ---
-            snapshot = ActionSnapshot(
-                tool_name="create_note",
-                user_id=str(ctx.user_id),
-                conversation_id=str(getattr(ctx, "conversation_id", "")),
-                snapshot={
-                    "op": "create_note",
-                    "note_id": str(note.id),
-                    "workspace_id": str(note.workspace_id),
-                },
-            )
-            action_id = await get_snapshot_store().save(snapshot)
-            # -----------------------
+    if not result.success:
+        if result.error and "Permission denied" in result.error:
+            raise PermissionError(result.error)
+        raise ValueError(result.error)
 
-            return {
-                "id": str(note.id),
-                "workspace_id": str(note.workspace_id),
-                "created_at": note.created_at.isoformat(),
-                "action_id": action_id,
-                "revert_hint": "Bạn có thể yêu cầu hoàn tác hành động này bằng action_id trên.",
-                "success": True,
-            }
-
-    except PermissionError as exc:
-        raise PermissionError(f"Permission denied: {exc}")
-    except Exception as exc:
-        logger.error(f"create_note failed: {exc}", exc_info=True)
-        raise
+    return {
+        "id": result.data["id"],
+        "workspace_id": result.data["workspace_id"],
+        "created_at": result.data["created_at"],
+        "action_id": result.action_id,
+        "revert_hint": "Bạn có thể yêu cầu hoàn tác hành động này bằng action_id trên.",
+        "success": True,
+    }
 
 
 CREATE_NOTE_SCHEMA = {
