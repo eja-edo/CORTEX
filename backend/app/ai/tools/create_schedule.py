@@ -188,5 +188,14 @@ CREATE_SCHEDULE_DEFINITION = {
     "handler": create_schedule_handler,
     "input_model": CreateScheduleInput,
     "schema": CREATE_SCHEDULE_SCHEMA,
-    "description": "Create a new schedule/event for the user.",
+    "description": (
+        "Create a SINGLE new schedule/event for the user, right now, immediately. "
+        "Do NOT use this for a recurring practice/study/workout block that's part of "
+        "a multi-phase plan you just proposed for a goal (\"tôi muốn học tiếng Anh\", "
+        "\"tôi muốn giảm cân\", or anything broken into phases/milestones/checklist) — "
+        "that whole plan (all its events AND tasks) must go through propose_plan "
+        "instead, as one call, so the user reviews and approves every item — including "
+        "the recurrence rule — before anything is booked. Calling create_schedule "
+        "repeatedly for a plan's sessions skips that review entirely."
+    ),
 }

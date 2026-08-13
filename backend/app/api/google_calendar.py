@@ -17,7 +17,10 @@ from app.dependencies import get_current_active_user
 from app.models import CalendarConnection, CalendarProvider, OAuthState, Schedule, User
 from app.api.sse.channels.sync_events import publish_sync_event
 from app.schemas import GoogleCalendarConnectionStatus, GoogleConnectUrlResponse, MessageResponse
-from app.services.google_calendar_sync import GoogleCalendarSyncService
+from app.services.google_calendar_sync import GoogleCalendarSyncService, GoogleReauthRequiredError
+from app.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/google-calendar", tags=["google-calendar"])
 
@@ -193,6 +196,7 @@ def get_connection_status(
             "has_sync_token": False,
             "channel_expiration": None,
             "last_sync_error": None,
+            "needs_reauth": False,
         }
 
     return {
@@ -204,6 +208,7 @@ def get_connection_status(
         "has_sync_token": bool(connection.sync_token),
         "channel_expiration": connection.channel_expiration,
         "last_sync_error": connection.last_sync_error,
+        "needs_reauth": connection.needs_reauth,
     }
 
 
@@ -236,10 +241,23 @@ def sync_now(
 ):
     schedules = db.query(Schedule).filter(Schedule.user_id == current_user.id).all()
     service = GoogleCalendarSyncService(db)
-    for schedule in schedules:
-        service.sync_upsert_schedule(schedule)
+    failed = 0
+    for index, schedule in enumerate(schedules):
+        try:
+            service.sync_upsert_schedule(schedule)
+        except GoogleReauthRequiredError:
+            # Connection is broken for every remaining schedule too — no
+            # point burning the rest of the loop re-discovering that.
+            failed += len(schedules) - index
+            break
+        except Exception:
+            logger.exception("sync-now: failed to push schedule %s", schedule.id)
+            failed += 1
 
-    return {"message": f"Sync requested for {len(schedules)} schedules"}
+    message = f"Sync requested for {len(schedules)} schedules"
+    if failed:
+        message += f" ({failed} failed — see Google Calendar status for details)"
+    return {"message": message}
 
 
 @router.post("/sync-from-google-now", response_model=MessageResponse)
@@ -320,6 +338,7 @@ def renew_due_watches(
         CalendarConnection.provider == CalendarProvider.GOOGLE,
         CalendarConnection.channel_expiration.isnot(None),
         CalendarConnection.channel_expiration <= threshold,
+        CalendarConnection.needs_reauth.is_(False),
     ).all()
 
     renewed = 0
@@ -329,12 +348,60 @@ def renew_due_watches(
             _watch_events(connection, access_token)
             db.add(connection)
             renewed += 1
+        except GoogleReauthRequiredError:
+            # ensure_access_token already recorded needs_reauth/last_sync_error.
+            pass
         except Exception as exc:
             connection.last_sync_error = str(exc)
             db.add(connection)
 
     db.commit()
     return {"message": f"Renewed {renewed} watch channel(s)"}
+
+
+@router.post("/sync-due", response_model=MessageResponse)
+def sync_due_connections(
+    x_cron_key: str | None = Header(default=None, alias="X-Cron-Key"),
+    db: Session = Depends(get_db),
+):
+    """Periodic pull fallback for all Google-connected users.
+
+    The primary pull path is Google's webhook push, which fires on change
+    but has no delivery guarantee and fails silently on the receiving end
+    (see /webhook below). This gives every connection a backstop so a missed
+    or dropped webhook doesn't leave a user's calendar stale until they
+    notice and click "Sync now" themselves.
+    """
+    if settings.GOOGLE_CALENDAR_RENEW_CRON_KEY:
+        if not x_cron_key or x_cron_key != settings.GOOGLE_CALENDAR_RENEW_CRON_KEY:
+            raise HTTPException(status_code=401, detail="Invalid cron key")
+
+    connections = db.query(CalendarConnection).filter(
+        CalendarConnection.provider == CalendarProvider.GOOGLE,
+        CalendarConnection.needs_reauth.is_(False),
+    ).all()
+
+    synced = 0
+    failed = 0
+    for connection in connections:
+        try:
+            service = GoogleCalendarSyncService(db)
+            stats = service.sync_from_google_incremental_for_connection(connection)
+            publish_sync_event(
+                user_id=str(connection.user_id),
+                source="google_calendar",
+                trigger="scheduled_pull",
+                stats=stats,
+                detail="Scheduled fallback pull from Google completed",
+            )
+            synced += 1
+        except Exception:
+            logger.exception(
+                "sync-due: failed to pull for connection %s", connection.id
+            )
+            failed += 1
+
+    return {"message": f"Pulled {synced} connection(s), {failed} failed"}
 
 
 @router.post("/webhook", status_code=204)
@@ -454,9 +521,7 @@ def google_oauth_callback(
         CalendarConnection.provider_calendar_id == settings.GOOGLE_CALENDAR_DEFAULT_ID,
     ).first()
 
-    expires_at = None
-    if isinstance(expires_in, int):
-        expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
+    expires_at = datetime.utcnow() + timedelta(seconds=expires_in if isinstance(expires_in, int) else 3600)
 
     if connection is None:
         connection = CalendarConnection(
@@ -474,6 +539,7 @@ def google_oauth_callback(
         connection.access_token_expires_at = expires_at
         connection.granted_scopes = granted_scopes
         connection.last_sync_error = None
+        connection.needs_reauth = False
 
     oauth_state.used_at = datetime.utcnow()
     db.add(connection)

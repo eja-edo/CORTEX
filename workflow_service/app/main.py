@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1 import executions, workflows, webhooks, actions
+from app.api.v1 import executions, workflows, webhooks, actions, system_workflows
 
 _ALLOWED_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
 
@@ -51,6 +51,7 @@ app.include_router(workflows.router, prefix="/api/v1/workflows", tags=["workflow
 app.include_router(executions.router, prefix="/api/v1/executions", tags=["executions"])
 app.include_router(webhooks.router, prefix="/api/v1/webhooks", tags=["webhooks"])
 app.include_router(actions.router, prefix="/api/v1/actions", tags=["actions"])
+app.include_router(system_workflows.router, prefix="/api/v1/system-workflows", tags=["system-workflows"])
 
 
 @app.get("/health")

@@ -40,15 +40,23 @@ class TestWebhookWorkflow:
         assert resp.status_code == 401
 
     async def test_webhook_no_secret(self, async_client: AsyncClient, auth_headers: dict):
+        """Every webhook is created with a secret (create_workflow always
+        generates one) — a request with no secret header at all must not
+        bypass auth."""
         _, url, _ = await self._create_and_activate(async_client, auth_headers)
         resp = await async_client.post(url, json={"test": True})
-        assert resp.status_code == 202
+        assert resp.status_code == 401
 
     async def test_webhook_not_active_returns_409(self, async_client: AsyncClient, auth_headers: dict):
         create_resp = await async_client.post("/api/v1/workflows", json=self.WEBHOOK_WF_PAYLOAD, headers=auth_headers)
-        url = create_resp.json()["webhook_url"]
+        data = create_resp.json()
+        url = data["webhook_url"]
+        secret = data["webhook_secret"]
 
-        resp = await async_client.post(url, json={"test": True})
+        # Correct secret so the request clears auth and reaches the
+        # active-status check this test is actually about — auth is
+        # checked first (401 outranks 409, see test_webhook_no_secret).
+        resp = await async_client.post(url, json={"test": True}, headers={"X-Webhook-Secret": secret})
         assert resp.status_code == 409
 
     async def test_webhook_not_found(self, async_client: AsyncClient):

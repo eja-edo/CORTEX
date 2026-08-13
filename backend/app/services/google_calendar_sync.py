@@ -20,10 +20,17 @@ from app.models import (
     SyncSource,
     ReminderStatus,
 )
+from app.services.attention_gate import request_attention_sync
 from app.services.recurrence import RecurrenceService
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+class GoogleReauthRequiredError(RuntimeError):
+    """Raised when Google has permanently rejected the stored refresh_token
+    (revoked, expired from disuse, etc). Unlike a transient network/API
+    error, retrying this without the user reconnecting will never succeed."""
 
 
 class GoogleCalendarSyncService:
@@ -96,11 +103,17 @@ class GoogleCalendarSyncService:
                 CalendarConnection.id == connection_id,
             ).first()
             if db_connection is not None:
-                db_connection.last_sync_error = str(exc)
-                self.db.add(db_connection)
-                self.db.commit()
+                # A GoogleReauthRequiredError already set last_sync_error via
+                # _mark_reauth_required; don't clobber that clearer message.
+                if not isinstance(exc, GoogleReauthRequiredError):
+                    db_connection.last_sync_error = str(exc)
+                    self.db.add(db_connection)
+                    self.db.commit()
             else:
                 logger.error("Calendar connection %s for user %s was not found while storing sync error", connection_id, connection_user_id)
+            # Re-raise: callers (GoogleSyncWorker, /sync-now) must see this as
+            # a failure, not treat a swallowed exception as a successful sync.
+            raise
 
     def sync_delete_schedule(self, schedule: Schedule) -> None:
         connection = self._get_connection(schedule.user_id)
@@ -118,6 +131,8 @@ class GoogleCalendarSyncService:
         if mapping is None:
             return
 
+        mapping_id = mapping.id
+
         try:
             access_token = self.ensure_access_token(connection)
             self._delete_event(
@@ -128,6 +143,18 @@ class GoogleCalendarSyncService:
             connection.last_sync_error = None
             connection.last_synced_at = datetime.utcnow()
             self.db.add(connection)
+
+            # Only drop the local mapping once Google confirms the event is
+            # gone (or was already gone, per _delete_event's 404 handling).
+            # Deleting it unconditionally — including when this call failed —
+            # used to make the next upsert recreate the event on Google as a
+            # duplicate, since the mapping that would have caught it was gone.
+            db_mapping = self.db.query(ScheduleExternalMap).filter(
+                ScheduleExternalMap.id == mapping_id,
+            ).first()
+            if db_mapping is not None:
+                self.db.delete(db_mapping)
+            self.db.commit()
         except Exception as exc:
             self.db.rollback()
             logger.exception("Failed to delete Google Calendar event for schedule %s", schedule.id)
@@ -135,17 +162,13 @@ class GoogleCalendarSyncService:
                 CalendarConnection.id == connection_id,
             ).first()
             if db_connection is not None:
-                db_connection.last_sync_error = str(exc)
-                self.db.add(db_connection)
+                if not isinstance(exc, GoogleReauthRequiredError):
+                    db_connection.last_sync_error = str(exc)
+                    self.db.add(db_connection)
+                self.db.commit()
             else:
                 logger.error("Calendar connection %s for user %s was not found while storing sync error", connection_id, connection_user_id)
-        finally:
-            db_mapping = self.db.query(ScheduleExternalMap).filter(
-                ScheduleExternalMap.id == mapping.id,
-            ).first()
-            if db_mapping is not None:
-                self.db.delete(db_mapping)
-            self.db.commit()
+            raise
 
     def sync_from_google_incremental(self, user_id) -> dict[str, int]:
         connection = self._get_connection(user_id)
@@ -211,9 +234,10 @@ class GoogleCalendarSyncService:
                 CalendarConnection.id == connection_id,
             ).first()
             if db_connection is not None:
-                db_connection.last_sync_error = str(exc)
-                self.db.add(db_connection)
-                self.db.commit()
+                if not isinstance(exc, GoogleReauthRequiredError):
+                    db_connection.last_sync_error = str(exc)
+                    self.db.add(db_connection)
+                    self.db.commit()
             else:
                 logger.error("Calendar connection %s for user %s was not found while storing sync error", connection_id, connection_user_id)
             raise
@@ -539,6 +563,13 @@ class GoogleCalendarSyncService:
         if connection.access_token_encrypted and connection.access_token_expires_at and connection.access_token_expires_at > now + timedelta(minutes=2):
             return self._decrypt_token(connection.access_token_encrypted)
 
+        if connection.needs_reauth:
+            # Already known-broken — don't spend another Google API call
+            # (and another silent failure) proving it again.
+            raise GoogleReauthRequiredError(
+                "Google Calendar connection needs to be reconnected"
+            )
+
         refresh_token = self._decrypt_token(connection.refresh_token_encrypted)
         payload = {
             "client_id": settings.GOOGLE_OAUTH_CLIENT_ID,
@@ -549,6 +580,11 @@ class GoogleCalendarSyncService:
 
         with httpx.Client(timeout=20) as client:
             response = client.post(settings.GOOGLE_OAUTH_TOKEN_URL, data=payload)
+            if response.status_code == 400 and self._is_invalid_grant(response):
+                self._mark_reauth_required(connection)
+                raise GoogleReauthRequiredError(
+                    "Google Calendar refresh token was revoked or expired"
+                )
             response.raise_for_status()
 
         data = response.json()
@@ -562,6 +598,33 @@ class GoogleCalendarSyncService:
         self.db.add(connection)
         self.db.commit()
         return access_token
+
+    def _is_invalid_grant(self, response: httpx.Response) -> bool:
+        try:
+            return response.json().get("error") == "invalid_grant"
+        except ValueError:
+            return False
+
+    def _mark_reauth_required(self, connection: CalendarConnection) -> None:
+        connection.needs_reauth = True
+        connection.last_sync_error = "Google Calendar access was revoked or expired. Please reconnect."
+        self.db.add(connection)
+        self.db.commit()
+        try:
+            request_attention_sync(
+                self.db,
+                user_id=connection.user_id,
+                type="warning",
+                title="Google Calendar needs to be reconnected",
+                body="Your Google Calendar connection has expired or was revoked. Reconnect it in Settings to resume syncing.",
+                actions=[{"label": "Open Settings", "action": "navigate", "url": "/settings"}],
+                payload={"connection_id": str(connection.id)},
+            )
+        except Exception:
+            logger.exception(
+                "Failed to create reconnect notification for calendar connection %s",
+                connection.id,
+            )
 
     def _event_headers(self, access_token: str) -> dict[str, str]:
         return {

@@ -1447,6 +1447,44 @@
   gap: 8px;
 }
 
+.wf-kv-table {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wf-kv-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.wf-kv-row .wf-config-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.wf-kv-remove-btn {
+  flex-shrink: 0;
+  width: auto;
+  padding: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.wf-kv-remove-btn:hover {
+  background: var(--red-light);
+  border-color: var(--red);
+  color: var(--red);
+}
+
 .wf-config-row {
   display: flex;
   gap: 8px;

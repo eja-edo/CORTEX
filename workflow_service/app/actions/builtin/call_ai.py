@@ -58,7 +58,6 @@ class CallAIAction(BaseAction):
                 )
                 response.raise_for_status()
                 data = response.json()
-                print(f"AI call response: {data}")  # Debugging line to log the response
 
                 return ActionResult(
                     success=True,

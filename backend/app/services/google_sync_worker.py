@@ -92,17 +92,21 @@ class GoogleSyncWorker:
         except asyncio.CancelledError:
             logger.info("GoogleSyncWorker: consume task cancelled during shutdown")
             raise
+        finally:
+            # Runs inside the same task run_until_complete is awaiting, so
+            # cleanup is guaranteed to finish before WorkerThread closes the
+            # loop — see WorkerThread._run()/stop() in app/__init__.py for
+            # why doing this from stop() instead used to race the shutdown.
+            await self._cleanup()
 
     async def stop(self) -> None:
+        """Signal the worker to stop. Cleanup runs in start()'s finally
+        block, not here — see the comment there."""
         self._running = False
-        # Cancel consume task first, wait for it to exit blocking call
         if self._consume_task and not self._consume_task.done():
             self._consume_task.cancel()
-            try:
-                await self._consume_task
-            except asyncio.CancelledError:
-                pass
-        # Now safe to disconnect Redis
+
+    async def _cleanup(self) -> None:
         if self._redis_service:
             await self._redis_service.stop_background_tasks()
             await self._redis_service.disconnect(release_pending=True)

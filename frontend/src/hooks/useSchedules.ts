@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { startOfWeek, endOfWeek } from 'date-fns'
 import type { Schedule, ScheduleListResponse, GoogleCalendarStatus } from '../types'
 import { requestWithAuth } from '../services/api'
@@ -14,8 +14,13 @@ function toIsoDateTime(localDateTime: string): string {
 
 function getRangeForCurrentWeek(): { startDate: string; endDate: string } {
     const now = new Date()
-    const start = startOfWeek(now, { weekStartsOn: 1 })
-    const end = endOfWeek(now, { weekStartsOn: 1 })
+    // Sunday-based, matching the calendar grid's actual week-start
+    // convention (see CalendarView.tsx's computeRange) — this only feeds
+    // the very first render before any navigation, but a Monday-based
+    // default here would be wrong on the same days computeRange used to
+    // get wrong (any load happening on a Sunday).
+    const start = startOfWeek(now, { weekStartsOn: 0 })
+    const end = endOfWeek(now, { weekStartsOn: 0 })
     start.setHours(0, 0, 0, 0)
     end.setHours(23, 59, 59, 999)
     return { startDate: toLocalInputDateTime(start), endDate: toLocalInputDateTime(end) }
@@ -27,13 +32,16 @@ export function useSchedules() {
     const [startDate, setStartDate] = useState<string>(weekRange.startDate)
     const [endDate, setEndDate] = useState<string>(weekRange.endDate)
     const [googleCalendarStatus, setGoogleCalendarStatus] = useState<GoogleCalendarStatus | null>(null)
+    // See useCalendarItems' identical guard — same out-of-order-response risk here.
+    const fetchRequestIdRef = useRef(0)
 
     const fetchSchedules = useCallback(async (): Promise<void> => {
+        const requestId = ++fetchRequestIdRef.current
         try {
             const data = await requestWithAuth<ScheduleListResponse>(
                 `/schedules?start_date=${encodeURIComponent(toIsoDateTime(startDate))}&end_date=${encodeURIComponent(toIsoDateTime(endDate))}`
             )
-            setSchedules(data.items)
+            if (requestId === fetchRequestIdRef.current) setSchedules(data.items)
         } catch (error) {
             console.error('Cannot load schedules:', error)
         }
@@ -70,6 +78,7 @@ export function useSchedules() {
                 has_sync_token: false,
                 channel_expiration: null,
                 last_sync_error: null,
+                needs_reauth: false,
             })
         } catch (error) {
             console.error('Cannot disconnect Google Calendar:', error)
@@ -103,16 +112,18 @@ export function useSchedules() {
         }
     }, [fetchGoogleCalendarStatus])
 
-    const handleCreateSchedule = useCallback(async (schedule: Omit<Schedule, 'id' | 'user_id' | 'created_at' | 'updated_at' | 'is_completed'>): Promise<void> => {
+    const handleCreateSchedule = useCallback(async (schedule: Omit<Schedule, 'id' | 'user_id' | 'created_at' | 'updated_at' | 'is_completed'>): Promise<Schedule | null> => {
         try {
-            await requestWithAuth<Schedule>('/schedules', {
+            const created = await requestWithAuth<Schedule>('/schedules', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(schedule),
             })
             await fetchSchedules()
+            return created
         } catch (error) {
             console.error('Cannot create schedule:', error)
+            return null
         }
     }, [fetchSchedules])
 

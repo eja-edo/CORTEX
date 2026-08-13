@@ -24,26 +24,39 @@ and creates consumer groups for any newly-appeared event types on the fly,
 so adding an event type to the vocabulary + regenerating the JSON is enough
 — no listener code change and no restart required (Task 1.9.3).
 
-`_handle_event` / `_matches_filters` / `_trigger_workflow_instance` are
-unchanged from the previous implementation; only the ingestion transport
-and vocabulary source changed.
+`_matches_filters` / `_trigger_workflow_instance` are unchanged from the
+original implementation; only the ingestion transport and vocabulary source
+changed. `_handle_event` itself has since been updated: Milestone 4.0 M2
+moved event-type matching into the SQL WHERE clause, and M1 added a
+per-workspace enable/fork check for system-owned workflow rows.
 """
 
 import asyncio
 import json
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import redis.asyncio as aioredis
 from sqlalchemy import select
 
 from app.config import settings
-from app.models.workflow import WorkflowDefinition, WorkflowStatus, TriggerType
+from app.models.workflow import WorkflowDefinition, WorkflowStatus, TriggerType, SYSTEM_WORKFLOW_USER_ID, WorkflowTrigger
 from app.database import AsyncSessionLocal
+from app.services.system_workflows import is_system_workflow_active_for_workspace
 
 STREAM_PREFIX = "events:"
 CONSUMER_GROUP = "workflow_service"
 CONSUMER_NAME = "listener-1"
+
+# Retry + DLQ for _handle_event failures (Milestone 4.1 M3), mirroring the
+# backend's own EventBus mechanism (backend/app/events/event_bus.py's
+# MAX_RETRIES/RETRY_DELAYS/DLQ pattern) rather than inventing a second one.
+# Own DLQ stream, not the backend's, to avoid mixing dlq_metadata shapes
+# from two different retry mechanisms in the same Redis stream.
+MAX_RETRIES = 3
+RETRY_DELAYS = [1, 5, 15]
+DLQ_STREAM = "events:dead-letter-workflow"
 
 VOCABULARY_PATH = Path(__file__).parent / "event_vocabulary.json"
 VOCABULARY_RELOAD_SECONDS = 30
@@ -148,40 +161,148 @@ async def start_internal_event_listener():
                 for message_id, fields in messages:
                     try:
                         envelope = json.loads(fields["data"])
-                        event_data = dict(envelope.get("payload") or {})
-                        if envelope.get("user_id"):
-                            event_data.setdefault("user_id", envelope["user_id"])
-                        await _handle_event(event_type, event_data)
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as e:
-                        print(f"[TriggerEngine] Error handling event: {e}")
-                    finally:
+                    except (KeyError, json.JSONDecodeError) as e:
+                        print(f"[TriggerEngine] Malformed message {message_id}, acking and dropping: {e}")
                         await redis.xack(stream_key, CONSUMER_GROUP, message_id)
+                        continue
+
+                    event_data = dict(envelope.get("payload") or {})
+                    if envelope.get("user_id"):
+                        event_data.setdefault("user_id", envelope["user_id"])
+                    if envelope.get("workspace_id"):
+                        event_data.setdefault("workspace_id", envelope["workspace_id"])
+
+                    last_error: Exception | None = None
+                    for attempt in range(MAX_RETRIES):
+                        try:
+                            await _handle_event(event_type, event_data)
+                            last_error = None
+                            break
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as e:
+                            last_error = e
+                            print(
+                                f"[TriggerEngine] _handle_event failed "
+                                f"(attempt {attempt + 1}/{MAX_RETRIES}): {e}"
+                            )
+                            if attempt < MAX_RETRIES - 1:
+                                await asyncio.sleep(RETRY_DELAYS[attempt])
+
+                    if last_error is not None:
+                        await _send_to_dlq(redis, envelope, last_error)
+
+                    await redis.xack(stream_key, CONSUMER_GROUP, message_id)
     finally:
         await redis.aclose()
 
 
+async def _send_to_dlq(redis: aioredis.Redis, envelope: dict, error: Exception) -> None:
+    """Last resort after MAX_RETRIES failures: record the event + error
+    instead of silently dropping it (the previous behavior — `xack` ran in
+    `finally` regardless of outcome). Mirrors backend's EventBus._send_to_dlq
+    shape (backend/app/events/event_bus.py) without importing across the
+    service boundary (see this module's docstring for why)."""
+    dlq_data = {
+        **envelope,
+        "dlq_metadata": {
+            "failed_handler": "_handle_event",
+            "error": str(error),
+            "error_type": type(error).__name__,
+            "failed_at": datetime.now(timezone.utc).isoformat(),
+            "original_event_id": envelope.get("event_id"),
+            "retry_count": MAX_RETRIES,
+        },
+    }
+    try:
+        await redis.xadd(DLQ_STREAM, {"data": json.dumps(dlq_data)})
+        print(f"[TriggerEngine] Event sent to DLQ: {envelope.get('type')} ({envelope.get('event_id')})")
+    except Exception as dlq_exc:
+        print(f"[TriggerEngine] CRITICAL: failed to send event to DLQ: {dlq_exc}")
+
+
+def _event_belongs_to_workflow_owner(workflow: WorkflowDefinition, event_data: dict) -> bool:
+    """A non-system workflow only fires on data it's actually allowed to
+    see. `Workspace`/`WorkspaceMember` (backend/app/models.py) is a real
+    shared, multi-user entity, so a workspace-scoped workflow reacting to
+    any member's action is intentional (team automation) — not a workflow
+    matching purely on event_type with no ownership check at all, which is
+    what let user A's workflow run on user B's data as long as the event
+    type happened to match.
+
+    workspace_id set on the workflow -> same workspace, any member.
+    workspace_id unset (the common case for workflows made via the UI) ->
+    same user as the workflow owner. No data to compare -> fail closed.
+
+    No backend event publisher currently sets `workspace_id` on
+    `EventEnvelope` — every domain entity behind today's event types (Task,
+    Note, Schedule, ...) is user-scoped only, with no workspace_id column at
+    all (see e.g. `Task` in backend/app/models.py). So a workspace-scoped
+    workflow would otherwise never fire from a real event: the event's
+    workspace_id is always None, which can never equal a real UUID. Falling
+    back to the same user-ownership check as a personal workflow when the
+    event carries no workspace_id keeps this at least as restrictive as the
+    non-workspace branch below (no cross-user leak) while making
+    workspace-scoped workflows over today's event types actually work."""
+    if workflow.workspace_id is not None:
+        event_workspace_id = event_data.get("workspace_id")
+        if event_workspace_id is not None:
+            return str(event_workspace_id) == str(workflow.workspace_id)
+
+    event_user_id = event_data.get("user_id")
+    return event_user_id is not None and str(event_user_id) == str(workflow.user_id)
+
+
 async def _handle_event(event_type: str, event_data: dict):
     async with AsyncSessionLocal() as db:
-        result = await db.execute(
+        # Match on trigger_config->>'event' in SQL (Milestone 4.0 M2) instead
+        # of loading every ACTIVE internal_event workflow and filtering in
+        # Python — the old version scanned the whole table on every event.
+        primary_result = await db.execute(
             select(WorkflowDefinition).where(
                 WorkflowDefinition.status == WorkflowStatus.ACTIVE,
                 WorkflowDefinition.trigger_type == TriggerType.INTERNAL_EVENT,
-                WorkflowDefinition.is_deleted == False
+                WorkflowDefinition.is_deleted == False,
+                WorkflowDefinition.trigger_config["event"].as_string() == event_type,
             )
         )
-        workflows = result.scalars().all()
+        matches = [(wf, wf.trigger_config) for wf in primary_result.scalars().all()]
 
-        for workflow in workflows:
-            trigger_config = workflow.trigger_config
-            configured_event = trigger_config.get("event")
+        # Supplementary triggers (multi-trigger support): a workflow whose
+        # primary trigger is something else (or even another internal_event
+        # with different filters) can still react to this event type via a
+        # row in workflow_triggers. Each row carries its own trigger_config,
+        # so it's matched — and its own `filters` applied — independently
+        # of the workflow's primary trigger.
+        supplementary_result = await db.execute(
+            select(WorkflowDefinition, WorkflowTrigger.trigger_config)
+            .join(WorkflowTrigger, WorkflowTrigger.workflow_id == WorkflowDefinition.id)
+            .where(
+                WorkflowDefinition.status == WorkflowStatus.ACTIVE,
+                WorkflowDefinition.is_deleted == False,
+                WorkflowTrigger.trigger_type == TriggerType.INTERNAL_EVENT,
+                WorkflowTrigger.is_active == True,
+                WorkflowTrigger.trigger_config["event"].as_string() == event_type,
+            )
+        )
+        matches.extend(supplementary_result.all())
 
-            if configured_event != event_type:
-                continue
-
+        for workflow, trigger_config in matches:
             filters = trigger_config.get("filters", {})
             if not _matches_filters(event_data, filters):
+                continue
+
+            if workflow.user_id == SYSTEM_WORKFLOW_USER_ID:
+                # Milestone 4.0 M1: a system workflow can be disabled or
+                # forked per workspace. Its fork (if any) is a normal row
+                # that already matched the WHERE clause above on its own.
+                workspace_id = event_data.get("workspace_id")
+                active = await is_system_workflow_active_for_workspace(
+                    db, workflow_id=workflow.id, workspace_id=workspace_id,
+                )
+                if not active:
+                    continue
+            elif not _event_belongs_to_workflow_owner(workflow, event_data):
                 continue
 
             await _trigger_workflow_instance(workflow, event_data)

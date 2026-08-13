@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Calendar as BigCalendar } from 'react-big-calendar'
 import { Plus, RefreshCw, Repeat } from 'lucide-react'
-import { format, parseISO } from 'date-fns'
+import { format, startOfWeek, endOfWeek } from 'date-fns'
 import { clsx } from 'clsx'
-import type { Schedule } from '../types'
+import type { CalendarItem, Schedule } from '../types'
 import { localizer } from '../utils/calendar'
+import {
+    isMarker,
+    isMarkerDone,
+    toCalendarEntries,
+    type CalendarEntry,
+} from '../utils/calendarItems'
 import { EventDetailModal } from './EventDetailModal'
-
-function parseServerDateTime(value: string): Date {
-    const hasTimezone = /(?:Z|[+-]\d{2}:\d{2})$/i.test(value)
-    return parseISO(hasTimezone ? value : `${value}Z`)
-}
 
 function formatTimeRange(start: Date, end: Date): string {
     return `${format(start, 'HH:mm')} – ${format(end, 'HH:mm')}`
@@ -29,9 +30,19 @@ function snapTo30(date: Date): Date {
     return snapped
 }
 
-type CalendarEvent = { title: string; start: Date; end: Date; resource: Schedule }
-
 interface CalendarViewProps {
+    /**
+     * The unified feed (2.6 M1): schedules and tasks in one shape. The grid
+     * is drawn entirely from this — nothing here knows there are two tables,
+     * it just obeys each item's `render_as`.
+     */
+    items: CalendarItem[]
+    /**
+     * Full schedule records, used only to open the detail modal on click.
+     * The calendar item shape deliberately carries just what's needed to
+     * *draw* an entry; editing an event still goes through the event
+     * resource.
+     */
     schedules: Schedule[]
     isGoogleCalendarConnected?: boolean
     startDate: string
@@ -46,14 +57,9 @@ interface CalendarViewProps {
     onRemove: (id: string) => Promise<void>
 }
 
-const TYPE_LABELS: Record<string, string> = {
-    CLASS: 'Class', DEADLINE: 'Deadline', EXAM: 'Exam', PERSONAL: 'Personal',
-}
-
-
 export function CalendarView({
     isGoogleCalendarConnected = false,
-    schedules, startDate, endDate,
+    items, schedules, startDate, endDate,
     onStartDateChange, onEndDateChange,
     onFetch, onOpenCreateEvent, onSlotSelect, onToggleComplete, onUpdate, onRemove,
 }: CalendarViewProps) {
@@ -71,14 +77,15 @@ export function CalendarView({
         onFetchRef.current()
     }, [startDate, endDate])
 
-    const calendarEvents = useMemo<CalendarEvent[]>(
-        () => schedules.map((item) => ({
-            title: item.title,
-            start: parseServerDateTime(item.start_time),
-            end: parseServerDateTime(item.end_time),
-            resource: item,
-        })),
-        [schedules],
+    // Split on `render_as`, which the server sends — never re-derived from
+    // `kind` here. See utils/calendarItems.ts.
+    const calendarEntries = useMemo<CalendarEntry[]>(() => toCalendarEntries(items), [items])
+
+    // Only blocks size the visible hour window. Markers are excluded on
+    // purpose: a task due at midnight must not drag the grid open to 00:00.
+    const timedEntries = useMemo(
+        () => calendarEntries.filter((entry) => !isMarker(entry)),
+        [calendarEntries],
     )
 
     const viewConfig = useMemo(() => {
@@ -89,12 +96,12 @@ export function CalendarView({
         const now = new Date()
         const nowMin = now.getHours() * 60 + now.getMinutes()
 
-        if (calendarEvents.length > 0) {
+        if (timedEntries.length > 0) {
             const earliest = Math.min(
-                ...calendarEvents.map((e) => e.start.getHours() * 60 + e.start.getMinutes())
+                ...timedEntries.map((e) => e.start.getHours() * 60 + e.start.getMinutes())
             )
             const latest = Math.max(
-                ...calendarEvents.map((e) => e.end.getHours() * 60 + e.end.getMinutes())
+                ...timedEntries.map((e) => e.end.getHours() * 60 + e.end.getMinutes())
             )
             // Expand start: floor down to the hour (e.g. 6:30 → 6:00, 5:10 → 5:00)
             if (earliest < windowStartMin) {
@@ -129,7 +136,7 @@ export function CalendarView({
             step: 30,
             timeslots: 2,
         }
-    }, [calendarEvents])
+    }, [timedEntries])
 
     const syncRangeToFilters = (rangeStart: Date, rangeEnd: Date) => {
         onStartDateChange(toLocalInputDateTime(rangeStart))
@@ -147,11 +154,20 @@ export function CalendarView({
         } else if (forView === 'day') {
             start.setHours(0, 0, 0, 0); end.setHours(23, 59, 59, 999)
         } else {
-            // week — Mon-based
-            const day = anchor.getDay()
-            const diff = day === 0 ? -6 : 1 - day
-            start.setDate(anchor.getDate() + diff); start.setHours(0, 0, 0, 0)
-            end.setDate(start.getDate() + 6); end.setHours(23, 59, 59, 999)
+            // week — Sunday-based, matching `localizer` (date-fns + enUS,
+            // whose default weekStartsOn is 0/Sunday — the same convention
+            // react-big-calendar actually draws, per the "Sun" column it
+            // always shows first). This used to be hand-rolled as Monday-
+            // based, which only agreed with what was on screen when the
+            // anchor itself was a Monday — any other anchor (in particular
+            // Sunday, e.g. right after switching from Day view, which
+            // anchors to `new Date()`) fetched the *previous* week while
+            // still labeling it as the current one, silently swapping in
+            // wrong data.
+            const weekStart = startOfWeek(anchor, { weekStartsOn: 0 })
+            const weekEnd = endOfWeek(anchor, { weekStartsOn: 0 })
+            start.setTime(weekStart.getTime())
+            end.setTime(weekEnd.getTime())
         }
         return { start, end }
     }
@@ -187,9 +203,6 @@ export function CalendarView({
         }
     }
 
-    const selectedStart = selectedSchedule ? parseServerDateTime(selectedSchedule.start_time) : null
-    const selectedEnd = selectedSchedule ? parseServerDateTime(selectedSchedule.end_time) : null
-
     return (
         <div className="calendar-panel">
             {/* Header */}
@@ -216,7 +229,7 @@ export function CalendarView({
             <div className="calendar-container">
                 <BigCalendar
                     localizer={localizer}
-                    events={calendarEvents}
+                    events={calendarEntries}
                     startAccessor="start"
                     endAccessor="end"
                     date={currentDate}
@@ -225,32 +238,61 @@ export function CalendarView({
                     selectable
                     onNavigate={handleNavigate}
                     onView={handleViewChange}
-                    onSelectEvent={(event) => setSelectedSchedule((event as CalendarEvent).resource)}
+                    onSelectEvent={(event) => {
+                        const entry = event as CalendarEntry
+                        // Markers are tasks — there's no event to open. The
+                        // task's own affordances live in the checklist and
+                        // the "Hôm nay" screen (2.7).
+                        if (isMarker(entry)) return
+                        const full = schedules.find((s) => s.id === entry.id)
+                        if (full) setSelectedSchedule(full)
+                    }}
                     onSelectSlot={handleSelectSlot}
                     // step=30 → 30-min slots like Google Calendar, timeslots=2 → 2 per hour group
                     step={viewConfig.step}
                     timeslots={viewConfig.timeslots}
                     min={viewConfig.min}
                     max={viewConfig.max}
-                    allDayAccessor={() => false}
+                    // Markers ride the all-day strip: present on the day,
+                    // consuming none of the hour grid. This is the rendering
+                    // half of "a task consumes time, it doesn't occupy it" —
+                    // the data half is that no task row exists in `schedules`.
+                    allDayAccessor={(event) => (event as CalendarEntry).allDay}
                     showMultiDayTimes
                     components={{
                         event: ({ event }) => {
-                            const item = event.resource as Schedule
-                            const start = (event as CalendarEvent).start
-                            const end = (event as CalendarEvent).end
+                            const entry = event as CalendarEntry
+
+                            // Task → milestone marker. No time range shown,
+                            // because it doesn't have one: it's due *by*
+                            // this day, it doesn't run *during* it.
+                            if (isMarker(entry)) {
+                                return (
+                                    <div
+                                        className={clsx('cal-task-marker', isMarkerDone(entry) && 'is-done')}
+                                        title={`${entry.title} — due today`}
+                                    >
+                                        <span className="cal-task-marker-glyph" aria-hidden>◆</span>
+                                        <span className="cal-task-marker-title">{entry.title}</span>
+                                    </div>
+                                )
+                            }
+
+                            // Schedule → time block, as before.
+                            const full = schedules.find((s) => s.id === entry.id)
+                            const typeClass = full ? `cal-event-${full.type}` : 'cal-event-PERSONAL'
                             return (
                                 <div
-                                    className={clsx('cal-event', `cal-event-${item.type}`, item.is_completed && 'is-completed')}
-                                    title={`${item.title}${item.location ? ` • ${item.location}` : ''} • ${formatTimeRange(start, end)}`}
+                                    className={clsx('cal-event', typeClass, entry.status === 'completed' && 'is-completed')}
+                                    title={`${entry.title}${entry.location ? ` • ${entry.location}` : ''} • ${formatTimeRange(entry.start, entry.end)}`}
                                 >
                                     <div className="cal-event-title">
-                                        {item.title}
-                                        {item.recurrence && item.recurrence.freq !== 'NONE' && (
+                                        {entry.title}
+                                        {full?.recurrence && full.recurrence.freq !== 'NONE' && (
                                             <Repeat size={12} style={{ marginLeft: 4, opacity: 0.7 }} />
                                         )}
                                     </div>
-                                    <div className="cal-event-time">{formatTimeRange(start, end)}</div>
+                                    <div className="cal-event-time">{formatTimeRange(entry.start, entry.end)}</div>
                                 </div>
                             )
                         },
@@ -262,11 +304,9 @@ export function CalendarView({
             </div>
 
             {/* Event Detail Modal */}
-            {selectedSchedule && selectedStart && selectedEnd && (
+            {selectedSchedule && (
                 <EventDetailModal
                     schedule={selectedSchedule}
-                    startDate={selectedStart}
-                    endDate={selectedEnd}
                     canEdit={Boolean(selectedSchedule.id) && Boolean(onUpdate)}
                     onUpdate={onUpdate ?? (async () => false)}
                     onToggleComplete={onToggleComplete}

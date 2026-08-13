@@ -17,7 +17,13 @@
 export const ROUTES = {
   // Global routes (no workspace context)
   HOME: '/',
+  /** "Hôm nay" — the product's main screen (2.7). */
+  TODAY: '/today',
   SCHEDULE: '/schedule',
+  /** Tasks dashboard — every task, organised by day/week/month, not just
+   * the handful ranked onto "Hôm nay". */
+  TASKS: '/tasks',
+  NOTIFICATIONS: '/notifications',
   AUTH_CALLBACK: '/auth/callback',
 
   // Workspace routes (require workspaceId)
@@ -31,6 +37,32 @@ export const ROUTES = {
 } as const
 
 export type RoutePath = typeof ROUTES[keyof typeof ROUTES]
+
+/**
+ * Every exact pathname that renders without a workspace.
+ *
+ * App.tsx redirects anything it doesn't recognise back to `/`, so a route
+ * that exists in ROUTES but is missing here is unreachable — you click the
+ * nav item and land on the home page. Keeping the two lists in one file (and
+ * asserting they agree in routes.spec.ts) is what stops that happening
+ * again; it already did once, when /today was added.
+ */
+export const GLOBAL_ROUTES: readonly string[] = [
+  ROUTES.HOME,
+  ROUTES.TODAY,
+  ROUTES.SCHEDULE,
+  ROUTES.TASKS,
+  ROUTES.NOTIFICATIONS,
+  ROUTES.AUTH_CALLBACK,
+  // Not in ROUTES yet — it has no helper and no constant, but the app
+  // does render it.
+  '/settings',
+] as const
+
+/** True for a pathname the app knows how to render. */
+export function isKnownRoute(pathname: string): boolean {
+  return GLOBAL_ROUTES.includes(pathname) || isWorkspaceRoute(pathname)
+}
 
 /**
  * Helper to build workspace-scoped URLs
@@ -48,6 +80,28 @@ export function workspaceRoute(workspaceId: string, path: '/notes' | '/records' 
  */
 export function scheduleRoute(): string {
   return ROUTES.SCHEDULE
+}
+
+/**
+ * Helper to build the Tasks dashboard URL.
+ */
+export function tasksRoute(): string {
+  return ROUTES.TASKS
+}
+
+/**
+ * Helper to build the "Hôm nay" URL. Top-level, not workspace-scoped —
+ * tasks are all personal in Phase 2.
+ */
+export function todayRoute(): string {
+  return ROUTES.TODAY
+}
+
+/**
+ * Helper to build the Notifications page URL.
+ */
+export function notificationsRoute(): string {
+  return ROUTES.NOTIFICATIONS
 }
 
 /**
@@ -106,7 +160,9 @@ export function isWorkspaceRoute(pathname: string): boolean {
  */
 export function isGlobalRoute(pathname: string): boolean {
   return pathname === '/'
+    || pathname === '/today'
     || pathname === '/schedule'
+    || pathname === '/tasks'
     || pathname === '/auth/callback'
     || !pathname.startsWith('/w/')
 }

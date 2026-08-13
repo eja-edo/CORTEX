@@ -1,10 +1,20 @@
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, EmailStr, field_validator, model_validator
 from enum import Enum
 
-from app.models import AssetStatus, AssetType, UploadStatus
+from app.models import (
+    AssetStatus,
+    AssetType,
+    AttentionChannel,
+    AttentionItemType,
+    AttentionLevel,
+    AttentionResponse,
+    TaskPriority,
+    TaskStatus,
+    UploadStatus,
+)
 
 MAX_NOTE_CONTENT_LENGTH = 50000
 
@@ -311,6 +321,120 @@ class NoteProposalListResponse(BaseModel):
     total: int
 
 
+class PlanProposalItemIn(BaseModel):
+    """One draft item inside a plan proposal (3.2 AI Planner) — a task or
+    an event that hasn't been created yet.
+
+    `key` is a proposal-local id the caller invents (e.g. "t1"), used only
+    to let a task's `parent_key` reference an earlier task in the SAME
+    list — it is never a real Task/Schedule id. Fields not relevant to the
+    item's `type` are rejected rather than silently ignored, since a typo'd
+    field (e.g. `start_time` on a task) would otherwise be dropped and
+    quietly do nothing.
+    """
+    key: str = Field(..., min_length=1, max_length=50)
+    type: Literal["task", "event"]
+    title: str = Field(..., min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=10000)
+
+    # Task-only
+    due_date: datetime | None = None
+    priority: str | None = None
+    parent_key: str | None = None
+    related_event_key: str | None = Field(
+        default=None,
+        description="key of an EVENT item in this same proposal this task is a checklist item of",
+    )
+
+    # Event-only
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+    location: str | None = None
+    recurrence: dict[str, Any] | None = Field(
+        default=None,
+        description="{freq: DAILY|WEEKLY|MONTHLY, interval?, until?, count?, tzid?} — for a repeating block, don't propose N one-off events instead",
+    )
+
+    @model_validator(mode="after")
+    def _fields_match_type(self) -> "PlanProposalItemIn":
+        task_only = {
+            "due_date": self.due_date,
+            "priority": self.priority,
+            "parent_key": self.parent_key,
+            "related_event_key": self.related_event_key,
+        }
+        event_only = {
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+            "location": self.location,
+            "recurrence": self.recurrence,
+        }
+        if self.type == "task":
+            set_event_fields = [name for name, value in event_only.items() if value is not None]
+            if set_event_fields:
+                raise ValueError(f"task item '{self.key}' cannot set event field(s): {set_event_fields}")
+        else:
+            set_task_fields = [name for name, value in task_only.items() if value is not None]
+            if set_task_fields:
+                raise ValueError(f"event item '{self.key}' cannot set task field(s): {set_task_fields}")
+            if self.start_time is None or self.end_time is None:
+                raise ValueError(f"event item '{self.key}' requires start_time and end_time")
+        return self
+
+
+class PlanProposalResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    user_id: UUID
+    conversation_id: UUID | None
+    items: list[dict[str, Any]]
+    status: str
+    creator_type: str
+    creator_id: str
+    created_at: datetime
+    expires_at: datetime
+    approved_at: datetime | None
+    rejected_at: datetime | None
+
+
+class PlanProposalListResponse(BaseModel):
+    items: list[PlanProposalResponse]
+    total: int
+
+
+class PlanProposalApproveRequest(BaseModel):
+    """Body for POST /plan-proposals/{id}/approve.
+
+    `items` omitted (or null) means "create exactly what was proposed".
+    When provided, it's the user-edited/filtered set actually applied —
+    an item left out simply isn't created; it isn't a rejection of the
+    whole proposal.
+    """
+    items: list[PlanProposalItemIn] | None = None
+
+
+class PlanProposalItemResult(BaseModel):
+    key: str
+    type: Literal["task", "event"]
+    outcome: Literal["created", "failed"]
+    id: UUID | None = None
+    error: str | None = None
+
+
+class PlanProposalApproveResponse(BaseModel):
+    proposal_id: UUID
+    status: str
+    results: list[PlanProposalItemResult]
+    created_count: int
+    failed_count: int
+
+
+class PlanProposalRejectResponse(BaseModel):
+    proposal_id: UUID
+    status: str
+
+
 class NoteSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -349,6 +473,294 @@ class NoteResponse(BaseModel):
     rendered_html: str | None = None
 
 
+
+class TodayReason(BaseModel):
+    """Why a task is being suggested today (Milestone 2.7).
+
+    `impact` is a full sentence naming a consequence — "Quá hạn 3 ngày, MVP
+    còn 12 ngày và còn 4 việc chưa xong". It is never a label like
+    "priority: high": a label makes the user do the interpreting, which is
+    the thing this screen exists to stop.
+
+    Composed server-side because it *is* the product's output. A client
+    assembling its own sentence could show one that isn't true.
+    """
+    key: str = Field(..., description="Stable machine id for the reason, e.g. task.overdue")
+    impact: str = Field(
+        ...,
+        min_length=1,
+        description="The consequence, in one sentence the user can act on",
+    )
+
+
+class TodayNowAction(BaseModel):
+    """One "should do now" card. Never valid without its reason."""
+    task_id: UUID
+    title: str
+    reason: TodayReason
+    due_date: datetime | None = None
+    priority: TaskPriority | None = None
+
+
+class TodayNeedsConfirmationItem(BaseModel):
+    """One task the extraction pipeline guessed at, waiting on a yes/no.
+
+    Kept off `now_actions`/`suggestions` on purpose: those two lists are
+    already-real work Cortex is confident about, and a `pending_confirm`
+    task hasn't earned that yet — showing it there would present an AI
+    guess as validated fact. Replaces the old `TodayWaitingItem` (formerly
+    fed by `Commitment`, folded into `Task`).
+    """
+    task_id: UUID
+    title: str
+    due_date: datetime | None = None
+
+
+class TodayResponse(BaseModel):
+    """Everything the "Hôm nay" screen renders."""
+    state: Literal[
+        "onboarding", "nothing_urgent", "all_clear", "has_actions"
+    ] = Field(
+        ...,
+        description="Which design the screen shows. Served, not inferred, so no state "
+                    "falls through to a default empty table.",
+    )
+    status_line: str | None = Field(
+        None,
+        description="The one sentence at the top. No data source in Phase 2 without Goal "
+                    "and without 3.3's free-slot half, so this is omitted rather than guessed.",
+    )
+    now_actions: list[TodayNowAction] = Field(default_factory=list)
+    suggestions: list[TodayNowAction] = Field(
+        default_factory=list,
+        description="Only for `nothing_urgent`: things the user *could* start. "
+                    "Never urgency invented to fill the screen.",
+    )
+    needs_confirmation: list[TodayNeedsConfirmationItem] = Field(default_factory=list)
+
+
+class CalendarItem(BaseModel):
+    """One row on the calendar, from either table (Milestone 2.6).
+
+    A single shape for both so the frontend never has to know there are two
+    tables. `render_as` is served rather than derived: the client should not
+    re-implement the kind→rendering mapping, because getting it wrong is how
+    a task ends up drawn as a time block.
+
+    The fields are deliberately per-kind and null otherwise — a task has no
+    `start_time` because **a task does not occupy time**. That asymmetry is
+    the point of the whole milestone, not an oversight.
+    """
+    id: UUID
+    kind: Literal["schedule", "task"]
+    render_as: Literal["block", "marker"] = Field(
+        ...,
+        description="block = occupies a time range in the grid; marker = a point in the day. "
+                    "Served, not inferred, so the client can't get the mapping wrong.",
+    )
+    title: str
+    # schedule only — the span it occupies.
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+    # task only. Usually that day at 00:00; can carry a real time (e.g. an
+    # event checklist item inherits the event's end_time). Either way the
+    # calendar still draws it as `render_as="marker"`, a day cell — never a
+    # clock position — so it can't be mistaken for booked time.
+    due_date: datetime | None = None
+    status: str = Field(
+        ...,
+        description="schedule: scheduled | completed | cancelled. task: todo | in_progress | done | cancelled.",
+    )
+    location: str | None = None      # schedule only
+
+
+class TaskCreate(BaseModel):
+    """Request body for POST /tasks (Milestone 2.5).
+
+    `related_event_id` is optional; a task attached to nothing is the
+    common case. `priority` is optional too — unset just means it doesn't
+    get a priority boost in `app.services.today`'s ranking.
+
+    `source_conversation_id`/`source_message_id` are provenance for a task
+    the extraction pipeline creates (formerly `Commitment`'s fields, see
+    `app.services.task_extraction`) — a client creating a task directly
+    leaves them null.
+    """
+    title: str = Field(..., min_length=1, max_length=255)
+    status: TaskStatus = TaskStatus.TODO
+    due_date: datetime | None = None
+    priority: TaskPriority | None = None
+    description: str | None = Field(default=None, max_length=10000)
+    related_event_id: UUID | None = None
+    parent_task_id: UUID | None = None
+    source_conversation_id: UUID | None = None
+    source_message_id: UUID | None = None
+
+    @field_validator("title")
+    @classmethod
+    def title_not_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Title cannot be empty")
+        return stripped
+
+
+class TaskUpdate(BaseModel):
+    """Request body for PATCH /tasks/{id}.
+
+    A `status` here is validated against the state machine in
+    `app.services.tasks` — an illegal transition is rejected by the service,
+    not merely by this schema.
+    """
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    status: TaskStatus | None = None
+    due_date: datetime | None = None
+    priority: TaskPriority | None = None
+    description: str | None = Field(default=None, max_length=10000)
+    related_event_id: UUID | None = None
+    parent_task_id: UUID | None = None
+
+    @field_validator("title")
+    @classmethod
+    def title_not_blank(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Title cannot be empty")
+        return stripped
+
+
+class TaskResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    user_id: UUID
+    title: str
+    status: TaskStatus
+    due_date: datetime | None
+    priority: TaskPriority | None
+    description: str | None
+    related_event_id: UUID | None
+    parent_task_id: UUID | None
+    source_conversation_id: UUID | None
+    source_message_id: UUID | None
+    completed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class TaskRejectionCheck(BaseModel):
+    """Answer to "has the user already rejected this suggestion?" — the
+    guard that stops the extractor re-proposing a task the user turned
+    down. Mirrors the removed `CommitmentRejectionCheck`."""
+    fingerprint: str
+    rejected_before: bool
+    rejected_task_id: UUID | None = None
+    rejected_at: datetime | None = None
+
+
+class AttentionSurfaceCreate(BaseModel):
+    """Request body for POST /attention-log — record one surfacing decision.
+
+    `level=silent` is a legitimate, expected value here: a decision not to
+    speak is still a decision, and recording it is the whole point of this
+    table (2.9).
+    """
+    item_type: AttentionItemType
+    item_id: UUID
+    reason_key: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="Stable string naming why this surfaced, e.g. 'task.overdue'. "
+                    "Half of the dedup key — keep it stable across releases.",
+    )
+    level: AttentionLevel
+    channel: AttentionChannel = AttentionChannel.IN_APP
+
+    @field_validator("reason_key")
+    @classmethod
+    def reason_key_not_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("reason_key cannot be empty")
+        return stripped
+
+
+class AttentionResponseUpdate(BaseModel):
+    """Request body for POST /attention-log/{id}/response.
+
+    `no_response` is rejected: it's the initial state of every row, not
+    something a user can report. Allowing it would let a real response be
+    silently erased, and 6.9 would count that as "never answered".
+    """
+    response: AttentionResponse
+
+    @field_validator("response")
+    @classmethod
+    def must_be_an_actual_response(cls, value: AttentionResponse) -> AttentionResponse:
+        if value is AttentionResponse.NO_RESPONSE:
+            raise ValueError(
+                "no_response is the initial state, not a response — use "
+                "accepted, dismissed, or ignored"
+            )
+        return value
+
+
+class AttentionLogResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    user_id: UUID
+    item_type: AttentionItemType
+    item_id: UUID
+    reason_key: str
+    surfaced_at: datetime
+    level: AttentionLevel
+    channel: AttentionChannel
+    response: AttentionResponse
+    responded_at: datetime | None
+
+
+class AttentionSurfaceResult(BaseModel):
+    """What happened to a surfacing request.
+
+    `suppressed=True` means an identical (item_id, reason_key) is still
+    inside the dedup window, so nothing was written and `log` is null. The
+    caller gets a 200, not an error — being told "already surfaced" is a
+    normal answer, not a failure.
+    """
+    suppressed: bool
+    reason: str | None = Field(
+        default=None, description="Why it was suppressed, when it was"
+    )
+    dedup_window_hours: int
+    log: AttentionLogResponse | None = None
+
+
+class AttentionReasonSummary(BaseModel):
+    """One reason_key's history for a single item."""
+    reason_key: str
+    surface_count: int = Field(..., description="Times surfaced, including silent decisions")
+    silent_count: int = Field(..., description="How many of those were decisions NOT to speak")
+    first_surfaced_at: datetime
+    last_surfaced_at: datetime
+    last_level: AttentionLevel
+    responses: dict[str, int] = Field(
+        default_factory=dict, description="Count per response value"
+    )
+
+
+class AttentionItemHistory(BaseModel):
+    """Answers 2.9 M2 in one payload: has this item been surfaced, for what
+    reasons, how many times, and how did the user respond?"""
+    item_id: UUID
+    surfaced: bool
+    total_surfacings: int
+    reasons: list[AttentionReasonSummary]
+
+
 class GoogleConnectUrlResponse(BaseModel):
     authorization_url: str
     state: str
@@ -364,6 +776,7 @@ class GoogleCalendarConnectionStatus(BaseModel):
     has_sync_token: bool = False
     channel_expiration: datetime | None = None
     last_sync_error: str | None = None
+    needs_reauth: bool = False
 
 
 class UploadInitRequest(BaseModel):

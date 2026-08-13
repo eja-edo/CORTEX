@@ -506,19 +506,91 @@ class EventBus:
 
 # Global EventBus instance
 _event_bus: Optional[EventBus] = None
+# Which running loop `_event_bus` (above) was connected on. None until the
+# first `get_event_bus()` call sets it.
+_event_bus_loop: Optional[asyncio.AbstractEventLoop] = None
+# Side cache for every OTHER loop that calls get_event_bus() — see below.
+# Keyed by id(loop) rather than the loop object itself only because a
+# worker thread's loop is closed (and could in principle be garbage
+# collected and a new one allocated at the same id) once that thread exits;
+# in practice each WorkerThread lives for the process lifetime, so this
+# never actually collides, but id() avoids holding the loop object alive
+# past its own cleanup for no reason.
+_event_bus_by_loop: dict[int, EventBus] = {}
 
 
 async def get_event_bus() -> EventBus:
-    """Get or create the global EventBus instance."""
-    global _event_bus
+    """Get or create the EventBus for the *current* running loop.
+
+    Every service in this codebase (NoteService, TaskService,
+    CommitmentService, ...) calls this to publish events, and some of those
+    services are driven from a `WorkerThread`'s own loop — CommitmentService,
+    for instance, gets called from `CommitmentFlushWorker`'s idle-flush sweep,
+    which runs on its own thread with its own loop (`app/__init__.py`'s
+    `WorkerThread`, the same mechanism `ReminderWorker`/`GoogleSyncWorker`
+    use). A plain single-instance singleton — this function's entire body
+    until this fix — hands every caller the *first* loop's connection
+    regardless of which loop is actually asking, and `redis.asyncio`
+    connections are as loop-bound as asyncpg's: using one from a different
+    loop raises "Task ... attached to a different loop", caught by
+    `publish()`'s own `except Exception: logger.warning(...)` so it never
+    crashes anything, but the event silently never sends. Found live: an
+    idle-flush-extracted commitment saved to Postgres correctly while its
+    `commitment.created` event vanished into exactly this failure.
+
+    Fixed the same way the DB engine is for the same class of worker
+    (`make_async_sessionmaker()` per thread in `ReminderWorker.start()`),
+    but additively — `_event_bus`/`_event_bus_loop` keep meaning exactly
+    what they meant before for whichever loop calls first (almost always the
+    main FastAPI loop), so every test that does
+    `event_bus_module._event_bus = bus` directly keeps working unchanged.
+    Only a call from a genuinely different loop falls through to the
+    per-loop side cache.
+    """
+    global _event_bus, _event_bus_loop
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
     if _event_bus is None:
         _event_bus = EventBus()
         await _event_bus.connect()
-    return _event_bus
+        _event_bus_loop = loop
+        return _event_bus
+
+    if _event_bus_loop is None:
+        # _event_bus was assigned directly rather than created through this
+        # function — the pattern every test's `event_subscriber`-style
+        # fixture uses (`event_bus_module._event_bus = bus`) so it can hand
+        # services a pre-subscribed instance. There's no way to know which
+        # loop that instance's Redis connection actually belongs to, so
+        # trust the caller: adopt the current loop as the owner. Almost
+        # always correct (the fixture and the code under test share a loop);
+        # the case this whole function exists for — a *different* loop, e.g.
+        # a WorkerThread — only shows up on a later call, once this branch
+        # has already bound the first loop.
+        _event_bus_loop = loop
+        return _event_bus
+
+    if loop is None or loop is _event_bus_loop:
+        return _event_bus
+
+    key = id(loop)
+    bus = _event_bus_by_loop.get(key)
+    if bus is None:
+        bus = EventBus()
+        await bus.connect()
+        _event_bus_by_loop[key] = bus
+        logger.info(f"EventBus: connected a second instance for a non-main loop (id={key})")
+    return bus
 
 
 def reset_event_bus():
     """Reset the global EventBus (for testing). Caller is responsible for
-    disconnecting the previous instance beforehand if needed."""
-    global _event_bus
+    disconnecting the previous instance(s) beforehand if needed."""
+    global _event_bus, _event_bus_loop
     _event_bus = None
+    _event_bus_loop = None
+    _event_bus_by_loop.clear()

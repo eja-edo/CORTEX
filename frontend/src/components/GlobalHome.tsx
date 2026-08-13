@@ -3,14 +3,13 @@ import { Calendar, Clock, FileText, Plus, Zap, ChevronRight } from 'lucide-react
 import type { Workspace } from '../types'
 import type { AppNote } from '../hooks/useNotes'
 import type { Schedule } from '../types'
+import { TodayChecklist } from './TodayChecklist'
 
 interface GlobalHomeProps {
   user: { full_name?: string | null; email?: string | null } | null
   workspaces: Workspace[]
   recentNotes: AppNote[]
   upcomingSchedules: Schedule[]
-  onCreateNote: () => void
-  onCreateEvent: () => void
   onCreateWorkspace: () => void
   onOpenWorkspace: (workspaceId: string) => void
   onOpenNote: (noteId: string) => void
@@ -42,8 +41,6 @@ export function GlobalHome({
   workspaces,
   recentNotes,
   upcomingSchedules,
-  onCreateNote,
-  onCreateEvent,
   onCreateWorkspace,
   onOpenWorkspace,
   onOpenNote,
@@ -92,9 +89,6 @@ export function GlobalHome({
         <h1 className="global-home-greeting">
           {greeting}, {userName}
         </h1>
-        <p className="global-home-subtitle">
-          Your automation flows are running smoothly.
-        </p>
       </div>
 
       {/* Dashboard Grid */}
@@ -214,28 +208,13 @@ export function GlobalHome({
 
         {/* Right Column */}
         <div className="global-home-right">
-          {/* Quick Actions */}
-          <section className="home-card">
-            <div className="home-card-header">
-              <div className="home-card-header-left">
-                <Plus size={16} className="home-card-header-icon" />
-                <h2 className="home-card-header-label">Quick Actions</h2>
-              </div>
-            </div>
-            <div className="home-quick-actions">
-              <button className="home-quick-action-btn" onClick={onCreateNote}>
-                <div className="home-quick-action-icon home-quick-action-icon--primary">
-                  <FileText size={22} />
-                </div>
-                <span>New Note</span>
-              </button>
-              <button className="home-quick-action-btn" onClick={onCreateEvent}>
-                <div className="home-quick-action-icon home-quick-action-icon--secondary">
-                  <Calendar size={22} />
-                </div>
-                <span>New Event</span>
-              </button>
-            </div>
+          {/* Today's tasks — a plain, manageable list + basic actions
+              (tick, rename, due date, priority, delete). Replaces the old
+              full-width "Hôm nay" section that used to sit above this grid.
+              TodayChecklist renders its own header ("Việc hôm nay" + count),
+              so this card doesn't add a second one. */}
+          <section className="home-card home-today-card">
+            <TodayChecklist />
           </section>
 
           {/* Recent Activity */}

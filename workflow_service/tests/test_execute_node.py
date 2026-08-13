@@ -47,7 +47,7 @@ class TestExecuteNode:
                             {"id": "a2", "type": "action.update_note", "position": {"x": 400, "y": 0}, "data": {"label": "Update Note", "config": {"note_id": "test-id", "content": "updated"}}},
                             {"id": "a3", "type": "action.send_notification", "position": {"x": 600, "y": 0}, "data": {"label": "Send Notification", "config": {"title": "notif", "body": "body", "type": "info"}}},
                             {"id": "a4", "type": "action.call_ai", "position": {"x": 800, "y": 0}, "data": {"label": "Call AI", "config": {"prompt": "Say hello", "output_key": "ai_result"}}},
-                            {"id": "a5", "type": "action.call_webhook", "position": {"x": 1000, "y": 0}, "data": {"label": "Call Webhook", "config": {"url": "https://httpbin.org/post", "method": "POST", "body": '{"test": true}'}}},
+                            {"id": "a5", "type": "action.call_api", "position": {"x": 1000, "y": 0}, "data": {"label": "Call API", "config": {"url": "https://httpbin.org/post", "method": "POST", "body": '{"test": true}'}}},
                             {"id": "a6", "type": "action.condition", "position": {"x": 1200, "y": 0}, "data": {"label": "Condition", "config": {"left": "1", "operator": "equals", "right": "1"}}},
                             {"id": "a7", "type": "action.wait", "position": {"x": 1400, "y": 0}, "data": {"label": "Wait", "config": {"seconds": 1}}},
                             {"id": "a8", "type": "action.schedule", "position": {"x": 1600, "y": 0}, "data": {"label": "Schedule", "config": {"title": "event", "start_time": "2025-01-01T00:00:00Z", "end_time": "2025-01-01T01:00:00Z"}}},
@@ -150,10 +150,10 @@ class TestExecuteNode:
         assert resp.status_code == 200
         print(f"  [call_ai] executed — {resp.json()}")
 
-    async def test_call_webhook_executed(self, auth_headers: dict):
+    async def test_call_api_executed(self, auth_headers: dict):
         resp = await self._exec(auth_headers, "a5", trigger_data={"event": "manual.trigger"})
         assert resp.status_code == 200
-        print(f"  [call_webhook] executed — {resp.json()}")
+        print(f"  [call_api] executed — {resp.json()}")
 
     async def test_schedule_executed(self, auth_headers: dict):
         resp = await self._exec(auth_headers, "a8", trigger_data={"event": "manual.trigger"})

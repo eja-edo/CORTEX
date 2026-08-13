@@ -58,6 +58,31 @@
       "has_payload_schema": true
     },
     {
+      "event_type": "task.completed",
+      "description": "A task transitioned to done \u2014 published instead of task.updated for that transition",
+      "has_payload_schema": true
+    },
+    {
+      "event_type": "task.created",
+      "description": "A task was created",
+      "has_payload_schema": true
+    },
+    {
+      "event_type": "task.deleted",
+      "description": "A task was deleted",
+      "has_payload_schema": true
+    },
+    {
+      "event_type": "task.overdue",
+      "description": "A task transitioned into overdue (polled, not from a mutation)",
+      "has_payload_schema": true
+    },
+    {
+      "event_type": "task.updated",
+      "description": "A task changed (carries fields_changed)",
+      "has_payload_schema": true
+    },
+    {
       "event_type": "tool.executed",
       "description": "An AI tool call finished",
       "has_payload_schema": true

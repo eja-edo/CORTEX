@@ -9,12 +9,13 @@ the shared DLQ stream afterwards, so this never touches real `note.*`/
 """
 
 import asyncio
+import threading
 from uuid import uuid4
 
 import pytest
 import pytest_asyncio
 
-from app.events.event_bus import EventBus, reset_event_bus
+from app.events.event_bus import EventBus, get_event_bus, reset_event_bus
 from app.events.schemas import EventEnvelope
 
 
@@ -219,3 +220,94 @@ async def test_publish_without_connect_raises():
 async def test_replay_from_dlq_not_implemented(event_bus):
     with pytest.raises(NotImplementedError):
         await event_bus.replay_from_dlq(str(uuid4()))
+
+
+# ============================================================================
+# get_event_bus() loop affinity
+#
+# Regression coverage for two related bugs:
+#   1. CommitmentFlushWorker (its own thread + event loop, same pattern as
+#      ReminderWorker) publishing commitment.created via the plain
+#      single-instance singleton silently failed with "attached to a
+#      different loop" — the singleton always handed back the *first*
+#      loop's Redis connection. get_event_bus() is now loop-aware: a call
+#      from a genuinely different running loop gets its own instance.
+#   2. Fixing #1 by comparing against a tracked "owner loop" broke every
+#      test using the `event_subscriber`-style fixture pattern (assign
+#      `event_bus_module._event_bus = bus` directly, bypassing
+#      get_event_bus() entirely) — the owner-loop tracker was left unset,
+#      so the very next same-loop get_event_bus() call treated "unset" as
+#      "some other loop" and silently handed back an unsubscribed bus
+#      instead. get_event_bus() now adopts the current loop lazily the
+#      first time it's asked, rather than requiring it to have been the
+#      one that created _event_bus.
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_get_event_bus_returns_directly_assigned_instance_from_same_loop():
+    """The exact pattern test fixtures use elsewhere: assign _event_bus
+    directly (never via get_event_bus()), then call get_event_bus() from
+    the same running loop and expect the same, already-subscribed instance
+    back — not a fresh, unsubscribed one."""
+    reset_event_bus()
+    import app.events.event_bus as event_bus_module
+
+    bus = EventBus()
+    await bus.connect()
+    event_bus_module._event_bus = bus
+    try:
+        result = await get_event_bus()
+        assert result is bus
+
+        # And a second call from the same loop still returns it too.
+        result_again = await get_event_bus()
+        assert result_again is bus
+    finally:
+        event_bus_module._event_bus = None
+        await bus.disconnect()
+        reset_event_bus()
+
+
+@pytest.mark.asyncio
+async def test_get_event_bus_gives_a_different_loop_its_own_instance():
+    """A call from a genuinely different loop (a real OS thread with its own
+    asyncio loop, the TaskFlushWorker/ReminderWorker pattern) must not
+    reuse the main loop's EventBus — that bus's Redis connection is bound to
+    the main loop and using it from another raises "attached to a different
+    loop"."""
+    reset_event_bus()
+    import app.events.event_bus as event_bus_module
+    try:
+        main_bus = await get_event_bus()
+
+        other_loop_bus: list[EventBus] = []
+        other_loop_error: list[BaseException] = []
+
+        def run_in_other_thread():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                bus = loop.run_until_complete(get_event_bus())
+                other_loop_bus.append(bus)
+                loop.run_until_complete(bus.disconnect())
+            except BaseException as exc:  # noqa: BLE001 - surfaced via assertion below
+                other_loop_error.append(exc)
+            finally:
+                loop.close()
+
+        thread = threading.Thread(target=run_in_other_thread)
+        thread.start()
+        thread.join(timeout=10)
+
+        assert not other_loop_error, f"get_event_bus() failed on other loop: {other_loop_error}"
+        assert len(other_loop_bus) == 1
+        assert other_loop_bus[0] is not main_bus
+    finally:
+        for bus in event_bus_module._event_bus_by_loop.values():
+            try:
+                await bus.disconnect()
+            except Exception:
+                pass
+        if event_bus_module._event_bus is not None:
+            await event_bus_module._event_bus.disconnect()
+        reset_event_bus()

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { streamAgentMessage, listConversations, getConversation, revertAction, ApiError, type ConversationListItem, type StreamEvent, type PendingChange, type TokenUsage } from '../services/api'
+import { streamAgentMessage, listConversations, getConversation, deleteConversation, revertAction, getAvailableModels, ApiError, type ConversationListItem, type StreamEvent, type PendingChange, type TokenUsage, type AskChoiceQuestion, type AvailableModel } from '../services/api'
 import { useConversationStore } from '../stores/conversationStore'
 import { knowledgeRoute, noteRoute, scheduleRoute } from '../services/routes'
 
@@ -34,12 +34,14 @@ export type AgentMessage = {
     thinkingOpen?: boolean
     thinkingSteps?: Array<{
         id: string
-        type: 'thinking' | 'text' | 'tool_start' | 'tool_result'
+        type: 'thinking' | 'text' | 'tool_start' | 'tool_result' | 'ask_choice'
         toolName?: string
         toolArgs?: Record<string, unknown>
         result?: unknown
         text?: string
         success?: boolean
+        questions?: AskChoiceQuestion[]
+        answers?: Record<string, string>
     }>
 }
 
@@ -122,11 +124,7 @@ function buildPendingChange(
     }
 }
 
-export const AVAILABLE_MODELS: { id: string; label: string }[] = [
-    { id: 'auto', label: 'Auto (round-robin)' },
-    { id: 'models/gemma-4-31b-it', label: 'Gemma 4 31B' },
-    { id: 'models/gemma-4-26b-a4b-it', label: 'Gemma 4 26B' },
-]
+const AUTO_MODEL_OPTION: AvailableModel = { id: 'auto', label: 'Auto (round-robin)' }
 
 export function toolSemanticDescription(toolName: string, toolArgs?: Record<string, unknown>): string {
     if (!toolArgs) return ''
@@ -222,10 +220,11 @@ interface UseAgentStreamOptions {
     pendingSelection?: string
     onToolNavigate?: (toolName: string) => Promise<void>
     onNoteDiff?: (noteId: string, proposalId: string) => void
+    onPlanProposal?: (proposalId: string) => void
 }
 
 export function useAgentStream(options: UseAgentStreamOptions) {
-    const { workspaceId, noteTitle, onToolNavigate, onNoteDiff } = options
+    const { workspaceId, noteTitle, onToolNavigate, onNoteDiff, onPlanProposal } = options
     const navigate = useNavigate()
     const { updateTokenUsage } = useConversationStore()
 
@@ -238,11 +237,13 @@ export function useAgentStream(options: UseAgentStreamOptions) {
     const [sessionsLoading, setSessionsLoading] = useState(true)
     const [sessionsLoadingMore, setSessionsLoadingMore] = useState(false)
     const [sessionsOffset, setSessionsOffset] = useState(0)
+    const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
     const [isInitializing, setIsInitializing] = useState(true)
     const [pendingChanges, setPendingChanges] = useState<PendingChange[]>([])
     const [selectedModel, setSelectedModel] = useState<string>(
         () => localStorage.getItem(MODEL_KEY) || 'auto'
     )
+    const [availableModels, setAvailableModels] = useState<AvailableModel[]>([AUTO_MODEL_OPTION])
     const [lastUsage, setLastUsage] = useState<TokenUsage | null>(null)
     const [lastModelUsed, setLastModelUsed] = useState<string | null>(null)
     const abortRef = useRef<AbortController | null>(null)
@@ -266,6 +267,16 @@ export function useAgentStream(options: UseAgentStreamOptions) {
         } catch (err) {
             console.error('Failed to clear conversationId from localStorage:', err)
         }
+    }, [])
+
+    useEffect(() => {
+        let canceled = false
+        getAvailableModels()
+            .then(models => {
+                if (!canceled) setAvailableModels([AUTO_MODEL_OPTION, ...models])
+            })
+            .catch(err => console.error('Failed to load available models:', err))
+        return () => { canceled = true }
     }, [])
 
     useEffect(() => {
@@ -564,6 +575,22 @@ export function useAgentStream(options: UseAgentStreamOptions) {
         clearConversationIdFromStorage()
     }, [clearConversationIdFromStorage])
 
+    const deleteSession = useCallback(async (sessionId: string) => {
+        setDeletingSessionId(sessionId)
+        try {
+            await deleteConversation(sessionId)
+            setSessions(prev => prev.filter(s => s.id !== sessionId))
+            if (conversationId === sessionId) {
+                handleNewSession()
+            }
+        } catch (err) {
+            setError(`Failed to delete session: ${err instanceof Error ? err.message : 'Unknown error'}`)
+            console.error('Failed to delete session:', err)
+        } finally {
+            setDeletingSessionId(null)
+        }
+    }, [conversationId, handleNewSession])
+
     const stopGeneration = useCallback(() => {
         abortRef.current?.abort()
         abortRef.current = null
@@ -783,6 +810,18 @@ export function useAgentStream(options: UseAgentStreamOptions) {
                         console.log('[AskAI] calling onNoteDiff', event.note_id, event.proposal_id)
                         onNoteDiff(event.note_id, event.proposal_id)
                     }
+                } else if (event.type === 'plan_proposal' && event.proposal_id) {
+                    onPlanProposal?.(event.proposal_id)
+                } else if (event.type === 'ask_choice' && event.questions) {
+                    flushPendingThinking()
+                    flushPendingText()
+                    const step = {
+                        id: `ask-${Date.now()}-${Math.random()}`,
+                        type: 'ask_choice' as const,
+                        questions: event.questions,
+                    }
+                    thinkingSteps = [...thinkingSteps, step]
+                    pushStepNow()
                 } else if (event.type === 'done' && event.conversation_id) {
                     finalConversationId = event.conversation_id
                     if (event.usage) {
@@ -828,7 +867,7 @@ export function useAgentStream(options: UseAgentStreamOptions) {
             abortRef.current = null
             setIsLoading(false)
         }
-    }, [isLoading, conversationId, updateTokenUsage, buildRuntimeContextText, buildPageContext, navigate, workspaceId, onToolNavigate, saveConversationIdToStorage, selectedModel, onNoteDiff])
+    }, [isLoading, conversationId, updateTokenUsage, buildRuntimeContextText, buildPageContext, navigate, workspaceId, onToolNavigate, saveConversationIdToStorage, selectedModel, onNoteDiff, onPlanProposal])
 
     const acceptChange = useCallback((changeId: string, actionId: string) => {
         persistDismissedActionId(actionId)
@@ -874,6 +913,22 @@ export function useAgentStream(options: UseAgentStreamOptions) {
         setPendingChanges([])
     }, [pendingChanges])
 
+    const answerChoice = useCallback((
+        messageId: string,
+        stepId: string,
+        answers: Record<string, string>,
+        summaryText: string,
+    ) => {
+        setMessages(prev => prev.map(m => m.id === messageId
+            ? {
+                ...m,
+                thinkingSteps: (m.thinkingSteps ?? []).map(s => s.id === stepId ? { ...s, answers } : s),
+            }
+            : m
+        ))
+        void sendMessage(summaryText, [])
+    }, [sendMessage])
+
     return {
         messages,
         isLoading,
@@ -884,9 +939,11 @@ export function useAgentStream(options: UseAgentStreamOptions) {
         sessionsLoading,
         sessionsLoadingMore,
         sessionsOffset,
+        deletingSessionId,
         isInitializing,
         pendingChanges,
         selectedModel,
+        availableModels,
         lastUsage,
         lastModelUsed,
         abortRef,
@@ -901,11 +958,13 @@ export function useAgentStream(options: UseAgentStreamOptions) {
         handleNewSession,
         loadSession,
         loadMoreSessions,
+        deleteSession,
         handleModelChange,
         acceptChange,
         undoChange,
         acceptAllChanges,
         undoAllChanges,
+        answerChoice,
         clearConversationIdFromStorage,
     }
 }

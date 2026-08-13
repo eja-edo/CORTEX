@@ -85,3 +85,27 @@ class WorkflowListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class WorkflowTriggerCreate(BaseModel):
+    trigger_type: TriggerTypeEnum
+    trigger_config: dict[str, Any] = {}
+
+
+class WorkflowTriggerUpdate(BaseModel):
+    trigger_config: Optional[dict[str, Any]] = None
+    is_active: Optional[bool] = None
+
+
+class WorkflowTriggerResponse(BaseModel):
+    id: UUID4
+    workflow_id: UUID4
+    trigger_type: TriggerTypeEnum
+    trigger_config: dict[str, Any]
+    is_active: bool
+    webhook_url: Optional[str] = None
+    webhook_secret: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}

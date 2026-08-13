@@ -16,6 +16,10 @@ from app.api.agent import router as agent_router
 from app.api.google_calendar import router as google_calendar_router
 from app.api.assets import router as assets_router
 from app.api.notes import router as notes_router
+from app.api.tasks import router as tasks_router
+from app.api.attention_log import router as attention_log_router
+from app.api.calendar import router as calendar_router
+from app.api.today import router as today_router
 from app.api.images import router as images_router
 from app.api.notifications import router as notifications_router
 from app.api.schedules import router as schedules_router
@@ -23,6 +27,7 @@ from app.api.upload import router as upload_router
 from app.api.knowledge import router as knowledge_router
 from app.api.internal import router as internal_router
 from app.api.workspaces import router as workspaces_router
+from app.api.plan_proposals import router as plan_proposals_router
 from app.api.proposals import router as proposals_router
 from app.api.sse import notification_sse_router, sync_sse_router
 from app.database_async import init_async_engine, close_async_engine
@@ -30,7 +35,9 @@ from app.events.event_bus import get_event_bus
 from app.services.transcription_results_consumer import transcription_results_consumer
 from app.services.llm_processor_worker import get_llm_processor_worker
 from app.services.reminder_worker import ReminderWorker
+from app.services.state_evaluator import StateEvaluator
 from app.services.google_sync_worker import GoogleSyncWorker
+from app.services.task_flush_worker import TaskFlushWorker
 from app.api.sse.sse_manager import SSEManager
 
 logger = get_logger(__name__)
@@ -66,6 +73,14 @@ class WorkerThread:
             self._loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self._loop)
             self._loop.run_until_complete(self.worker.start())
+        except asyncio.CancelledError:
+            # Expected: stop() cancels the worker's internal task, which
+            # start() re-raises out of run_until_complete once its own
+            # cleanup (finally block) has finished. Not a crash — asyncio
+            # .CancelledError is a BaseException since Python 3.8, so it
+            # would otherwise skip the `except Exception` below entirely
+            # and print as an uncaught "Exception in thread" traceback.
+            logger.info(f"{self.name} worker stopped")
         except KeyboardInterrupt:
             logger.info(f"{self.name} worker interrupted")
         except Exception as exc:
@@ -107,7 +122,9 @@ original_sigterm = signal.getsignal(signal.SIGTERM)
 # Global worker threads
 _llm_worker_thread: Optional[WorkerThread] = None
 _reminder_worker_thread: Optional[WorkerThread] = None
+_state_evaluator_thread: Optional[WorkerThread] = None
 _google_sync_worker_thread: Optional[WorkerThread] = None
+_task_flush_worker_thread: Optional[WorkerThread] = None
 
 def signal_exit(signum, frame):
     """
@@ -160,6 +177,12 @@ async def lifespan(app: FastAPI):
     # future worker) would XADD successfully and then be seen by nobody.
     try:
         event_bus = await get_event_bus()
+        # Subscribe before starting the consumer: registering after would
+        # leave a window where task.* events are read and dropped. (Late
+        # subscribers do still work — route_event() re-reads _subscribers
+        # each time — but there's no reason to open the gap.)
+        from app.services.notification_subscribers import handle_schedule_reminder_due
+        event_bus.subscribe("schedule.reminder.due", handle_schedule_reminder_due)
         await event_bus.start_consumer()
     except Exception as exc:
         logger.warning(f"EventBus durable consumer disabled: {exc}")
@@ -177,10 +200,22 @@ async def lifespan(app: FastAPI):
     _reminder_worker_thread = WorkerThread("Reminder", reminder_worker)
     _reminder_worker_thread.start()
 
+    # Start StateEvaluator in separate thread (Milestone 4.6)
+    global _state_evaluator_thread
+    _state_evaluator_thread = WorkerThread("StateEvaluator", StateEvaluator())
+    _state_evaluator_thread.start()
+
     # Start GoogleSyncWorker in separate thread
     google_sync_worker = GoogleSyncWorker()
     _google_sync_worker_thread = WorkerThread("GoogleSync", google_sync_worker)
     _google_sync_worker_thread.start()
+
+    # Start TaskFlushWorker. Without it, a conversation that ends before the
+    # 20-message threshold never gets extracted and its tasks are lost —
+    # which is the most common conversation shape.
+    global _task_flush_worker_thread
+    _task_flush_worker_thread = WorkerThread("TaskFlush", TaskFlushWorker())
+    _task_flush_worker_thread.start()
 
     try:
         yield
@@ -196,8 +231,12 @@ async def lifespan(app: FastAPI):
         # Stop all workers
         if _reminder_worker_thread:
             _reminder_worker_thread.stop()
+        if _state_evaluator_thread:
+            _state_evaluator_thread.stop()
         if _google_sync_worker_thread:
             _google_sync_worker_thread.stop()
+        if _task_flush_worker_thread:
+            _task_flush_worker_thread.stop()
         if _llm_worker_thread:
             _llm_worker_thread.stop()
 
@@ -231,6 +270,10 @@ app.include_router(agent_router, prefix=settings.API_STR)
 app.include_router(google_calendar_router, prefix=settings.API_STR)
 app.include_router(schedules_router, prefix=settings.API_STR)
 app.include_router(notes_router, prefix=settings.API_STR)
+app.include_router(tasks_router, prefix=settings.API_STR)
+app.include_router(attention_log_router, prefix=settings.API_STR)
+app.include_router(calendar_router, prefix=settings.API_STR)
+app.include_router(today_router, prefix=settings.API_STR)
 app.include_router(assets_router, prefix=settings.API_STR)
 app.include_router(images_router, prefix=settings.API_STR)
 app.include_router(notifications_router, prefix=settings.API_STR)
@@ -240,6 +283,7 @@ app.include_router(workspaces_router, prefix=settings.API_STR)
 app.include_router(sync_sse_router, prefix=settings.API_STR)
 app.include_router(notification_sse_router, prefix=settings.API_STR)
 app.include_router(proposals_router, prefix=settings.API_STR)
+app.include_router(plan_proposals_router, prefix=settings.API_STR)
 
 # Internal service-to-service endpoints (not exposed to internet)
 app.include_router(internal_router)

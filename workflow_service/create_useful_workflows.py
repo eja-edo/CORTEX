@@ -212,7 +212,7 @@ def create_webhook_workflow():
             },
             {
                 "id": "webhook1",
-                "type": "action.call_webhook",
+                "type": "action.call_api",
                 "position": {"x": 500, "y": 100},
                 "data": {
                     "label": "Send Response",

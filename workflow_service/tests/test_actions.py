@@ -11,7 +11,7 @@ class TestActionsCatalog:
         data = resp.json()
         assert "actions" in data
         assert "triggers" in data
-        assert len(data["actions"]) == 9  # All 9 built-in action types
+        assert len(data["actions"]) == 15  # All 15 built-in action types
         assert len(data["triggers"]) == 3
 
     async def test_list_actions_no_auth_returns_403(self, async_client: AsyncClient):
@@ -23,6 +23,12 @@ class TestActionsCatalog:
         types = {a["type"] for a in resp.json()["actions"]}
         assert "action.create_note" in types
         assert "action.send_notification" in types
+        assert "action.request_attention" in types
+        assert "action.call_api" in types
+        assert "action.extract_html" in types
+        assert "action.get_schedules" in types
+        assert "action.create_task" in types
+        assert "action.update_task" in types
 
     async def test_triggers_contain_expected_types(self, async_client: AsyncClient, auth_headers: dict):
         resp = await async_client.get("/api/v1/actions", headers=auth_headers)

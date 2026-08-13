@@ -557,6 +557,32 @@
     color: var(--text-primary);
 }
 
+.ask-ai-quick-btn-delete {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+    border-radius: 5px;
+    color: var(--text-tertiary);
+    cursor: pointer;
+}
+
+.ask-ai-quick-btn:hover .ask-ai-quick-btn-delete {
+    display: flex;
+}
+
+.ask-ai-quick-btn-delete:hover {
+    background: var(--red-light);
+    color: var(--red);
+}
+
+.ask-ai-quick-btn-delete.is-deleting {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
 .ask-ai-more-btn {
     padding: 7px 12px;
     border: none;
@@ -1372,6 +1398,439 @@
 
 .ask-ai-changes-item-btn.undo:hover {
     background: rgba(220,38,38,0.08);
+}
+
+/* Plan proposal review card — same "card in the chat flow" language as
+   .ask-ai-changes-*, but for a set of task/event items awaiting approval
+   (3.2 AI Planner) rather than already-executed tool actions. */
+.plan-proposal-card {
+    margin-bottom: 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    padding: 8px;
+}
+
+.plan-proposal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 2px 6px;
+}
+
+.plan-proposal-title {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.plan-proposal-close-btn {
+    display: inline-grid;
+    place-items: center;
+    padding: 2px;
+    border: none;
+    background: none;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    border-radius: 4px;
+}
+
+.plan-proposal-close-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.plan-proposal-loading,
+.plan-proposal-error {
+    font-size: 11.5px;
+    color: var(--text-tertiary);
+    padding: 6px 2px;
+}
+
+.plan-proposal-error {
+    color: #dc2626;
+}
+
+.plan-proposal-list {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.plan-proposal-item {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 5px 6px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+}
+
+.plan-proposal-item.is-excluded {
+    opacity: 0.45;
+}
+
+/* Two datetime-local inputs don't fit next to a title on this card's
+   narrow (sidebar) width — native datetime-local rendering alone eats
+   ~180px each, squeezing the title input to 0. Wrap the time range onto
+   its own line instead of fighting the title for space. */
+.plan-proposal-item--event .plan-proposal-item-event-time {
+    flex-basis: 100%;
+    margin-left: 27px;
+    margin-top: 2px;
+}
+
+/* Read-only recurrence (event) / linked-event (task) indicator — same
+   wrap-to-own-line treatment, always below the editable controls. */
+.plan-proposal-item-meta {
+    flex-basis: 100%;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: 27px;
+    margin-top: 1px;
+    font-size: 10.5px;
+    color: var(--text-tertiary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.plan-proposal-item-check {
+    flex-shrink: 0;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
+.plan-proposal-item-type-icon {
+    flex-shrink: 0;
+    display: inline-grid;
+    place-items: center;
+    color: var(--text-tertiary);
+}
+
+.plan-proposal-item-title {
+    flex: 1;
+    min-width: 0;
+    background: none;
+    border: none;
+    font: inherit;
+    font-size: 12px;
+    color: var(--text-primary);
+    padding: 2px 0;
+}
+
+.plan-proposal-item-title:focus {
+    outline: none;
+}
+
+.plan-proposal-date-input {
+    flex-shrink: 0;
+    font: inherit;
+    font-size: 11px;
+    color: var(--text-secondary);
+    background: none;
+    border: none;
+    border-radius: 4px;
+    padding: 2px 4px;
+}
+
+.plan-proposal-date-input:hover {
+    background: var(--bg-hover);
+}
+
+.plan-proposal-date-time-toggle {
+    flex-shrink: 0;
+    display: inline-grid;
+    place-items: center;
+    background: none;
+    border: none;
+    padding: 2px;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    border-radius: 4px;
+}
+
+.plan-proposal-date-time-toggle:hover {
+    background: var(--bg-hover);
+}
+
+.plan-proposal-item-priority {
+    flex-shrink: 0;
+    display: inline-grid;
+    place-items: center;
+    padding: 3px;
+    border: none;
+    background: none;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    border-radius: 4px;
+}
+
+.plan-proposal-item-priority:hover {
+    background: var(--bg-hover);
+}
+
+.plan-proposal-item-priority.is-urgent { color: var(--red); }
+.plan-proposal-item-priority.is-high { color: var(--orange, #d97706); }
+.plan-proposal-item-priority.is-medium { color: var(--text-secondary); }
+.plan-proposal-item-priority.is-low { color: var(--text-tertiary); }
+
+.plan-proposal-item-event-time {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.plan-proposal-item-event-sep {
+    color: var(--text-tertiary);
+    font-size: 11px;
+}
+
+.plan-proposal-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.plan-proposal-approve-btn,
+.plan-proposal-reject-btn {
+    flex: 1;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: pointer;
+    background: transparent;
+    transition: all 0.1s;
+}
+
+.plan-proposal-approve-btn {
+    color: #0f7b6c;
+    border-color: rgba(15,123,108,0.25);
+}
+
+.plan-proposal-approve-btn:hover:not(:disabled) {
+    background: rgba(15,123,108,0.08);
+}
+
+.plan-proposal-reject-btn {
+    color: #dc2626;
+    border-color: rgba(220,38,38,0.2);
+}
+
+.plan-proposal-reject-btn:hover:not(:disabled) {
+    background: rgba(220,38,38,0.08);
+}
+
+.plan-proposal-approve-btn:disabled,
+.plan-proposal-reject-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+/* Ask-choice card — multiple-choice question(s) from the assistant that the
+   user answers by picking instead of typing. Same "card in the chat flow"
+   language as .plan-proposal-*, but rendered unconditionally (not gated by
+   msg.loading) since the user needs to interact with it after the turn ends. */
+.ask-choice-card {
+    margin-bottom: 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    padding: 8px;
+}
+
+.ask-choice-tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 6px;
+}
+
+.ask-choice-tab {
+    padding: 3px 8px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background: none;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-tertiary);
+    cursor: pointer;
+}
+
+.ask-choice-tab:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.ask-choice-tab.is-active {
+    background: var(--bg);
+    border-color: var(--border);
+    color: var(--text-primary);
+}
+
+.ask-choice-tab.is-answered::after {
+    content: '';
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    margin-left: 5px;
+    border-radius: 50%;
+    background: #0f7b6c;
+    vertical-align: middle;
+}
+
+.ask-choice-question {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-primary);
+    padding: 0 2px 8px;
+}
+
+.ask-choice-options {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.ask-choice-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    text-align: left;
+    cursor: pointer;
+    transition: all 0.1s;
+}
+
+.ask-choice-option:hover:not(:disabled) {
+    background: var(--bg-hover);
+}
+
+.ask-choice-option.is-selected {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 8%, var(--bg));
+}
+
+.ask-choice-option:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
+.ask-choice-option-mark {
+    flex-shrink: 0;
+    display: inline-grid;
+    place-items: center;
+    width: 15px;
+    height: 15px;
+    margin-top: 1px;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    color: var(--accent);
+}
+
+.ask-choice-option-mark.is-checkbox {
+    border-radius: 4px;
+}
+
+.ask-choice-option.is-selected .ask-choice-option-mark {
+    border-color: var(--accent);
+}
+
+.ask-choice-option-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.ask-choice-option-label {
+    font-size: 12px;
+    color: var(--text-primary);
+}
+
+.ask-choice-option-desc {
+    font-size: 10.5px;
+    color: var(--text-tertiary);
+}
+
+.ask-choice-custom-input {
+    width: 100%;
+    font: inherit;
+    font-size: 12px;
+    color: var(--text-primary);
+    background: none;
+    border: none;
+    padding: 0;
+}
+
+.ask-choice-custom-input:focus {
+    outline: none;
+}
+
+.ask-choice-footer {
+    display: flex;
+    margin-top: 8px;
+}
+
+.ask-choice-submit-btn {
+    flex: 1;
+    padding: 6px 8px;
+    border: 1px solid rgba(15,123,108,0.25);
+    border-radius: 6px;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: #0f7b6c;
+    background: transparent;
+    cursor: pointer;
+    transition: all 0.1s;
+}
+
+.ask-choice-submit-btn:hover:not(:disabled) {
+    background: rgba(15,123,108,0.08);
+}
+
+.ask-choice-submit-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.ask-choice-card--locked {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.ask-choice-locked-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px;
+    font-size: 11.5px;
+    padding: 2px;
+}
+
+.ask-choice-locked-question {
+    color: var(--text-tertiary);
+}
+
+.ask-choice-locked-answer {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    color: #0f7b6c;
+    font-weight: 500;
 }
 
 @keyframes thinkingPulse {

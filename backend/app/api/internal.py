@@ -17,8 +17,8 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
-from app.models import Asset, AssetStatus, Notification
-from app.api.sse.channels.notification_events import publish_notification
+from app.models import Asset, AssetStatus
+from app.services.attention_gate import request_attention_sync
 from app.core.internal_auth import verify_internal_key, get_internal_user, InternalUser
 from app.utils.logger import get_logger
 
@@ -127,48 +127,47 @@ class CreateNotificationRequest(BaseModel):
     actions: list[NotificationActionSchema] = []
 
 
+def _create_attention_request(payload: CreateNotificationRequest, db: Session) -> dict:
+    try:
+        user_uuid = UUID(payload.user_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid user_id format")
+
+    notification = request_attention_sync(
+        db,
+        user_id=user_uuid,
+        type=payload.type,
+        title=payload.title,
+        body=payload.body,
+        content=[b.model_dump() for b in payload.content] or None,
+        actions=[a.model_dump() for a in payload.actions],
+    )
+
+    return {"ok": True, "notification_id": str(notification.id)}
+
+
+@router.post("/attention/request", include_in_schema=False)
+def request_attention_internal(
+    payload: CreateNotificationRequest,
+    _: None = Depends(verify_internal_key),
+    db: Session = Depends(get_db),
+):
+    """Attention Gate entry point (Milestone 4.3/6.1): called by workflow
+    `action.request_attention` (and its deprecated alias
+    `action.send_notification`). Today the gate is a pass-through stub —
+    see `app.services.attention_gate`."""
+    return _create_attention_request(payload, db)
+
+
 @router.post("/notifications", include_in_schema=False)
 def create_notification_internal(
     payload: CreateNotificationRequest,
     _: None = Depends(verify_internal_key),
     db: Session = Depends(get_db),
 ):
-    """Create a notification for a user (called by workflow actions)."""
-    try:
-        user_uuid = UUID(payload.user_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid user_id format")
-
-    # Auto-wrap body into a text block if no content provided
-    content = payload.content
-    if not content and payload.body:
-        content = [NotificationBlockSchema(type="text", text=payload.body)]
-
-    notification = Notification(
-        user_id=user_uuid,
-        title=payload.title,
-        body=payload.body,
-        type=payload.type,
-        content=[b.model_dump() for b in content],
-        actions=[a.model_dump() for a in payload.actions],
-        created_at=datetime.utcnow(),
-    )
-    db.add(notification)
-    db.commit()
-    db.refresh(notification)
-
-    # Broadcast real-time notification via SSE
-    publish_notification(
-        user_id=payload.user_id,
-        notification_id=str(notification.id),
-        title=payload.title,
-        body=payload.body,
-        content=[b.model_dump() for b in content],
-        actions=[a.model_dump() for a in payload.actions],
-        notification_type=payload.type,
-    )
-
-    return {"ok": True, "notification_id": str(notification.id)}
+    """Deprecated alias for /internal/attention/request, kept for any
+    caller not yet migrated. Routes through the same Attention Gate."""
+    return _create_attention_request(payload, db)
 
 
 @router.get("/health")

@@ -29,20 +29,38 @@ class ConversationSummarizer:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
-    async def summarize_conversation(self, conversation_id: UUID) -> dict:
+    async def summarize_conversation(
+        self,
+        conversation_id: UUID,
+        extract_tasks: bool = True,
+        min_new_messages: int = 5,
+    ) -> dict:
         """
         Run memory extraction on a conversation.
 
         On success, resets summary counters (tokens_since_last_summary,
         messages_since_last_summary) and updates last_summary_message_id.
 
-        Returns dict with keys: success, episodic_stored, semantic_count, model_used, title
+        Args:
+            conversation_id: conversation to extract from.
+            extract_tasks: ask the same LLM call for tasks the user
+                committed to as well. Defaults to on — it costs no extra
+                round trip, and the threshold trigger firing without it
+                would mean a task sitting unnoticed in an already-summarised
+                conversation.
+            min_new_messages: see extract_and_store. The idle flush lowers
+                this to 1 so two-message conversations aren't skipped.
+
+        Returns dict with keys: success, episodic_stored, semantic_count,
+        model_used, title, tasks
         """
         logger.info(f"Starting memory extraction for conversation {conversation_id}")
 
         result = await extract_and_store(
             conversation_id=conversation_id,
             db=self.db,
+            extract_tasks=extract_tasks,
+            min_new_messages=min_new_messages,
         )
 
         if result.get("success"):

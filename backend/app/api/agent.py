@@ -18,6 +18,7 @@ from app.schemas import (
 )
 from app.ai.agents.agent_service import AgentService
 from app.ai.agents.model_client import ModelClient
+from app.ai.agents.model_catalog import enabled_models
 from app.ai.agents.provider_types import Message, GenerationConfig
 from app.core.internal_auth import verify_internal_key
 from app.utils.logger import get_logger
@@ -40,6 +41,25 @@ class AgentCompleteResponse(BaseModel):
     model_config = {"protected_namespaces": ()}
     reply: str
     model_used: str
+
+
+class AvailableModel(BaseModel):
+    model_config = {"protected_namespaces": ()}
+    id: str
+    label: str
+
+
+@router.get("/models", response_model=list[AvailableModel], status_code=status.HTTP_200_OK)
+async def list_models(
+    current_user: User = Depends(get_current_active_user),
+) -> list[AvailableModel]:
+    """List the models the chat UI may switch between.
+
+    Backed by the static catalogue in model_catalog.py, not the LLM
+    provider's live /v1/models — that keeps the switchable set reviewable
+    and, later, filterable by the requesting user's account tier.
+    """
+    return [AvailableModel(id=m.id, label=m.label) for m in enabled_models()]
 
 
 @router.post("/chat", response_model=AgentChatResponse, status_code=status.HTTP_200_OK)
@@ -68,6 +88,7 @@ async def chat(
         service = AgentService(user=current_user, db=db)
         result = await service.handle(
             message=payload.message,
+            model=payload.model,
             conversation_id=payload.conversation_id,
             workspace_id=payload.workspace_id,
             context=payload.context,
@@ -140,6 +161,10 @@ async def stream_chat(
                     yield f'data: {json.dumps({"event": "reasoning_token", "text": chunk["text"]})}\n\n'
                 elif chunk.get("event") == "note_diff":
                     yield f'data: {json.dumps({"event": "note_diff", "proposal_id": chunk.get("proposal_id"), "note_id": chunk.get("note_id"), "base_version": chunk.get("base_version")})}\n\n'
+                elif chunk.get("event") == "plan_proposal":
+                    yield f'data: {json.dumps({"event": "plan_proposal", "proposal_id": chunk.get("proposal_id"), "item_count": chunk.get("item_count")})}\n\n'
+                elif chunk.get("event") == "ask_choice":
+                    yield f'data: {json.dumps({"event": "ask_choice", "questions": chunk.get("questions")})}\n\n'
                 elif chunk.get("event") == "error":
                     yield f'data: {json.dumps({"event": "error", "message": chunk.get("message")})}\n\n'
                     

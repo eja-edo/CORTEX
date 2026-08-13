@@ -28,10 +28,11 @@ async def receive_webhook(
         raise HTTPException(status_code=404, detail="Webhook not found")
 
     secret_header = request.headers.get("X-Webhook-Secret")
-    if secret_header:
-        provided_hash = hashlib.sha256(secret_header.encode()).hexdigest()
-        if provided_hash != webhook.secret_hash:
-            raise HTTPException(status_code=401, detail="Invalid webhook secret")
+    if not secret_header:
+        raise HTTPException(status_code=401, detail="Missing webhook secret")
+    provided_hash = hashlib.sha256(secret_header.encode()).hexdigest()
+    if provided_hash != webhook.secret_hash:
+        raise HTTPException(status_code=401, detail="Invalid webhook secret")
 
     result = await db.execute(
         select(WorkflowDefinition).where(

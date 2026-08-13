@@ -136,6 +136,18 @@ export interface DeleteConversationResponse {
     message: string
 }
 
+export interface AvailableModel {
+    id: string
+    label: string
+}
+
+/**
+ * List the models the chat UI may switch between.
+ */
+export async function getAvailableModels(): Promise<AvailableModel[]> {
+    return requestWithAuth('/agent/models')
+}
+
 /**
  * List all conversations for the authenticated user.
  * @param limit - Maximum conversations to return (default: 50, max: 100)
@@ -197,9 +209,22 @@ export interface TokenUsage {
     total_tokens: number
 }
 
+export interface AskChoiceOption {
+    label: string
+    description?: string
+}
+
+export interface AskChoiceQuestion {
+    id: string
+    question: string
+    options: AskChoiceOption[]
+    allow_multiple?: boolean
+}
+
 export interface StreamEvent {
     type: 'text' | 'done' | 'tool_start' | 'tool_result' | 'thinking' | 'title_generated'
     | 'note_diff' | 'proposal_approved' | 'proposal_rejected' | 'proposal_conflict' | 'proposal_expired'
+    | 'plan_proposal' | 'ask_choice'
     text?: string
     conversation_id?: string
     title?: string
@@ -214,6 +239,8 @@ export interface StreamEvent {
     note_id?: string
     base_version?: number
     version?: number
+    item_count?: number
+    questions?: AskChoiceQuestion[]
 }
 
 export interface StreamOptions {
@@ -345,6 +372,17 @@ export async function* streamAgentMessage(
                                 note_id: data.note_id,
                                 base_version: data.base_version,
                             }
+                        } else if (data.event === 'plan_proposal') {
+                            yield {
+                                type: 'plan_proposal',
+                                proposal_id: data.proposal_id,
+                                item_count: data.item_count,
+                            }
+                        } else if (data.event === 'ask_choice') {
+                            yield {
+                                type: 'ask_choice',
+                                questions: data.questions,
+                            }
                         } else if (data.event === 'proposal_approved') {
                             yield {
                                 type: 'proposal_approved',
@@ -420,6 +458,17 @@ export async function* streamAgentMessage(
                         proposal_id: data.proposal_id,
                         note_id: data.note_id,
                         base_version: data.base_version,
+                    }
+                } else if (data.event === 'plan_proposal') {
+                    yield {
+                        type: 'plan_proposal',
+                        proposal_id: data.proposal_id,
+                        item_count: data.item_count,
+                    }
+                } else if (data.event === 'ask_choice') {
+                    yield {
+                        type: 'ask_choice',
+                        questions: data.questions,
                     }
                 } else if (data.event === 'proposal_approved') {
                     yield {
@@ -513,8 +562,8 @@ export async function revertAction(actionId: string): Promise<{ success: boolean
    return requestWithAuth(`/agent/actions/${actionId}/revert`, { method: 'POST' })
 }
 
-export async function listNotifications(limit = 50): Promise<NotificationListResponse> {
-   return requestWithAuth(`/notifications?limit=${limit}`)
+export async function listNotifications(limit = 50, offset = 0): Promise<NotificationListResponse> {
+   return requestWithAuth(`/notifications?limit=${limit}&offset=${offset}`)
 }
 
 export async function markNotificationRead(notificationId: string): Promise<NotificationResponse> {
@@ -523,6 +572,10 @@ export async function markNotificationRead(notificationId: string): Promise<Noti
 
 export async function markAllNotificationsRead(): Promise<{ message: string }> {
    return requestWithAuth('/notifications/read-all', { method: 'POST' })
+}
+
+export async function deleteNotification(notificationId: string): Promise<{ message: string }> {
+   return requestWithAuth(`/notifications/${notificationId}`, { method: 'DELETE' })
 }
 
 export { API_BASE_URL }

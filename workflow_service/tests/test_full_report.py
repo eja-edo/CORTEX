@@ -3,9 +3,20 @@ Comprehensive workflow node execution audit.
 Tests ALL node types, template resolution, conditional branching, error handling.
 Generates tests/REPORT.md with detailed results.
 
-Run: python -m pytest tests/test_full_report.py -s --asyncio-mode=auto
-Or:  python tests/test_full_report.py
+This is a standalone script, not a pytest suite, despite the `test_*.py`
+filename and `test_*` function names (both required so `run_audit()`, at the
+bottom, can call them directly with hand-threaded `wf_id`/`trigger_data`/
+`previous_outputs` state — not pytest fixtures). `__test__ = False` below
+stops pytest from auto-collecting those functions as test items, which
+otherwise fails every one of them at setup (`fixture 'wf_id' not found` —
+no such fixture is defined anywhere, on purpose, since this was never meant
+to run under pytest's own collection/injection).
+
+Run: python tests/test_full_report.py
 """
+
+__test__ = False
+
 import asyncio
 import json
 import os
@@ -179,10 +190,10 @@ async def _create_workflow() -> str:
             },
             {
                 "id": "wh1",
-                "type": "action.call_webhook",
+                "type": "action.call_api",
                 "position": {"x": 1600, "y": -100},
                 "data": {
-                    "label": "Call Webhook",
+                    "label": "Call API",
                     "config": {"url": "{{trigger.event}}", "method": "POST"},
                 },
             },
@@ -545,10 +556,10 @@ async def test_call_ai(wf_id: str, trigger_data: dict):
     return data.get("output", {})
 
 
-async def test_call_webhook_with_bad_url(wf_id: str, trigger_data: dict):
-    """10. action.call_webhook — url resolves to trigger.event value (not a valid URL)."""
+async def test_call_api_with_bad_url(wf_id: str, trigger_data: dict):
+    """10. action.call_api — url resolves to trigger.event value (not a valid URL)."""
     node_id = "wh1"
-    label = "Call Webhook"
+    label = "Call API"
     config = {"url": "{{trigger.event}}", "method": "POST"}
 
     status, data = await _exec_node(
@@ -561,9 +572,9 @@ async def test_call_webhook_with_bad_url(wf_id: str, trigger_data: dict):
     # Check that the action handled the error gracefully
     if data.get("success") is False:
         error_msg = data.get("error", "")
-        if "manual.trigger" in str(error_msg) or "Webhook call failed" in str(error_msg):
+        if "manual.trigger" in str(error_msg) or "API call failed" in str(error_msg):
             passed = True
-            EDGE_CASES["Webhook with bad URL"] = True
+            EDGE_CASES["API call with bad URL"] = True
     _record(node_id, label, passed, {
         "request_body": req_body,
         "response_status": status,
@@ -832,7 +843,7 @@ tr1 (manual trigger) -> a1 (test_success: message="ok")
         "Empty trigger_data",
         "Missing steps field in template",
         "Deeply nested trigger_data paths",
-        "Webhook with bad URL",
+        "API call with bad URL",
         "Condition with empty config",
     ]
     for ec in edge_order:
@@ -926,10 +937,10 @@ async def run_audit():
     out = await test_call_ai(WF_ID, trigger_data)
     _store_output("ai1", "Call AI", out, success=out.get("ai_result") is not None)
 
-    # Step 10: call_webhook (bad URL)
-    print("  -- Step 10: call_webhook (bad URL) --")
-    out = await test_call_webhook_with_bad_url(WF_ID, trigger_data)
-    _store_output("wh1", "Call Webhook", out, success=False)
+    # Step 10: call_api (bad URL)
+    print("  -- Step 10: call_api (bad URL) --")
+    out = await test_call_api_with_bad_url(WF_ID, trigger_data)
+    _store_output("wh1", "Call API", out, success=False)
 
     # Step 11: create_schedule
     print("  -- Step 11: create_schedule --")

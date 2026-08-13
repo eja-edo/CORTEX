@@ -58,7 +58,8 @@ export function BlockRenderer({ blocks, actions, onNavigate }: Props) {
               key={i}
               type="button"
               className="notif-action-btn"
-              onClick={() => {
+              onClick={(e) => {
+                e.stopPropagation()
                 if (action.action === 'navigate' && action.url && onNavigate) {
                   onNavigate(action.url)
                 }

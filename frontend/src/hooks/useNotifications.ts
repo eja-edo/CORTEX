@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react'
 import type { NotificationListResponse, NotificationResponse } from '../types'
-import { listNotifications, markNotificationRead, markAllNotificationsRead } from '../services/api'
+import { listNotifications, markNotificationRead, markAllNotificationsRead, deleteNotification } from '../services/api'
 import type { AppNotification, NotificationKind } from '../components/NotificationBell'
 
 function mapApiNotification(apiNotif: NotificationResponse): AppNotification {
@@ -45,8 +45,8 @@ export function useNotifications() {
        try {
            await markNotificationRead(id)
            setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)))
-       } catch {
-           setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)))
+       } catch (error) {
+           console.error('Failed to mark notification as read:', error)
        }
    }, [])
 
@@ -59,8 +59,13 @@ export function useNotifications() {
        setNotifications((prev) => prev.map((n) => ({ ...n, read: true })))
    }, [])
 
-   const handleDismiss = useCallback((id: string) => {
+   const handleDismiss = useCallback(async (id: string) => {
        setNotifications((prev) => prev.filter((n) => n.id !== id))
+       try {
+           await deleteNotification(id)
+       } catch (error) {
+           console.error('Failed to delete notification:', error)
+       }
    }, [])
 
    return {

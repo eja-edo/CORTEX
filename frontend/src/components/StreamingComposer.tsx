@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowUp, Square, Plus, Mic, FileText, ChevronDown, Check } from 'lucide-react'
-import type { PendingChange } from '../services/api'
-import { AVAILABLE_MODELS } from '../hooks/useAgentStream'
+import type { PendingChange, AvailableModel } from '../services/api'
 
 interface ContextPill {
     id: string
@@ -29,6 +28,7 @@ interface StreamingComposerProps {
     onUndoAllChanges: () => void
     selectedModel: string
     onModelChange: (model: string) => void
+    availableModels: AvailableModel[]
 }
 
 export function StreamingComposer({
@@ -37,7 +37,7 @@ export function StreamingComposer({
     pendingSelection, onAddPendingSelection,
     pendingChanges, pendingChangesOpen, onTogglePendingChanges,
     onAcceptChange, onUndoChange, onAcceptAllChanges, onUndoAllChanges,
-    selectedModel, onModelChange,
+    selectedModel, onModelChange, availableModels,
 }: StreamingComposerProps) {
     const inputRef = useRef<HTMLTextAreaElement>(null)
     const modelDropdownRef = useRef<HTMLDivElement>(null)
@@ -188,13 +188,13 @@ export function StreamingComposer({
                             title="Select model"
                         >
                             <span className="ask-ai-model-trigger-label">
-                                {AVAILABLE_MODELS.find(m => m.id === selectedModel)?.label || 'Auto'}
+                                {availableModels.find(m => m.id === selectedModel)?.label || 'Auto'}
                             </span>
                             <ChevronDown size={11} className={`ask-ai-model-chevron ${modelDropdownOpen ? 'open' : ''}`} />
                         </button>
                         {modelDropdownOpen && (
                             <div className="ask-ai-model-dropdown">
-                                {AVAILABLE_MODELS.map((m) => (
+                                {availableModels.map((m) => (
                                     <button
                                         key={m.id}
                                         type="button"

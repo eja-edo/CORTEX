@@ -1,5 +1,4 @@
 import type { TokenUsage } from '../services/api'
-import { AVAILABLE_MODELS } from '../hooks/useAgentStream'
 
 interface TokenBudgetBarProps {
     lastUsage: TokenUsage | null
@@ -11,7 +10,7 @@ export function TokenBudgetBar({ lastUsage, lastModelUsed }: TokenBudgetBarProps
     return (
         <div className="ask-ai-usage">
             <span className="ask-ai-usage-model">
-                {lastModelUsed ? (AVAILABLE_MODELS.find(m => m.id === lastModelUsed)?.label || lastModelUsed) : 'Auto'}
+                {lastModelUsed || 'Auto'}
             </span>
             <span className="ask-ai-usage-stat">↑ {lastUsage.prompt_tokens}</span>
             <span className="ask-ai-usage-stat">↓ {lastUsage.completion_tokens}</span>

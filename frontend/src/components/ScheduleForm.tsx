@@ -1,11 +1,15 @@
 import { useState, useEffect } from 'react'
 import type { FormEvent } from 'react'
-import { Layers, MapPin, Calendar, TextQuote, MoveRight, RefreshCw, Bell, Paperclip, X } from 'lucide-react'
+import { Layers, MapPin, Calendar, Clock3, RefreshCw, Bell, Circle, Plus, Trash2, X } from 'lucide-react'
+import { clsx } from 'clsx'
 
-import type { Schedule, ScheduleType, RecurrenceRule, ReminderConfig } from '../types'
+import type { Schedule, ScheduleType, RecurrenceRule, ReminderConfig, TaskPriority } from '../types'
 import { RecurrenceConfig } from './RecurrenceConfig'
 import { ReminderConfig as ReminderConfigComponent } from './ReminderConfig'
 import { MarkdownField } from './MarkdownField'
+import { PriorityIcon } from './PriorityIcon'
+import { SubtaskCreatePanel } from './SubtaskCreatePanel'
+import { useTaskStore } from '../stores/taskStore'
 
 function toLocalInputDateTime(value: Date): string {
   const local = new Date(value.getTime() - value.getTimezoneOffset() * 60000)
@@ -22,14 +26,29 @@ function getNowRounded(): Date {
   return now
 }
 
+type ChecklistDraft = { title: string; description: string | null; priority: TaskPriority | null }
+
 interface ScheduleFormProps {
-  onCreate: (schedule: Omit<Schedule, 'id' | 'user_id' | 'created_at' | 'updated_at' | 'is_completed'>) => Promise<void>
+  onCreate: (schedule: Omit<Schedule, 'id' | 'user_id' | 'created_at' | 'updated_at' | 'is_completed'>) => Promise<Schedule | null>
   /** If provided (e.g. from a calendar slot click), pre-fills start/end times */
   initialTimes?: { startDate: string; endDate: string } | null
   onClose?: () => void
 }
 
+/**
+ * Create-event form, styled to match `TaskDetailModal` — big borderless
+ * title/description on the left, a "Thuộc tính" property list on the
+ * right — instead of the old boxed grid-row/time-box/pill layout. Shares
+ * the `.task-detail-modal-*` classes directly rather than a parallel set,
+ * so the two stay visually identical without duplicated CSS.
+ *
+ * Checklist items are held as plain drafts, not `Task`s — there's no event
+ * id to attach `related_event_id` to until the event itself is created.
+ * `handleSubmit` creates the event first, then walks the drafts creating
+ * one task per item, linked to the new event.
+ */
 export function ScheduleForm({ onCreate, initialTimes, onClose }: ScheduleFormProps) {
+  const createTask = useTaskStore((state) => state.createTask)
   const [title, setTitle] = useState('')
   const [type, setType] = useState<ScheduleType>('CLASS')
   const [startTime, setStartTime] = useState<string>(() => {
@@ -51,6 +70,9 @@ export function ScheduleForm({ onCreate, initialTimes, onClose }: ScheduleFormPr
   const [showRecurrence, setShowRecurrence] = useState(false)
   const [showReminders, setShowReminders] = useState(false)
 
+  const [checklistDrafts, setChecklistDrafts] = useState<ChecklistDraft[]>([])
+  const [addingChecklistItem, setAddingChecklistItem] = useState(false)
+
   const [formError, setFormError] = useState('')
 
   useEffect(() => {
@@ -66,17 +88,17 @@ export function ScheduleForm({ onCreate, initialTimes, onClose }: ScheduleFormPr
     setFormError('')
 
     if (!title.trim()) {
-      setFormError('Title is required')
+      setFormError('Cần có tiêu đề')
       return
     }
 
     if (!startTime || !endTime) {
-      setFormError('Start and end times are required')
+      setFormError('Cần có thời gian bắt đầu và kết thúc')
       return
     }
 
     try {
-      await onCreate({
+      const created = await onCreate({
         title: title.trim(),
         type,
         start_time: new Date(startTime).toISOString(),
@@ -86,150 +108,219 @@ export function ScheduleForm({ onCreate, initialTimes, onClose }: ScheduleFormPr
         recurrence,
         reminders,
       })
+      if (!created) {
+        setFormError('Tạo sự kiện thất bại')
+        return
+      }
+
+      for (const draft of checklistDrafts) {
+        await createTask({
+          title: draft.title,
+          description: draft.description,
+          priority: draft.priority,
+          related_event_id: created.id,
+        })
+      }
+
       onClose?.()
     } catch {
-      setFormError('Failed to create schedule')
+      setFormError('Tạo sự kiện thất bại')
     }
   }
 
   return (
-    <form id="create-event-form" onSubmit={handleSubmit} className="schedule-form">
-      {formError && (
-        <div className="form-error">{formError}</div>
-      )}
+    <form onSubmit={handleSubmit} className="task-detail-modal-body">
+      <div className="task-detail-modal-columns">
+        <div className="task-detail-modal-main">
+          {formError && <div className="form-error">{formError}</div>}
 
-      <div className="title-group">
-        <input
-          type="text"
-          className="input-title"
-          value={title}
-          onChange={e => setTitle(e.target.value)}
-          placeholder="Tên sự kiện của bạn..."
-          autoFocus
-          required
-        />
-        <div className="title-underline" />
-      </div>
-
-      <div className="grid-row">
-        <div className="form-item">
-          <label><Layers size={14} /> Phân loại</label>
-          <select
-            className="input-field"
-            value={type}
-            onChange={e => setType(e.target.value as ScheduleType)}
-          >
-            <option value="CLASS">Lớp học (Class)</option>
-            <option value="EXAM">Hội chẩn (Exam)</option>
-            <option value="PERSONAL">Cá nhân (Personal)</option>
-            <option value="DEADLINE">Deadline</option>
-            <option value="CRON_EVENT">Cron</option>
-          </select>
-        </div>
-        <div className="form-item">
-          <label><MapPin size={14} /> Địa điểm</label>
           <input
             type="text"
-            className="input-field"
-            value={location}
-            onChange={e => setLocation(e.target.value)}
-            placeholder="Phòng hoặc Link Zoom"
-          />
-        </div>
-      </div>
-
-      <label><Calendar size={14} /> Thời gian diễn ra</label>
-      <div className="time-box">
-        <div className="time-segment">
-          <div className="time-segment-label">BẮT ĐẦU</div>
-          <input
-            type="datetime-local"
-            value={startTime}
-            onChange={e => setStartTime(e.target.value)}
+            className="task-detail-modal-title-input"
+            value={title}
+            onChange={e => setTitle(e.target.value)}
+            placeholder="Tên sự kiện của bạn…"
+            aria-label="Tên sự kiện"
+            autoFocus
             required
           />
-        </div>
-        <div className="time-arrow">
-          <MoveRight size={20} />
-        </div>
-        <div className="time-segment">
-          <div className="time-segment-label">KẾT THÚC</div>
-          <input
-            type="datetime-local"
-            value={endTime}
-            onChange={e => setEndTime(e.target.value)}
-            required
+          <MarkdownField
+            className="task-detail-modal-description-input"
+            value={description}
+            onChange={setDescription}
+            placeholder="Thêm mô tả…"
+            ariaLabel="Ghi chú thêm"
           />
+
+          <div className="task-detail-modal-checklist">
+            <div className="task-detail-modal-checklist-header">
+              <span className="task-detail-modal-sidebar-label">Checklist</span>
+              {checklistDrafts.length > 0 && (
+                <span className="task-detail-modal-checklist-count">{checklistDrafts.length}</span>
+              )}
+            </div>
+
+            {checklistDrafts.length > 0 && (
+              <ul className="event-checklist-list">
+                {checklistDrafts.map((draft, index) => (
+                  <li key={index} className="today-checklist-row">
+                    <span className="today-checklist-box" aria-hidden>
+                      <Circle size={10} />
+                    </span>
+                    <PriorityIcon priority={draft.priority} />
+                    <span className="today-checklist-title" style={{ cursor: 'default' }}>
+                      {draft.title}
+                    </span>
+                    <button
+                      type="button"
+                      className="today-checklist-remove"
+                      aria-label={`Xoá: ${draft.title}`}
+                      onClick={() => setChecklistDrafts((items) => items.filter((_, i) => i !== index))}
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {addingChecklistItem ? (
+              <SubtaskCreatePanel
+                onCancel={() => setAddingChecklistItem(false)}
+                onCreate={async (input) => {
+                  setChecklistDrafts((items) => [...items, input])
+                  setAddingChecklistItem(false)
+                }}
+              />
+            ) : (
+              <button
+                type="button"
+                className="task-detail-modal-checklist-add"
+                onClick={() => setAddingChecklistItem(true)}
+              >
+                <Plus size={13} />
+                <span>Thêm sub-issue</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="task-detail-modal-sidebar">
+          <div className="task-detail-modal-sidebar-label">Thuộc tính</div>
+
+          <label className="task-detail-modal-property">
+            <Layers size={14} />
+            <select
+              className="task-detail-modal-property-field"
+              value={type}
+              aria-label="Phân loại"
+              onChange={e => setType(e.target.value as ScheduleType)}
+            >
+              <option value="CLASS">Lớp học (Class)</option>
+              <option value="EXAM">Hội chẩn (Exam)</option>
+              <option value="PERSONAL">Cá nhân (Personal)</option>
+              <option value="DEADLINE">Deadline</option>
+              <option value="CRON_EVENT">Cron</option>
+            </select>
+          </label>
+
+          <label className="task-detail-modal-property">
+            <MapPin size={14} />
+            <input
+              type="text"
+              className="task-detail-modal-property-field"
+              value={location}
+              onChange={e => setLocation(e.target.value)}
+              placeholder="Địa điểm"
+              aria-label="Địa điểm"
+            />
+          </label>
+
+          <label className="task-detail-modal-property">
+            <Calendar size={14} />
+            <span className="task-detail-modal-property-label">Từ</span>
+            <input
+              type="datetime-local"
+              className="task-detail-modal-property-field"
+              value={startTime}
+              onChange={e => setStartTime(e.target.value)}
+              aria-label="Bắt đầu"
+              required
+            />
+          </label>
+
+          <label className="task-detail-modal-property">
+            <Clock3 size={14} />
+            <span className="task-detail-modal-property-label">Đến</span>
+            <input
+              type="datetime-local"
+              className="task-detail-modal-property-field"
+              value={endTime}
+              onChange={e => setEndTime(e.target.value)}
+              aria-label="Kết thúc"
+              required
+            />
+          </label>
+
+          <button
+            type="button"
+            className={clsx('task-detail-modal-property', recurrence && 'is-active')}
+            onClick={() => setShowRecurrence(s => !s)}
+          >
+            <RefreshCw size={14} />
+            <span>{recurrence ? 'Lặp lại: bật' : 'Không lặp lại'}</span>
+          </button>
+
+          <button
+            type="button"
+            className={clsx('task-detail-modal-property', reminders.length > 0 && 'is-active')}
+            onClick={() => setShowReminders(s => !s)}
+          >
+            <Bell size={14} />
+            <span>{reminders.length > 0 ? `${reminders.length} nhắc nhở` : 'Không nhắc nhở'}</span>
+          </button>
+
+          <button type="submit" className="btn btn-primary task-detail-modal-submit">
+            Tạo sự kiện
+          </button>
         </div>
       </div>
 
-      <div className="form-item">
-        <label><TextQuote size={14} /> Ghi chú thêm</label>
-        <MarkdownField
-          className="input-field"
-          rows={2}
-          value={description}
-          onChange={setDescription}
-          placeholder="Nội dung tóm tắt..."
-          ariaLabel="Ghi chú thêm (markdown)"
-        />
-      </div>
-
-      <div className="options-group">
-        <button
-          type="button"
-          className={`pill ${recurrence ? 'active' : ''}`}
-          onClick={() => setShowRecurrence(s => !s)}
-        >
-          <RefreshCw size={14} /> Lặp lại
-        </button>
-        <button
-          type="button"
-          className={`pill ${reminders.length > 0 ? 'active' : ''}`}
-          onClick={() => setShowReminders(s => !s)}
-        >
-          <Bell size={14} /> Nhắc nhở
-        </button>
-        <button type="button" className="pill" disabled title="Sắp ra mắt">
-          <Paperclip size={14} /> Đính kèm
-        </button>
-      </div>
-
-      {(showRecurrence || recurrence) && (
-        <div className="options-panel">
-          {showRecurrence ? (
-            <div className="options-panel-header">
-              <span>Lặp lại</span>
-              <button
-                type="button"
-                className="options-panel-close"
-                onClick={() => setShowRecurrence(false)}
-                aria-label="Đóng"
-              >
-                <X size={14} />
-              </button>
+      {((showRecurrence || recurrence) || (showReminders || reminders.length > 0)) && (
+        <div className="task-detail-modal-panels">
+          {(showRecurrence || recurrence) && (
+            <div className="task-detail-modal-panel">
+              <div className="task-detail-modal-panel-header">
+                <span>Lặp lại</span>
+                <button
+                  type="button"
+                  className="modal-close"
+                  onClick={() => setShowRecurrence(false)}
+                  aria-label="Đóng"
+                >
+                  <X size={13} />
+                </button>
+              </div>
+              <RecurrenceConfig value={recurrence} onChange={setRecurrence} />
             </div>
-          ) : null}
-          <RecurrenceConfig value={recurrence} onChange={setRecurrence} />
-        </div>
-      )}
+          )}
 
-      {(showReminders || reminders.length > 0) && (
-        <div className="options-panel">
-          {showReminders ? (
-            <div className="options-panel-header">
-              <span>Nhắc nhở</span>
-              <button
-                type="button"
-                className="options-panel-close"
-                onClick={() => setShowReminders(false)}
-                aria-label="Đóng"
-              >
-                <X size={14} />
-              </button>
+          {(showReminders || reminders.length > 0) && (
+            <div className="task-detail-modal-panel">
+              <div className="task-detail-modal-panel-header">
+                <span>Nhắc nhở</span>
+                <button
+                  type="button"
+                  className="modal-close"
+                  onClick={() => setShowReminders(false)}
+                  aria-label="Đóng"
+                >
+                  <X size={13} />
+                </button>
+              </div>
+              <ReminderConfigComponent value={reminders} onChange={setReminders} />
             </div>
-          ) : null}
-          <ReminderConfigComponent value={reminders} onChange={setReminders} />
+          )}
         </div>
       )}
     </form>

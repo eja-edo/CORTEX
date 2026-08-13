@@ -28,8 +28,10 @@ Bản 2 sửa 6 điểm:
 | 2 | **Bỏ Rule Engine.** Detection hợp nhất vào Workflow Engine | 6.3 `[ĐÃ BỎ]` → Phase 4 |
 | 3 | System workflow **tham chiếu, không copy** vào từng workspace | 4.0 (mới) |
 | 4 | **State Evaluator** biến thay đổi trạng thái thành event → chỉ cần một cơ chế trigger | 4.6 (mới) |
-| 5 | Task sở hữu `due_date`; Schedule là projection read-only (bỏ đồng bộ hai chiều) | 2.6 (viết lại) |
+| 5 | Task là bảng riêng, **không** ghi projection row vào `schedules`; Calendar đọc cả hai và render khác nhau | 2.5, 2.6 (viết lại) |
 | 6 | `attention_log` phải có từ Phase 2, không đợi Phase 6 | 2.9 (mới) |
+| 6b | Goal cắt đôi: bản tối thiểu 3 trường mở khoá được Gate; phần còn lại hoãn tới 3.2 | 2.1a / 2.1b |
+| 6c | Commitment dùng `direction` (`i_owe` / `owed_to_me`) thay cặp `owner`/`subject_person` mơ hồ | 2.4 (viết lại) |
 
 Kèm 2 điểm sửa trong Phase 1 (chặn cứng, phát hiện khi rà soát code):
 
@@ -103,8 +105,8 @@ Phase 0 và Phase 1 phần lớn **đã được implement**. Kế hoạch dư�
 
 | Lỗ hổng | Bằng chứng | Sửa ở |
 |---|---|---|
-| Không có ai gọi `subscribe()` trong backend; không có `XREADGROUP` | grep toàn bộ `backend/app/` = 0 kết quả | **1.10** |
-| Hai nguồn sự thật về event type, đã lệch nhau | `EVENT_PAYLOAD_REGISTRY` (10) vs `SUPPORTED_EVENTS` (8) | **1.9** |
+| ~~Không có `XREADGROUP` ở backend~~ | **✅ đã vá 2026-08-06** — `EventBus.start_consumer()` / `_consume_loop()` | **1.10** |
+| ~~Hai nguồn sự thật về event type~~ | **✅ đã vá 2026-08-06** — `app/events/vocabulary.py` | **1.9** |
 | `send_notification` POST thẳng `/internal/notifications` | `workflow_service/app/actions/builtin/send_notification.py` | **4.3** |
 | `ReminderWorker` tạo `Notification` trực tiếp | `reminder_worker.py` | **6.1** |
 | `_handle_event` load **toàn bộ** workflow ACTIVE mỗi event, lọc bằng Python | `internal_event_listener.py` | **4.0** |
@@ -325,7 +327,7 @@ Phase 0 và Phase 1 phần lớn **đã được implement**. Kế hoạch dư�
 
 ---
 
-### 1.9 — Event Vocabulary Thống Nhất 🆕
+### 1.9 — Event Vocabulary Thống Nhất ✅ *(hoàn thành 2026-08-06 — `app/events/vocabulary.py`)*
 
 - **Mục tiêu:** Chỉ có **một** nguồn sự thật về "hệ thống có những event nào", dùng chung cho backend, workflow_service, và Trigger Catalog (4.2). Đây là điều kiện tiên quyết của Phase 2 và Phase 4.
 - **Mô tả:** Hiện có hai list và **chúng đã lệch nhau**: `EVENT_PAYLOAD_REGISTRY` trong `backend/app/events/payloads.py` khai báo 10 type; `SUPPORTED_EVENTS` trong `workflow_service/app/triggers/internal_event_listener.py` hardcode 8 type. workflow_service nghe `asset.uploaded`/`asset.processed` — không có trong registry; registry có `schedule.reminder.due`, `tool.executed`, `conversation.message.created` — workflow_service không nghe. Thêm `goal.*`/`task.*`/`commitment.*` ở Phase 2 sẽ làm lệch thêm. Ngoài ra consumer group chỉ được tạo lúc startup, nên thêm event type = phải sửa list + restart service.
@@ -337,7 +339,7 @@ Phase 0 và Phase 1 phần lớn **đã được implement**. Kế hoạch dư�
 
 ---
 
-### 1.10 — Durable Event Consumer ở Backend 🆕
+### 1.10 — Durable Event Consumer ở Backend ✅ *(hoàn thành 2026-08-06 — `EventBus.start_consumer()` / `_consume_loop()`)*
 
 - **Mục tiêu:** Làm cho `EventBus.subscribe()` thực sự hoạt động xuyên process. **Đây là chặn cứng** — không có nó thì 2.2 (goal progress tracking), 3.4 (dynamic re-planning) và 6.x đều không chạy được.
 - **Mô tả:** `EventBus.publish()` hiện gọi `route_event()` **in-process** ngay sau `XADD`. Backend **không có** `XREADGROUP` nào, và grep cho thấy hiện **không có một `subscribe()` nào được gọi** trong toàn bộ `backend/app/`. Hệ quả: subscriber chỉ chạy nếu nằm cùng process với publisher. Task complete từ worker hay từ workflow_service → goal progress **không bao giờ** cập nhật, và **không có gì báo lỗi**. Đây là loại bug âm thầm, không phải crash.
@@ -356,81 +358,313 @@ Phase 0 và Phase 1 phần lớn **đã được implement**. Kế hoạch dư�
 **Điều kiện tiên quyết:** Phase 1 **bao gồm 1.9 và 1.10** (không có 1.10 thì 2.2 không chạy).
 **Definition of Done:** Có thể tạo Goal → thấy Task liên quan → AI trích xuất được Commitment từ hội thoại → có màn hình "Hôm nay" hiển thị. **Và mọi entity mới đều có sẵn state phục vụ Attention Gate, không phải migration lại ở Phase 6.**
 
+### Thứ tự thực thi trong Phase 2
+
+```
+2.1a Goal tối thiểu ─┐
+2.5  Task           ─┼─→ 2.2 Progress ─→ 2.7 Màn "Hôm nay"
+2.9  attention_log  ─┘         ↑
+                               │
+2.4  Commitment ─→ 2.3 Extraction ──┘
+                                    2.6 Calendar/checklist  (song song với 2.7)
+                                    2.8 AI Skills           (cuối, cần 2.1+2.4+2.5)
+                                    2.1b Goal đầy đủ        (hoãn tới Phase 3.2)
+```
+
+**Làm trước:** 2.1a, 2.5, 2.9 — ba cái này không phụ thuộc nhau, làm song song được, và mở khoá mọi thứ còn lại.
+**Làm cuối:** 2.8 (cần cả ba entity đã ổn định), 2.3 (đắt nhất, rủi ro chất lượng cao nhất).
+
+### Quyết định phạm vi: `user_id` hay `workspace_id`
+
+Codebase hiện **không nhất quán**: `Note` có `workspace_id` (nullable), `Schedule` chỉ có `user_id`. Ba entity mới phải chọn dứt khoát.
+
+**Chốt: `user_id` only cho cả `goals`, `tasks`, `commitments` ở Phase 2.** Lý do: mục tiêu và lời hứa là chuyện cá nhân; chia sẻ goal cho cả workspace là bài toán collaboration khác hẳn (cần permission model, cần khái niệm assignee) và không có requirement nào ở mục 20 Product Requirement cần tới nó. Thêm `workspace_id` sau vẫn rẻ (một cột nullable); bỏ nó ra thì đắt.
+
+### Không làm trong Phase 2
+
+Ghi rõ để tránh scope creep — mỗi mục dưới đây đều đã bị cân nhắc và hoãn có chủ đích:
+
+| Không làm | Vì sao | Khi nào |
+|---|---|---|
+| Project entity (`related_project_id`) | Chưa có requirement nào cần; thêm FK trỏ vào bảng không tồn tại là nợ | Khi có nhu cầu thật |
+| Goal chia sẻ trong workspace | Xem quyết định phạm vi ở trên | Sau, nếu có |
+| Task dependency (task A chặn task B) | 3.1 xếp hạng được bằng deadline + goal, chưa cần đồ thị phụ thuộc | Phase 3 nếu 3.1 chứng minh cần |
+| Sub-event (khối thời gian con) | Không requirement nào cần; rẻ, làm lúc nào cũng được | Sau |
+| Recurring task | Khác hẳn recurring schedule về ngữ nghĩa; dễ làm sai | Sau khi task đơn ổn định |
+| Person entity (chuẩn hoá "John") | Xem 2.4 | Phase 5 khi có Email/GitHub |
+
 ---
 
-### 2.1 — Goal Data Model + API
+### 2.1a — Goal Tối Thiểu
 
-- **Mục tiêu:** Có entity Goal thực sự trong hệ thống.
-- **Mô tả:** Bảng `goals`: `{id, user_id, title, description, why, status, target_date, progress, milestones, related_project_id}`. CRUD API + command `goal.create`, `goal.update`.
+- **Mục tiêu:** Có entity Goal đủ để mở khoá 2.2, 6.1, 6.8 — **không hơn**. Xác nhận Attention Gate hoạt động trước khi đầu tư vào mô hình phức tạp.
+- **Vì sao cắt đôi:** Attention Gate chỉ cần **3 trường** (`title`, `target_date`, `status`) cộng với `tasks.related_goal_id` để join. Các trường còn lại (`why`, `milestones`, `description` dài) chỉ có nơi tiêu thụ ở **3.2 AI Planner**. Xây sớm thì vừa tốn công vừa khoá thiết kế trước khi biết 3.2 thực sự cần gì.
+- **Mô tả:** Bảng `goals`: `{id, user_id, title, status, target_date, description, created_at, updated_at}`.
+
+**`status` enum — chốt 4 giá trị:**
+
+| Giá trị | Nghĩa | Ảnh hưởng |
+|---|---|---|
+| `active` | đang theo đuổi | **duy nhất** được tính vào importance và risk detection |
+| `achieved` | đã đạt | không surface nữa |
+| `abandoned` | bỏ | không surface nữa |
+| `paused` | tạm dừng | không surface, nhưng vẫn hiện ở màn Goal |
+
+Chỉ `active` đi vào công thức importance (6.1) và risk score (6.8). Ghi rõ ở đây để tránh Cortex nhắc về mục tiêu user đã bỏ.
+
+- **`progress`:** **không lưu thành cột.** Tính khi query (xem 2.2). Lưu cột thì phải giữ đồng bộ, và nó sẽ lệch mỗi lần lỡ một event.
+- **Không có `related_project_id`** — xem bảng "Không làm trong Phase 2".
 - **Milestones:**
-  - M1: Migration tạo bảng `goals` + `goal_milestones`.
-  - M2: CRUD API (`/api/goals`) hoàn chỉnh, có test.
+  - M1: Migration tạo bảng `goals` (7 cột trên, không có bảng con).
+  - M2: CRUD API (`/api/goals`), có test.
   - M3: Command `goal.create`/`goal.update` đăng ký trong Command Registry.
-  - M4: Phát event `goal.created`/`goal.updated`, **khai báo trong vocabulary chung (1.9)** chứ không thêm rời rạc vào hai chỗ.
+  - M4: Phát event `goal.created`/`goal.updated`, **khai báo trong vocabulary chung (1.9)**.
+  - M5: Nghiệm thu: tính được importance của một task chỉ bằng `tasks.related_goal_id` + `goals.target_date` + `goals.status`, không cần trường nào khác.
+
+---
+
+### 2.1b — Goal Đầy Đủ *(hoãn — làm cùng 3.2)*
+
+- **Mục tiêu:** Bổ sung các trường mà **AI Planner (3.2) thực sự tiêu thụ**, khi đã biết nó cần gì.
+- **Mô tả:** Thêm `why` (lý do theo đuổi — input cho breakdown), bảng con `goal_milestones` (`{id, goal_id, title, target_date, order}`).
+- **Lưu ý:** Bản 1 viết `milestones (jsonb hoặc bảng con)` **và** đồng thời có bảng `goal_milestones` — mâu thuẫn. Chốt: **bảng con**, vì milestone cần `target_date` riêng để tính risk theo từng mốc, và jsonb không index được cho việc đó.
+- **Milestones:**
+  - M1: Migration thêm `why` + bảng `goal_milestones`.
+  - M2: API milestone CRUD.
+  - M3: Màn Goal detail (2.7 M4) hiển thị milestone.
+  - M4: 3.2 dùng `why` trong prompt breakdown.
 
 ---
 
 ### 2.2 — Goal Progress Tracking
 
 - **Mục tiêu:** Goal không phải văn bản tĩnh — tiến độ tự cập nhật dựa trên Task liên quan.
-- **Mô tả:** Progress = tỷ lệ task hoàn thành (deterministic, không cần AI — theo mục 9 Product Requirement). Subscribe `task.completed` để tự cập nhật.
+- **Mô tả:** Progress = tỷ lệ task hoàn thành (deterministic, không cần AI — theo mục 9 Product Requirement).
 - **⚠️ Phụ thuộc:** Hạng mục này **không chạy được nếu thiếu 1.10**. Subscriber hiện chỉ nhận event publish trong cùng process. Đừng bắt đầu 2.2 trước khi 1.10 xong.
+
+**Định nghĩa chính xác "task liên quan":** chỉ task có `related_goal_id = goal.id` **trực tiếp**. Không đệ quy, không tính task của milestone con (2.1b chưa có), không tính task của goal con (không có khái niệm goal con).
+
+**Công thức:**
+
+```
+progress = COUNT(tasks WHERE related_goal_id = X AND status = 'done')
+         / COUNT(tasks WHERE related_goal_id = X)
+```
+
+**Ba trường hợp biên phải xử lý rõ:**
+
+| Trường hợp | Trả về | Vì sao |
+|---|---|---|
+| Goal có **0 task** | `null`, **không phải 0%** | 0% nghĩa là "chưa làm gì"; null nghĩa là "chưa chia việc". Hai thứ khác nhau — 6.8 không được đánh risk cho goal chưa có task nào |
+| Task bị **xoá** | phải recalculate | `task.deleted` cũng là input, không chỉ `created`/`completed` |
+| Task đổi `related_goal_id` | recalculate **cả hai** goal | event `task.updated` phải mang `fields_changed` để biết |
+
+**Tính khi query, không lưu cột.** Đây là quyết định quan trọng: nếu lưu `goals.progress` thì mỗi event bị lỡ sẽ làm số lệch vĩnh viễn và không ai phát hiện. Query `COUNT` trên một index `(related_goal_id, status)` là rẻ ở quy mô này. Subscriber chỉ dùng để **invalidate cache** và để phát `goal.progress.changed` cho 6.8, không phải để ghi số.
+
 - **Milestones:**
-  - M1: Công thức progress (completed_tasks / total_tasks).
-  - M2: Subscriber lắng nghe `task.completed`/`task.created` qua **durable consumer (1.10)** để recalculate.
-  - M3: API trả về goal kèm progress real-time, không cần cron job riêng.
-  - M4: Test: tạo goal + 3 task, complete 1 task **từ một process khác** → verify progress = 33%.
+  - M1: Công thức + ba trường hợp biên trên, có index `(related_goal_id, status)` trên `tasks`.
+  - M2: Subscriber lắng nghe `task.created/completed/deleted/updated` qua **durable consumer (1.10)**; phát `goal.progress.changed` khi tỷ lệ đổi.
+  - M3: API trả về goal kèm progress tính real-time, không cột lưu, không cron job.
+  - M4: Test: tạo goal + 3 task, complete 1 task **từ một process khác** → progress = 33%.
+  - M5: Test biên: goal 0 task → `null`; xoá 1 trong 3 task đã done → progress cập nhật đúng; đổi `related_goal_id` của một task → cả hai goal đổi.
 
 ---
 
 ### 2.3 — Commitment Extraction từ Conversations
 
 - **Mục tiêu:** Cortex tự nhận diện khi user hoặc người khác hứa làm gì đó, không cần user tự nhập.
-- **Mô tả:** Bước extraction LLM-based ở tier L2 sau mỗi conversation turn hoặc theo batch, giống `ConversationSummarizer` hiện có.
+- **Cảnh báo:** đây là hạng mục **đắt nhất và rủi ro chất lượng cao nhất** của Phase 2. Làm cuối cùng, sau khi 2.4 đã ổn định.
+
+**Cái gì được tính là commitment** — ba điều kiện, thiếu một thì bỏ qua:
+
+1. Có **người chịu trách nhiệm** xác định (tôi, hoặc một người có tên)
+2. Có **hành động cụ thể** (không phải ý định mơ hồ)
+3. Được nói ra **tường minh**, không phải suy diễn
+
+| Câu | Có phải commitment | Vì sao |
+|---|---|---|
+| "Thứ 6 tôi gửi proposal cho John" | ✅ | đủ 3 điều kiện |
+| "John sẽ gửi API spec cho tôi tuần sau" | ✅ | owner = John, hướng ngược lại |
+| "Tôi nên tập thể dục nhiều hơn" | ❌ | không hành động cụ thể, không deadline |
+| "Chắc tuần sau xong" | ❌ | không tường minh, "chắc" là phỏng đoán |
+| "Nếu kịp thì tôi làm luôn phần đó" | ❌ | có điều kiện — không phải cam kết |
+| "Deadline dự án là 15/9" | ❌ | đây là sự kiện, không phải lời hứa của ai |
+
+Ranh giới: **thà bỏ sót còn hơn bắt nhầm.** Một commitment sai làm user mất niềm tin nhanh hơn nhiều so với một commitment bị bỏ lỡ — họ sẽ tắt tính năng.
+
+**Chi phí — bám vào trigger sẵn có:**
+
+`memory_trigger_service.py` hiện chạy extraction khi `messages_since_last_summary >= 20` **hoặc** `tokens_since_last_summary >= 20000`. Commitment extraction dùng **đúng trigger đó và đúng lần gọi đó** — chỉ thêm phần yêu cầu vào prompt đã chạy sẵn. Không extraction theo từng turn; không job riêng.
+
+**⚠️ Nhưng chỉ bám ngưỡng đó thôi thì mất commitment.** Đây là lỗ hổng phải vá cùng lúc, không hoãn.
+
+`maybe_trigger` được gọi sau mỗi tin nhắn và `return` ngay nếu chưa đủ ngưỡng. Không có timer, không có sweep, **không có flush khi hội thoại kết thúc**. Hậu quả:
+
+| Kịch bản | Hậu quả |
+|---|---|
+| Hội thoại dài, commitment ở tin #3 | chậm tới tin #20 — chấp nhận được |
+| **Hội thoại kết thúc ở tin #5** | ngưỡng không bao giờ đạt → **mất vĩnh viễn** |
+
+Và kịch bản thứ hai mới phổ biến: *"nhắc tôi gửi proposal cho John thứ 6"* là hội thoại **2 tin nhắn**. Đúng loại câu quan trọng nhất lại nằm đúng trong loại hội thoại không bao giờ chạm ngưỡng.
+
+Ngưỡng 20 tin hợp lý cho **memory** vì memory là kiến thức nền tích luỹ — sót một mẩu thì mềm, và thông tin thường lặp lại. **Commitment thì ngược lại: sự kiện rời rạc, có hạn, không lặp.** Sót một lần là hỏng đúng lúc quan trọng nhất.
+
+**Cách vá — tín hiệu L0 + flush khi idle:**
+
+1. **Quét L0 trên mỗi tin nhắn, không tốn token.** Regex bắt mẫu cam kết ("tôi sẽ", "sẽ gửi", "hứa", "trước thứ", "deadline", "chốt ngày"…), bám vào `app/intents/rule_detector.py` đã có. Bắt nhầm ở bước này **không sao** — cờ chỉ *lên lịch* extraction, không tạo commitment; việc lọc thật vẫn do LLM + 3 điều kiện ở trên làm.
+
+2. **Flush có điều kiện khi hội thoại idle:**
+
+```
+conversation idle > N phút, còn tin chưa extract
+        ↓
+   có tín hiệu L0?
+        ↓ có                    ↓ không
+   extract ngay            chờ ngưỡng 20 như cũ
+                           (memory không cần gấp)
+```
+
+Chi phí thêm gần bằng 0 — chỉ hội thoại **thực sự có dấu hiệu cam kết** mới phát sinh lần gọi sớm. Flush phải dùng **cùng advisory lock** `pg_try_advisory_xact_lock` hiện có, nếu không sẽ đua với trigger inline.
+
+Độ trễ: commitment xuất hiện vài phút sau khi user ngừng chat — không vấn đề với deadline kiểu "thứ 6".
+
+**Vòng đời candidate — không hỏi lại thứ user đã từ chối:**
+
+```
+extracted → pending_confirm → (user xác nhận)  → commitment thật (2.4)
+                            → (user từ chối)   → rejected  ← KHÔNG extract lại
+                            → (im lặng > 7 ngày) → expired
+```
+
+`rejected` phải được lưu kèm dấu vân tay nội dung (hash của `expected_action` + `subject_person`) để lần extraction sau không đề xuất lại cùng một thứ. Thiếu bước này thì user sẽ bị hỏi đi hỏi lại — chính là notification fatigue ở dạng khác.
+
+**Ngôn ngữ:** hội thoại thực tế trộn Việt–Anh. Prompt và tập test phải có cả hai, và cả câu trộn ("thứ 6 tôi sẽ review PR đó").
+
 - **Milestones:**
-  - M1: Prompt + extraction pipeline chạy thử trên tập hội thoại mẫu, đo precision/recall thủ công.
-  - M2: Chỉ extract commitment tường minh (explicit), tránh false positive.
-  - M3: Candidate ở trạng thái "pending confirm" trước khi thành commitment chính thức.
-  - M4: Tích hợp vào luồng conversation hiện có, có advisory lock tránh chạy trùng.
+  - M1: Tập test **≥ 50 đoạn hội thoại thật** (Việt, Anh, trộn) gán nhãn thủ công; chạy prompt, đo precision/recall.
+  - M2: **Ngưỡng nghiệm thu: precision ≥ 0.9.** Recall không đặt ngưỡng ở bản đầu — ưu tiên không bắt nhầm. Nếu chưa đạt, siết prompt chứ không nới ngưỡng.
+  - M3: Vòng đời candidate + lưu `rejected` kèm vân tay nội dung, không đề xuất lại.
+  - M4: Bám vào trigger của `memory_trigger_service`, dùng chung advisory lock hiện có — không thêm job riêng, không extraction theo từng turn.
+  - M5: **Quét tín hiệu L0 + flush khi idle** (xem trên), dùng chung advisory lock. Không có bước này thì hội thoại ngắn mất commitment vĩnh viễn.
+  - M6: Test: hội thoại **2 tin nhắn** chứa "thứ 6 tôi gửi proposal cho John", user đóng app → candidate xuất hiện trong vòng N phút. *(Đây là test quan trọng nhất của 2.3 — nó bảo vệ đúng ca dùng phổ biến nhất.)*
+  - M7: Test: chạy trên tập 50 đoạn → không có candidate nào thuộc 4 dòng ❌ ở bảng trên.
+  - M8: Đo chi phí: số lần gọi LLM tăng thêm chỉ đến từ hội thoại có tín hiệu L0 — đo bằng token tracking (0.8) trước/sau.
 
 ---
 
 ### 2.4 — Commitment Data Model + API
 
-- **Mục tiêu:** Có nơi lưu trữ và query commitment có cấu trúc, phục vụ follow-up và risk detection.
-- **Mô tả:** Bảng `commitments`: `{id, user_id, owner, subject_person, expected_action, deadline, related_goal_id, related_project_id, status, source_conversation_id}`.
+- **Mục tiêu:** Có nơi lưu trữ và query commitment có cấu trúc, phục vụ follow-up (6.7) và risk detection (6.8).
+
+**Hướng của commitment là trường quan trọng nhất** — Bản 1 dùng `owner` + `subject_person` mà không định nghĩa, dẫn tới mơ hồ. Đây là trường quyết định toàn bộ tính năng, vì câu hỏi cốt lõi của sản phẩm là *"ai đang chờ tôi?"*.
+
+Chốt: một trường `direction` với 2 giá trị, thay cho cặp `owner`/`subject_person` mơ hồ.
+
+| `direction` | Nghĩa | Ví dụ | Cortex làm gì |
+|---|---|---|---|
+| `i_owe` | **Tôi** hứa với người khác | "Thứ 6 tôi gửi proposal cho John" | nhắc **tôi** làm |
+| `owed_to_me` | Người khác hứa với **tôi** | "John sẽ gửi API spec tuần sau" | soạn sẵn lời nhắc **John** (6.7) |
+
+Hai hướng này dẫn tới hành vi hoàn toàn khác nhau ở Phase 6 — gộp chung thì Cortex sẽ nhắc sai người.
+
+- **Mô tả:** Bảng `commitments`: `{id, user_id, direction, counterparty, expected_action, deadline, status, related_goal_id, related_task_id, source_conversation_id, source_message_id, created_at, confirmed_at}`.
+  - `counterparty` = phía bên kia (là "John" ở cả hai ví dụ trên). Rõ nghĩa hơn `subject_person`.
+  - `user_id` luôn là chủ tài khoản; `direction` cho biết ai nợ ai. Không cần `owner`.
+
+**`counterparty` là string thô, chưa chuẩn hoá.** "John", "john@x.com", "anh John" là ba giá trị khác nhau trong Phase 2 — chấp nhận. Chuẩn hoá thành Person entity cần danh bạ thật, chỉ có sau Phase 5 (Email/GitHub). Ghi rõ để không ai kỳ vọng nhầm ở 6.7.
+
+**`status` enum — chốt 5 giá trị:**
+
+| Giá trị | Nghĩa |
+|---|---|
+| `pending_confirm` | candidate từ 2.3, chưa được user xác nhận |
+| `active` | đã xác nhận, đang chờ tới hạn |
+| `fulfilled` | đã hoàn thành |
+| `cancelled` | user huỷ / không còn hiệu lực |
+| `rejected` | user từ chối candidate — giữ lại kèm vân tay nội dung để 2.3 không đề xuất lại |
+
+Chỉ `active` đi vào follow-up (6.7) và risk detection (6.8).
+
+**`related_task_id`:** khi user xác nhận một commitment `i_owe`, hệ thống tạo luôn một Task tương ứng và liên kết ngược lại. Nghĩa là user **không phải nhập lại việc đó lần nữa** — đúng nguyên tắc "ít thao tác" ở 2.7.
+
 - **Milestones:**
-  - M1: Migration tạo bảng `commitments`.
-  - M2: CRUD API hoàn chỉnh.
-  - M3: Liên kết được với `conversations` (source) và `goals` (related).
-  - M4: Phát event `commitment.created`; `commitment.overdue` **do State Evaluator (4.6) phát**, không phải do service tự phát — vì "overdue" là trạng thái, không phải hành động.
+  - M1: Migration tạo bảng `commitments` với `direction` và `status` như trên.
+  - M2: CRUD API + command `commitment.create/confirm/reject/complete`.
+  - M3: Liên kết `conversations`/`messages` (source, để trace ngược "Cortex lấy cái này từ đâu"), `goals`, `tasks`.
+  - M4: Xác nhận commitment `i_owe` → tự tạo Task liên kết, không bắt user nhập lại.
+  - M5: Phát event `commitment.created/confirmed/fulfilled`; `commitment.overdue` và `commitment.due_soon` **do State Evaluator (4.6) phát**, không phải do service tự phát — vì "overdue" là trạng thái, không phải hành động.
 
 ---
 
 ### 2.5 — Task Data Model + API
 
-- **Mục tiêu:** Tách Task ra khỏi Schedule (hiện bị conflate qua loại `DEADLINE`).
-- **Mô tả:** Bảng `tasks`: `{id, user_id, title, status, priority, related_goal_id, related_project_id, due_date, related_commitment_id}`. State machine rõ ràng cho status.
-- **Lưu ý thiết kế:** `related_goal_id` **không phải nice-to-have** — nó là input trực tiếp của công thức importance ở Attention Gate (6.1). Importance được **suy ra** (task này có chặn goal không × goal còn bao nhiêu ngày), **không phải do user nhập**, theo mục 12 Product Requirement (không biến user thành người quản lý Cortex).
+- **Mục tiêu:** Tách Task ra khỏi Schedule (hiện bị conflate qua loại `DEADLINE`), nhưng **không** vì thế mà sinh ra thêm màn hình hay thao tác nào cho user.
+- **Mô tả:** Bảng `tasks`: `{id, user_id, title, status, due_date, related_goal_id, related_event_id, related_commitment_id, related_project_id}`. State machine rõ ràng cho status (`todo`/`in_progress`/`done`).
+
+**Ranh giới Task vs Schedule** — quy tắc một câu:
+
+> **Schedule *chiếm* thời gian. Task *tiêu tốn* thời gian.**
+
+Họp 14–15h chiếm đúng khoảng đó. "Viết API spec, hạn thứ 6" **không** chiếm thứ 6 — nó chỉ phải xong trước thứ 6. Đây không phải phân biệt học thuật: cả **free-slot (3.3)** lẫn **interruptibility (6.2)** đều đọc bảng `schedules` để trả lời "user đang bận không". Nhét task vào đó thì mọi task có hạn đều làm user trông như đang bận → planning trả lời sai và Gate im lặng vĩnh viễn.
+
+*(Phương án đã cân nhắc và loại: dùng `schedules` với `type=TASK` rồi filter. Vẫn phải thêm ~5 cột, sửa `start_time`/`end_time` thành nullable, và rà **53 điểm query trên 8 file**. Bỏ sót một filter thì không crash — nó lặng lẽ trả sai, ví dụ đẩy task lên Google Calendar thật của user. Bảng riêng không đụng dòng code cũ nào.)*
+
+**Ba lối tạo task, mỗi lối 1 thao tác:**
+
+| # | Lối vào | Thao tác |
+|---|---|---|
+| 1 | **Chat** *(chủ đạo)* — "thứ 6 tôi phải gửi proposal cho John" | nói 1 câu |
+| 2 | **Checklist trong event** (2.6) | gõ 1 dòng + Enter |
+| 3 | **Cortex tự tạo** — commitment extraction (2.3), AI Planner (3.2), workflow (4.3) | 0 |
+
+Vì lối 1 và 3 chiếm phần lớn, `related_event_id` **phải nullable** — task không thuộc event nào là trường hợp phổ biến nhất, không phải ngoại lệ.
+
+- **Lưu ý thiết kế 1 — không có trường `priority`:** importance được **suy ra** (task này có chặn goal không × goal còn bao nhiêu ngày), không do user nhập. Đây là lý do `related_goal_id` tồn tại. Priority do user nhập là thứ mọi todo app bắt làm và là thứ bị bỏ đầu tiên — sau hai tuần mọi việc đều thành P1 và trường đó vô nghĩa. Bỏ nó vừa bớt một thao tác mỗi lần tạo việc, vừa làm xếp hạng thực sự đúng. Theo mục 12 Product Requirement.
+- **Lưu ý thiết kế 2 — checklist con trong event thì sao:** ghi chú tự do và agenda cuộc họp **vẫn ở `description` dạng markdown**, không thành Task. Chỉ thứ cần deadline / gắn goal / bị Attention Gate soi mới là Task. Ranh giới này ghi ở đây để sau không phải tranh luận lại.
 - **Milestones:**
-  - M1: Migration tạo bảng `tasks`, foreign key tới `goals` và `commitments`.
+  - M1: Migration tạo bảng `tasks`, foreign key tới `goals`, `commitments`, `schedules` (`related_event_id`, nullable).
   - M2: CRUD API + command `task.create/update/complete`.
   - M3: State machine validation cho status.
   - M4: Phát event `task.created/completed`; `task.overdue` do State Evaluator (4.6) phát.
+  - M5: Xác nhận không có trường `priority` do user nhập ở bất kỳ đâu trong API và UI.
 
 ---
 
-### 2.6 — Task → Schedule Projection (viết lại)
+### 2.6 — Task Hiển Thị Chung Với Calendar (viết lại)
 
-- **Mục tiêu:** Task có deadline xuất hiện trên Calendar mà không cần user tạo event thủ công — **và không tạo ra vòng lặp dual-write**.
-- **Thay đổi so với Bản 1:** Bản 1 yêu cầu đồng bộ **hai chiều** (task ↔ schedule). Điều này tạo vòng lặp: `task.completed` → sửa schedule → phát `schedule.completed` → sửa task → lặp vô hạn. Bản 2 bỏ chiều ngược.
-- **Mô tả:** **Task là owner** của "việc phải làm + due_date". Schedule chỉ là **projection read-only** lên calendar, đúng như `ScheduleExternalMap` đang làm cho Google Calendar. Muốn dời deadline thì đi qua command `task.reschedule`, không phải sửa Schedule rồi để trigger DB đồng bộ ngược.
-- **Ghi chú:** Nếu về sau bắt buộc phải có chiều ngược, codebase **đã có sẵn lời giải cho đúng bài toán này**: `Schedule.updated_by` (`INTERNAL`/`PROVIDER`) + `Schedule.version` + bảng `schedule_external_maps`. Tái dùng pattern đó, đừng phát minh cơ chế mới.
+- **Mục tiêu:** Task tách bảng ở tầng dữ liệu nhưng **user không bao giờ thấy sự tách đó**. Không trang mới, không tab mới, không nút mới.
+- **Thay đổi so với Bản 1:** Bản 1 yêu cầu đồng bộ **hai chiều** (task ↔ schedule) → tạo vòng lặp `task.completed` → sửa schedule → phát `schedule.completed` → sửa task → vô hạn. Bản 2 **bỏ hẳn cả hai chiều**: không ghi row projection nào vào `schedules`.
+- **Vì sao bỏ luôn projection:** ghi row task vào `schedules` gây đúng vấn đề đã nêu ở 2.5 — làm bẩn phép tính "user đang bận không" của 3.3 và 6.2. Thay vào đó Calendar **query thẳng cả hai bảng** và render khác nhau.
+
+**Calendar render hai loại khác nhau:**
+
+```
+Thứ 6
+┌───────────────────────────────────┐
+│ ◆ Viết API spec — hạn hôm nay     │  ← task: cột mốc, KHÔNG chiếm chỗ
+├───────────────────────────────────┤
+│ ▓▓▓ Họp team      14:00–15:00     │  ← schedule: khối thời gian
+└───────────────────────────────────┘
+```
+
+`schedules` giữ nguyên nghĩa "thời gian đã bị chiếm" → free-slot và interruptibility tính đúng.
+
+**Checklist trong event** — task có `related_event_id` hiện thành checklist ngay trong event. Nguyên tắc: **render task thành checklist, không parse checklist thành task.** Description không lưu chuỗi checklist; widget đọc thẳng `tasks WHERE related_event_id = X`.
+
+| User làm gì | Gọi gì |
+|---|---|
+| Gõ dòng mới + Enter | `task.create` |
+| Tick ô | `task.complete` |
+| Xoá dòng | `task.delete` |
+| Click dòng | popover đặt hạn / gắn goal |
+
+*(Phương án đã cân nhắc và loại: FE parse markdown trong `description` rồi gọi API. FE sẽ phải tự diff khi user sửa/xoá dòng — sót một lần là sinh task mồ côi, và Attention Gate sẽ nhắc về task user đã xoá. Markdown cũng không mang nổi `due_date`/`status`/`related_goal_id` nếu không bịa ra DSL. Quan trọng nhất: task từ AI Planner, commitment extraction, workflow **không có dòng markdown nào** — checklist không thể là nguồn duy nhất.)*
+
 - **Milestones:**
-  - M1: Logic tự động tạo Schedule (projection) khi Task có due_date.
-  - M2: Task hoàn thành → Schedule tương ứng đánh dấu completed.
-  - M3: Sửa Schedule projection trực tiếp bị **từ chối** ở tầng API, kèm thông báo hướng user sang `task.reschedule`.
-  - M4: Test: không có vòng lặp event nào giữa `task.*` và `schedule.*` (đếm số event phát ra trong một lần complete task = hữu hạn và đúng như kỳ vọng).
+  - M1: Endpoint `/api/calendar/items` trả về `schedules` + `tasks` trong một shape thống nhất, có trường phân biệt cách render. Frontend không cần biết có hai bảng.
+  - M2: Calendar render task thành cột mốc, schedule thành khối thời gian.
+  - M3: Widget checklist trong event, đọc thẳng từ `tasks`, mỗi thao tác là một command.
+  - M4: Test: `schedules` không có row nào sinh ra từ task; free-slot (3.3) và interruptibility (6.2) cho kết quả đúng khi user có nhiều task quá hạn.
 
 ---
 
@@ -464,12 +698,50 @@ Phase 0 và Phase 1 phần lớn **đã được implement**. Kế hoạch dư�
   1. **Goal không có màn hình riêng ở cấp một.** Goal xuất hiện *bên trong lý do* của mỗi card ("đang chặn 3 task của MVP"). Click tên goal mới sang màn chi tiết. Progress bar sống ở đó, không phải trang chủ.
   2. **Không hiển thị số mà user phải tự diễn giải.** "progress 33%" là số; "chậm 2 ngày so với target" là quyết định. Progress vẫn tồn tại như metric nội bộ (2.2), chỉ không làm UI chính.
   3. **Đây cũng là bề mặt bundle của Attention Gate.** "Trong lúc bạn họp có 3 việc cần chú ý" không phải notification đặc biệt — nó là trạng thái của màn này sau cuộc họp. Push notification chỉ là con trỏ tới đây. Vì chỉ có **một** bề mặt làm phiền, hệ thống **buộc** phải xếp hạng — đó chính là P1 được ép ở tầng UI.
+
+**Toàn bộ bề mặt hiển thị sau Phase 2** — không có trang Task, không có Goal Dashboard:
+
+| Trang | Nội dung | Mới? |
+|---|---|---|
+| **Hôm nay** | Việc nên làm + lý do, commitment đang chờ, trạng thái goal | 🆕 |
+| **Calendar** | Schedule (khối) + task due (cột mốc) + checklist trong event | đã có |
+| Note, Chat | giữ nguyên | đã có |
+| Workflow list | audit + tắt (4.5) | 🆕 |
+| *Goal detail* | màn phụ, vào từ card | 🆕 |
+
+**Kiểm chứng "ít phải nhớ, ít thao tác"** — tiêu chí nghiệm thu của cả Phase 2:
+
+- User giữ **một** khái niệm: *việc cần làm*. Không phải phân biệt task / deadline / reminder / event — Cortex tự xếp.
+- User không phải nhớ **việc nằm ở đâu** — nó tự hiện ở nơi đang nhìn (3 chỗ trong bảng trên, đều là chỗ user vốn mở hằng ngày).
+- Tạo một việc: **1 thao tác** (nói 1 câu, hoặc gõ 1 dòng), so với 6 thao tác của todo app truyền thống (new task → date → priority → reminder → project → save).
+- Không có trường nào bắt user tự đánh giá (`priority` đã bỏ ở 2.5).
+
+**Trạng thái rỗng — phần dễ bị bỏ quên nhất:**
+
+Màn này là bề mặt chính, nên nó phải tử tế cả khi không có gì để nói. Ba trạng thái:
+
+| Khi nào | Hiển thị | Không được làm |
+|---|---|---|
+| User mới, chưa có goal/task | Một câu mời khai báo mục tiêu đầu tiên + ví dụ cụ thể | bảng trống, hay "0 tasks" |
+| Có dữ liệu, hôm nay **không có gì gấp** | "Hôm nay không có gì gấp. Bạn có 4 tiếng trống." + 1–2 việc *có thể* làm trước | bịa ra việc khẩn cấp để lấp chỗ |
+| Mọi việc đã xong | Xác nhận ngắn, gọn | huy hiệu, confetti, gamification |
+
+Trạng thái giữa là quan trọng nhất: **"hôm nay không có gì gấp" là một câu trả lời hợp lệ và hữu ích.** Đây là P1 ở tầng UI — màn hình cũng phải biết im lặng, giống Attention Gate.
+
+**Câu trạng thái ở đầu màn** ("Bạn có 4 tiếng trống. MVP còn 12 ngày — đang chậm 2 ngày") lấy từ:
+- *giờ trống* → free-slot của 3.3
+- *goal + số ngày còn lại* → `goals.target_date` (2.1a)
+- *"đang chậm"* → so progress hiện tại với tỷ lệ thời gian đã trôi
+
+Ở Phase 2, khi 3.1/3.3 chưa xong, câu này rút gọn còn phần goal — **không bịa phần giờ trống**.
+
 - **Milestones:**
   - M1: Wireframe/UX cho màn "Hôm nay", tái dùng design pattern của `CalendarView`/`GlobalHome`.
   - M2: Component card "nên làm bây giờ" — bắt buộc có trường lý do, không render được nếu thiếu.
-  - M3: Section "Đang chờ" (commitment: ai chờ tôi / tôi chờ ai).
+  - M3: Section "Đang chờ", tách rõ hai hướng `i_owe` / `owed_to_me` (2.4).
   - M4: Màn Goal detail (progress bar, milestone, task liên quan) là **màn phụ**, vào từ card.
   - M5: Tích hợp vào navigation chính; tạo/sửa Goal trực tiếp được, không chỉ qua chat.
+  - M6: Ba trạng thái rỗng ở trên đều có thiết kế riêng, không dùng bảng trống mặc định.
 
 ---
 
@@ -489,12 +761,31 @@ Phase 0 và Phase 1 phần lớn **đã được implement**. Kế hoạch dư�
 
 - **Mục tiêu:** Trả lời được câu hỏi **"user đã biết chuyện này chưa?"** — câu hỏi quyết định giữa một trợ lý hữu ích và một cái máy nhắc lặp.
 - **Vì sao ở Phase 2 mà không phải Phase 6:** state này gắn trên chính **item** (task/goal/commitment), không phải trên bảng notification. Nếu Phase 2 tạo 3 bảng mà không có nó, đến Phase 6 phải migration lại cả 3. Một migration nhỏ bây giờ đổi lấy một migration lớn sau.
-- **Mô tả:** Bảng `attention_log`: `{id, user_id, item_type, item_id, surfaced_at, level, channel, response}` — `level` theo 5 cấp ở mục 13 Product Requirement (Silent/Inform/Recommend/Ask/Act), `response` là `accepted/dismissed/ignored/no_response`. Đây đồng thời là nguồn dữ liệu cho Feedback Loop (6.9) — không cần xây lại.
+- **Mô tả:** Bảng `attention_log`: `{id, user_id, item_type, item_id, reason_key, surfaced_at, level, channel, response, responded_at}`.
+
+**`reason_key` — trường then chốt, Bản 2 đầu tiên thiếu.** Milestone M3 nói dedup theo "cùng item + cùng lý do", nhưng schema khi đó không có chỗ nào lưu lý do. Bổ sung:
+
+`reason_key` là chuỗi ổn định mô tả **vì sao** item được surface, ví dụ `task.overdue`, `task.blocks_goal_near_deadline`, `commitment.due_soon`. Cùng một task có thể được surface vì hai lý do khác nhau ở hai thời điểm — đó là hợp lệ và **không** nên bị dedup. Dedup theo cặp `(item_id, reason_key)`, không phải theo `item_id`.
+
+**Các trường còn lại:**
+
+| Trường | Giá trị |
+|---|---|
+| `item_type` | `task` / `goal` / `commitment` / `schedule` |
+| `level` | 5 cấp ở mục 13 Product Requirement: `silent` / `inform` / `recommend` / `ask` / `act` |
+| `channel` | `in_app` / `push` / `telegram` / `email` |
+| `response` | `accepted` / `dismissed` / `ignored` / `no_response` |
+
+**Ghi cả khi im lặng.** `level = silent` vẫn phải ghi một dòng. Không có nó thì không trả lời được câu quan trọng nhất khi debug: *"vì sao Cortex KHÔNG nói gì?"* — và 6.9 cũng không đo được tỷ lệ im lặng đúng/sai. Đây là điểm phân biệt attention_log với một bảng notification thông thường.
+
+Đây đồng thời là nguồn dữ liệu cho Feedback Loop (6.9) — không cần xây lại.
+
 - **Milestones:**
-  - M1: Migration bảng `attention_log`.
-  - M2: API ghi/đọc; query được "item này đã surface cho user chưa, bao nhiêu lần, phản hồi ra sao".
-  - M3: Chỉ số dedup cơ bản: cùng item + cùng lý do trong khoảng thời gian N → không surface lại.
-  - M4: Test: surface một task 2 lần liên tiếp → lần 2 bị chặn bởi dedup.
+  - M1: Migration bảng `attention_log`, index `(user_id, item_id, reason_key, surfaced_at)`.
+  - M2: API ghi/đọc; query được "item này đã surface chưa, vì lý do gì, bao nhiêu lần, phản hồi ra sao".
+  - M3: Dedup theo cặp `(item_id, reason_key)` trong cửa sổ thời gian N; **`level = silent` cũng được ghi**.
+  - M4: Test: surface một task 2 lần cùng `reason_key` → lần 2 bị chặn; surface cùng task với `reason_key` khác → **không** bị chặn.
+  - M5: Test: một quyết định im lặng để lại đúng một dòng `level = silent`, truy vấn lại được lý do.
 
 ---
 
@@ -502,71 +793,53 @@ Phase 0 và Phase 1 phần lớn **đã được implement**. Kế hoạch dư�
 
 **Thời lượng dự kiến:** 4–6 tuần
 **Mục tiêu tổng:** Cortex giúp người dùng quyết định "nên làm gì tiếp theo", không chỉ lưu trữ thông tin.
-**Điều kiện tiên quyết:** Phase 2 (Goals, Tasks phải tồn tại trước khi planning có ý nghĩa).
+**Điều kiện tiên quyết:** Phase 2 (Tasks phải tồn tại trước khi planning có ý nghĩa).
 **Definition of Done:** User hỏi "Hôm nay tôi nên làm gì?" và nhận được câu trả lời dựa trên dữ liệu thật, không phải câu trả lời chung chung.
 
+> **Cập nhật 2026-08-08:** Goal đã bị xoá khỏi schema (migration `b0123456789x`) — chỉ còn `tasks` (với `priority`, `description`, `parent_task_id` để làm subtask) và `schedules` (event). Mọi mục dưới đây viết lại để không còn phụ thuộc Goal.
+
 ---
 
-### 3.1 — Daily Planning Engine
+### 3.1 — Daily Planning Engine *(phần lớn đã xong — xem `app/services/today.py`)*
 
 - **Mục tiêu:** Trả lời "Hôm nay tôi nên làm gì?" bằng logic giải thích được, không phải hộp đen LLM.
-- **Mô tả:** Tổng hợp task due/quá hạn, schedule hôm nay, goal đang risk, độ ưu tiên. Trả về danh sách xếp hạng kèm lý do.
-- **Liên kết:** Đây là nguồn dữ liệu trực tiếp của màn "Hôm nay" (2.7). Trường lý do của engine chính là trường lý do của card — thiết kế chung một schema, đừng làm hai.
+- **Mô tả:** Tổng hợp task due/quá hạn, subtask con chưa xong (`parent_task_id`), độ ưu tiên do user đặt (`tasks.priority`). Trả về danh sách xếp hạng kèm lý do.
+- **Liên kết:** Đây là nguồn dữ liệu trực tiếp của màn "Hôm nay" (2.7) — trên thực tế đã làm ngược thứ tự dự kiến: `TodayService` triển khai thẳng logic xếp hạng này, không tách riêng một engine/endpoint `/api/planning/*`. `TodayReason` chính là trường lý do của card — đã dùng chung một schema, không có schema thứ hai.
 - **Milestones:**
-  - M1: Logic xếp hạng deterministic dựa trên deadline + priority + dependency.
-  - M2: Endpoint `/api/planning/today` trả về danh sách đã xếp hạng.
-  - M3: Explainability cho mỗi item.
-  - M4: AI skill gọi engine này thay vì tự suy luận từ đầu.
+  - M1: ✅ Logic xếp hạng deterministic dựa trên deadline + priority (`TodayService._rank_actions`/`_reason_for`).
+  - M2: ✅ Endpoint — dùng `GET /api/today` có sẵn; không tạo `/api/planning/today` trùng chức năng.
+  - M3: ✅ Explainability cho mỗi item (`TodayReason.impact`).
+  - M4: Còn thiếu — AI skill gọi thẳng `TodayService` qua tool thay vì tự suy luận; đưa tín hiệu cascade từ subtask (3.4) vào `_reason_for`.
 
 ---
 
-### 3.2 — AI Planner (Goal → Plan)
+### 3.2 — AI Planner (Hội thoại → Event + Task)
 
-- **Mục tiêu:** Chuyển mục tiêu mơ hồ thành milestone và task cụ thể.
-- **Mô tả:** LLM tier L3 breakdown Goal → Milestone → Task. Kết quả là **đề xuất**, user phải approve.
+- **Mục tiêu:** Chuyển mong muốn/mục tiêu mơ hồ mà user nói ra thành Event (khối thời gian cụ thể) và Task (việc cần làm, có deadline) cụ thể — không còn Goal/Milestone làm tầng trung gian.
+- **Mô tả:** LLM tier L3 trao đổi qua lại với user để làm rõ phạm vi, thời hạn, ràng buộc lịch, rồi đề xuất một bộ Event + Task giúp user đạt được điều họ vừa mô tả. Kết quả là **đề xuất**, user phải approve trước khi tạo thật — bản thân "mục tiêu" không còn là entity lưu trữ, nó chỉ tồn tại trong hội thoại và được vật chất hoá thành các Event/Task cụ thể.
 - **Milestones:**
-  - M1: Prompt template cho goal breakdown, test trên 5-10 goal mẫu.
-  - M2: Kết quả structured (milestone list + task list), không free text.
-  - M3: UI review và approve/edit trước khi tạo task thật.
-  - M4: Sau approve, dùng command `task.create`/`goal.update`.
+  - M1: Prompt template cho hội thoại làm rõ mục tiêu (hỏi phạm vi/deadline/ràng buộc thời gian), test trên 5–10 kịch bản mẫu.
+  - M2: Kết quả structured — danh sách event (title, thời điểm) + danh sách task (title, due_date, priority, có thể lồng nhau qua `parent_task_id`) — không free text.
+  - M3: UI review và approve/edit từng item trước khi tạo thật.
+  - M4: Sau approve, dùng command có sẵn `schedule.create`/`task.create` — không cần command mới.
 
 ---
 
-### 3.3 — Calendar-aware Scheduling
+### 3.3 — Free-slot Query (deterministic, dùng chung Planning + Attention Gate)
 
-- **Mục tiêu:** Đề xuất thời gian làm task phải biết lịch hiện tại, tránh giờ đã bận.
-- **Mô tả:** Query Schedule (gồm Google Calendar đã sync) tìm slot trống.
-- **Ghi chú:** Cùng query này được Attention Gate (6.2) tái dùng cho câu hỏi "user có đang họp không". Viết một lần, dùng hai chỗ.
+- **Mục tiêu:** Có một câu trả lời **deterministic, không qua LLM** cho "khoảng thời gian này user có bận không" — vì Attention Gate (6.2) là cổng bắt buộc chạy cho mọi quyết định làm phiền, không được phép tốn một lượt gọi LLM mỗi lần kiểm tra.
+- **Mô tả:** Query bảng `schedules` (gồm Google Calendar đã sync) trong một khoảng thời gian, trả về danh sách slot rảnh/bận.
+- **Ghi chú — phần KHÔNG cần logic riêng:** AI Planner (3.2) đã có tool `get_schedules` sẵn (`app/ai/tools/get_schedules.py`) — khi hội thoại đề xuất Event/Task, Agent tự gọi tool này và tự suy luận "có trống không" bằng LLM. Không cần bọc thêm một tool "find free slot" riêng cho Agent, sẽ trùng chức năng với suy luận LLM đã có.
+- **Liên kết:** Consumer chính của milestone này là **Attention Gate (6.2)**, không phải `TodayService` (3.1) — 3.1 M4 xác nhận AI skill vẫn chưa gọi `TodayService` qua tool, nên tích hợp free-slot vào đó không phục vụ mục tiêu calendar-aware của AI Planner. Cùng một hàm free-slot được viết một lần (`ScheduleService` hoặc module mới `app/services/availability.py`) và dùng ở cả 6.2 lẫn bất kỳ nơi nào cần câu trả lời nhanh/xác định thay vì qua Agent.
 - **Milestones:**
-  - M1: Logic tìm free slot trong khoảng thời gian cho trước.
-  - M2: Tích hợp vào Daily Planning Engine.
-  - M3: Xử lý trường hợp không có slot trống (đề xuất dời, không im lặng).
-  - M4: Test với Google Calendar đã sync, không đề xuất trùng giờ họp.
+  - M1: Hàm service thuần `find_free_slots(user_id, start, end)` — query `schedules`, trả về list slot rảnh. Không phải AI tool.
+  - M2: Attention Gate (6.2) gọi hàm này để quyết định interruptibility ("user có đang họp không").
+  - M3: Xử lý trường hợp không có slot trống trong khoảng yêu cầu (trả gợi ý dời gần nhất, không im lặng).
+  - M4: Test: Attention Gate không làm phiền khi user đang trong event ở `schedules`; kết quả không bị nhiễu bởi task có `due_date` (task không sinh row trong `schedules` — xem ghi chú ở 2.5).
 
 ---
 
-### 3.4 — Dynamic Re-planning
-
-- **Mục tiêu:** Task bị trễ → Cortex hiểu ảnh hưởng tới Goal và đề xuất điều chỉnh.
-- **Mô tả:** Subscribe `task.overdue` (do State Evaluator 4.6 phát) → tính impact → nếu đáng kể, tạo đề xuất re-plan.
-- **⚠️ Phụ thuộc:** cần **1.10** (durable consumer) và **4.6** (State Evaluator phát `task.overdue`).
-- **Milestones:**
-  - M1: Subscriber tính impact tới goal liên quan (deterministic).
-  - M2: Ngưỡng quyết định khi nào cần re-plan.
-  - M3: Đề xuất ở dạng "Recommend", **gửi qua Attention Gate** chứ không notify thẳng.
-  - M4: Test: task trễ 3 ngày, block goal deadline còn 5 ngày → tạo đề xuất đúng.
-
----
-
-### 3.5 — "What should I do next?" Endpoint
-
-- **Mục tiêu:** Một entry point rõ ràng cho câu hỏi trung tâm của sản phẩm.
-- **Mô tả:** Tổng hợp 3.1 + risk từ goal + commitment sắp đến hạn.
-- **Milestones:**
-  - M1: Endpoint `/api/planning/next-action`.
-  - M2: AI skill dùng endpoint này thay vì gọi rời rạc nhiều tool.
-  - M3: Test các kịch bản: không có gì khẩn cấp / deadline gấp / commitment quá hạn.
-  - M4: Response time < 2s.
+> **3.4 và 3.5 đã dời xuống sau mục 4.6** (trong Phase 4) vì cả hai đều phụ thuộc `task.overdue` do State Evaluator (4.6) phát ra — đọc theo đúng thứ tự làm thì hợp lý hơn đọc theo đúng thứ tự số phase. Số hạng mục (3.4, 3.5) giữ nguyên, chỉ đổi vị trí trong tài liệu.
 
 ---
 
@@ -702,6 +975,33 @@ workspace_workflow_settings
   - M2: Publish event trạng thái lên Event Bus, khai báo trong vocabulary chung (1.9).
   - M3: Idempotency: chỉ phát khi có **chuyển** trạng thái, không phát lặp mỗi chu kỳ quét.
   - M4: Test: task quá hạn liên tục 7 ngày → chỉ phát `task.overdue` **một lần**.
+
+---
+
+> **3.4 và 3.5 (thuộc Phase 3) đặt ở đây** vì cả hai chỉ chạy được sau khi 4.6 phát `task.overdue` lên Event Bus. Giữ nguyên số hạng mục gốc để không phá tham chiếu chéo trong tài liệu.
+
+### 3.4 — Dynamic Re-planning
+
+- **Mục tiêu:** Task bị trễ → Cortex đánh giá mức độ nghiêm trọng và đề xuất điều chỉnh, không cần Goal để suy ra impact.
+- **Mô tả:** Subscribe `task.overdue` (do State Evaluator 4.6 phát) → tính mức độ nghiêm trọng bằng **priority + subtask cascade**: trọng số theo `tasks.priority` (giống `_PRIORITY_WEIGHT` của `today.py`), cộng thêm nếu task có subtask con (`parent_task_id`) chưa xong đang phụ thuộc vào nó, hoặc chính nó là subtask của một task cha đang gấp. Đáng kể thì tạo đề xuất re-plan (dời `due_date`, hạ ưu tiên việc khác…).
+- **⚠️ Phụ thuộc:** cần **1.10** (durable consumer, ✅ đã xong) và **4.6** (State Evaluator phát `task.overdue`, ngay ở trên).
+- **Milestones:**
+  - M1: Subscriber tính mức độ nghiêm trọng deterministic từ priority + subtask cascade (không còn goal lookup).
+  - M2: Ngưỡng quyết định khi nào cần re-plan (vd: priority HIGH/URGENT trễ ≥ N ngày, hoặc task cha trễ mà còn ≥1 subtask chưa xong).
+  - M3: Đề xuất ở dạng "Recommend", **gửi qua Attention Gate** chứ không notify thẳng.
+  - M4: Test: task priority URGENT trễ 3 ngày, có 2 subtask con chưa xong → tạo đề xuất đúng; task không priority, không subtask → không tạo đề xuất (tránh spam).
+
+---
+
+### 3.5 — "What should I do next?" Endpoint
+
+- **Mục tiêu:** Một entry point rõ ràng cho câu hỏi trung tâm của sản phẩm.
+- **Mô tả:** Tổng hợp 3.1 (danh sách xếp hạng) + đề xuất re-plan đang chờ approve (3.4).
+- **Milestones:**
+  - M1: Endpoint `/api/planning/next-action`.
+  - M2: AI skill dùng endpoint này thay vì gọi rời rạc nhiều tool.
+  - M3: Test các kịch bản: không có gì khẩn cấp / deadline gấp / có đề xuất re-plan đang chờ.
+  - M4: Response time < 2s.
 
 ---
 

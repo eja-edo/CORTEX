@@ -45,3 +45,16 @@ def mark_all_notifications_read(
     service = NotificationService(db)
     updated_count = service.mark_all_as_read(user_id=current_user.id)
     return MessageResponse(message=f"Marked {updated_count} notifications as read")
+
+
+@router.delete("/{notification_id}", response_model=MessageResponse)
+def delete_notification(
+    notification_id: UUID,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    service = NotificationService(db)
+    deleted = service.delete(notification_id=notification_id, user_id=current_user.id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification not found")
+    return MessageResponse(message="Notification deleted")

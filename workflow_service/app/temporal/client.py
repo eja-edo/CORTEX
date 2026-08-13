@@ -48,19 +48,34 @@ async def start_workflow_execution(
         await db.commit()
 
     client = await get_temporal_client()
-    await client.start_workflow(
-        CortexWorkflow.run,
-        CortexWorkflowInput(
-            instance_id=instance_id,
-            workflow_id=str(workflow.id),
-            user_id=str(workflow.user_id),
-            workspace_id=str(workflow.workspace_id) if workflow.workspace_id else None,
-            definition=workflow.definition,
-            trigger_data=trigger_data,
-        ),
-        id=temporal_workflow_id,
-        task_queue=settings.temporal_task_queue,
-    )
+    try:
+        await client.start_workflow(
+            CortexWorkflow.run,
+            CortexWorkflowInput(
+                instance_id=instance_id,
+                workflow_id=str(workflow.id),
+                user_id=str(workflow.user_id),
+                workspace_id=str(workflow.workspace_id) if workflow.workspace_id else None,
+                definition=workflow.definition,
+                trigger_data=trigger_data,
+            ),
+            id=temporal_workflow_id,
+            task_queue=settings.temporal_task_queue,
+        )
+    except Exception as e:
+        # Without this, a Temporal-unreachable failure here leaves the
+        # WorkflowInstance row committed above stuck at PENDING forever —
+        # no temporal_workflow_id ever gets set, and nothing cleans it up.
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(WorkflowInstance).where(WorkflowInstance.id == uuid.UUID(instance_id))
+            )
+            inst = result.scalar_one_or_none()
+            if inst:
+                inst.status = ExecutionStatus.FAILED
+                inst.error_message = f"Failed to start Temporal workflow: {e}"[:2000]
+                await db.commit()
+        raise
 
     async with AsyncSessionLocal() as db:
         result = await db.execute(
@@ -138,5 +153,10 @@ async def delete_workflow_schedule(temporal_schedule_id: str) -> None:
         client = await get_temporal_client()
         handle = client.get_schedule_handle(temporal_schedule_id)
         await handle.delete()
-    except Exception:
-        pass  # Schedule may not exist
+    except Exception as exc:
+        # Not-found is expected (schedule already gone) and fine to ignore,
+        # but logging unconditionally beats silently swallowing every other
+        # failure too (e.g. Temporal unreachable) — a leaked schedule with
+        # no trace anywhere is exactly the kind of silent failure this
+        # audit exists to catch.
+        print(f"[Temporal] Failed to delete schedule {temporal_schedule_id}: {exc}")

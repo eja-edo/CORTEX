@@ -27,13 +27,13 @@ import asyncio
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Deque, AsyncIterator
 
 from app.config import settings
 from app.ai.agents.base_provider import LLMProvider
 from app.ai.agents.openai_provider import OpenAIProvider
+from app.ai.agents.model_catalog import ModelLimits, DEFAULT_LIMITS, enabled_model_ids, get_model_spec
 from app.ai.agents.provider_types import (
     Message,
     GenerationConfig,
@@ -59,26 +59,8 @@ def get_default_model(provider: LLMProvider | None = None) -> str:
 
 
 def get_default_models() -> list[str]:
-    return [get_default_model()]
+    return enabled_model_ids()
 
-
-# ---------------------------------------------------------------------------
-# Model catalogue
-# ---------------------------------------------------------------------------
-
-@dataclass(frozen=True)
-class ModelLimits:
-    rpm: int
-    tpm: int | None
-    rpd: int
-
-
-MODEL_LIMITS: dict[str, ModelLimits] = {
-    "models/gemma-4-31b-it":        ModelLimits(rpm=15, tpm=None,    rpd=1_500),
-    "models/gemma-4-26b-a4b-it":    ModelLimits(rpm=15, tpm=None,    rpd=1_500),
-}
-
-AVAILABLE_MODELS: list[str] = list(MODEL_LIMITS.keys())
 
 EST_TOKENS_PER_REQUEST: int = 1_500
 RETRY_MAX_ATTEMPTS: int = 2
@@ -245,10 +227,10 @@ class ModelClient:
         self._cursor: int = 0
         self._lock = threading.Lock()
 
-        _default_limits = ModelLimits(rpm=15, tpm=None, rpd=1_500)
         self._budgets: dict[str, RateLimitBudget] = {}
         for m in self._models:
-            limits = MODEL_LIMITS.get(m, _default_limits)
+            spec = get_model_spec(m)
+            limits = spec.limits if spec else DEFAULT_LIMITS
             self._budgets[m] = RateLimitBudget(limits)
 
     # ------------------------------------------------------------------
@@ -261,6 +243,7 @@ class ModelClient:
         config: GenerationConfig,
         tools: list[ToolDefinition] | None = None,
         estimated_tokens: int = EST_TOKENS_PER_REQUEST,
+        preferred_model: str | None = None,
     ) -> tuple[str, ProviderResponse]:
         return await self._run_with_rotation(
             call_fn=self._call_generate,
@@ -268,6 +251,7 @@ class ModelClient:
             config=config,
             tools=tools,
             estimated_tokens=estimated_tokens,
+            preferred_model=preferred_model,
         )
 
     # ------------------------------------------------------------------
@@ -285,12 +269,6 @@ class ModelClient:
         last_exc: Exception | None = None
         budget_skipped_all: list[str] = []
 
-        def _ordered(preferred: str | None) -> list[str]:
-            base = self._model_order()
-            if not preferred or preferred not in self._models:
-                return base
-            return [preferred] + [m for m in base if m != preferred]
-
         for rotation_attempt in range(STREAM_ROTATION_RETRIES + 1):
             if rotation_attempt > 0:
                 delay = self._retry_delay * (2 ** (rotation_attempt - 1))
@@ -300,7 +278,7 @@ class ModelClient:
                 )
                 await asyncio.sleep(delay)
 
-            ordered = _ordered(preferred_model)
+            ordered = self._ordered(preferred_model)
             models_tried: dict[str, str] = {}
             budget_skipped: list[str] = []
 
@@ -417,8 +395,9 @@ class ModelClient:
         config: GenerationConfig,
         tools: list[ToolDefinition] | None,
         estimated_tokens: int,
+        preferred_model: str | None = None,
     ) -> tuple[str, ProviderResponse]:
-        ordered = self._model_order()
+        ordered = self._ordered(preferred_model)
         last_exc: Exception | None = None
         budget_skipped: list[str] = []
 
@@ -527,6 +506,12 @@ class ModelClient:
             start = self._cursor
         n = len(self._models)
         return [self._models[(start + i) % n] for i in range(n)]
+
+    def _ordered(self, preferred: str | None) -> list[str]:
+        base = self._model_order()
+        if not preferred or preferred not in self._models:
+            return base
+        return [preferred] + [m for m in base if m != preferred]
 
     def _advance_cursor_to(self, model: str) -> None:
         try:

@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Bell, BellOff, Calendar, CheckCircle2, Info, RefreshCw, StickyNote, X, AlertTriangle, CheckSquare } from 'lucide-react'
+import { Bell, BellOff, X } from 'lucide-react'
 import { BlockRenderer } from './BlockRenderer'
+import { NotificationDetailModal } from './NotificationDetailModal'
+import { KIND_META, timeAgo } from '../utils/notificationDisplay'
 import type { NotificationBlock, NotificationActionDef } from '../types'
 
-export type NotificationKind = 'sync' | 'schedule' | 'note' | 'system' | 'info' | 'success' | 'warning' | 'error'
+export type NotificationKind = 'sync' | 'schedule' | 'reminder' | 'note' | 'system' | 'info' | 'success' | 'warning' | 'error'
 
 export type AppNotification = {
    id: string
@@ -25,51 +27,6 @@ interface NotificationBellProps {
    onNavigate?: (path: string) => void
 }
 
-function timeAgo(date: Date): string {
-    const diff = Date.now() - date.getTime()
-    const mins = Math.floor(diff / 60000)
-    if (mins < 1) return 'Vừa xong'
-    if (mins < 60) return `${mins} phút trước`
-    const hrs = Math.floor(mins / 60)
-    if (hrs < 24) return `${hrs} giờ trước`
-    return date.toLocaleDateString('vi-VN')
-}
-
-const KIND_META: Record<NotificationKind, { icon: React.ReactNode; color: string }> = {
-   sync: {
-       icon: <RefreshCw size={13} />,
-       color: 'var(--accent)',
-   },
-   schedule: {
-       icon: <Calendar size={13} />,
-       color: 'var(--yellow)',
-   },
-   note: {
-       icon: <StickyNote size={13} />,
-       color: 'var(--green)',
-   },
-   system: {
-       icon: <CheckCircle2 size={13} />,
-       color: 'var(--text-tertiary)',
-   },
-   info: {
-       icon: <Info size={13} />,
-       color: 'var(--accent)',
-   },
-   success: {
-       icon: <CheckSquare size={13} />,
-       color: 'var(--green)',
-   },
-   warning: {
-       icon: <AlertTriangle size={13} />,
-       color: 'var(--yellow)',
-   },
-   error: {
-       icon: <AlertTriangle size={13} />,
-       color: 'var(--red)',
-   },
-}
-
 export function NotificationBell({
    notifications,
    onMarkRead,
@@ -79,6 +36,7 @@ export function NotificationBell({
 }: NotificationBellProps) {
    const [isOpen, setIsOpen] = useState(false)
    const [animatingIds, setAnimatingIds] = useState<Set<string>>(new Set())
+   const [detailNotif, setDetailNotif] = useState<AppNotification | null>(null)
    const panelRef = useRef<HTMLDivElement>(null)
    const btnRef = useRef<HTMLButtonElement>(null)
 
@@ -94,12 +52,18 @@ export function NotificationBell({
    const handleItemClick = useCallback(
        (notification: AppNotification) => {
            onMarkRead(notification.id)
-           if (notification.payload?.navigate_to) {
-               onNavigate?.(String(notification.payload.navigate_to))
-           }
+           setDetailNotif(notification)
            setIsOpen(false)
        },
-       [onMarkRead, onNavigate],
+       [onMarkRead],
+   )
+
+   const handleDetailNavigate = useCallback(
+       (path: string) => {
+           setDetailNotif(null)
+           onNavigate?.(path)
+       },
+       [onNavigate],
    )
 
     const handleDismiss = useCallback(
@@ -174,7 +138,7 @@ export function NotificationBell({
                             </div>
                         ) : (
                             notifications.map((n) => {
-                                const meta = KIND_META[n.kind]
+                                const meta = KIND_META[n.kind] ?? KIND_META.system
                                 const isExiting = animatingIds.has(n.id)
                                 return (
 <div
@@ -218,6 +182,23 @@ export function NotificationBell({
                         )}
                     </div>
                 </div>
+            )}
+
+            {detailNotif && (
+                <NotificationDetailModal
+                    title={detailNotif.title}
+                    timestamp={detailNotif.timestamp}
+                    body={detailNotif.body}
+                    content={detailNotif.content}
+                    actions={detailNotif.actions}
+                    navigateTo={typeof detailNotif.payload?.navigate_to === 'string' ? detailNotif.payload.navigate_to : undefined}
+                    onClose={() => setDetailNotif(null)}
+                    onNavigate={handleDetailNavigate}
+                    onDelete={() => {
+                        onDismiss(detailNotif.id)
+                        setDetailNotif(null)
+                    }}
+                />
             )}
         </div>
     )

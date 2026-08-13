@@ -417,10 +417,13 @@ async def test_all_six_commands_registered():
     test module already triggered that import chain via app.ai.tools.*."""
     commands = {c["name"]: c for c in get_command_registry().list_commands()}
 
-    assert set(commands.keys()) == {
+    # Subset, not equality: the registry is global and grows with each new
+    # domain. What this test owns is the six commands the tool migration
+    # produced, and their revertable flags.
+    assert {
         "note.create", "note.update", "note.delete",
         "schedule.create", "schedule.update", "schedule.delete",
-    }
+    } <= set(commands.keys())
     assert commands["note.update"]["revertable"] is False
     for name in ("note.create", "note.delete", "schedule.create", "schedule.update", "schedule.delete"):
         assert commands[name]["revertable"] is True
@@ -431,3 +434,49 @@ def test_verify_tool_migration_script_passes():
     proc = subprocess.run([sys.executable, str(script)], capture_output=True, text=True)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "All mutating tools use CommandRegistry" in proc.stdout
+
+
+@pytest.mark.asyncio
+async def test_a_failing_audit_write_cannot_break_the_caller(async_db):
+    """A best-effort write must not be able to break the request it rode in on.
+
+    `action_history` doesn't exist in this database, so every revertable
+    command's snapshot INSERT fails. That failure used to be "handled" by
+    rolling back the **caller's** session — which expires every ORM object it
+    holds. The agent's session holds the live conversation, so the next
+    `conv.id` raised MissingGreenlet and the chat turn returned 500 *after*
+    the user's task had already been created: an error message for work that
+    succeeded.
+
+    The audit write now uses its own session, so the caller's objects survive
+    whatever happens to it.
+    """
+    from app.ai.agents.action_snapshot_store import ActionSnapshot, get_snapshot_store
+    from app.models import AgentConversation
+
+    conversation = AgentConversation(user_id=TEST_USER_ID, title="[audit-isolation] conv")
+    async_db.add(conversation)
+    await async_db.commit()
+    await async_db.refresh(conversation)
+    conversation_id = conversation.id
+
+    # Snapshot save runs its (failing) INSERT while the caller holds `conversation`.
+    await get_snapshot_store().save(
+        ActionSnapshot(
+            tool_name="task.create",
+            user_id=str(TEST_USER_ID),
+            conversation_id=str(conversation_id),
+            snapshot={"task_id": str(uuid4())},
+            action_id=str(uuid4()),
+        ),
+        db_session=async_db,
+    )
+
+    # The caller's object is still usable — this is the access that used to blow up.
+    assert conversation.id == conversation_id
+    assert conversation.title == "[audit-isolation] conv"
+
+    await async_db.execute(
+        delete(AgentConversation).where(AgentConversation.id == conversation_id)
+    )
+    await async_db.commit()

@@ -22,6 +22,32 @@ logger = get_logger(__name__)
 SNAPSHOT_TTL_SECONDS = 86_400  # 24 giờ
 KEY_PREFIX = "revert:snapshot"
 
+# Session factory for the audit write, overridable for tests.
+#
+# In production the module-level `AsyncSessionLocal` is correct: one
+# process, one event loop, one pooled engine. Under pytest-asyncio each test
+# gets a fresh loop while that engine's pool holds connections bound to
+# whichever loop first initialised it, so the write can silently go through
+# the `except Exception: logger.warning(...)` in `save()` on some tests and
+# not others — a real row never lands, but nothing fails loudly. Same root
+# cause, same fix, as the session-factory override pattern used by tests
+# elsewhere in the codebase.
+_audit_session_factory_override = None
+
+
+def set_audit_session_factory(factory) -> None:
+    """Point the audit write at a specific session factory (tests only)."""
+    global _audit_session_factory_override
+    _audit_session_factory_override = factory
+
+
+def _open_audit_session():
+    if _audit_session_factory_override is not None:
+        return _audit_session_factory_override()
+    from app.database_async import AsyncSessionLocal
+
+    return AsyncSessionLocal()
+
 
 @dataclass
 class ActionSnapshot:
@@ -71,7 +97,29 @@ class ActionSnapshotStore:
         except Exception as exc:
             logger.error(f"Failed to save action snapshot to Redis: {exc}", exc_info=True)
 
+        # Deliberately NOT the caller's session.
+        #
+        # This write is best-effort audit history, but the recovery it used
+        # to do — rolling back the caller's session so a failed statement
+        # didn't leave the transaction aborted — expires every ORM object
+        # that session holds. The agent's request session holds the live
+        # `conv`, so one failed audit INSERT made the very next `conv.id`
+        # raise MissingGreenlet and the whole chat turn return 500 *after*
+        # the user's task had already been created. A best-effort write must
+        # not be able to break the request that triggered it, so it gets its
+        # own session and the caller's is never touched.
         if db_session is not None:
+            try:
+                async with _open_audit_session() as audit_session:
+                    await self._write_history(audit_session, snapshot)
+            except Exception as exc:
+                logger.warning(f"Failed to save action snapshot to PG (non-fatal): {exc}")
+
+        return snapshot.action_id
+
+    async def _write_history(self, db_session, snapshot: "ActionSnapshot") -> None:
+        """The audit INSERT, on a session of its own."""
+        if True:  # keeps the original body's indentation
             try:
                 await db_session.execute(
                     text("""
@@ -97,17 +145,12 @@ class ActionSnapshotStore:
                 logger.info(f"Saved action snapshot to PG: {snapshot.action_id}")
             except Exception as exc:
                 logger.warning(f"Failed to save action snapshot to PG (non-fatal): {exc}")
-                # A failed statement leaves the session's transaction aborted
-                # at the Postgres protocol level — every later query on this
-                # same session would fail with "current transaction is
-                # aborted" until rolled back. db_session is caller-owned (may
-                # be reused well beyond this call), so it must be left usable.
+                # Rolling back is safe now: this session belongs to this
+                # method and holds no ORM objects anyone else is using.
                 try:
                     await db_session.rollback()
                 except Exception as rb_exc:
                     logger.warning(f"Rollback after PG snapshot save failure also failed: {rb_exc}")
-
-        return snapshot.action_id
 
     async def get(self, user_id: str, action_id: str) -> Optional[ActionSnapshot]:
         """Lấy snapshot theo user_id + action_id. Trả None nếu không tồn tại / expired."""
@@ -147,22 +190,24 @@ class ActionSnapshotStore:
                 await client.setex(key, ttl, json.dumps(snapshot.to_dict()))
 
             if db_session is not None:
+                # Own session, same reasoning as save(): `ctx.async_db()` in
+                # CommandRegistry.revert_command() is caller-owned and may be
+                # reused for more work in the same turn after this returns.
+                # A failed UPDATE rolling back *that* session would expire
+                # whatever it holds — this write must not be able to do that.
                 try:
-                    await db_session.execute(
-                        text("""
-                            UPDATE action_history
-                            SET is_reverted = TRUE, reverted_at = NOW()
-                            WHERE action_id = :aid
-                        """),
-                        {"aid": action_id},
-                    )
-                    await db_session.commit()
+                    async with _open_audit_session() as audit_session:
+                        await audit_session.execute(
+                            text("""
+                                UPDATE action_history
+                                SET is_reverted = TRUE, reverted_at = NOW()
+                                WHERE action_id = :aid
+                            """),
+                            {"aid": action_id},
+                        )
+                        await audit_session.commit()
                 except Exception as exc:
                     logger.warning(f"Failed to mark_reverted in PG (non-fatal): {exc}")
-                    try:
-                        await db_session.rollback()
-                    except Exception as rb_exc:
-                        logger.warning(f"Rollback after PG mark_reverted failure also failed: {rb_exc}")
 
             return True
         except Exception as exc:

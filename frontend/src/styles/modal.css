@@ -58,39 +58,6 @@
     min-width: 0;
 }
 
-.modal-event-type-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 2px 8px;
-    border-radius: 999px;
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin-bottom: 6px;
-}
-
-.badge-CLASS {
-    background: var(--accent-light);
-    color: var(--accent);
-}
-
-.badge-DEADLINE {
-    background: var(--red-light);
-    color: var(--red);
-}
-
-.badge-EXAM {
-    background: var(--yellow-light);
-    color: var(--yellow);
-}
-
-.badge-PERSONAL {
-    background: var(--green-light);
-    color: var(--green);
-}
-
 .modal-title {
     font-size: 18px;
     font-weight: 700;
@@ -123,42 +90,6 @@
     overflow-y: auto;
 }
 
-.modal-meta-list {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
-.modal-meta-row {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    font-size: 13.5px;
-    color: var(--text-secondary);
-}
-
-.modal-meta-icon {
-    color: var(--text-tertiary);
-    margin-top: 2px;
-    flex-shrink: 0;
-}
-
-.modal-meta-text {
-    flex: 1;
-    color: var(--text-primary);
-}
-
-.modal-description {
-    margin-top: 14px;
-    padding: 12px 14px;
-    background: var(--bg-secondary);
-    border-radius: var(--radius);
-    font-size: 13.5px;
-    color: var(--text-primary);
-    line-height: 1.6;
-    border: 1px solid var(--border);
-}
-
 .modal-description-label {
     font-size: 11px;
     font-weight: 600;
@@ -168,200 +99,371 @@
     margin-bottom: 6px;
 }
 
-/* ─────────────────────────────────────────────────────────────────────────
-   CalendarView event detail modal — inline edit on double-click
-   ───────────────────────────────────────────────────────────────────────── */
-
-/* Common display surface — same metrics as the editor so the layout doesn't
-   shift when toggling between modes. */
-.modal-title-area > .inline-editable,
-.modal-meta-row > .inline-editable {
-    display: inline-block;
-    min-height: 24px;
-    line-height: 1.4;
-    vertical-align: middle;
+/* ── Confirm dialog ────────────────────────────────────────────────────── */
+.confirm-dialog {
+    width: min(380px, 100%);
 }
 
-.modal-title-area {
-    flex: 1 1 auto;
+.confirm-dialog-message {
+    font-size: 13.5px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+}
+
+/* ── Task detail modal ─────────────────────────────────────────────────────
+   A Linear issue page, not the event modal's date/type/location form: big
+   borderless title + description on the left, a slim "Properties" list on
+   the right. No header bar, no footer — delete/close live as small icon
+   buttons above the title, and every property commits on change instead of
+   needing a save step. */
+
+/* A fixed height only matters if every box between it and the description
+   field actually passes that height down — flex parents default to
+   sizing children by content, so each link in the chain below needs its
+   own `flex: 1 1 auto; min-height: 0` or the extra height just becomes
+   dead space above a description box stuck at its content size. */
+.task-detail-modal {
+    width: min(760px, 100%);
+    height: min(80%, 100%);
     display: flex;
-    align-items: center;
-    gap: 12px;
+    flex-direction: column;
+}
+
+.task-detail-modal-topbar {
+    flex-shrink: 0;
+    display: flex;
+    justify-content: flex-end;
+    gap: 2px;
+    padding: 10px 10px 0;
+}
+
+/* Scrollable content area. Its only always-present child is `-columns`
+   (title/description | properties); a create-style form can additionally
+   drop an expanded config panel (recurrence, reminders) in after it, full
+   width, still inside the same scroll region. */
+.task-detail-modal-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+}
+
+.task-detail-modal-columns {
+    display: flex;
+    gap: 32px;
+    padding: 0 28px 28px;
+}
+
+.task-detail-modal-main {
+    flex: 1 1 auto;
     min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
 }
 
-/* Each editable span gets the same hover affordance. */
-.inline-editable {
-    cursor: text;
-    border-radius: 6px;
-    padding: 2px 6px;
-    margin: -2px -6px;
-    transition: background 0.15s, box-shadow 0.15s;
-    display: inline-block;
-    min-width: 0;
-    max-width: 100%;
-}
-
-.inline-editable:hover {
-    background: rgba(99, 102, 241, 0.08);
-    box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.15);
-}
-
-.inline-editable:focus-within {
-    background: rgba(99, 102, 241, 0.08);
-    box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.3);
-}
-
-/* Title — match display height, font weight, size. */
-.modal-title-area .modal-title {
-    font-size: 18px;
-    font-weight: 600;
-    line-height: 1.4;
-    color: var(--text-primary);
-    margin: 0;
-    word-break: break-word;
-}
-
-.modal-title-area .modal-title-input {
-    font-size: 18px;
-    font-weight: 600;
-    line-height: 1.4;
+.task-detail-modal-title-input {
+    flex-shrink: 0;
     width: 100%;
-    padding: 4px 8px;
-    border-radius: 6px;
-    background: white;
-    color: var(--text-primary);
+    background: none;
+    border: none;
     outline: none;
-}
-
-/* Type badge — match the same height so the badge doesn't reflow when the
-   <select> opens. */
-.modal-event-type-badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    height: 24px;
-    padding: 0 10px;
-    border-radius: 12px;
-    font-size: 11px;
+    padding: 0;
+    font: inherit;
+    font-size: 22px;
     font-weight: 700;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    line-height: 1;
-    cursor: pointer;
+    letter-spacing: -0.015em;
+    color: var(--text-primary);
 }
 
-.modal-event-type-badge.editing-select {
-    border: 1px solid var(--cm-primary, #6366f1);
-    background: white;
-    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
-    cursor: pointer;
-    padding: 0 6px;
-}
-
-.modal-event-type-badge.editing-select:focus {
+.task-detail-modal-description-input {
+    flex: 1 1 auto;
+    min-height: 120px;
+    width: 100%;
+    background: none;
+    border: none;
     outline: none;
+    resize: none;
+    font: inherit;
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--text-primary);
 }
 
-/* Meta rows — let the inline-editable span stretch. */
-.modal-meta-row {
+.task-detail-modal-description-input::placeholder {
+    color: var(--text-tertiary);
+}
+
+.task-detail-modal-sidebar {
+    width: 220px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.task-detail-modal-sidebar-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 6px;
+}
+
+.task-detail-modal-property {
     display: flex;
     align-items: center;
     gap: 8px;
-    min-height: 28px;
-    line-height: 1.4;
+    padding: 6px 8px;
+    margin: 0 -8px;
+    background: none;
+    border: none;
+    border-radius: var(--radius);
+    font: inherit;
+    font-size: 13px;
+    color: var(--text-secondary);
+    text-align: left;
+    cursor: pointer;
 }
 
-.modal-meta-row > .inline-editable {
-    flex: 1 1 auto;
+.task-detail-modal-property:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.task-detail-modal-property.is-urgent { color: var(--red); }
+.task-detail-modal-property.is-high { color: var(--orange, #d97706); }
+
+/* A toggle whose config is actually set (recurrence on, reminders added) —
+   same idea as the urgent/high priority colors above, just accent instead
+   of a status color since there's no inherent "this is dangerous" meaning. */
+.task-detail-modal-property.is-active {
+    color: var(--accent);
+}
+
+/* `DueDateEditor`'s wrapper needs to take the row's remaining width itself
+   (not just its first input) so the date field keeps the same footprint it
+   had as a lone input, before an optional time field could sit next to it. */
+.task-detail-modal-property > .due-date-editor {
+    flex: 1;
     min-width: 0;
 }
 
-.modal-meta-text {
-    color: var(--text-primary);
-    font-size: 13.5px;
-    word-break: break-word;
-}
-
-.modal-meta-row .modal-meta-input,
-.modal-meta-row .time-editor input[type="datetime-local"] {
-    font-size: 13.5px;
-    padding: 4px 8px;
-    border-radius: 6px;
-    background: white;
-    color: var(--text-primary);
+/* Any input/select living inside a property row — due date, event type,
+   location, start/end time. Named for what it is (a field in a property
+   row), not which one, since every property row's editor looks identical. */
+.task-detail-modal-property-field {
+    flex: 1;
+    min-width: 0;
+    background: none;
+    border: none;
     outline: none;
+    font: inherit;
+    font-size: 13px;
+    color: inherit;
+    padding: 0;
+    cursor: pointer;
+}
+
+/* The clock icon that opens/closes the optional time-of-day field next to
+   a due date (`DueDateEditor`) — same idea as `today-checklist-date-time-
+   toggle`, sized for the modal's roomier property row. */
+.task-detail-modal-property-time-toggle {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    background: none;
+    border: none;
+    padding: 2px;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+}
+
+.task-detail-modal-property-time-toggle:hover {
+    background: var(--bg-active);
+    color: var(--text-primary);
+}
+
+.task-detail-modal-property-label {
+    flex-shrink: 0;
+    min-width: 22px;
+    font-size: 11px;
+    color: var(--text-tertiary);
+}
+
+/* ── Checklist (sub-tasks) ─────────────────────────────────────────────
+   Sits under the description, in the main column — not the sidebar, since
+   it can grow long. Rows are `TaskChecklistRow` (`.event-checklist-list`
+   lays them out — same list styling the event checklist uses). */
+.task-detail-modal-checklist {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 6px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+}
+
+.task-detail-modal-checklist-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+}
+
+.task-detail-modal-checklist-count {
+    font-size: 12px;
+    color: var(--text-tertiary);
+}
+
+.task-detail-modal-checklist-add {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    margin: 0 -8px;
+    background: none;
+    border: none;
+    border-radius: var(--radius);
+    font: inherit;
+    font-size: 13px;
+    color: var(--text-tertiary);
+    text-align: left;
+    cursor: pointer;
+}
+
+.task-detail-modal-checklist-add:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+/* The "+ Add sub-issues" inline creation form. */
+.subtask-create-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.subtask-create-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.subtask-create-checkbox {
+    flex-shrink: 0;
+    color: var(--text-tertiary);
+}
+
+.subtask-create-title {
+    flex: 1;
+    min-width: 0;
+    background: none;
+    border: none;
+    outline: none;
+    font: inherit;
+    font-size: 13.5px;
+    color: var(--text-primary);
+    padding: 2px 0;
+}
+
+.subtask-create-title::placeholder {
+    color: var(--text-tertiary);
+}
+
+.subtask-create-description {
     width: 100%;
-    line-height: 1.4;
-    min-height: 28px;
+    background: none;
+    border: none;
+    outline: none;
+    resize: none;
+    font: inherit;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-primary);
 }
 
-.modal-meta-row .modal-meta-input {
-    max-width: 320px;
+.subtask-create-description::placeholder {
+    color: var(--text-tertiary);
 }
 
-.time-editor {
+.subtask-create-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border);
+}
+
+.subtask-create-priority {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    flex-wrap: wrap;
-}
-
-.time-editor input[type="datetime-local"] {
-    width: auto;
-    min-width: 180px;
-}
-
-.time-editor .time-editor-sep {
-    color: var(--text-tertiary);
+    background: none;
+    border: none;
+    padding: 4px 8px;
+    margin: -4px 0 -4px -8px;
+    border-radius: var(--radius-sm);
+    font: inherit;
     font-size: 12px;
-    padding: 0 2px;
+    color: var(--text-secondary);
+    cursor: pointer;
 }
 
-.modal-meta-placeholder {
-    color: var(--text-tertiary);
-    font-style: italic;
-    font-size: 13.5px;
-}
-
-/* MarkdownField inside the modal — give it the same metrics as the
-   read-only paragraph to avoid reflow. */
-.modal-description .markdown-field-preview {
-    min-height: 28px;
-    padding: 4px 8px;
-    border-radius: 6px;
-    background: transparent;
-    transition: background 0.15s;
-    border: 1px solid transparent;
-    cursor: text;
-    font-size: 13.5px;
-    line-height: 1.5;
-}
-
-.modal-description .markdown-field-preview:hover {
-    background: rgba(99, 102, 241, 0.05);
-    border-color: rgba(99, 102, 241, 0.15);
-}
-
-.modal-description .markdown-field-textarea {
-    width: 100%;
-    padding: 4px 8px;
-    border: 1px solid var(--cm-primary, #6366f1);
-    border-radius: 6px;
-    background: white;
+.subtask-create-priority:hover {
+    background: var(--bg-hover);
     color: var(--text-primary);
-    outline: none;
-    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
-    font-size: 13.5px;
-    line-height: 1.5;
-    min-height: 28px;
-    resize: vertical;
-    font-family: inherit;
 }
 
-.modal-description .markdown-field-placeholder {
+.subtask-create-priority.is-urgent { color: var(--red); }
+.subtask-create-priority.is-high { color: var(--orange, #d97706); }
+
+.subtask-create-actions {
+    display: flex;
+    gap: 6px;
+}
+
+/* Pushed to the bottom of the (stretched) sidebar column via margin-top:
+   auto, so it reads as the sidebar's closing action rather than just
+   another property in the list. */
+.task-detail-modal-submit {
+    margin-top: auto;
+    justify-content: center;
+}
+
+.task-detail-modal-panels {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 0 28px 20px;
+}
+
+.task-detail-modal-panel {
+    padding: 14px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.task-detail-modal-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 11px;
+    font-weight: 600;
     color: var(--text-tertiary);
-    font-style: italic;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 10px;
 }
 
 .modal-footer {
@@ -377,242 +479,57 @@
     gap: 6px;
 }
 
-/* ========== CREATE EVENT MODAL ========== */
-.create-modal .modal-body {
-    padding: 16px 20px 20px;
-}
-
-.create-form {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-}
-
-.create-form-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-}
-
-/* ========== CREATE EVENT MODAL (modern design) ========== */
-.modal-backdrop:has(.create-modal) {
-    background: rgba(15, 23, 42, 0.4);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    align-items: flex-start;
-    padding-top: max(24px, env(safe-area-inset-top));
-    padding-bottom: max(24px, env(safe-area-inset-bottom));
-}
-
-.create-modal {
-    --cm-primary: #6366f1;
-    --cm-primary-soft: #eef2ff;
-    --cm-text-dark: #0f172a;
-    --cm-text-gray: #64748b;
-    --cm-bg-card: #ffffff;
-    --cm-border: #e2e8f0;
-    --cm-radius-xl: 28px;
-    --cm-radius-md: 14px;
-    --cm-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.1);
-    width: min(540px, 100%);
-    max-height: calc(100vh - 32px);
-    border-radius: var(--cm-radius-xl);
-    border: 1px solid rgba(255, 255, 255, 0.7);
-    box-shadow: var(--cm-shadow);
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    animation: cmSlideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1);
-    padding: 0;
-}
-
-@keyframes cmSlideUp {
-    from {
-        opacity: 0;
-        transform: translateY(40px) scale(0.95);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0) scale(1);
-    }
-}
-
-.create-modal .modal-header {
-    padding: 32px 32px 10px;
-    border-bottom: none;
-    align-items: center;
-    flex-shrink: 0;
-}
-
-.create-modal .category-tag {
-    display: inline-flex;
-    align-items: center;
-    background: var(--cm-primary-soft);
-    color: var(--cm-primary);
-    padding: 6px 14px;
-    border-radius: 100px;
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.5px;
-    text-transform: uppercase;
-}
-
-.create-modal .modal-close {
-    background: #f8fafc;
-    border: 1px solid var(--cm-border);
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    transition: background 0.3s, color 0.3s, border-color 0.3s, transform 0.3s;
-}
-
-.create-modal .modal-close:hover {
-    background: #fee2e2;
-    color: #ef4444;
-    border-color: #fecaca;
-    transform: rotate(90deg);
-}
-
-.create-modal .modal-body {
-    padding: 0 32px 24px;
-    flex: 1 1 auto;
-    min-height: 0;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-}
-
-/* Form layout */
-.create-modal .schedule-form {
-    display: flex;
-    flex-direction: column;
-    gap: 0;
-}
-
-.create-modal .form-error {
-    background: #fef2f2;
-    border: 1px solid #fecaca;
-    color: #b91c1c;
+/* Shared by every create/settings form (ScheduleForm, WorkspaceCreateModal,
+   WorkspaceMembersModal) — a top-of-form validation banner. */
+.form-error {
+    background: var(--red-light, rgba(239, 68, 68, 0.1));
+    border: 1px solid var(--red);
+    color: var(--red);
     padding: 10px 14px;
-    border-radius: var(--cm-radius-md);
+    border-radius: var(--radius);
     font-size: 13px;
-    margin-bottom: 16px;
 }
 
-/* Title input */
-.create-modal .title-group {
-    margin-bottom: 24px;
-    position: relative;
-}
-
-.create-modal .input-title {
-    width: 100%;
-    border: none;
-    font-size: 28px;
-    font-weight: 700;
-    color: var(--cm-text-dark);
-    padding: 8px 0;
-    outline: none;
-    background: transparent;
-    font-family: var(--font);
-}
-
-.create-modal .input-title::placeholder {
-    color: #cbd5e1;
-}
-
-.create-modal .title-underline {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    height: 3px;
-    width: 40px;
-    background: var(--cm-primary);
-    transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-    border-radius: 2px;
-}
-
-.create-modal .input-title:focus ~ .title-underline {
-    width: 100%;
-}
-
-/* Grid row (type + location) */
-.create-modal .grid-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px;
-    margin-bottom: 24px;
-}
-
-.create-modal .form-item {
-    display: flex;
-    flex-direction: column;
-}
-
-.create-modal .form-item > label,
-.create-modal > .schedule-form > label {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--cm-text-gray);
-    margin-bottom: 10px;
-}
-
-.create-modal .input-field {
-    width: 100%;
-    padding: 12px 16px;
-    border-radius: var(--cm-radius-md);
-    border: 1px solid var(--cm-border);
-    background: #f8fafc;
-    font-size: 14px;
-    color: var(--cm-text-dark);
-    transition: background 0.3s, border-color 0.3s, box-shadow 0.3s;
-    outline: none;
-    font-family: var(--font);
-}
-
-.create-modal .input-field:focus {
-    background: white;
-    border-color: var(--cm-primary);
-    box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1);
-}
-
-.create-modal textarea.input-field {
-    line-height: 1.5;
-    min-height: 64px;
-}
-
-/* MarkdownField — raw textarea when focused, sanitized preview otherwise. */
+/* MarkdownField — raw textarea when focused, sanitized preview otherwise.
+   Borderless/transparent by default so it blends into whichever surface
+   drops it in (task/event description, notes); a boxed context like
+   `.modal-description` layers its own background back on top above. */
 .markdown-field-preview {
     width: 100%;
-    padding: 12px 16px;
-    border-radius: var(--cm-radius-md);
-    border: 1px solid var(--cm-border);
-    background: #f8fafc;
+    padding: 0;
+    border: none;
+    border-radius: var(--radius);
+    background: none;
     font-size: 14px;
-    color: var(--cm-text-dark);
-    line-height: 1.5;
+    color: var(--text-primary);
+    line-height: 1.6;
     min-height: 64px;
     cursor: text;
     overflow-y: auto;
-    transition: background 0.3s, border-color 0.3s, box-shadow 0.3s;
+    transition: background 0.15s;
 }
 
 .markdown-field-preview:hover {
-    background: white;
-    border-color: var(--cm-primary);
-}
-
-.markdown-field-preview:focus {
-    outline: none;
-    background: white;
-    border-color: var(--cm-primary);
-    box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1);
+    background: var(--bg-hover);
 }
 
 .markdown-field-preview.is-empty {
     color: var(--text-tertiary);
+}
+
+.markdown-field-textarea {
+    width: 100%;
+    padding: 0;
+    border: none;
+    outline: none;
+    border-radius: var(--radius);
+    background: none;
+    font: inherit;
+    font-size: 14px;
+    color: var(--text-primary);
+    line-height: 1.6;
+    min-height: 64px;
+    resize: vertical;
 }
 
 .markdown-field-placeholder {
@@ -637,7 +554,7 @@
 }
 
 .markdown-field-preview code {
-    background: rgba(99, 102, 241, 0.08);
+    background: var(--bg-secondary);
     padding: 1px 6px;
     border-radius: 4px;
     font-family: ui-monospace, "SF Mono", "Menlo", monospace;
@@ -645,9 +562,9 @@
 }
 
 .markdown-field-preview pre {
-    background: rgba(15, 23, 42, 0.05);
+    background: var(--bg-secondary);
     padding: 10px 12px;
-    border-radius: 6px;
+    border-radius: var(--radius);
     overflow-x: auto;
     font-family: ui-monospace, "SF Mono", "Menlo", monospace;
     font-size: 13px;
@@ -669,7 +586,7 @@
 }
 
 .markdown-field-preview a {
-    color: var(--cm-primary);
+    color: var(--accent);
     text-decoration: underline;
 }
 
@@ -695,7 +612,7 @@
     width: 16px;
     height: 20px;
     line-height: 0;
-    color: var(--cm-primary);
+    color: var(--accent);
     cursor: default;
 }
 
@@ -707,306 +624,3 @@
     display: block;
 }
 
-/* Time range box */
-.create-modal .time-box {
-    background: #f8fafc;
-    border: 1px solid var(--cm-border);
-    border-radius: var(--cm-radius-md);
-    padding: 16px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 24px;
-}
-
-.create-modal .time-segment {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-}
-
-.create-modal .time-segment-label {
-    font-size: 11px;
-    color: var(--cm-text-gray);
-    margin-bottom: 4px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-}
-
-.create-modal .time-segment input {
-    border: none;
-    background: transparent;
-    font-weight: 600;
-    font-size: 14px;
-    color: var(--cm-text-dark);
-    width: 100%;
-    cursor: pointer;
-    padding: 0;
-    font-family: var(--font);
-    outline: none;
-}
-
-.create-modal .time-arrow {
-    color: var(--cm-text-gray);
-    display: flex;
-    align-items: center;
-}
-
-/* Quick option pills */
-.create-modal .options-group {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    margin-top: 20px;
-}
-
-.create-modal .pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 16px;
-    border-radius: 100px;
-    border: 1.5px solid var(--cm-border);
-    background: white;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--cm-text-gray);
-    cursor: pointer;
-    transition: background 0.3s, color 0.3s, border-color 0.3s, transform 0.3s, box-shadow 0.3s;
-    font-family: var(--font);
-}
-
-.create-modal .pill:hover:not(:disabled) {
-    border-color: var(--cm-primary);
-    color: var(--cm-primary);
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(99, 102, 241, 0.1);
-}
-
-.create-modal .pill.active {
-    background: var(--cm-primary);
-    color: white;
-    border-color: var(--cm-primary);
-}
-
-.create-modal .pill:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-}
-
-/* Inline expanded options panels (recurrence / reminders) */
-.create-modal .options-panel {
-    margin-top: 16px;
-    padding: 16px;
-    border: 1px solid var(--cm-border);
-    border-radius: var(--cm-radius-md);
-    background: #f8fafc;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.create-modal .options-panel-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    font-size: 13px;
-    font-weight: 700;
-    color: var(--cm-text-dark);
-    margin-bottom: 4px;
-}
-
-.create-modal .options-panel-close {
-    width: 24px;
-    height: 24px;
-    border-radius: 50%;
-    border: none;
-    background: transparent;
-    color: var(--cm-text-gray);
-    cursor: pointer;
-    display: grid;
-    place-items: center;
-    transition: background 0.2s, color 0.2s;
-}
-
-.create-modal .options-panel-close:hover {
-    background: #f1f5f9;
-    color: var(--cm-text-dark);
-}
-
-/* Override inner RecurrenceConfig / ReminderConfig look so they blend in */
-.create-modal .options-panel .form-field,
-.create-modal .options-panel .recurrence-card {
-    background: white;
-    border: 1px solid var(--cm-border);
-    border-radius: 10px;
-    padding: 12px 14px;
-}
-
-.create-modal .options-panel .form-label {
-    color: var(--cm-text-gray);
-    font-size: 12px;
-    font-weight: 600;
-    margin-bottom: 8px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.create-modal .options-panel .form-label > span {
-    margin-left: 0;
-}
-
-.create-modal .options-panel .form-field {
-    margin: 0;
-}
-
-.create-modal .options-panel .form-field .form-label {
-    margin-bottom: 8px;
-}
-
-.create-modal .options-panel .btn {
-    font-size: 12px;
-}
-
-.create-modal .options-panel select,
-.create-modal .options-panel input[type="date"],
-.create-modal .options-panel input[type="text"] {
-    padding: 8px 10px;
-    border-radius: 8px;
-    border: 1px solid var(--cm-border);
-    background: white;
-    font-size: 13px;
-    color: var(--cm-text-dark);
-    outline: none;
-    font-family: var(--font);
-}
-
-.create-modal .options-panel .recurrence-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 10px;
-}
-
-.create-modal .options-panel .recurrence-title {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--cm-text-dark);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-}
-
-.create-modal .options-panel .recurrence-remove {
-    background: transparent;
-    border: none;
-    color: var(--cm-text-gray);
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-    padding: 4px 8px;
-    border-radius: 6px;
-    transition: background 0.2s, color 0.2s;
-}
-
-.create-modal .options-panel .recurrence-remove:hover {
-    background: #fee2e2;
-    color: #ef4444;
-}
-
-.create-modal .options-panel .recurrence-group {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    margin-bottom: 10px;
-}
-
-.create-modal .options-panel .recurrence-group label {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--cm-text-gray);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-}
-
-.create-modal .options-panel .recurrence-hint {
-    font-size: 11px;
-    color: var(--cm-text-gray);
-}
-
-.create-modal .options-panel .recurrence-info {
-    font-size: 12px;
-    color: var(--cm-text-gray);
-    background: var(--cm-primary-soft);
-    color: var(--cm-primary);
-    padding: 6px 10px;
-    border-radius: 8px;
-    font-weight: 600;
-}
-
-/* Footer with cancel + create */
-.create-modal .modal-footer {
-    padding: 20px 32px 28px;
-    display: flex;
-    justify-content: flex-end;
-    gap: 16px;
-    border-top: 1px solid var(--cm-border);
-    background: var(--cm-bg-card);
-    flex-shrink: 0;
-    border-bottom-left-radius: var(--cm-radius-xl);
-    border-bottom-right-radius: var(--cm-radius-xl);
-}
-
-.create-modal .btn-cm-cancel {
-    background: transparent;
-    color: var(--cm-text-gray);
-    padding: 14px 28px;
-    border-radius: var(--cm-radius-md);
-    font-size: 15px;
-    font-weight: 700;
-    border: none;
-    cursor: pointer;
-    transition: background 0.3s, color 0.3s;
-    font-family: var(--font);
-}
-
-.create-modal .btn-cm-cancel:hover {
-    color: var(--cm-text-dark);
-    background: #f1f5f9;
-}
-
-.create-modal .btn-cm-create {
-    background: var(--cm-primary);
-    color: white;
-    padding: 14px 28px;
-    border-radius: var(--cm-radius-md);
-    font-size: 15px;
-    font-weight: 700;
-    border: none;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-    box-shadow: 0 10px 20px -5px rgba(99, 102, 241, 0.4);
-    transition: transform 0.3s, background 0.3s, box-shadow 0.3s;
-    font-family: var(--font);
-}
-
-.create-modal .btn-cm-create:hover:not(:disabled) {
-    transform: translateY(-3px) scale(1.03);
-    background: #4f46e5;
-    box-shadow: 0 15px 30px -10px rgba(99, 102, 241, 0.5);
-}
-
-.create-modal .btn-cm-create:active:not(:disabled) {
-    transform: translateY(0) scale(0.98);
-}
-
-.create-modal .btn-cm-create:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-    box-shadow: none;
-}

@@ -29,6 +29,8 @@ from httpx import AsyncClient
 from app.config import settings
 from app.triggers import internal_event_listener as listener_module
 
+from .conftest import TEST_USER_ID
+
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 STREAM_KEY = "events:note.created"
@@ -70,7 +72,11 @@ async def _publish_note_created_envelope(note_id: str) -> str:
         "source": "test_internal_event_listener",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "correlation_id": None,
-        "user_id": None,
+        # Same owner as the test workflow (created under auth_headers, i.e.
+        # TEST_USER_ID) — the ownership check added for the cross-tenant
+        # trigger fix needs this to match, or the event just wouldn't be
+        # this workflow's to see.
+        "user_id": str(TEST_USER_ID),
         "workspace_id": None,
         "conversation_id": None,
         "payload": {
@@ -260,3 +266,155 @@ async def test_listener_picks_up_new_event_type_without_restart(tmp_path, monkey
         await redis.delete(f"events:{initial_event_type}")
         await redis.delete(f"events:{new_event_type}")
         await redis.aclose()
+
+
+async def test_handle_event_matches_only_configured_event_in_sql(
+    async_client: AsyncClient, auth_headers: dict, valid_definition: dict, monkeypatch
+):
+    """Milestone 4.0 M2: `_handle_event` matches `trigger_config->>'event'` in
+    the SQL WHERE clause, not by loading every ACTIVE internal_event workflow
+    and filtering in Python. Create two workflows for two different event
+    types and assert only the one configured for the fired event triggers."""
+    run_id = uuid.uuid4().hex[:8]
+    matching_event = f"test.matching_{run_id}"
+    other_event = f"test.other_{run_id}"
+
+    workflow_ids = []
+    for name, event in [("matching", matching_event), ("other", other_event)]:
+        create_resp = await async_client.post(
+            "/api/v1/workflows",
+            json={
+                "name": f"sql_filter_test_{name}_{run_id}",
+                "trigger_type": "internal_event",
+                "trigger_config": {"event": event},
+                "definition": valid_definition,
+            },
+            headers=auth_headers,
+        )
+        assert create_resp.status_code == 201
+        workflow_id = create_resp.json()["id"]
+        activate_resp = await async_client.post(
+            f"/api/v1/workflows/{workflow_id}/activate", headers=auth_headers
+        )
+        assert activate_resp.status_code == 200
+        workflow_ids.append(workflow_id)
+
+    trigger_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr(listener_module, "_trigger_workflow_instance", trigger_mock)
+
+    try:
+        # user_id must match the workflows' owner (TEST_USER_ID, via
+        # auth_headers) — the cross-tenant trigger fix requires it.
+        await listener_module._handle_event(matching_event, {"user_id": str(TEST_USER_ID)})
+
+        assert trigger_mock.call_count == 1
+        called_workflow, _called_trigger_data = trigger_mock.call_args.args
+        assert str(called_workflow.id) == workflow_ids[0]
+        assert called_workflow.trigger_config["event"] == matching_event
+    finally:
+        for workflow_id in workflow_ids:
+            await async_client.delete(f"/api/v1/workflows/{workflow_id}", headers=auth_headers)
+
+
+async def test_handle_event_does_not_trigger_other_users_personal_workflow(
+    async_client: AsyncClient, auth_headers: dict, valid_definition: dict, monkeypatch
+):
+    """Cross-tenant trigger leak: a personal workflow (no workspace_id) must
+    only fire on its own owner's events — matching purely on event_type
+    used to let ANY user's data trigger it."""
+    event_type = f"test.other_user_{uuid.uuid4().hex[:8]}"
+
+    create_resp = await async_client.post(
+        "/api/v1/workflows",
+        json={
+            "name": "cross_tenant_test",
+            "trigger_type": "internal_event",
+            "trigger_config": {"event": event_type},
+            "definition": valid_definition,
+        },
+        headers=auth_headers,
+    )
+    assert create_resp.status_code == 201
+    workflow_id = create_resp.json()["id"]
+    await async_client.post(f"/api/v1/workflows/{workflow_id}/activate", headers=auth_headers)
+
+    trigger_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr(listener_module, "_trigger_workflow_instance", trigger_mock)
+
+    try:
+        other_user_id = str(uuid.uuid4())
+        await listener_module._handle_event(event_type, {"user_id": other_user_id})
+
+        assert trigger_mock.call_count == 0
+    finally:
+        await async_client.delete(f"/api/v1/workflows/{workflow_id}", headers=auth_headers)
+
+
+async def test_handle_event_triggers_workspace_workflow_for_any_member(
+    async_client: AsyncClient, auth_headers: dict, valid_definition: dict, monkeypatch
+):
+    """A workspace-scoped workflow is intentional team automation
+    (Workspace/WorkspaceMember is a real shared entity) — it should fire on
+    a fellow member's event, not just the workflow creator's own."""
+    event_type = f"test.workspace_{uuid.uuid4().hex[:8]}"
+    workspace_id = str(uuid.uuid4())
+
+    create_resp = await async_client.post(
+        "/api/v1/workflows",
+        json={
+            "name": "workspace_scoped_test",
+            "workspace_id": workspace_id,
+            "trigger_type": "internal_event",
+            "trigger_config": {"event": event_type},
+            "definition": valid_definition,
+        },
+        headers=auth_headers,
+    )
+    assert create_resp.status_code == 201
+    workflow_id = create_resp.json()["id"]
+    await async_client.post(f"/api/v1/workflows/{workflow_id}/activate", headers=auth_headers)
+
+    trigger_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr(listener_module, "_trigger_workflow_instance", trigger_mock)
+
+    try:
+        other_member_id = str(uuid.uuid4())
+        await listener_module._handle_event(
+            event_type, {"user_id": other_member_id, "workspace_id": workspace_id},
+        )
+
+        assert trigger_mock.call_count == 1
+    finally:
+        await async_client.delete(f"/api/v1/workflows/{workflow_id}", headers=auth_headers)
+
+
+async def test_handle_event_fails_closed_with_no_ownership_data(
+    async_client: AsyncClient, auth_headers: dict, valid_definition: dict, monkeypatch
+):
+    """An event with neither user_id nor workspace_id can't be verified as
+    belonging to a personal workflow's owner — must not fire."""
+    event_type = f"test.no_ownership_data_{uuid.uuid4().hex[:8]}"
+
+    create_resp = await async_client.post(
+        "/api/v1/workflows",
+        json={
+            "name": "fail_closed_test",
+            "trigger_type": "internal_event",
+            "trigger_config": {"event": event_type},
+            "definition": valid_definition,
+        },
+        headers=auth_headers,
+    )
+    assert create_resp.status_code == 201
+    workflow_id = create_resp.json()["id"]
+    await async_client.post(f"/api/v1/workflows/{workflow_id}/activate", headers=auth_headers)
+
+    trigger_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr(listener_module, "_trigger_workflow_instance", trigger_mock)
+
+    try:
+        await listener_module._handle_event(event_type, {})
+
+        assert trigger_mock.call_count == 0
+    finally:
+        await async_client.delete(f"/api/v1/workflows/{workflow_id}", headers=auth_headers)

@@ -72,6 +72,62 @@ export type Schedule = {
   updated_at: string | null  // null for virtual instances
 }
 
+export type TaskStatus = 'pending_confirm' | 'todo' | 'in_progress' | 'done' | 'cancelled' | 'rejected'
+
+export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent'
+
+export type Task = {
+  id: string
+  user_id: string
+  title: string
+  status: TaskStatus
+  /** A deadline, not a booked span — a task still consumes time, it never
+   * occupies it. Usually a bare day (midnight); can carry a real time (e.g.
+   * a checklist item inherits its event's `end_time`). Use `dateOnly()`
+   * from `utils/taskDateBuckets` before treating this as a `yyyy-MM-dd`
+   * bucket key. */
+  due_date: string | null
+  priority: TaskPriority | null
+  description: string | null
+  related_event_id: string | null
+  /** A task's own checklist — self-referential, same shape as
+   * `related_event_id`. Null for a top-level task. */
+  parent_task_id: string | null
+  source_conversation_id: string | null
+  source_message_id: string | null
+  /** When this task last became `done` — null once reopened. The one field
+   * that tells "finished today" from "finished on some earlier day"; see
+   * `isVisibleToday` in `utils/taskDateBuckets`. */
+  completed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+/**
+ * One row on the calendar, from either table (Milestone 2.6).
+ *
+ * `render_as` comes from the server on purpose — the client must not
+ * re-derive it from `kind`, or the two mappings can drift and a task ends up
+ * drawn as a block of booked time.
+ */
+export type CalendarItem = {
+  id: string
+  kind: 'schedule' | 'task'
+  render_as: 'block' | 'marker'
+  title: string
+  /** schedule only */
+  start_time: string | null
+  /** schedule only */
+  end_time: string | null
+  /** task only — usually midnight of the due day, but can carry a real
+   * time; `render_as: 'marker'` is what keeps it from ever being drawn as
+   * a clock position on the calendar, not the value itself */
+  due_date: string | null
+  status: string
+  /** schedule only */
+  location: string | null
+}
+
 export type TokenPair = {
   accessToken: string
   refreshToken: string
@@ -91,6 +147,7 @@ export type GoogleCalendarStatus = {
   has_sync_token: boolean
   channel_expiration: string | null
   last_sync_error: string | null
+  needs_reauth: boolean
 }
 
 export type SyncUpdateEvent = {
@@ -238,7 +295,29 @@ export type WorkflowUpdatePayload = {
    definition?: WorkflowDefinitionSchema
 }
 
-export type NotificationType = 'sync' | 'schedule' | 'note' | 'system' | 'info' | 'success' | 'warning' | 'error'
+// Multi-trigger support: supplementary triggers on top of a workflow's
+// primary trigger_type/trigger_config (see WorkflowResponse above).
+export type WorkflowTriggerResponse = {
+  id: string
+  workflow_id: string
+  trigger_type: TriggerType
+  trigger_config: Record<string, unknown>
+  is_active: boolean
+  webhook_url: string | null
+  webhook_secret: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type WorkflowTriggerCreatePayload = {
+  trigger_type: TriggerType
+  trigger_config: Record<string, unknown>
+}
+
+export type WorkflowTriggerUpdatePayload = {
+  trigger_config?: Record<string, unknown>
+  is_active?: boolean
+}
 
 export type NotificationBlock =
    | { type: 'text'; text: string }
@@ -257,7 +336,7 @@ export type NotificationActionDef = {
 export type NotificationResponse = {
    id: string
    user_id: string
-   type: NotificationType
+   type: string
    title: string
    body: string | null
    content: NotificationBlock[]

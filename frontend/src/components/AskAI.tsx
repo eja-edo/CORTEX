@@ -4,6 +4,7 @@ import { useAgentStream } from '../hooks/useAgentStream'
 import { MessageList } from './MessageList'
 import { StreamingComposer } from './StreamingComposer'
 import { TokenBudgetBar } from './TokenBudgetBar'
+import { PlanProposalCard } from './PlanProposalCard'
 
 interface AskAIProps {
     noteContent?: string
@@ -23,7 +24,8 @@ type ContextPill = {
 }
 
 export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onInsert, workspaceId, onToolNavigate, onNoteDiff }: AskAIProps) {
-    const stream = useAgentStream({ workspaceId, noteContent, noteTitle, pendingSelection, onToolNavigate, onNoteDiff })
+    const [planProposalId, setPlanProposalId] = useState<string | null>(null)
+    const stream = useAgentStream({ workspaceId, noteContent, noteTitle, pendingSelection, onToolNavigate, onNoteDiff, onPlanProposal: setPlanProposalId })
 
     const [input, setInput] = useState('')
     const [addedPills, setAddedPills] = useState<ContextPill[]>([
@@ -108,15 +110,28 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                     sessionsLoadingMore={stream.sessionsLoadingMore}
                     onLoadSession={stream.loadSession}
                     onLoadMoreSessions={stream.loadMoreSessions}
+                    onDeleteSession={(sessionId) => void stream.deleteSession(sessionId)}
+                    deletingSessionId={stream.deletingSessionId}
                     onInsert={onInsert}
+                    onAnswerChoice={stream.answerChoice}
+                    isLoading={stream.isLoading}
                     messagesEndRef={stream.messagesEndRef}
                 />
+
+                {planProposalId && (
+                    <PlanProposalCard
+                        proposalId={planProposalId}
+                        onClose={() => setPlanProposalId(null)}
+                        onApproved={() => setPlanProposalId(null)}
+                    />
+                )}
 
                 <StreamingComposer
                     input={input}
                     onInputChange={setInput}
                     onSend={(text) => {
                         stream.sendMessage(text, addedPills)
+                        setInput('')
                     }}
                     isLoading={stream.isLoading}
                     onStop={stream.stopGeneration}
@@ -134,6 +149,7 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                     onUndoAllChanges={() => { void stream.undoAllChanges() }}
                     selectedModel={stream.selectedModel}
                     onModelChange={stream.handleModelChange}
+                    availableModels={stream.availableModels}
                 />
 
                 <TokenBudgetBar lastUsage={stream.lastUsage} lastModelUsed={stream.lastModelUsed} />

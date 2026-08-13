@@ -11,6 +11,7 @@ from app.commands.args import (
     NoteCreateArgs,
     NoteDeleteArgs,
     NoteUpdateArgs,
+    PlanProposeArgs,
     ScheduleCreateArgs,
     ScheduleDeleteArgs,
     ScheduleUpdateArgs,
@@ -204,3 +205,112 @@ def test_action_revert_args():
 def test_action_revert_args_requires_action_id():
     with pytest.raises(ValidationError):
         ActionRevertArgs()
+
+
+# ============================================================================
+# PlanProposeArgs (3.2 AI Planner)
+# ============================================================================
+
+def test_plan_propose_args_valid_flat():
+    args = PlanProposeArgs(items=[{"key": "t1", "type": "task", "title": "Học ngữ pháp"}])
+    assert len(args.items) == 1
+
+
+def test_plan_propose_args_valid_nested():
+    args = PlanProposeArgs(items=[
+        {"key": "t1", "type": "task", "title": "Milestone"},
+        {"key": "t2", "type": "task", "title": "Sub-task", "parent_key": "t1"},
+    ])
+    assert args.items[1].parent_key == "t1"
+
+
+def test_plan_propose_args_rejects_empty_list():
+    with pytest.raises(ValidationError):
+        PlanProposeArgs(items=[])
+
+
+def test_plan_propose_args_rejects_duplicate_keys():
+    with pytest.raises(ValidationError):
+        PlanProposeArgs(items=[
+            {"key": "t1", "type": "task", "title": "a"},
+            {"key": "t1", "type": "task", "title": "b"},
+        ])
+
+
+def test_plan_propose_args_rejects_unknown_parent_key():
+    with pytest.raises(ValidationError):
+        PlanProposeArgs(items=[{"key": "t1", "type": "task", "title": "a", "parent_key": "nope"}])
+
+
+def test_plan_propose_args_rejects_self_parent():
+    with pytest.raises(ValidationError):
+        PlanProposeArgs(items=[{"key": "t1", "type": "task", "title": "a", "parent_key": "t1"}])
+
+
+def test_plan_propose_args_rejects_event_as_parent():
+    with pytest.raises(ValidationError):
+        PlanProposeArgs(items=[
+            {
+                "key": "e1", "type": "event", "title": "ev",
+                "start_time": "2026-08-15T09:00:00", "end_time": "2026-08-15T10:00:00",
+            },
+            {"key": "t1", "type": "task", "title": "a", "parent_key": "e1"},
+        ])
+
+
+def test_plan_propose_args_rejects_cycle():
+    with pytest.raises(ValidationError):
+        PlanProposeArgs(items=[
+            {"key": "t1", "type": "task", "title": "a", "parent_key": "t2"},
+            {"key": "t2", "type": "task", "title": "b", "parent_key": "t1"},
+        ])
+
+
+def test_plan_propose_args_rejects_task_with_event_fields():
+    with pytest.raises(ValidationError):
+        PlanProposeArgs(items=[
+            {"key": "t1", "type": "task", "title": "a", "start_time": "2026-08-15T09:00:00"},
+        ])
+
+
+def test_plan_propose_args_event_requires_start_and_end():
+    with pytest.raises(ValidationError):
+        PlanProposeArgs(items=[{"key": "e1", "type": "event", "title": "ev"}])
+
+
+def test_plan_propose_args_event_accepts_recurrence():
+    args = PlanProposeArgs(items=[{
+        "key": "e1", "type": "event", "title": "ev",
+        "start_time": "2026-08-10T19:00:00", "end_time": "2026-08-10T19:45:00",
+        "recurrence": {"freq": "WEEKLY", "interval": 1, "until": "2027-02-22T19:45:00"},
+    }])
+    assert args.items[0].recurrence["freq"] == "WEEKLY"
+
+
+def test_plan_propose_args_task_links_to_event():
+    args = PlanProposeArgs(items=[
+        {
+            "key": "e1", "type": "event", "title": "ev",
+            "start_time": "2026-08-10T19:00:00", "end_time": "2026-08-10T19:45:00",
+        },
+        {"key": "t1", "type": "task", "title": "daily words", "related_event_key": "e1"},
+    ])
+    assert args.items[1].related_event_key == "e1"
+
+
+def test_plan_propose_args_rejects_related_event_key_pointing_to_task():
+    with pytest.raises(ValidationError):
+        PlanProposeArgs(items=[
+            {"key": "t1", "type": "task", "title": "a"},
+            {"key": "t2", "type": "task", "title": "b", "related_event_key": "t1"},
+        ])
+
+
+def test_plan_propose_args_rejects_dangling_related_event_key():
+    with pytest.raises(ValidationError):
+        PlanProposeArgs(items=[{"key": "t1", "type": "task", "title": "a", "related_event_key": "nope"}])
+
+
+def test_plan_propose_args_rejects_task_with_recurrence():
+    with pytest.raises(ValidationError):
+        PlanProposeArgs(items=[{"key": "t1", "type": "task", "title": "a", "recurrence": {"freq": "DAILY"}}])

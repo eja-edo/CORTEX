@@ -4,6 +4,9 @@ import type {
   WorkflowListResponse,
   WorkflowCreatePayload,
   WorkflowUpdatePayload,
+  WorkflowTriggerResponse,
+  WorkflowTriggerCreatePayload,
+  WorkflowTriggerUpdatePayload,
 } from '../types'
 import { getCurrentTokens, setCurrentTokens, ApiError } from '../services/api'
 
@@ -187,6 +190,55 @@ export function useWorkflows() {
     }
   }, [])
 
+  const listWorkflowTriggers = useCallback(async (workflowId: string): Promise<WorkflowTriggerResponse[]> => {
+    try {
+      return await workflowRequest<WorkflowTriggerResponse[]>(`/v1/workflows/${workflowId}/triggers`)
+    } catch (error) {
+      console.error('Cannot list workflow triggers:', error)
+      return []
+    }
+  }, [])
+
+  const createWorkflowTrigger = useCallback(async (
+    workflowId: string, payload: WorkflowTriggerCreatePayload
+  ): Promise<WorkflowTriggerResponse | null> => {
+    try {
+      return await workflowRequest<WorkflowTriggerResponse>(`/v1/workflows/${workflowId}/triggers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+    } catch (error) {
+      console.error('Cannot create workflow trigger:', error)
+      return null
+    }
+  }, [])
+
+  const updateWorkflowTrigger = useCallback(async (
+    workflowId: string, triggerId: string, payload: WorkflowTriggerUpdatePayload
+  ): Promise<WorkflowTriggerResponse | null> => {
+    try {
+      return await workflowRequest<WorkflowTriggerResponse>(`/v1/workflows/${workflowId}/triggers/${triggerId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+    } catch (error) {
+      console.error('Cannot update workflow trigger:', error)
+      return null
+    }
+  }, [])
+
+  const deleteWorkflowTrigger = useCallback(async (workflowId: string, triggerId: string): Promise<boolean> => {
+    try {
+      await workflowRequest<void>(`/v1/workflows/${workflowId}/triggers/${triggerId}`, { method: 'DELETE' })
+      return true
+    } catch (error) {
+      console.error('Cannot delete workflow trigger:', error)
+      return false
+    }
+  }, [])
+
   return {
     workflows,
     total,
@@ -200,5 +252,9 @@ export function useWorkflows() {
     pauseWorkflow,
     triggerWorkflow,
     executeNode,
+    listWorkflowTriggers,
+    createWorkflowTrigger,
+    updateWorkflowTrigger,
+    deleteWorkflowTrigger,
   }
 }

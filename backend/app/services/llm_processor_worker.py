@@ -175,19 +175,21 @@ class LLMProcessorWorker:
         except asyncio.CancelledError:
             logger.info("🤖 LLM Processor Worker: consume task cancelled during shutdown")
             raise
+        finally:
+            # Runs inside the same task run_until_complete is awaiting, so
+            # cleanup is guaranteed to finish before WorkerThread closes the
+            # loop — see WorkerThread._run()/stop() in app/__init__.py for
+            # why doing this from stop() instead used to race the shutdown.
+            await self._cleanup()
 
     async def stop(self) -> None:
-        """Stop the LLM worker gracefully."""
+        """Signal the LLM worker to stop. Cleanup runs in start()'s finally
+        block, not here — see the comment there."""
         self._running = False
-
-        # Cancel consume task first, wait for it to exit blocking call
         if self._consume_task and not self._consume_task.done():
             self._consume_task.cancel()
-            try:
-                await self._consume_task
-            except asyncio.CancelledError:
-                pass
 
+    async def _cleanup(self) -> None:
         # Now safe to disconnect Redis
         if self._redis_service:
             # Stop background tasks (heartbeat, recovery)
@@ -205,7 +207,7 @@ class LLMProcessorWorker:
             self._db_engine = None
             self._session_maker = None
             self._redis_service = None
-        
+
         logger.info("🛑 LLM Processor Worker stopped")
 
     async def _consume_loop(self) -> None:

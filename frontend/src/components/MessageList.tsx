@@ -1,8 +1,9 @@
 import { useCallback, useMemo, useState } from 'react'
-import { Bot, Copy, Check, X } from 'lucide-react'
+import { Bot, Copy, Check, X, Trash2 } from 'lucide-react'
 import type { ConversationListItem } from '../services/api'
 import { renderMarkdownToSanitizedHtml } from '../utils/markdown/renderToHtml'
 import { ToolExecutionIndicator } from './ToolExecutionIndicator'
+import { AskChoiceCard } from './AskChoiceCard'
 import type { AgentMessage } from '../hooks/useAgentStream'
 
 interface MessageListProps {
@@ -14,7 +15,11 @@ interface MessageListProps {
     sessionsLoadingMore: boolean
     onLoadSession: (sessionId: string) => void
     onLoadMoreSessions: () => void
+    onDeleteSession: (sessionId: string) => void
+    deletingSessionId: string | null
     onInsert?: (text: string) => void
+    onAnswerChoice: (messageId: string, stepId: string, answers: Record<string, string>, summaryText: string) => void
+    isLoading: boolean
     messagesEndRef: React.RefObject<HTMLDivElement | null>
 }
 
@@ -22,7 +27,10 @@ export function MessageList({
     messages, error, onDismissError,
     sessions, sessionsLoading, sessionsLoadingMore,
     onLoadSession, onLoadMoreSessions,
+    onDeleteSession, deletingSessionId,
     onInsert,
+    onAnswerChoice,
+    isLoading,
     messagesEndRef,
 }: MessageListProps) {
     const [copiedId, setCopiedId] = useState<string | null>(null)
@@ -74,7 +82,7 @@ export function MessageList({
                                     onClick={() => onLoadSession(session.id)}
                                     title={`Last updated: ${new Date(session.updated_at).toLocaleString()}`}
                                 >
-                                    <div style={{ textAlign: 'left' }}>
+                                    <div style={{ textAlign: 'left', flex: 1, overflow: 'hidden' }}>
                                         <div style={{ fontWeight: 500, marginBottom: '2px' }}>
                                             {session.title || 'Untitled Session'}
                                         </div>
@@ -82,6 +90,33 @@ export function MessageList({
                                             {session.message_count} messages
                                         </div>
                                     </div>
+                                    <span
+                                        role="button"
+                                        tabIndex={0}
+                                        aria-disabled={deletingSessionId === session.id}
+                                        className={`ask-ai-quick-btn-delete ${deletingSessionId === session.id ? 'is-deleting' : ''}`}
+                                        title="Delete session"
+                                        aria-label="Delete session"
+                                        onClick={(e) => {
+                                            e.stopPropagation()
+                                            if (deletingSessionId) return
+                                            if (window.confirm('Are you sure you want to delete this conversation? This action cannot be undone.')) {
+                                                onDeleteSession(session.id)
+                                            }
+                                        }}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter' || e.key === ' ') {
+                                                e.preventDefault()
+                                                e.stopPropagation()
+                                                if (deletingSessionId) return
+                                                if (window.confirm('Are you sure you want to delete this conversation? This action cannot be undone.')) {
+                                                    onDeleteSession(session.id)
+                                                }
+                                            }
+                                        }}
+                                    >
+                                        <Trash2 size={13} />
+                                    </span>
                                 </button>
                             ))
                         ) : (
@@ -135,6 +170,15 @@ export function MessageList({
                                             />
                                         </div>
                                     )}
+
+                                    {(msg.thinkingSteps ?? []).filter(s => s.type === 'ask_choice').map(s => (
+                                        <AskChoiceCard
+                                            key={s.id}
+                                            step={s}
+                                            disabled={isLoading}
+                                            onSubmit={(answers, summaryText) => onAnswerChoice(msg.id, s.id, answers, summaryText)}
+                                        />
+                                    ))}
 
                                     {!msg.loading && (
                                         <div className="ask-ai-msg-actions">

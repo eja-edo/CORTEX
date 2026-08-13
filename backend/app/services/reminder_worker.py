@@ -11,7 +11,7 @@ from app.database_async import make_async_sessionmaker
 from app.events.event_bus import get_event_bus
 from app.events.payloads import ReminderDuePayload
 from app.events.schemas import EventEnvelope
-from app.models import ScheduleReminder, Schedule, ReminderStatus, Notification
+from app.models import ScheduleReminder, Schedule, ReminderStatus
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -50,17 +50,22 @@ class ReminderWorker:
         except asyncio.CancelledError:
             logger.info("ReminderWorker: task cancelled during shutdown")
             raise
+        finally:
+            # Runs inside the same task run_until_complete is awaiting, so
+            # cleanup is guaranteed to finish before WorkerThread closes the
+            # loop — see WorkerThread._run()/stop() in app/__init__.py for
+            # why doing this from stop() instead used to race the shutdown.
+            await self._cleanup()
 
     async def stop(self):
-        """Stop the reminder worker."""
+        """Signal the reminder worker to stop. Cleanup runs in start()'s
+        finally block, not here — see the comment there."""
         self._running = False
         logger.info("ReminderWorker stopping...")
         if self._task and not self._task.done():
             self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
+
+    async def _cleanup(self):
         # Dispose per-worker DB engine so asyncpg connections held by this
         # loop are released cleanly.
         if self._db_engine is not None:
@@ -195,14 +200,18 @@ class ReminderWorker:
                     schedule_title=schedule.title,
                     scheduled_at=reminder.scheduled_at,
                     reminder_offset_minutes=reminder.minutes_before,
+                    method=reminder.method,
                 ).model_dump(),
             ))
         except Exception as exc:
             logger.warning(f"Failed to publish schedule.reminder.due event: {exc}")
 
     async def _send_notification(self, reminder: ScheduleReminder, db: AsyncSession) -> Optional[Schedule]:
-        """Send notification for a reminder. Returns the schedule (for event
-        emission by the caller), or None if the schedule no longer exists."""
+        """Resolve the schedule for a due reminder. Returns the schedule (so
+        the caller can publish schedule.reminder.due), or None if the
+        schedule no longer exists. Notification delivery is handled by a
+        subscriber on that event, not here — this worker only detects
+        due reminders."""
         schedule = (
             await db.execute(select(Schedule).where(Schedule.id == reminder.schedule_id))
         ).scalar_one_or_none()
@@ -211,34 +220,7 @@ class ReminderWorker:
             logger.warning("Schedule %s not found for reminder %s", reminder.schedule_id, reminder.id)
             return None
 
-        if reminder.method == "push":
-            # Create notification record
-            body_text = f"Starts at {schedule.start_time.strftime('%H:%M')}"
-            notification = Notification(
-                user_id=reminder.user_id,
-                type="reminder",
-                title=f"Reminder: {schedule.title}",
-                body=body_text,
-                content=[{"type": "text", "text": body_text}],
-                actions=[{"label": "View", "action": "navigate", "url": "/schedule"}],
-                payload={
-                    "schedule_id": str(schedule.id),
-                    "start_time": schedule.start_time.isoformat(),
-                },
-            )
-            db.add(notification)
-            await db.flush()
-
-            # TODO: Publish via SSE/FCM if available
-            # publish_sync_event(user_id=str(reminder.user_id), ...)
-
-            logger.info(
-                "Push notification created for user %s, schedule %s",
-                reminder.user_id,
-                schedule.id,
-            )
-
-        elif reminder.method == "email":
+        if reminder.method == "email":
             # TODO: Integrate email service
             logger.info("Email reminder not yet implemented for reminder %s", reminder.id)
 

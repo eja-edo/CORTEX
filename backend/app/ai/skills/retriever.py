@@ -42,7 +42,7 @@ _SKILL_SIGNATURES: dict[str, list[str]] = {
         "organize", "arrange", "prepare", "agenda", "timeline",
         "free slot", "available", "busy", "conflict", "prioritize",
         "this week", "this month", "today", "tomorrow", "upcoming",
-        "goal", "routine", "habit", "time-block",
+        "routine", "habit", "time-block",
         "roadmap", "milestone", "checklist", "learning plan", "business plan",
         "study", "learn", "want to", "would like", "workout", "weight loss",
         "deadline", "proposal", "submit", "nộp",
@@ -69,17 +69,17 @@ _SKILL_SIGNATURES: dict[str, list[str]] = {
         "đặt vé", "đặt phòng", "nhắc", "nhắc nhở", "chuẩn bị",
         "mai tôi", "ngày mai tôi", "cuối tuần", "cuối tuần này",
     ],
-    "goal": [
-        "goal", "aim", "target", "want to achieve", "long-term",
-        "progress", "milestone", "accomplish", "complete", "done",
-        "finished", "sent", "submitted", "paid", "learned", "finished unit",
-        "I want", "I'm learning", "I've been", "cv", "resume",
+    "task": [
+        # Things the user commits to doing themselves. Kept narrow on
+        # purpose: this skill tells the model when NOT to record something,
+        # so firing it on every mention of a date would waste prompt budget
+        # on ordinary chat.
+        "promise", "promised", "i'll send", "i will send", "agreed to",
+        "commitment", "follow up", "get back to me",
+        "by friday", "by monday", "deadline i gave",
         # Vietnamese
-        "mục tiêu", "muốn đạt", "tiến độ", "hoàn thành", "xong",
-        "đã gửi", "đã nộp", "đã thanh toán", "thanh toán rồi",
-        "học xong", "làm xong", "xong rồi", "cuối cùng cũng",
-        "giảm", "tăng", "chạy được", "đạt được", "vừa gửi", "gửi cv",
-        "tôi muốn", "mình muốn", "em muốn",
+        "hứa", "cam kết", "tôi sẽ gửi", "sẽ gửi", "đã hứa",
+        "chốt", "chốt ngày", "hẹn gửi", "gửi cho", "trước thứ",
     ],
     "reasoning": [
         "reason", "think", "analyze", "compare", "evaluate",

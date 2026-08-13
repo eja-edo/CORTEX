@@ -1,18 +1,25 @@
-import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react'
-import { CheckCircle2, Clock3, MapPin, Tag, Trash2, X, Repeat } from 'lucide-react'
-import { format } from 'date-fns'
+import { useEffect, useState } from 'react'
+import { Calendar, CheckCircle2, Circle, Clock3, Layers, MapPin, Repeat, Trash2, X } from 'lucide-react'
 import type { Schedule, ScheduleType } from '../types'
+import { parseServerDateTime } from '../utils/calendarItems'
 import { MarkdownField } from './MarkdownField'
+import { EventChecklist } from './EventChecklist'
 
-const TYPE_LABELS: Record<string, string> = {
-  CLASS: 'Class',
+const TYPE_LABELS: Record<ScheduleType, string> = {
+  CLASS: 'Lớp học (Class)',
+  EXAM: 'Hội chẩn (Exam)',
+  PERSONAL: 'Cá nhân (Personal)',
   DEADLINE: 'Deadline',
-  EXAM: 'Exam',
-  PERSONAL: 'Personal',
   CRON_EVENT: 'Cron',
 }
 
-const TYPE_OPTIONS: ScheduleType[] = ['CLASS', 'DEADLINE', 'EXAM', 'PERSONAL', 'CRON_EVENT']
+const TYPE_OPTIONS: ScheduleType[] = ['CLASS', 'EXAM', 'PERSONAL', 'DEADLINE', 'CRON_EVENT']
+
+const RECURRENCE_LABELS: Record<string, string> = {
+  DAILY: 'Hàng ngày',
+  WEEKLY: 'Hàng tuần',
+  MONTHLY: 'Hàng tháng',
+}
 
 function toLocalInputDateTime(value: Date): string {
   const local = new Date(value.getTime() - value.getTimezoneOffset() * 60000)
@@ -23,14 +30,8 @@ function toIsoDateTime(localDateTime: string): string {
   return new Date(localDateTime).toISOString()
 }
 
-function formatTimeRange(start: Date, end: Date): string {
-  return `${format(start, 'HH:mm')} – ${format(end, 'HH:mm')}`
-}
-
 interface EventDetailModalProps {
   schedule: Schedule
-  startDate: Date
-  endDate: Date
   canEdit: boolean
   onUpdate: (item: Schedule, patch: Partial<Schedule>) => Promise<boolean>
   onToggleComplete: (item: Schedule) => Promise<void>
@@ -39,253 +40,42 @@ interface EventDetailModalProps {
 }
 
 /**
- * Editor "chip" that swaps on double-click into an inline <input/>. Saves
- * on Enter / blur; cancels on Escape.
+ * Viewing/editing an existing event — same shell as `ScheduleForm`
+ * (`.task-detail-modal-*`) and `TaskDetailModal`: big borderless
+ * title/description on the left, a "Thuộc tính" property list on the
+ * right, checklist under the description. Unlike the create form there's
+ * no submit step — every property commits on change/blur, same as
+ * `TaskDetailModal`, since this is editing something that already exists.
  */
-function InlineTextInput({
-  value,
-  onSave,
-  display,
-  placeholder,
-  ariaLabel,
-  className,
-  multiline,
-}: {
-  value: string
-  display: ReactNode
-  onSave: (next: string) => Promise<boolean>
-  placeholder?: string
-  ariaLabel?: string
-  className?: string
-  multiline?: boolean
-}) {
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(value)
-  const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null)
-
-  useEffect(() => {
-    if (editing) {
-      const el = inputRef.current
-      if (el) {
-        el.focus()
-        if ('setSelectionRange' in el) {
-          const len = (el as HTMLInputElement).value.length
-          el.setSelectionRange(len, len)
-        }
-      }
-    }
-  }, [editing])
-
-  const begin = useCallback(() => {
-    setDraft(value)
-    setEditing(true)
-  }, [value])
-
-  const commit = useCallback(async () => {
-    const ok = await onSave(draft)
-    if (ok === false) setDraft(value)
-    setEditing(false)
-  }, [draft, value, onSave])
-
-  const cancel = useCallback(() => {
-    setDraft(value)
-    setEditing(false)
-  }, [value])
-
-  if (editing) {
-    const sharedProps = {
-      value: draft,
-      onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
-        setDraft(e.target.value),
-      onBlur: commit,
-      onKeyDown: (e: React.KeyboardEvent) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-          e.preventDefault()
-          commit()
-        }
-        if (e.key === 'Escape') cancel()
-      },
-      placeholder,
-      'aria-label': ariaLabel,
-      className,
-    }
-    return multiline ? (
-      <textarea ref={inputRef as React.RefObject<HTMLTextAreaElement>} {...sharedProps} rows={2} />
-    ) : (
-      <input ref={inputRef as React.RefObject<HTMLInputElement>} {...sharedProps} />
-    )
-  }
-
-  return (
-    <span
-      className={`inline-editable ${className ?? ''}`.trim()}
-      onDoubleClick={begin}
-      title="Double-click to edit"
-    >
-      {display}
-    </span>
-  )
-}
-
-function InlineSelect<T extends string>({
-  value,
-  options,
-  onSave,
-  display,
-}: {
-  value: T
-  options: { value: T; label: string }[]
-  onSave: (next: T) => Promise<boolean>
-  display: ReactNode
-}) {
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(value)
-
-  const begin = useCallback(() => {
-    setDraft(value)
-    setEditing(true)
-  }, [value])
-
-  const commit = useCallback(async () => {
-    const ok = await onSave(draft)
-    if (ok === false) setDraft(value)
-    setEditing(false)
-  }, [draft, value, onSave])
-
-  const cancel = useCallback(() => {
-    setDraft(value)
-    setEditing(false)
-  }, [value])
-
-  if (editing) {
-    return (
-      <select
-        className="editing-select"
-        value={draft}
-        onChange={e => setDraft(e.target.value as T)}
-        onBlur={commit}
-        onKeyDown={e => {
-          if (e.key === 'Enter') commit()
-          if (e.key === 'Escape') cancel()
-        }}
-        autoFocus
-      >
-        {options.map(opt => (
-          <option key={opt.value} value={opt.value}>
-            {opt.label}
-          </option>
-        ))}
-      </select>
-    )
-  }
-
-  return (
-    <span onDoubleClick={begin} title="Double-click to edit">
-      {display}
-    </span>
-  )
-}
-
-function InlineTimeRange({
-  start,
-  end,
-  onSave,
-  display,
-}: {
-  start: Date
-  end: Date
-  onSave: (next: { start: string; end: string }) => Promise<boolean>
-  display: ReactNode
-}) {
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState({
-    start: toLocalInputDateTime(start),
-    end: toLocalInputDateTime(end),
-  })
-  const startRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    if (editing) {
-      startRef.current?.focus()
-    }
-  }, [editing])
-
-  const begin = useCallback(() => {
-    setDraft({
-      start: toLocalInputDateTime(start),
-      end: toLocalInputDateTime(end),
-    })
-    setEditing(true)
-  }, [start, end])
-
-  const commit = useCallback(async () => {
-    if (!draft.start || !draft.end) {
-      setEditing(false)
-      return
-    }
-    const ok = await onSave(draft)
-    if (ok === false) setDraft({ start: toLocalInputDateTime(start), end: toLocalInputDateTime(end) })
-    setEditing(false)
-  }, [draft, start, end, onSave])
-
-  const cancel = useCallback(() => {
-    setDraft({ start: toLocalInputDateTime(start), end: toLocalInputDateTime(end) })
-    setEditing(false)
-  }, [start, end])
-
-  if (editing) {
-    return (
-      <span className="time-editor">
-        <input
-          ref={startRef}
-          type="datetime-local"
-          value={draft.start}
-          onChange={e => setDraft({ ...draft, start: e.target.value })}
-          onKeyDown={e => {
-            if (e.key === 'Enter') commit()
-            if (e.key === 'Escape') cancel()
-          }}
-        />
-        <span aria-hidden>→</span>
-        <input
-          type="datetime-local"
-          value={draft.end}
-          onChange={e => setDraft({ ...draft, end: e.target.value })}
-          onBlur={commit}
-          onKeyDown={e => {
-            if (e.key === 'Enter') commit()
-            if (e.key === 'Escape') cancel()
-          }}
-        />
-      </span>
-    )
-  }
-
-  return (
-    <span onDoubleClick={begin} title="Double-click to edit">
-      {display}
-    </span>
-  )
-}
-
 export function EventDetailModal({
   schedule,
-  startDate,
-  endDate,
   canEdit,
   onUpdate,
   onToggleComplete,
   onRemove,
   onClose,
 }: EventDetailModalProps) {
-  // Snapshot for inline-editing — we hold a local copy so the parent's
-  // `schedules` array doesn't have to update instantly for the editor to
-  // show new drafts.
+  // Snapshot for editing — we hold a local copy so the parent's `schedules`
+  // array doesn't have to update instantly for the fields to show new drafts.
   const [draft, setDraft] = useState<Schedule>(schedule)
+  const [titleInput, setTitleInput] = useState(schedule.title)
+  const [startLocal, setStartLocal] = useState(() => toLocalInputDateTime(parseServerDateTime(schedule.start_time)))
+  const [endLocal, setEndLocal] = useState(() => toLocalInputDateTime(parseServerDateTime(schedule.end_time)))
 
-  // If the parent selects a different schedule, re-seed the draft.
+  // `schedule` is a stable reference for as long as this event stays open
+  // (`CalendarView` only replaces it via a fresh click, never on its own
+  // re-renders) — so this only re-seeds on a genuine switch to a different
+  // event, not on every parent re-render. It used to also depend on
+  // `startDate`/`endDate` Date-object props that CalendarView recomputed
+  // (new reference, same value) on every render; that made this effect
+  // re-fire constantly and stomp `draft` back to the pre-edit snapshot —
+  // a field could save successfully and still visibly "revert" on blur,
+  // only showing the real value after closing and reopening the modal.
   useEffect(() => {
     setDraft(schedule)
+    setTitleInput(schedule.title)
+    setStartLocal(toLocalInputDateTime(parseServerDateTime(schedule.start_time)))
+    setEndLocal(toLocalInputDateTime(parseServerDateTime(schedule.end_time)))
   }, [schedule])
 
   const patch = async (changes: Partial<Schedule>): Promise<boolean> => {
@@ -295,141 +85,182 @@ export function EventDetailModal({
     return ok
   }
 
+  const commitTitle = async () => {
+    const trimmed = titleInput.trim()
+    if (trimmed && trimmed !== draft.title) {
+      await patch({ title: trimmed })
+    } else {
+      setTitleInput(draft.title)
+    }
+  }
+
+  const commitTime = async () => {
+    if (!startLocal || !endLocal) return
+    const nextStart = toIsoDateTime(startLocal)
+    const nextEnd = toIsoDateTime(endLocal)
+    if (nextStart === draft.start_time && nextEnd === draft.end_time) return
+    await patch({ start_time: nextStart, end_time: nextEnd })
+  }
+
+  const commitLocation = async () => {
+    const trimmed = (draft.location ?? '').trim()
+    if (trimmed !== (schedule.location ?? '')) {
+      await patch({ location: trimmed || null })
+    }
+  }
+
+  const recurrenceLabel = draft.recurrence && draft.recurrence.freq !== 'NONE'
+    ? `${RECURRENCE_LABELS[draft.recurrence.freq] ?? draft.recurrence.freq}`
+      + (draft.recurrence.interval && draft.recurrence.interval > 1 ? ` · mỗi ${draft.recurrence.interval}` : '')
+    : null
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
-          <div className="modal-title-area">
-            <InlineSelect<ScheduleType>
-              value={draft.type}
-              options={TYPE_OPTIONS.map(t => ({ value: t, label: TYPE_LABELS[t] ?? t }))}
-              onSave={(next) => patch({ type: next })}
-              display={
-                <div className={`modal-event-type-badge badge-${draft.type}`}>
-                  {TYPE_LABELS[draft.type] ?? draft.type}
-                </div>
-              }
-            />
-            <InlineTextInput
-              value={draft.title}
-              className="modal-title-input"
-              ariaLabel="Title"
-              onSave={async (next) => {
-                if (!next.trim()) return false
-                return patch({ title: next.trim() })
-              }}
-              display={<div className="modal-title">{draft.title}</div>}
-            />
-          </div>
-          <button type="button" className="modal-close" onClick={onClose}>
+      <div className="modal task-detail-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="task-detail-modal-topbar">
+          <button
+            type="button"
+            className="modal-close"
+            onClick={async () => { if (schedule.id) { await onRemove(schedule.id) } onClose() }}
+            aria-label="Xoá"
+            title="Xoá"
+          >
+            <Trash2 size={15} />
+          </button>
+          <button type="button" className="modal-close" onClick={onClose} aria-label="Đóng">
             <X size={15} />
           </button>
         </div>
 
-        <div className="modal-body">
-          <div className="modal-meta-list">
-            <div className="modal-meta-row">
-              <Clock3 size={14} className="modal-meta-icon" />
-              <InlineTimeRange
-                start={startDate}
-                end={endDate}
-                onSave={(next) =>
-                  patch({
-                    start_time: toIsoDateTime(next.start),
-                    end_time: toIsoDateTime(next.end),
-                  })
-                }
-                display={
-                  <span className="modal-meta-text">
-                    {format(startDate, 'EEEE, MMM d, yyyy')} · {formatTimeRange(startDate, endDate)}
-                  </span>
-                }
-              />
-            </div>
-
-            {/* Recurrence indicator — read-only display, no inline edit yet. */}
-            {draft.recurrence && draft.recurrence.freq !== 'NONE' && (
-              <div className="modal-meta-row">
-                <Repeat size={14} className="modal-meta-icon" />
-                <span className="modal-meta-text">
-                  {draft.recurrence.freq === 'DAILY' && 'Daily'}
-                  {draft.recurrence.freq === 'WEEKLY' && 'Weekly'}
-                  {draft.recurrence.freq === 'MONTHLY' && 'Monthly'}
-                  {draft.recurrence.interval && draft.recurrence.interval > 1 && ` every ${draft.recurrence.interval}`}
-                </span>
-              </div>
-            )}
-
-            <div className="modal-meta-row">
-              <MapPin size={14} className="modal-meta-icon" />
-              <InlineTextInput
-                value={draft.location ?? ''}
-                className="modal-meta-input"
-                ariaLabel="Location"
-                placeholder="Phòng hoặc Link Zoom"
-                onSave={async (next) => {
-                  const trimmed = next.trim()
-                  return patch({ location: trimmed || null })
+        <div className="task-detail-modal-body">
+          <div className="task-detail-modal-columns">
+            <div className="task-detail-modal-main">
+              <input
+                className="task-detail-modal-title-input"
+                value={titleInput}
+                aria-label="Tên sự kiện"
+                disabled={!canEdit}
+                onChange={(e) => setTitleInput(e.target.value)}
+                onBlur={() => void commitTitle()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') { e.preventDefault(); void commitTitle() }
+                  if (e.key === 'Escape') setTitleInput(draft.title)
                 }}
-                display={
-                  <span className="modal-meta-text">
-                    {draft.location || <em className="modal-meta-placeholder">Add location…</em>}
-                  </span>
-                }
               />
+              <MarkdownField
+                className="task-detail-modal-description-input"
+                value={draft.description ?? ''}
+                onChange={(next) => setDraft((d) => ({ ...d, description: next }))}
+                onImmediateChange={(next) => {
+                  void patch({ description: next.trim() || null })
+                }}
+                onBlur={() => {
+                  if (draft.description !== schedule.description) {
+                    void patch({ description: draft.description?.trim() || null })
+                  }
+                }}
+                placeholder="Thêm mô tả…"
+                ariaLabel="Mô tả (markdown)"
+              />
+
+              {/*
+                Checklist (2.6). Reads `tasks WHERE related_event_id = id` — it
+                is NOT parsed out of the description above, and nothing it does
+                is written back there. Description stays prose; checklist state
+                lives in `tasks`, where a due date, a status, a priority and a
+                description can actually be stored.
+              */}
+              <EventChecklist eventId={schedule.id} eventEndTime={schedule.end_time} />
             </div>
 
-            <div className="modal-meta-row">
-              <Tag size={14} className="modal-meta-icon" />
-              <span className="modal-meta-text" style={{ color: 'var(--text-tertiary)' }}>
-                {draft.is_completed ? 'Completed' : 'In progress'}
-              </span>
+            <div className="task-detail-modal-sidebar">
+              <div className="task-detail-modal-sidebar-label">Thuộc tính</div>
+
+              <button
+                type="button"
+                className="task-detail-modal-property"
+                disabled={!canEdit}
+                onClick={() => {
+                  // `onToggleComplete` writes straight through the parent's
+                  // schedule list, not our `patch()` — it never touches
+                  // `draft`, so without this the label only catches up once
+                  // the modal is re-opened with a fresh `schedule` prop.
+                  setDraft((d) => ({ ...d, is_completed: !d.is_completed }))
+                  void onToggleComplete(schedule)
+                }}
+              >
+                {draft.is_completed
+                  ? <CheckCircle2 size={14} style={{ color: 'var(--green, #16a34a)' }} />
+                  : <Circle size={14} style={{ color: 'var(--text-tertiary)' }} />}
+                <span>{draft.is_completed ? 'Đã xong' : 'Đang diễn ra'}</span>
+              </button>
+
+              <label className="task-detail-modal-property">
+                <Layers size={14} />
+                <select
+                  className="task-detail-modal-property-field"
+                  value={draft.type}
+                  aria-label="Phân loại"
+                  disabled={!canEdit}
+                  onChange={(e) => void patch({ type: e.target.value as ScheduleType })}
+                >
+                  {TYPE_OPTIONS.map((t) => (
+                    <option key={t} value={t}>{TYPE_LABELS[t]}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="task-detail-modal-property">
+                <MapPin size={14} />
+                <input
+                  type="text"
+                  className="task-detail-modal-property-field"
+                  value={draft.location ?? ''}
+                  placeholder="Địa điểm"
+                  aria-label="Địa điểm"
+                  disabled={!canEdit}
+                  onChange={(e) => setDraft((d) => ({ ...d, location: e.target.value }))}
+                  onBlur={() => void commitLocation()}
+                />
+              </label>
+
+              <label className="task-detail-modal-property">
+                <Calendar size={14} />
+                <span className="task-detail-modal-property-label">Từ</span>
+                <input
+                  type="datetime-local"
+                  className="task-detail-modal-property-field"
+                  value={startLocal}
+                  aria-label="Bắt đầu"
+                  disabled={!canEdit}
+                  onChange={(e) => setStartLocal(e.target.value)}
+                  onBlur={() => void commitTime()}
+                />
+              </label>
+
+              <label className="task-detail-modal-property">
+                <Clock3 size={14} />
+                <span className="task-detail-modal-property-label">Đến</span>
+                <input
+                  type="datetime-local"
+                  className="task-detail-modal-property-field"
+                  value={endLocal}
+                  aria-label="Kết thúc"
+                  disabled={!canEdit}
+                  onChange={(e) => setEndLocal(e.target.value)}
+                  onBlur={() => void commitTime()}
+                />
+              </label>
+
+              {/* Read-only for now — set at creation (`ScheduleForm`), no
+                  inline editor for an existing event's recurrence yet. */}
+              {recurrenceLabel && (
+                <div className="task-detail-modal-property" style={{ cursor: 'default' }}>
+                  <Repeat size={14} />
+                  <span>{recurrenceLabel}</span>
+                </div>
+              )}
             </div>
-          </div>
-
-          <div className="modal-description">
-            <div className="modal-description-label">Notes</div>
-            <MarkdownField
-              className="input-field"
-              rows={3}
-              value={draft.description ?? ''}
-              onChange={(next) => setDraft({ ...draft, description: next })}
-              onImmediateChange={(next) => {
-                const trimmed = next.trim()
-                void patch({ description: trimmed || null })
-              }}
-              onBlur={() => {
-                if (draft.description !== schedule.description) {
-                  const trimmed = (draft.description ?? '').trim()
-                  void patch({ description: trimmed || null })
-                }
-              }}
-              placeholder="Nội dung tóm tắt…"
-              ariaLabel="Notes (markdown)"
-            />
-          </div>
-        </div>
-
-        <div className="modal-footer">
-          <button
-            type="button"
-            className="btn btn-danger"
-            onClick={async () => { if (schedule.id) { await onRemove(schedule.id); } onClose() }}
-          >
-            <Trash2 size={13} /> Delete
-          </button>
-          <div className="modal-footer-right">
-            <button type="button" className="btn btn-ghost" onClick={onClose}>
-              Close
-            </button>
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={async () => { await onToggleComplete(schedule); onClose() }}
-            >
-              <CheckCircle2 size={13} />
-              {schedule.is_completed ? 'Mark in progress' : 'Mark complete'}
-            </button>
           </div>
         </div>
       </div>

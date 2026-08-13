@@ -67,6 +67,8 @@ def _build_conversation_text(messages: list[AgentMessage]) -> str:
 async def extract_and_store(
     conversation_id: UUID,
     db: AsyncSession,
+    extract_tasks: bool = False,
+    min_new_messages: int = 5,
 ) -> dict:
     """Extract structured memory from a conversation and store it.
 
@@ -76,9 +78,20 @@ async def extract_and_store(
     Args:
         conversation_id: UUID of the conversation to analyze.
         db: Async database session.
+        extract_tasks: Also pull tasks the user committed to out of the same
+            call (see `app.services.task_extraction`). One prompt, one call
+            — task extraction never adds an LLM round trip of its own.
+        min_new_messages: Below this, extraction is skipped. The default of
+            5 suits memory, which is accumulated background knowledge where
+            a small gap is soft. The idle flush passes 1: a task suggestion
+            is a discrete, dated, one-off statement, and "thứ 6 tôi gửi
+            proposal cho John" is a two-message conversation. Applying the
+            memory threshold there would drop exactly the case task
+            extraction exists to catch.
 
     Returns:
-        dict with keys: success, episodic_stored, semantic_count, model_used, title
+        dict with keys: success, episodic_stored, semantic_count, model_used,
+        title, and (when extract_tasks) tasks
     """
     # Fetch conversation
     stmt = select(AgentConversation).where(AgentConversation.id == conversation_id)
@@ -92,7 +105,7 @@ async def extract_and_store(
     store = ConversationStore(db)
     new_messages = await store.get_messages_since(conversation_id, conv.last_summary_message_id)
 
-    if len(new_messages) < 5:
+    if len(new_messages) < min_new_messages:
         return {"success": False, "reason": "Not enough new messages to extract memory"}
 
     conversation_text = _build_conversation_text(new_messages)
@@ -103,6 +116,7 @@ async def extract_and_store(
         extraction_messages = build_extraction_messages(
             conversation_text,
             existing_summary=existing_summary,
+            include_tasks=extract_tasks,
         )
         msgs = [
             Message(role=m["role"], content=m["content"])
@@ -166,6 +180,33 @@ async def extract_and_store(
             )
             logger.info(f"Stored {semantic_count}/{len(semantic_memories)} semantic memories for workspace {workspace_id_str}")
 
+    # ── 3. Store task candidates ──
+    #
+    # Validated before anything is written: the LLM proposes, the
+    # conditions in task_extraction.py dispose. Failures here never fail
+    # the extraction — losing a conversation's episodic summary because one
+    # candidate was malformed would be a much worse trade.
+    task_result = None
+    if extract_tasks:
+        try:
+            from app.services.task_extraction import TaskCandidateService
+
+            candidate_service = TaskCandidateService(db)
+            task_result = await candidate_service.store_candidates(
+                raw_candidates=result_data.get("tasks") or [],
+                user_id=conv.user_id,
+                conversation_id=conversation_id,
+                message_id=new_messages[-1].id if new_messages else None,
+            )
+            logger.info(
+                f"Task extraction | conversation={conversation_id} | "
+                f"created={task_result['created_count']} | "
+                f"rejected={task_result['rejected_count']} | "
+                f"rules={task_result['rejected_rules']}"
+            )
+        except Exception as exc:
+            logger.error(f"Task candidate storage failed: {exc}", exc_info=True)
+
     await db.commit()
 
     return {
@@ -175,6 +216,7 @@ async def extract_and_store(
         "model_used": model_used,
         "title": title,
         "new_messages": len(new_messages),
+        "tasks": task_result,
     }
 
 

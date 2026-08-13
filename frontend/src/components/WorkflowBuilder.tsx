@@ -43,6 +43,7 @@ type WorkflowBuilderProps = {
   workflowId: string | null
   onBack?: () => void
   onNavigate?: (workflowId: string) => void
+  onWorkflowsChanged?: () => void
 }
 
 export function WorkflowBuilder(props: WorkflowBuilderProps) {
@@ -53,26 +54,45 @@ export function WorkflowBuilder(props: WorkflowBuilderProps) {
   )
 }
 
-function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate }: WorkflowBuilderProps) {
+function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate, onWorkflowsChanged }: WorkflowBuilderProps) {
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null)
   const [nodes, setNodes, onNodesChange] = useNodesState([])
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
   const [selectedNode, setSelectedNode] = useState<Node | null>(null)
+  const [jsonConfigDraft, setJsonConfigDraft] = useState<{ nodeId: string; text: string } | null>(null)
 
   const [workflowName, setWorkflowName] = useState('')
   const [workflowDescription, setWorkflowDescription] = useState('')
   const [workflowStatus, setWorkflowStatus] = useState<WorkflowStatus>('draft')
-  const [triggerConfig, setTriggerConfig] = useState<Record<string, unknown>>({})
   const [currentWorkflowId, setCurrentWorkflowId] = useState<string | null>(null)
 
+  // Multi-trigger support: every node whose type starts with "trigger." is
+  // a trigger. The first one (canvas/array order — same rule the old
+  // single-trigger derivation used) is the "primary" trigger, sent as the
+  // workflow's own trigger_type/trigger_config exactly as before. Any
+  // others are "supplementary" triggers, reconciled against
+  // /workflows/{id}/triggers on save (see reconcileSupplementaryTriggers).
+  // No separate triggerConfig state: node.data.config is already the
+  // single source of truth for every node type via updateNodeConfig, so
+  // deriving straight from it here avoids the two states going out of
+  // sync (the bug that made a second trigger node overwrite the first's
+  // config under the old design).
+  const triggerNodes = useMemo(() => nodes.filter(n => n.type?.startsWith('trigger.')), [nodes])
+  const primaryTriggerNode = triggerNodes[0]
+  const supplementaryTriggerNodes = useMemo(() => triggerNodes.slice(1), [triggerNodes])
+
   const triggerType = useMemo<TriggerType>(() => {
-    const triggerNode = nodes.find(n => n.type?.startsWith('trigger.'))
-    if (triggerNode?.type) {
-      return triggerNode.type.replace('trigger.', '') as TriggerType
+    if (primaryTriggerNode?.type) {
+      return primaryTriggerNode.type.replace('trigger.', '') as TriggerType
     }
     return 'manual'
-  }, [nodes])
+  }, [primaryTriggerNode])
+
+  const triggerConfig = useMemo<Record<string, unknown>>(
+    () => (primaryTriggerNode?.data?.config as Record<string, unknown>) ?? {},
+    [primaryTriggerNode],
+  )
 
   const [view, setView] = useState<'list' | 'editor'>('list')
   const [saving, setSaving] = useState(false)
@@ -157,7 +177,6 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate }: W
     setWorkflowName(data.name)
     setWorkflowDescription(data.description ?? '')
     setWorkflowStatus(data.status)
-    setTriggerConfig(data.trigger_config as Record<string, unknown>)
 
     const def = data.definition
     const flowNodes: Node[] = (def.nodes ?? []).map((n: WorkflowNodeDef) => {
@@ -169,12 +188,16 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate }: W
       return injectExecuteNode({ id: n.id, type: n.type, position: n.position, data: nd })
     })
 
-    // Sync trigger_config from the trigger node's data if trigger_config is empty
-    const triggerNode = flowNodes.find(n => n.type?.startsWith('trigger.'))
-    if (triggerNode && (!data.trigger_config || Object.keys(data.trigger_config).length === 0)) {
-      const nodeConfig = triggerNode.data?.config as Record<string, unknown> ?? {}
-      if (nodeConfig && Object.keys(nodeConfig).length > 0) {
-        setTriggerConfig(nodeConfig)
+    // Legacy workflows may carry trigger_config only on the API record,
+    // not mirrored into the primary trigger node's own data.config — which
+    // is now the single source of truth for it (see the triggerConfig
+    // useMemo above). Seed it once so the canvas reflects what's actually
+    // configured; every save from here on writes it back into node data.
+    const primaryNode = flowNodes.find(n => n.type?.startsWith('trigger.'))
+    if (primaryNode) {
+      const nodeConfig = (primaryNode.data?.config as Record<string, unknown>) ?? {}
+      if (Object.keys(nodeConfig).length === 0 && data.trigger_config && Object.keys(data.trigger_config).length > 0) {
+        primaryNode.data = { ...primaryNode.data, config: data.trigger_config }
       }
     }
 
@@ -266,11 +289,9 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate }: W
       return { ...n, data: { ...n.data, config } }
     }))
     setSelectedNode(prev => prev?.id === nodeId ? { ...prev, data: { ...prev.data, config } } : prev)
-    // Sync trigger node config to triggerConfig so save/activate use the right data
-    if (selectedNode?.type?.startsWith('trigger.')) {
-      setTriggerConfig(config)
-    }
-  }, [setNodes, selectedNode])
+    // No separate sync needed: triggerType/triggerConfig are derived
+    // straight from the trigger nodes' own data.config (see useMemo above).
+  }, [setNodes])
 
   const buildDefinition = useCallback((): WorkflowDefinitionSchema => {
     return {
@@ -291,10 +312,52 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate }: W
     }
   }, [nodes, edges])
 
+  // Reconcile canvas trigger nodes beyond the primary against
+  // /workflows/{id}/triggers. Each supplementary node's backend row id is
+  // stamped into node.data.triggerId once created (and round-trips through
+  // definition.nodes on future loads, same as node.data.output already
+  // does) — that's what lets a later save PATCH the right row instead of
+  // creating a duplicate, and what lets a removed node's row get deleted.
+  const reconcileSupplementaryTriggers = useCallback(async (workflowId: string) => {
+    const existingTriggers = await wf.listWorkflowTriggers(workflowId)
+    const existingIds = new Set(existingTriggers.map(t => t.id))
+    const nodeTriggerIds = new Set(
+      supplementaryTriggerNodes
+        .map(n => n.data?.triggerId as string | undefined)
+        .filter((id): id is string => !!id)
+    )
+
+    for (const trigger of existingTriggers) {
+      if (!nodeTriggerIds.has(trigger.id)) {
+        await wf.deleteWorkflowTrigger(workflowId, trigger.id)
+      }
+    }
+
+    for (const node of supplementaryTriggerNodes) {
+      const nodeTriggerType = (node.type ?? '').replace('trigger.', '') as TriggerType
+      const config = (node.data?.config as Record<string, unknown>) ?? {}
+      const existingId = node.data?.triggerId as string | undefined
+
+      if (existingId && existingIds.has(existingId)) {
+        await wf.updateWorkflowTrigger(workflowId, existingId, { trigger_config: config })
+      } else {
+        const created = await wf.createWorkflowTrigger(workflowId, {
+          trigger_type: nodeTriggerType,
+          trigger_config: config,
+        })
+        if (created) {
+          const createdId = created.id
+          setNodes(nds => nds.map(n => n.id === node.id ? { ...n, data: { ...n.data, triggerId: createdId } } : n))
+        }
+      }
+    }
+  }, [wf, supplementaryTriggerNodes, setNodes])
+
   const handleSave = useCallback(async () => {
     setSaving(true)
     try {
       const definition = buildDefinition()
+      let workflowId = currentWorkflowId
       if (currentWorkflowId) {
         const payload: WorkflowUpdatePayload = {
           name: workflowName || 'Untitled Workflow',
@@ -318,14 +381,19 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate }: W
         }
         const created = await wf.createWorkflow(payload)
         if (created) {
+          workflowId = created.id
           setCurrentWorkflowId(created.id)
           setWorkflowStatus(created.status)
         }
       }
+      if (workflowId) {
+        await reconcileSupplementaryTriggers(workflowId)
+      }
+      onWorkflowsChanged?.()
     } finally {
       setSaving(false)
     }
-  }, [currentWorkflowId, workflowName, workflowDescription, triggerType, triggerConfig, workspaceId, wf, buildDefinition])
+  }, [currentWorkflowId, workflowName, workflowDescription, triggerType, triggerConfig, workspaceId, wf, buildDefinition, reconcileSupplementaryTriggers, onWorkflowsChanged])
 
   const handleActivate = useCallback(async () => {
     if (!currentWorkflowId) return
@@ -357,8 +425,9 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate }: W
       setEdges([])
       setView('list')
       if (workspaceId) void wf.fetchWorkflows({ workspace_id: workspaceId })
+      onWorkflowsChanged?.()
     }
-  }, [currentWorkflowId, wf, setNodes, setEdges, workspaceId])
+  }, [currentWorkflowId, wf, setNodes, setEdges, workspaceId, onWorkflowsChanged])
 
   const handleRemoveNode = useCallback(() => {
     setSelectedNode(prev => {
@@ -456,7 +525,6 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate }: W
     setWorkflowName('')
     setWorkflowDescription('')
     setWorkflowStatus('draft')
-    setTriggerConfig({})
     setNodes([])
     setEdges([])
     setSelectedNode(null)
@@ -593,6 +661,7 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate }: W
                 if (ConfigPanel) {
                   return (
                     <ConfigPanel
+                      key={selectedNode.id}
                       config={(selectedNode.data.config as Record<string, unknown>) ?? {}}
                       onChange={(cfg) => updateNodeConfig(selectedNode.id, cfg)}
                       templateVars={templateVars}
@@ -606,13 +675,19 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate }: W
                       <textarea
                         className="wf-config-textarea"
                         rows={6}
-                        value={JSON.stringify(selectedNode.data.config ?? {}, null, 2)}
+                        value={
+                          jsonConfigDraft?.nodeId === selectedNode.id
+                            ? jsonConfigDraft.text
+                            : JSON.stringify(selectedNode.data.config ?? {}, null, 2)
+                        }
                         onChange={e => {
+                          const text = e.target.value
+                          setJsonConfigDraft({ nodeId: selectedNode.id, text })
                           try {
-                            const parsed = JSON.parse(e.target.value)
+                            const parsed = JSON.parse(text)
                             updateNodeConfig(selectedNode.id, parsed)
                           } catch {
-                            // Allow typing invalid JSON temporarily
+                            // Allow typing/pasting invalid JSON temporarily
                           }
                         }}
                       />
@@ -623,7 +698,14 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate }: W
               {selectedNode.type?.startsWith('trigger.') && (
                 <div className="wf-config-field">
                   <label className="wf-config-label">TRIGGER TYPE</label>
-                  <div className="wf-config-value">{triggerType.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase())}</div>
+                  <div className="wf-config-value">
+                    {selectedNode.type.replace('trigger.', '').replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase())}
+                  </div>
+                  <div className="wf-config-hint">
+                    {selectedNode.id === primaryTriggerNode?.id
+                      ? 'Primary trigger — determines the workflow\'s main trigger_type'
+                      : 'Additional trigger — runs alongside the primary trigger'}
+                  </div>
                 </div>
               )}
               {(() => {

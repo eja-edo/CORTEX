@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, CheckCircle2, ChevronDown, GitBranch, Home, Plus, Search, Settings, Sparkles, StickyNote, Video, X, Trash2 } from 'lucide-react'
+import { AlertCircle, CheckCircle2, ChevronDown, GitBranch, Home, ListChecks, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings, StickyNote, Trash2, Video, X } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
 import 'react-big-calendar/lib/css/react-big-calendar.css'
 import './App.css'
@@ -12,10 +12,11 @@ import { CalendarView } from './components/CalendarView'
 import { RecordPanel } from './components/RecordPanel'
 import { AssetKnowledgeView } from './components/AssetKnowledgeView'
 import { SettingsPanel } from './components/SettingsPanel'
-import type { SyncUpdateEvent } from './types'
+import type { Schedule, SyncUpdateEvent } from './types'
 import type { AppNotification } from './components/NotificationBell'
 import { NotificationBell } from './components/NotificationBell'
 import type { NotificationKind } from './components/NotificationBell'
+import { UserMenu } from './components/UserMenu'
 import { WorkspaceNoteEditor } from './components/WorkspaceNoteEditor'
 import { WorkspaceSearch } from './components/WorkspaceSearch'
 import { WorkspaceSwitcher } from './components/WorkspaceSwitcher'
@@ -32,15 +33,19 @@ import { useAuth } from './hooks/useAuth'
 import { useWorkspaces } from './hooks/useWorkspaces'
 import { useNotes, noteTitleFromMd } from './hooks/useNotes'
 import { useSchedules } from './hooks/useSchedules'
+import { useCalendarItems } from './hooks/useCalendarItems'
 import { useAssets } from './hooks/useAssets'
+import { useWorkflows } from './hooks/useWorkflows'
 import { useNotifications } from './hooks/useNotifications'
 import { requestWithAuth, getCurrentTokens, setCurrentTokens } from './services/api'
-import { extractWorkspaceId, isWorkspaceRoute, noteRoute, knowledgeRoute, scheduleRoute, workspaceRoute, workflowRoute } from './services/routes'
+import { ROUTES, extractWorkspaceId, isKnownRoute, noteRoute, knowledgeRoute, scheduleRoute, tasksRoute, todayRoute, notificationsRoute, workspaceRoute, workflowRoute } from './services/routes'
+import { TasksPage } from './components/TasksPage'
+import { NotificationsPage } from './components/NotificationsPage'
 import type { Workspace } from './types'
 
 const SSE_TAB_APPID_KEY = 'cortex_sse_appid'
 
-type WorkspaceView = 'dashboard' | 'note' | 'records' | 'knowledge' | 'schedule' | 'settings' | 'workflow'
+type WorkspaceView = 'dashboard' | 'note' | 'records' | 'knowledge' | 'schedule' | 'tasks' | 'notifications' | 'settings' | 'workflow'
 
 function getRouteWorkspaceState(pathname: string): {
   view: WorkspaceView
@@ -56,6 +61,14 @@ function getRouteWorkspaceState(pathname: string): {
   if (matchPath('/w/:workspaceId/schedule', pathname)) {
     const wsId = extractWorkspaceId(pathname)
     return { view: 'schedule', workspaceId: wsId, noteId: null, assetId: null, workflowId: null }
+  }
+
+  if (matchPath('/tasks', pathname)) {
+    return { view: 'tasks', workspaceId: null, noteId: null, assetId: null, workflowId: null }
+  }
+
+  if (matchPath('/notifications', pathname)) {
+    return { view: 'notifications', workspaceId: null, noteId: null, assetId: null, workflowId: null }
   }
 
   if (matchPath('/settings', pathname)) {
@@ -114,15 +127,6 @@ function getRouteWorkspaceState(pathname: string): {
   return { view: 'dashboard', workspaceId: null, noteId: null, assetId: null, workflowId: null }
 }
 
-function isKnownRoute(pathname: string): boolean {
-  return pathname === '/'
-    || pathname === '/schedule'
-    || pathname === '/settings'
-    || pathname === '/notifications'
-    || pathname === '/auth/callback'
-    || isWorkspaceRoute(pathname)
-}
-
 function getOrCreateSseTabAppId(): string {
   const existing = window.sessionStorage.getItem(SSE_TAB_APPID_KEY)
   if (existing) return existing
@@ -155,7 +159,7 @@ function SidebarSection({
   const { className: sectionBodyClassName, ...sectionBodyRestProps } = sectionBodyProps ?? {}
 
   return (
-    <div className="sidebar-collapsible-section">
+    <div className={`sidebar-collapsible-section ${isOpen ? 'is-open' : ''}`}>
       <button
         type="button"
         className="app-sidebar-section-header"
@@ -178,21 +182,23 @@ function SidebarSection({
             >
               {label}
             </span>
-            <span className={`app-sidebar-section-chevron ${isOpen ? 'open' : ''}`}>
+            <span className="app-sidebar-section-chevron">
               <ChevronDown size={13} />
             </span>
           </>
         )}
       </button>
-      {isOpen && !isCollapsed && (
-        <div
-          className={[
-            'app-sidebar-section-body',
-            sectionBodyClassName ?? '',
-          ].filter(Boolean).join(' ')}
-          {...sectionBodyRestProps}
-        >
-          {children}
+      {!isCollapsed && (
+        <div className="app-sidebar-section-body-wrapper">
+          <div
+            className={[
+              'app-sidebar-section-body',
+              sectionBodyClassName ?? '',
+            ].filter(Boolean).join(' ')}
+            {...sectionBodyRestProps}
+          >
+            {children}
+          </div>
         </div>
       )}
     </div>
@@ -208,7 +214,11 @@ function App() {
   const workspaces = useWorkspaces()
   const notes = useNotes(workspaces.currentWorkspace, routeWorkspaceState.noteId)
   const schedules = useSchedules()
+  // The calendar's unified feed (2.6): schedules + tasks in one shape,
+  // over the same visible range the schedule list uses.
+  const calendarItems = useCalendarItems(schedules.startDate, schedules.endDate)
   const assets = useAssets(workspaces.currentWorkspace)
+  const sidebarWorkflows = useWorkflows()
 
   const [isCreateEventOpen, setIsCreateEventOpen] = useState<boolean>(false)
   const [isSearchOpen, setIsSearchOpen] = useState(false)
@@ -225,12 +235,26 @@ function App() {
   const [managingMembersWorkspace, setManagingMembersWorkspace] = useState<{ id: string; name: string; is_personal: boolean } | null>(null)
   const [settingsWorkspace, setSettingsWorkspace] = useState<Workspace | null>(null)
   const [createEventInitialTimes, setCreateEventInitialTimes] = useState<{ startDate: string; endDate: string } | null>(null)
-  const isWorkspaceSidebarCollapsed = false
+  const [isWorkspaceSidebarCollapsed, setIsWorkspaceSidebarCollapsed] = useState<boolean>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('cortex_sidebar_collapsed') ?? 'false')
+    } catch {
+      return false
+    }
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem('cortex_sidebar_collapsed', JSON.stringify(isWorkspaceSidebarCollapsed))
+    } catch {
+      // ignore storage failures
+    }
+  }, [isWorkspaceSidebarCollapsed])
    const [theme, _setTheme] = useState<AppTheme>(getStoredTheme)
   const [reviewProposal, setReviewProposal] = useState<{ noteId: string; proposalId: string } | null>(null)
    const [blockEditingEnabled, _setBlockEditingEnabled] = useState<boolean>(getBlockEditingEnabled)
    const [sectionNoteOpen, setSectionNoteOpen] = useState(true)
    const [sectionRecordOpen, setSectionRecordOpen] = useState(true)
+   const [sectionWorkflowOpen, setSectionWorkflowOpen] = useState(true)
    const notif = useNotifications()
    const syncToastTimerRef = useRef<number | null>(null)
 
@@ -267,6 +291,15 @@ useEffect(() => {
     }
   }, [location.pathname, navigate])
 
+  // "Hôm nay" no longer has a page of its own — it renders on home. Kept as
+  // a redirect rather than deleted so an old bookmark or link still lands
+  // somewhere correct instead of on the unknown-route fallback.
+  useEffect(() => {
+    if (location.pathname === todayRoute()) {
+      navigate(ROUTES.HOME, { replace: true })
+    }
+  }, [location.pathname, navigate])
+
   useEffect(() => {
     if (!('Notification' in window) || Notification.permission !== 'default') return
     const handler = () => {
@@ -282,6 +315,12 @@ useEffect(() => {
      void assets.loadSidebarAssets()
    // eslint-disable-next-line react-hooks/exhaustive-deps
    }, [sectionRecordOpen, auth.tokens, workspaces.currentWorkspace])
+
+   useEffect(() => {
+     if (!sectionWorkflowOpen || !auth.tokens || !workspaces.currentWorkspace) return
+     void sidebarWorkflows.fetchWorkflows({ workspace_id: workspaces.currentWorkspace.id })
+   // eslint-disable-next-line react-hooks/exhaustive-deps
+   }, [sectionWorkflowOpen, auth.tokens, workspaces.currentWorkspace])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -299,6 +338,7 @@ useEffect(() => {
        workspaces.setCurrentWorkspace(null)
        return
      }
+     void auth.fetchCurrentUser(auth.tokens)
      void workspaces.fetchWorkspaces()
      void schedules.fetchSchedules()
      void schedules.fetchGoogleCalendarStatus()
@@ -345,15 +385,6 @@ useEffect(() => {
 
 const showSyncToast = useCallback((message: string): void => {
      auth.setStatusMessage(message)
-     const newNotif: AppNotification = {
-       id: Date.now().toString(),
-       kind: 'sync',
-       title: 'Calendar synced',
-       body: message,
-       timestamp: new Date(),
-       read: false,
-     }
-     notif.addNotification(newNotif)
      if (syncToastTimerRef.current) {
        window.clearTimeout(syncToastTimerRef.current)
      }
@@ -361,7 +392,7 @@ const showSyncToast = useCallback((message: string): void => {
        auth.setStatusMessage('')
        syncToastTimerRef.current = null
      }, 5000)
-   }, [auth, notif])
+   }, [auth])
 
    function formatSyncSummary(event: SyncUpdateEvent): string {
     const created = event.stats.created ?? 0
@@ -516,6 +547,41 @@ const renderWorkspaceSidebarNoteTree = useCallback((parentId: string | null, dep
     setIsCreateEventOpen(false)
     setCreateEventInitialTimes(null)
   }, [])
+
+  // `CalendarView` draws its grid entirely from `calendarItems` (the unified
+  // schedules+tasks feed), not from `schedules.schedules` — that array only
+  // backs the detail modal's lookups. `useSchedules`'s own create/update/
+  // toggle/remove handlers refetch `schedules` but have no idea
+  // `calendarItems` exists, so without also refetching it here, the grid
+  // stayed stale after every edit until the next date-range change or
+  // manual refresh. These wrappers are what CalendarView/ScheduleForm
+  // actually get passed instead of the raw `schedules.*` handlers.
+  const handleCreateSchedule = useCallback(async (
+    schedule: Omit<Schedule, 'id' | 'user_id' | 'created_at' | 'updated_at' | 'is_completed'>,
+  ): Promise<Schedule | null> => {
+    const created = await schedules.handleCreateSchedule(schedule)
+    if (created) await calendarItems.fetchItems()
+    return created
+  }, [schedules, calendarItems])
+
+  const handleUpdateSchedule = useCallback(async (
+    item: Schedule,
+    patch: Partial<Schedule>,
+  ): Promise<boolean> => {
+    const ok = await schedules.handleUpdateSchedule(item, patch)
+    if (ok) await calendarItems.fetchItems()
+    return ok
+  }, [schedules, calendarItems])
+
+  const handleToggleScheduleComplete = useCallback(async (item: Schedule): Promise<void> => {
+    await schedules.handleToggleComplete(item)
+    await calendarItems.fetchItems()
+  }, [schedules, calendarItems])
+
+  const handleRemoveSchedule = useCallback(async (id: string): Promise<void> => {
+    await schedules.handleRemoveSchedule(id)
+    await calendarItems.fetchItems()
+  }, [schedules, calendarItems])
 
 // SSE for calendar sync
    useEffect(() => {
@@ -763,6 +829,7 @@ const processNotificationChunk = (chunk: string): void => {
           }
 
           retryDelayMs = 3000
+          void notif.fetchNotifications()
 
           const reader = response.body.getReader()
           const decoder = new TextDecoder('utf-8')
@@ -797,8 +864,6 @@ const processNotificationChunk = (chunk: string): void => {
     }
    // eslint-disable-next-line react-hooks/exhaustive-deps
    }, [auth.tokens?.accessToken])
-
-  const userInitial = auth.user?.full_name?.[0]?.toUpperCase() ?? auth.user?.email?.[0]?.toUpperCase() ?? '?'
 
   return (
     <div className="app-shell">
@@ -857,7 +922,11 @@ const processNotificationChunk = (chunk: string): void => {
                   <line x1="12" y1="17" x2="12.01" y2="17" />
                 </svg>
               </button>
-              <div className="user-avatar" title={auth.user?.email}>{userInitial}</div>
+              <UserMenu
+                user={auth.user}
+                onOpenSettings={() => navigate('/settings')}
+                onLogout={() => void auth.handleLogout()}
+              />
             </>
           )}
         </div>
@@ -884,7 +953,7 @@ const processNotificationChunk = (chunk: string): void => {
         </div>
       ) : (
         <div className="main-layout">
-          <aside className="app-sidebar">
+          <aside className={`app-sidebar ${isWorkspaceSidebarCollapsed ? 'collapsed' : ''}`}>
             <div className="app-sidebar-profile">
               {workspaces.currentWorkspace && (
                 <WorkspaceSwitcher
@@ -922,14 +991,17 @@ const processNotificationChunk = (chunk: string): void => {
 
                 <button
                   type="button"
-                  className="app-sidebar-nav-item"
-                  onClick={() => {/* TODO: Navigate to notifications */ }}
+                  className={`app-sidebar-nav-item ${activeWorkspaceView === 'notifications' ? 'active' : ''}`}
+                  onClick={() => navigate(notificationsRoute())}
                 >
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
                     <path d="M13.73 21a2 2 0 0 1-3.46 0" />
                   </svg>
                   <span className="app-sidebar-nav-label">NOTIFICATIONS</span>
+                  {notif.notifications.some((n) => !n.read) && (
+                    <span className="app-sidebar-nav-badge" aria-hidden />
+                  )}
                 </button>
 
                 <button
@@ -944,6 +1016,15 @@ const processNotificationChunk = (chunk: string): void => {
                     <line x1="3" y1="10" x2="21" y2="10" />
                   </svg>
                   <span className="app-sidebar-nav-label">SCHEDULE</span>
+                </button>
+
+                <button
+                  type="button"
+                  className={`app-sidebar-nav-item ${location.pathname === '/tasks' ? 'active' : ''}`}
+                  onClick={() => navigate(tasksRoute())}
+                >
+                  <ListChecks size={16} />
+                  <span className="app-sidebar-nav-label">TASKS</span>
                 </button>
               </div>
 
@@ -1128,8 +1209,8 @@ const processNotificationChunk = (chunk: string): void => {
                   <SidebarSection
                     icon={<GitBranch size={15} />}
                     label="Workflows"
-                    isOpen={true}
-                    onToggle={() => {}}
+                    isOpen={sectionWorkflowOpen}
+                    onToggle={() => setSectionWorkflowOpen(v => !v)}
                     isCollapsed={isWorkspaceSidebarCollapsed}
                     onLabelClick={() => {
                       const workspaceId = workspaces.currentWorkspace?.id
@@ -1137,9 +1218,53 @@ const processNotificationChunk = (chunk: string): void => {
                     }}
                   >
                     <div className="workspace-note-links">
+                      {sidebarWorkflows.loading ? (
+                        <div className="app-sidebar-sub-item">
+                          <GitBranch size={13} />
+                          <span>Loading...</span>
+                        </div>
+                      ) : sidebarWorkflows.workflows.length === 0 ? (
+                        <div className="app-sidebar-sub-item">
+                          <GitBranch size={13} />
+                          <span>No workflows yet</span>
+                        </div>
+                      ) : (
+                        <>
+                          {sidebarWorkflows.workflows.map(wf => (
+                            <button
+                              key={wf.id}
+                              type="button"
+                              className={`app-sidebar-sub-item ${activeWorkspaceView === 'workflow' && activeWorkspaceWorkflowId === wf.id ? 'active' : ''}`}
+                              onClick={() => {
+                                const workspaceId = workspaces.currentWorkspace?.id
+                                if (workspaceId) navigate(workflowRoute(workspaceId, wf.id))
+                              }}
+                              title={wf.name}
+                            >
+                              <GitBranch size={13} />
+                              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{wf.name}</span>
+                              <div className="workspace-nav-item-actions">
+                                <button
+                                  type="button"
+                                  className="app-sidebar-sub-action-btn danger"
+                                  title="Delete"
+                                  onClick={async (e) => {
+                                    e.stopPropagation()
+                                    if (window.confirm('Are you sure you want to delete this workflow?')) {
+                                      await sidebarWorkflows.deleteWorkflow(wf.id)
+                                    }
+                                  }}
+                                >
+                                  <Trash2 size={12} />
+                                </button>
+                              </div>
+                            </button>
+                          ))}
+                        </>
+                      )}
                       <button
                         type="button"
-                        className="app-sidebar-sub-item"
+                        className="app-sidebar-sub-item app-sidebar-sub-item--add"
                         onClick={() => {
                           const workspaceId = workspaces.currentWorkspace?.id
                           if (workspaceId) navigate(workflowRoute(workspaceId))
@@ -1162,6 +1287,15 @@ const processNotificationChunk = (chunk: string): void => {
               >
                 <Settings size={16} />
                 <span className="app-sidebar-nav-label">SETTINGS</span>
+              </button>
+              <button
+                type="button"
+                className="app-sidebar-nav-item app-sidebar-collapse-toggle"
+                onClick={() => setIsWorkspaceSidebarCollapsed(v => !v)}
+                title={isWorkspaceSidebarCollapsed ? 'Mở rộng sidebar' : 'Thu gọn sidebar'}
+              >
+                {isWorkspaceSidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+                <span className="app-sidebar-nav-label">{isWorkspaceSidebarCollapsed ? 'MỞ RỘNG' : 'THU GỌN'}</span>
               </button>
             </div>
           </aside>
@@ -1188,25 +1322,45 @@ const processNotificationChunk = (chunk: string): void => {
                   setBlockEditingEnabled(enabled)
                 }}
               />
-            ) : activeWorkspaceView === 'schedule' ? (
+                        ) : activeWorkspaceView === 'schedule' ? (
               <section className="home-workspace">
                 <div className="home-schedule-area">
                   <CalendarView
+                    items={calendarItems.items}
                     schedules={schedules.schedules}
                     isGoogleCalendarConnected={Boolean(schedules.googleCalendarStatus?.connected)}
                     startDate={schedules.startDate}
                     endDate={schedules.endDate}
                     onStartDateChange={schedules.setStartDate}
                     onEndDateChange={schedules.setEndDate}
-                    onFetch={() => void schedules.fetchSchedules()}
+                    onFetch={() => {
+                      // Both calls are needed: `onFetch` isn't only fired on
+                      // date-range change (where calendarItems' own effect
+                      // would already cover it) — CalendarView's manual
+                      // refresh button calls it directly too, with the range
+                      // unchanged, so calendarItems has to be fetched here
+                      // explicitly or that button would silently do nothing
+                      // for the grid. The out-of-order-response race this
+                      // used to cause is now handled by the request-id guard
+                      // inside each hook, not by avoiding the duplicate call.
+                      void schedules.fetchSchedules()
+                      void calendarItems.fetchItems()
+                    }}
                     onOpenCreateEvent={handleOpenCreateEvent}
                     onSlotSelect={handleCalendarSlotSelect}
-                    onToggleComplete={schedules.handleToggleComplete}
-                    onUpdate={schedules.handleUpdateSchedule}
-                    onRemove={schedules.handleRemoveSchedule}
+                    onToggleComplete={handleToggleScheduleComplete}
+                    onUpdate={handleUpdateSchedule}
+                    onRemove={handleRemoveSchedule}
                   />
                 </div>
               </section>
+            ) : activeWorkspaceView === 'tasks' ? (
+              <TasksPage />
+            ) : activeWorkspaceView === 'notifications' ? (
+              <NotificationsPage
+                onNavigate={(path) => navigate(path)}
+                onNotificationsChanged={() => void notif.fetchNotifications()}
+              />
             ) : activeWorkspaceView === 'workflow' ? (
               <WorkflowBuilder
                 workspaceId={workspaces.currentWorkspace?.id ?? null}
@@ -1218,6 +1372,10 @@ const processNotificationChunk = (chunk: string): void => {
                 onNavigate={(wfId) => {
                   const workspaceId = workspaces.currentWorkspace?.id
                   if (workspaceId) navigate(workflowRoute(workspaceId, wfId))
+                }}
+                onWorkflowsChanged={() => {
+                  const workspaceId = workspaces.currentWorkspace?.id
+                  if (workspaceId) void sidebarWorkflows.fetchWorkflows({ workspace_id: workspaceId })
                 }}
               />
             ) : !routeWorkspaceState.workspaceId ? (
@@ -1326,29 +1484,17 @@ const processNotificationChunk = (chunk: string): void => {
       {
         auth.tokens && isCreateEventOpen && (
           <div className="modal-backdrop" onClick={handleCloseCreateEvent}>
-            <div className="modal create-modal" onClick={(e) => e.stopPropagation()}>
-              <div className="modal-header">
-                <span className="category-tag">Lịch biểu</span>
+            <div className="modal task-detail-modal" onClick={(e) => e.stopPropagation()}>
+              <div className="task-detail-modal-topbar">
                 <button type="button" className="modal-close" onClick={handleCloseCreateEvent} aria-label="Đóng">
-                  <X size={18} />
+                  <X size={15} />
                 </button>
               </div>
-              <div className="modal-body">
-                <ScheduleForm
-                  onCreate={schedules.handleCreateSchedule}
-                  initialTimes={createEventInitialTimes}
-                  onClose={handleCloseCreateEvent}
-                />
-              </div>
-              <div className="modal-footer">
-                <button type="button" className="btn-cm-cancel" onClick={handleCloseCreateEvent}>
-                  Bỏ qua
-                </button>
-                <button type="submit" form="create-event-form" className="btn-cm-create">
-                  <span>Lưu sự kiện</span>
-                  <Sparkles size={18} />
-                </button>
-              </div>
+              <ScheduleForm
+                onCreate={handleCreateSchedule}
+                initialTimes={createEventInitialTimes}
+                onClose={handleCloseCreateEvent}
+              />
             </div>
           </div>
         )

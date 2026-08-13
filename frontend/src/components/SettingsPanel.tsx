@@ -109,6 +109,15 @@ export function SettingsPanel({
             <button type="button" className="btn btn-primary" onClick={onConnectGoogleCalendar}>
               Connect Google
             </button>
+          ) : googleCalendarStatus?.needs_reauth ? (
+            <>
+              <button type="button" className="btn btn-primary" onClick={onConnectGoogleCalendar}>
+                Reconnect Google
+              </button>
+              <button type="button" className="btn btn-danger" onClick={onDisconnectGoogleCalendar}>
+                Disconnect Google
+              </button>
+            </>
           ) : (
             <>
               <button type="button" className="btn btn-ghost" onClick={onSyncGoogleCalendarNow}>
@@ -127,7 +136,14 @@ export function SettingsPanel({
           )}
         </div>
         <div className="settings-meta-list">
-          <div>Status: {googleCalendarStatus?.connected ? 'Connected' : 'Not connected'}</div>
+          <div>
+            Status:{' '}
+            {!googleCalendarStatus?.connected
+              ? 'Not connected'
+              : googleCalendarStatus?.needs_reauth
+                ? 'Needs reconnect'
+                : 'Connected'}
+          </div>
           <div>Last sync: {formatDateTimeVi(googleCalendarStatus?.last_synced_at ?? null)}</div>
           <div>Channel expires: {formatDateTimeVi(googleCalendarStatus?.channel_expiration ?? null)}</div>
           {googleCalendarStatus?.last_sync_error && (

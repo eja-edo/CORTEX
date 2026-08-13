@@ -9,6 +9,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database_async import AsyncSessionLocal
 from app.events.event_bus import get_event_bus
 from app.events.payloads import ToolExecutedPayload
 from app.events.schemas import EventEnvelope
@@ -313,7 +314,15 @@ class ToolExecutionService:
                     logger.info(f"Parallel executing tool: {name} with args: {args}")
                     start_time = time.time()
                     try:
-                        result = await self.registry.execute(name, args, ctx)
+                        # Fresh session per concurrently-gathered call — see
+                        # agent_service.py's streaming twin for why sharing `ctx`
+                        # (and its one AsyncSession) across asyncio.gather is unsafe.
+                        async with AsyncSessionLocal() as db:
+                            call_ctx = ToolContext(
+                                user_id=ctx.user_id, async_db=db,
+                                workspace_id=ctx.workspace_id, conversation_id=ctx.conversation_id,
+                            )
+                            result = await self.registry.execute(name, args, call_ctx)
                         logger.info(f"Tool '{name}' executed | result: {str(result)[:200]}")
                     except Exception as tool_exc:
                         logger.error(f"Tool '{name}' raised exception: {tool_exc}", exc_info=True)

@@ -107,6 +107,95 @@ class AssetStatus(str, Enum):
     ARCHIVED = "archived"
 
 
+class AttentionItemType(str, Enum):
+    """What kind of thing was surfaced (Milestone 2.9).
+
+    `attention_log.item_id` points at whichever table this names — it is
+    polymorphic and therefore carries no foreign key.
+    """
+    TASK = "task"
+    COMMITMENT = "commitment"
+    SCHEDULE = "schedule"
+
+
+class AttentionLevel(str, Enum):
+    """The five levels of intervention (Product Requirement 13).
+
+    `silent` is a real, recorded outcome — a decision not to speak, not the
+    absence of a decision. See AttentionLog's docstring.
+    """
+    SILENT = "silent"
+    INFORM = "inform"
+    RECOMMEND = "recommend"
+    ASK = "ask"
+    ACT = "act"
+
+
+class AttentionChannel(str, Enum):
+    """Where the surfacing went.
+
+    `telegram` and `email` have no delivery path until Phase 5; they are
+    declared now so adding one later is a code change, not a migration on a
+    table that by then holds history.
+    """
+    IN_APP = "in_app"
+    PUSH = "push"
+    TELEGRAM = "telegram"
+    EMAIL = "email"
+
+
+class AttentionResponse(str, Enum):
+    """How the user reacted.
+
+    `no_response` is the initial state of every row: nothing has come back
+    *yet*. `ignored` is different and stronger — the user saw it and chose
+    not to act. Collapsing the two would make 6.9's accuracy numbers
+    meaningless.
+    """
+    ACCEPTED = "accepted"
+    DISMISSED = "dismissed"
+    IGNORED = "ignored"
+    NO_RESPONSE = "no_response"
+
+
+class TaskStatus(str, Enum):
+    """Task lifecycle state (Milestone 2.5).
+
+    The legal transitions between these live in
+    `app.services.tasks.TASK_STATUS_TRANSITIONS` — the service rejects
+    anything else, so the enum alone is not the contract.
+
+    `PENDING_CONFIRM`/`REJECTED` exist for one source only: a task extracted
+    from a conversation (formerly the separate `Commitment` entity — see
+    `app.services.task_extraction`). The AI *guesses* these, so they need a
+    human yes/no before they count as real work; every other creation path
+    (the user typing it, a goal breakdown, an event checklist) starts
+    straight at `TODO` because nobody needs to confirm their own input.
+    `REJECTED` rows are kept, not deleted — the same reason `Commitment`
+    kept them: it's what stops the extractor re-proposing the same guess.
+    """
+    PENDING_CONFIRM = "pending_confirm"
+    TODO = "todo"
+    IN_PROGRESS = "in_progress"
+    DONE = "done"
+    CANCELLED = "cancelled"
+    REJECTED = "rejected"
+
+
+class TaskPriority(str, Enum):
+    """User-set importance of a Task.
+
+    Replaces the goal-derived importance Task used to rely on (see the
+    Task docstring's former "no priority column" stance) — that signal
+    went away with Goal, so this is a plain, user-entered field instead.
+    Nullable on the column: unset ranks below every set value, it is not
+    the same as `LOW`.
+    """
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    URGENT = "urgent"
+
 
 class Asset(Base):
     """Uploaded or recorded media source tracked by processing pipeline."""
@@ -258,6 +347,7 @@ class CalendarConnection(Base):
     sync_token = Column(Text, nullable=True)
     last_synced_at = Column(DateTime, nullable=True)
     last_sync_error = Column(Text, nullable=True)
+    needs_reauth = Column(Boolean, nullable=False, default=False, server_default=text("false"))
     channel_id = Column(String(64), nullable=True)
     channel_resource_id = Column(String(255), nullable=True)
     channel_expiration = Column(DateTime, nullable=True)
@@ -566,6 +656,48 @@ class NoteEditProposal(Base):
     )
 
 
+class PlanProposal(Base):
+    """Reviewable proposal for AI-generated Task/Event items (3.2 AI Planner).
+
+    Simpler than `NoteEditProposal`: items describe rows to be *created*,
+    not a patch to existing content, so there is no base_revision/version
+    to optimistic-lock against and no "supersede the older pending one"
+    concept — each proposal stands alone.
+    """
+    __tablename__ = "plan_proposals"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+
+    # List of draft {type: "task"|"event", key, title, ...} dicts — see
+    # `PlanProposalItemIn` (schemas.py) for the shape. `key`/`parent_key`
+    # are proposal-local ids, not real Task/Schedule ids.
+    items = Column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
+
+    # Creator identity (supports USER / AGENT / WORKFLOW / SYSTEM, mirrors NoteEditProposal)
+    creator_type = Column(String(20), nullable=False, default="AGENT")
+    creator_id = Column(String(255), nullable=False)
+
+    # Status machine: pending → approved | rejected | expired (no "applying"
+    # intermediate state — each item's creation is its own Command, not a
+    # single atomic patch application).
+    status = Column(String(20), nullable=False, default="pending")
+
+    approved_at = Column(DateTime, nullable=True)
+    rejected_at = Column(DateTime, nullable=True)
+
+    expires_at = Column(DateTime, nullable=False)
+    conversation_id = Column(UUID, nullable=True)
+
+    created_at = Column(DateTime, default=_utcnow, nullable=False, server_default=text("NOW()"))
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False, server_default=text("NOW()"))
+
+    __table_args__ = (
+        Index("ix_plan_proposals_user_status", "user_id", "status"),
+        Index("ix_plan_proposals_expires", "status", "expires_at"),
+    )
+
+
 class AgentConversation(Base):
     """Multi-turn conversation thread with an AI agent."""
     __tablename__ = "agent_conversations"
@@ -612,3 +744,267 @@ class AgentMessage(Base):
         Index("ix_agent_messages_conversation_created", "conversation_id", "created_at"),
         Index("ix_agent_messages_conversation_role", "conversation_id", "role"),
     )
+
+
+class Task(Base):
+    """A unit of work (Milestone 2.5).
+
+    Deliberately its own table, not `schedules` with `type=TASK`:
+    **a schedule occupies time, a task consumes it**. Free-slot planning (3.3)
+    and interruptibility (6.2) both answer "is the user busy?" by reading
+    `schedules`; a task with a Friday deadline does not make Friday busy, and
+    projecting tasks into that table would make every deadline read as a busy
+    block. See the planning doc's "Ranh giới Task vs Schedule".
+
+    `priority` is user-entered (see `TaskPriority`) — Goal, the thing
+    importance used to be derived from, is gone. Nullable and unranked by
+    default: an unset priority is not the same as `LOW`, it just doesn't
+    push the task up in `app.services.today`'s ordering.
+
+    No `related_project_id` either: 2.5's description line lists it, but the
+    Phase 2 "Không làm" table defers the Project entity outright — an FK to a
+    table that doesn't exist is debt, not forward-compatibility.
+    """
+    __tablename__ = "tasks"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    title = Column(String(255), nullable=False)
+    status = Column(
+        SQLEnum(TaskStatus, values_callable=_enum_values, name="taskstatus"),
+        nullable=False,
+        default=TaskStatus.TODO,
+        server_default=text("'todo'"),
+    )
+    # When this task last transitioned *into* `done` — cleared the moment it
+    # leaves `done` again (reopened). Distinct from `updated_at`, which also
+    # moves on an unrelated edit (renaming a done task must not make it read
+    # as "finished just now"). The one place a "Hôm nay" list tells "done
+    # today" from "done on some earlier day" — see
+    # `app.services.tasks.TaskService.update_task` for where it's set.
+    completed_at = Column(DateTime, nullable=True)
+    # A deadline, not a time block: "must be done before Friday", not
+    # "occupies Friday". Usually midnight (a bare day, set via a plain date
+    # string); a real time is optional, not the default — e.g. a checklist
+    # item created inside an event (2.6) inherits that event's `end_time`
+    # exactly. Carrying a time here still isn't "occupying" anything: it's
+    # a point the task must be done by, not a span it books.
+    #
+    # No timezone, unlike `Schedule.start_time`/`end_time`: this is the
+    # user's own wall-clock fact, not a real-world instant, and a tz-aware
+    # column tempts exactly the reinterpretation the calendar feed already
+    # avoids when reading it back (see `calendar_items.parseServerDay`'s
+    # frontend counterpart). See migration `d0123456789z` for the concrete
+    # bug that made this the deliberate choice, not an oversight.
+    due_date = Column(DateTime(timezone=False), nullable=True)
+    priority = Column(SQLEnum(TaskPriority, values_callable=_enum_values, name="taskpriority"), nullable=True)
+    description = Column(Text, nullable=True)
+    # Nullable and stays that way: the two dominant creation paths (chat,
+    # and Cortex creating tasks itself) produce a task attached to nothing.
+    # "Belongs to no event" is the common case here, not the exception.
+    related_event_id = Column(
+        UUID(as_uuid=True), ForeignKey("schedules.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    # A task's own checklist. Self-referential and SET NULL on delete, same
+    # reasoning as `related_event_id`: deleting the parent orphans its
+    # sub-tasks into ordinary top-level tasks rather than deleting them too.
+    parent_task_id = Column(
+        UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    # Provenance for a task extracted from a conversation (formerly on
+    # `Commitment` — see `app.services.task_extraction`). Null for every
+    # other creation path: the user typing it, a goal breakdown, an event
+    # checklist. So "where did Cortex get this?" is answerable the same way
+    # Commitment answered it (2.4 M3).
+    source_conversation_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("agent_conversations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    source_message_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("agent_messages.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at = Column(DateTime, default=_utcnow, nullable=False, server_default=text("NOW()"))
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False, server_default=text("NOW()"))
+
+    __table_args__ = (
+        # "What's on my plate" for the Hôm Nay screen (2.7).
+        Index("ix_tasks_user_status_due_date", "user_id", "status", "due_date"),
+        # The extraction fingerprint lookup (formerly
+        # `ix_commitments_user_status_content`) — must stay identical to
+        # `app.repositories.tasks.normalized()`'s expression, or the lookup
+        # silently stops using the index and starts scanning.
+        Index(
+            "ix_tasks_user_status_content",
+            "user_id",
+            "status",
+            text("lower(btrim(title))"),
+        ),
+    )
+
+    def __repr__(self):
+        return f"<Task(id={self.id}, title={self.title}, status={self.status})>"
+
+
+class AttentionLog(Base):
+    """One row per surfacing decision (Milestone 2.9).
+
+    Answers "does the user already know about this?" — the question that
+    separates an assistant from a machine that repeats itself.
+
+    Two properties make this not a notifications table:
+
+    1. **A silent decision is still a row.** `level = silent` means Cortex
+       considered this item and chose not to speak. Without that row, the
+       most important debugging question — *why did Cortex say nothing?* —
+       has no answer, and 6.9 can't measure how often the silence was right.
+
+    2. **Deduplication is per (item_id, reason_key), never per item_id.**
+       The same task surfaced because it's overdue and, separately, because
+       it's marked high priority, is two legitimate surfacings. Collapsing
+       them to one would hide the second reason.
+
+    `item_id` deliberately has no FK: it points at `tasks`, `commitments`
+    (2.4) or `schedules` depending on `item_type`. It also outlives its
+    target on purpose — the record that Cortex nagged about something is
+    still true after that something is deleted.
+    """
+    __tablename__ = "attention_log"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    item_type = Column(
+        SQLEnum(AttentionItemType, values_callable=_enum_values, name="attentionitemtype"),
+        nullable=False,
+    )
+    item_id = Column(UUID(as_uuid=True), nullable=False)
+    # A stable string naming *why*, e.g. "task.overdue",
+    # "task.high_priority", "commitment.due_soon". Half of the
+    # dedup key, so it must stay stable across releases once used.
+    reason_key = Column(String(100), nullable=False)
+    surfaced_at = Column(DateTime, default=_utcnow, nullable=False, server_default=text("NOW()"), index=True)
+    level = Column(
+        SQLEnum(AttentionLevel, values_callable=_enum_values, name="attentionlevel"),
+        nullable=False,
+    )
+    channel = Column(
+        SQLEnum(AttentionChannel, values_callable=_enum_values, name="attentionchannel"),
+        nullable=False,
+        default=AttentionChannel.IN_APP,
+        server_default=text("'in_app'"),
+    )
+    response = Column(
+        SQLEnum(AttentionResponse, values_callable=_enum_values, name="attentionresponse"),
+        nullable=False,
+        default=AttentionResponse.NO_RESPONSE,
+        server_default=text("'no_response'"),
+    )
+    responded_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        # The dedup lookup, in its exact column order (2.9 M1).
+        Index("ix_attention_log_user_item_reason_surfaced", "user_id", "item_id", "reason_key", "surfaced_at"),
+        # 6.9 reads the other way round: "how did surfacings of this kind fare?"
+        Index("ix_attention_log_user_reason_response", "user_id", "reason_key", "response"),
+    )
+
+    def __repr__(self):
+        return (
+            f"<AttentionLog(id={self.id}, item={self.item_type}:{self.item_id}, "
+            f"reason={self.reason_key}, level={self.level})>"
+        )
+
+
+class StateEvaluatorFlag(Base):
+    """One row per (item, condition) currently true (Milestone 4.6).
+
+    The State Evaluator's own idempotency bookkeeping — deliberately not
+    `attention_log` (2.9): that table answers "does the user already know
+    about this", a delivery-layer question. This answers "did we already
+    publish an event for this transition", a detection-layer question that
+    has to exist even if nothing ever surfaces the event to a user. A row
+    present means the condition (`flag_key`) is currently true for
+    (`item_type`, `item_id`); the evaluator deletes it the moment the
+    condition stops holding, so a later re-transition publishes again
+    instead of being suppressed forever.
+    """
+    __tablename__ = "state_evaluator_flags"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    item_type = Column(
+        SQLEnum(AttentionItemType, values_callable=_enum_values, name="attentionitemtype"),
+        nullable=False,
+    )
+    item_id = Column(UUID(as_uuid=True), nullable=False)
+    flag_key = Column(String(100), nullable=False)
+    first_detected_at = Column(DateTime, default=_utcnow, nullable=False, server_default=text("NOW()"))
+
+    __table_args__ = (
+        UniqueConstraint("item_type", "item_id", "flag_key", name="uq_state_evaluator_flag"),
+    )
+
+    def __repr__(self):
+        return f"<StateEvaluatorFlag(item={self.item_type}:{self.item_id}, flag={self.flag_key})>"
+
+
+class ActionHistory(Base):
+    """The PostgreSQL half of `ActionSnapshotStore` (Layer 7 audit trail).
+
+    `ActionSnapshotStore` writes every revertable command's undo state twice:
+    Redis (24h, hot — what `revert_command()` actually reads) and here
+    (90-day-ish, cold — the audit record of what an AI-driven session did,
+    surviving past Redis's TTL and past a restart). This table existed in
+    name only until now: every INSERT into it had been silently failing
+    since the day `action_snapshot_store.py` was written, because nothing
+    had ever created it. `revert_action` still worked (Redis carries it),
+    so the gap went unnoticed — the failure mode was losing history, not
+    losing function.
+
+    `action_id` is not typed as UUID even though it always holds one in
+    practice: the application code treats it as an opaque string identifier
+    everywhere (the Redis key, `Command.command_id`), never casts it, and
+    this table shouldn't add a constraint the application layer doesn't
+    itself enforce.
+
+    No FK from `action_id` to anything — it names a `Command.command_id`,
+    which has no table of its own to point at (commands are never persisted
+    beyond this audit row and the Redis snapshot).
+    """
+    __tablename__ = "action_history"
+
+    # Server-side default, not just Python-side: this table is written via a
+    # raw SQL INSERT (action_snapshot_store.py), which never goes through
+    # session.add() — a Column(default=...) only fires there, so without
+    # gen_random_uuid() at the database level every insert would violate
+    # this column's NOT NULL constraint.
+    id = Column(
+        UUID(as_uuid=True), primary_key=True,
+        default=uuid.uuid4, server_default=text("gen_random_uuid()"),
+    )
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    # SET NULL, not CASCADE: the audit record that a command ran must outlive
+    # the conversation it happened in — same reasoning as Commitment's
+    # source_conversation_id.
+    conversation_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("agent_conversations.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    tool_name = Column(String(100), nullable=False)
+    action_type = Column(String(50), nullable=False, default="snapshot", server_default=text("'snapshot'"))
+    action_id = Column(String(64), nullable=False, unique=True)
+    before_state = Column(JSONB, nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=text("NOW()"))
+    is_reverted = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    reverted_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("ix_action_history_user_created", "user_id", "created_at"),
+    )
+
+    def __repr__(self):
+        return f"<ActionHistory(action_id={self.action_id}, tool={self.tool_name}, reverted={self.is_reverted})>"

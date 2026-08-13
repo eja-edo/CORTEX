@@ -7,6 +7,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database_async import AsyncSessionLocal
 from app.models import User
 from app.schemas import AgentChatRequest as ChatRequest
 from app.ai.agents.conversation_service import ConversationService, _build_history_contents, _inject_context_into_text, _format_timestamp, _trim_incomplete_tail
@@ -110,7 +111,8 @@ class AgentService:
             logger.warning(f"ContextService failed to build context (non-fatal): {exc}")
             return None
 
-    async def handle(self, message: str, conversation_id: UUID | None = None, workspace_id: UUID | None = None, context: dict | None = None) -> dict:
+    async def handle(self, message: str, conversation_id: UUID | None = None, workspace_id: UUID | None = None, context: dict | None = None, model: str | None = None) -> dict:
+        preferred_model = model if model and model != "auto" else None
         conv, title = await self.conversation_service.get_or_create(conversation_id, workspace_id, message)
         if conv is None:
             return {"conversation_id": str(conversation_id), "reply": title}
@@ -169,7 +171,7 @@ class AgentService:
             self.tool_service.log_token_breakdown(bd, turn, conv.id)
 
             try:
-                _model_used, response = await _model_client.generate(messages, gen_config, tools=tools)
+                _model_used, response = await _model_client.generate(messages, gen_config, tools=tools, preferred_model=preferred_model)
                 if response and response.usage:
                     for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
                         total_usage[k] = total_usage.get(k, 0) + (response.usage.get(k) or 0)
@@ -233,7 +235,7 @@ class AgentService:
             logger.warning(f"Agent hit max turns ({MAX_TOOL_TURNS}) — attempting synthesis turn for conversation {conv.id}")
             try:
                 synthesis_config = GenerationConfig(system_instruction=gen_config.system_instruction, temperature=gen_config.temperature)
-                _, synthesis_response = await _model_client.generate(messages, synthesis_config, tools=None)
+                _, synthesis_response = await _model_client.generate(messages, synthesis_config, tools=None, preferred_model=preferred_model)
                 reply_text = synthesis_response.content if synthesis_response and synthesis_response.content else "I reached my processing limit for this request. Please try a simpler or more specific question."
                 if synthesis_response and synthesis_response.usage:
                     for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
@@ -427,7 +429,18 @@ class AgentService:
                         yield {"event": "tool_start", "tool_name": tool_name, "tool_args": tool_args}
 
                     async def _exec_parallel(tc, name, args):
-                        result = await self.tool_service.execute_single_tool(name, args, ctx)
+                        # A fresh session per concurrently-gathered call — AsyncSession
+                        # is not safe for concurrent use, and every tool handler here
+                        # touches the DB, so sharing the request-scoped `ctx.async_db()`
+                        # across `asyncio.gather` causes intermittent
+                        # "another operation is in progress" / "Session is already
+                        # flushing" failures once two handlers' awaits interleave.
+                        async with AsyncSessionLocal() as db:
+                            call_ctx = ToolContext(
+                                user_id=ctx.user_id, async_db=db,
+                                workspace_id=ctx.workspace_id, conversation_id=ctx.conversation_id,
+                            )
+                            result = await self.tool_service.execute_single_tool(name, args, call_ctx)
                         return tc, name, args, result
 
                     exec_results = await asyncio.gather(
@@ -446,6 +459,15 @@ class AgentService:
                             inner = result.get("result", {})
                             if inner.get("proposal_id"):
                                 yield {"event": "note_diff", "proposal_id": inner["proposal_id"], "note_id": inner.get("id"), "base_version": inner.get("version")}
+
+                        if tool_name == "propose_plan":
+                            inner = result.get("result", {})
+                            if inner.get("proposal_id"):
+                                yield {"event": "plan_proposal", "proposal_id": inner["proposal_id"], "item_count": inner.get("item_count")}
+
+                        if tool_name == "ask_user_choice":
+                            inner = result.get("result", {})
+                            yield {"event": "ask_choice", "questions": inner.get("questions", [])}
 
                         await self.store.save_message(
                             conversation_id=conv.id, role="tool", tool_name=tool_name,
@@ -475,6 +497,15 @@ class AgentService:
                             inner = result.get("result", {})
                             if inner.get("proposal_id"):
                                 yield {"event": "note_diff", "proposal_id": inner["proposal_id"], "note_id": inner.get("id"), "base_version": inner.get("version")}
+
+                        if tool_name == "propose_plan":
+                            inner = result.get("result", {})
+                            if inner.get("proposal_id"):
+                                yield {"event": "plan_proposal", "proposal_id": inner["proposal_id"], "item_count": inner.get("item_count")}
+
+                        if tool_name == "ask_user_choice":
+                            inner = result.get("result", {})
+                            yield {"event": "ask_choice", "questions": inner.get("questions", [])}
 
                 if tool_result_msgs:
                     messages.extend(tool_result_msgs)

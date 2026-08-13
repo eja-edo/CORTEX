@@ -154,6 +154,13 @@ class Settings:
     MEMORY_EXTRACTION_ENABLED: bool = os.getenv("MEMORY_EXTRACTION_ENABLED", "true").lower() == "true"
     OCR_SERVICE_MODE: str = os.getenv("OCR_SERVICE_MODE", "EXTERNAL")
 
+    # ── Attention Log (Milestone 2.9) ────────────────────────────────────────
+    # How long a surfaced (item_id, reason_key) pair stays deduplicated.
+    # 24h is the agreed starting value, not a law: the right number is an
+    # empirical question the Feedback Loop (6.9) will answer from this very
+    # table, so it has to be tunable without a deploy.
+    ATTENTION_DEDUP_WINDOW_HOURS: int = int(os.getenv("ATTENTION_DEDUP_WINDOW_HOURS", "24"))
+
     # ── Agent feature flags ──────────────────────────────────────────────────
     AGENT_PARALLEL_TOOL_EXECUTION: bool = os.getenv("AGENT_PARALLEL_TOOL_EXECUTION", "true").lower() == "true"
     AGENT_TOOL_CALL_COUNT_SCOPE: str = os.getenv("AGENT_TOOL_CALL_COUNT_SCOPE", "turn")

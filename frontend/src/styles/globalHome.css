@@ -65,6 +65,13 @@
   margin-bottom: 24px;
 }
 
+/* Today's tasks card — capped and scrollable so a long list doesn't push
+   Quick Actions / Recent Activity far down the page. */
+.home-today-card .today-checklist-list {
+  max-height: 360px;
+  overflow-y: auto;
+}
+
 .home-card-header-left {
   display: flex;
   align-items: center;

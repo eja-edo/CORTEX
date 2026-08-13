@@ -70,8 +70,11 @@ def _parse_frontmatter(text: str) -> dict:
                 current_lines.append(line.strip())
             # non-indented lines (blank or comments) are ignored inside block
         else:
-            # Non-block: list items or continuation
-            if line.strip().startswith("- "):
+            # Non-block: list items or continuation. `*` is accepted as a
+            # bullet alongside `-` because a skill file in this repo already
+            # uses it (research/SKILL.md), and without it that file's `tools`
+            # silently parsed as one long string.
+            if line.strip().startswith("- ") or line.strip().startswith("* "):
                 current_lines.append(line.strip())
             elif line.strip() and not line.strip().startswith("#"):
                 current_lines.append(line.strip())
@@ -88,9 +91,21 @@ def _finalise_value(lines: list[str]) -> str | list[str]:
     if not stripped:
         return ""
 
-    # YAML block list:  - item
-    if all(l.startswith("- ") for l in stripped if l.strip()):
-        return [re.sub(r"^- \s*", "", l).strip() for l in stripped]
+    # Inline empty list: `tools: []`. Without this it parsed as the literal
+    # two-character string "[]", so anything iterating the field walked
+    # characters instead of items.
+    if len(stripped) == 1 and stripped[0].strip() in ("[]", "{}"):
+        return []
+
+    # Inline list: `tools: [a, b]`
+    single = stripped[0].strip() if len(stripped) == 1 else ""
+    if single.startswith("[") and single.endswith("]"):
+        inner = single[1:-1].strip()
+        return [item.strip().strip("\'\"") for item in inner.split(",") if item.strip()]
+
+    # Block list: `- item` or `* item`
+    if all(l.startswith(("- ", "* ")) for l in stripped if l.strip()):
+        return [re.sub(r"^[-*]\s*", "", l).strip() for l in stripped]
 
     return "\n".join(stripped).strip()
 

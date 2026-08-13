@@ -72,6 +72,62 @@ class ReminderDuePayload(BaseModel):
     schedule_title: str
     scheduled_at: datetime
     reminder_offset_minutes: Optional[int] = None
+    method: str = "push"
+
+
+# ============================================================================
+# Task Events (Milestone 2.5)
+# ============================================================================
+#
+# task.overdue is not published from a mutation like the others here —
+# overdue is a property of the clock, not of a write. app.services.
+# state_evaluator.StateEvaluator polls for it and owns publishing it
+# (Milestone 4.6).
+
+class TaskCreatedPayload(BaseModel):
+    """Payload for task.created event."""
+    task_id: UUID
+    title: str
+    status: str = Field(
+        ..., description="pending_confirm, todo, in_progress, done, cancelled, or rejected"
+    )
+    due_date: Optional[datetime] = None
+    priority: Optional[str] = Field(None, description="low, medium, high, or urgent")
+    related_event_id: Optional[UUID] = None
+
+
+class TaskUpdatedPayload(BaseModel):
+    """Payload for task.updated event."""
+    task_id: UUID
+    status: str
+    fields_changed: list[str] = Field(default_factory=list)
+
+
+class TaskCompletedPayload(BaseModel):
+    """Payload for task.completed event (status transitioned to `done`).
+
+    Published *instead of* task.updated for that transition, so a subscriber
+    never sees the same change twice.
+    """
+    task_id: UUID
+    completed_at: datetime
+    fields_changed: list[str] = Field(default_factory=list)
+
+
+class TaskDeletedPayload(BaseModel):
+    """Payload for task.deleted event (hard delete)."""
+    task_id: UUID
+    status: str
+
+
+class TaskOverduePayload(BaseModel):
+    """Payload for task.overdue event (Milestone 4.6). Published once per
+    transition into overdue, not once per poll — see StateEvaluator."""
+    task_id: UUID
+    title: str
+    due_date: datetime
+    priority: Optional[str] = Field(None, description="low, medium, high, or urgent")
+    overdue_days: int
 
 
 # ============================================================================
@@ -126,6 +182,11 @@ EVENT_PAYLOAD_REGISTRY: dict[str, type[BaseModel]] = {
     "schedule.updated": ScheduleUpdatedPayload,
     "schedule.completed": ScheduleCompletedPayload,
     "schedule.reminder.due": ReminderDuePayload,
+    "task.created": TaskCreatedPayload,
+    "task.updated": TaskUpdatedPayload,
+    "task.completed": TaskCompletedPayload,
+    "task.deleted": TaskDeletedPayload,
+    "task.overdue": TaskOverduePayload,
     "conversation.message.created": ConversationMessageCreatedPayload,
     "tool.executed": ToolExecutedPayload,
     "google_calendar.synced": GoogleCalendarSyncedPayload,

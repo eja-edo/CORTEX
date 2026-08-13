@@ -13,6 +13,7 @@ tools:
   - update_schedule
   - search_notes
   - create_note
+  - propose_plan
 dependencies:
   - memory
 ---
@@ -58,8 +59,50 @@ stakes, so the default is to propose, not interrogate.
      questions — before proposing.
 4. **PLAN** — phases → milestones → schedule → checklist → review, compact.
 5. **CONFIRM** — "Áp dụng luôn?" / "Bạn muốn điều chỉnh gì?"
-6. **ACT** — Once approved, save the plan to a note, schedule the milestones,
-   and set reminders.
+6. **ACT** — Once the user confirms scope, call `propose_plan` **once** with
+   the full plan broken into task/event items: each milestone is a task
+   item, each checklist step is a task item with `parent_key` pointing at
+   its milestone, each recurring practice/study block is an event item
+   with a `recurrence` rule. Do **not** call `create_task`/`create_schedule`
+   directly for this flow — `propose_plan` only creates a pending proposal;
+   nothing is booked until the user reviews and approves it in the UI.
+   After calling it, tell the user the plan is ready for their review —
+   don't describe it as already scheduled or already on their task list,
+   and don't promise a follow-up action ("mình sẽ chuyển thành lịch lặp
+   lại sau") — there is no follow-up step, so anything not set in this one
+   call never happens. Set it right here or not at all.
+
+   **A repeating block is ONE event item with `recurrence`, never several
+   one-off events.** "Luyện mỗi tối 19h, Thứ 2–6" is one event per weekday
+   (5 items, each `recurrence: {freq: WEEKLY, until: ...}`), not 20+ single
+   events for the next 4 months. If a daily checklist belongs to that
+   session ("10 từ mới + nghe + nói"), it's a task item with
+   `related_event_key` pointing at that event — **not** `parent_key`.
+   `parent_key` is for the goal hierarchy (milestone → checklist step);
+   `related_event_key` is for "this task is what you do during that
+   session." A task can't recur on its own (no recurrence field on Task),
+   so anything that repeats daily belongs on the event, not invented as a
+   Task that quietly stops existing after the first day it's checked off.
+
+### `propose_plan` example (học tiếng Anh, 6 tháng)
+
+```json
+{
+  "items": [
+    {"key": "m1", "type": "task", "title": "Giai đoạn 1: Nền tảng (tháng 1-2)"},
+    {"key": "c1", "type": "task", "title": "Học 500 từ vựng cơ bản", "parent_key": "m1", "priority": "medium"},
+    {"key": "c2", "type": "task", "title": "Hoàn thành ngữ pháp cơ bản", "parent_key": "m1"},
+    {"key": "e1", "type": "event", "title": "Luyện tiếng Anh — Thứ 2", "start_time": "2026-09-07T19:00:00+07:00", "end_time": "2026-09-07T19:45:00+07:00",
+     "recurrence": {"freq": "WEEKLY", "interval": 1, "until": "2027-03-01T19:45:00+07:00"}},
+    {"key": "c3", "type": "task", "title": "10 từ mới + 15 phút nghe + 15 phút nói", "related_event_key": "e1"}
+  ]
+}
+```
+
+`key` is a short id you invent per item (never a real UUID) — it lets a
+checklist step's `parent_key` point at its milestone, and a session's
+checklist task point at its event via `related_event_key`, all within
+this same call.
 
 ### Plan templates
 

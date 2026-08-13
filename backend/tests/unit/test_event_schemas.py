@@ -189,5 +189,20 @@ def test_event_payload_registry_covers_all_core_events(event_type):
     assert payload_cls is not None
 
 
-def test_event_payload_registry_has_ten_core_events():
-    assert len(EVENT_PAYLOAD_REGISTRY) == 10
+def test_event_payload_registry_has_the_ten_phase_1_core_events():
+    """The 10 core Milestone 1.1 events must all still be registered. Checked
+    as a subset, not an exact count — later phases add their own domains
+    (task.* in 2.5), and a count assertion here would just be a chore for
+    every one of them."""
+    assert {
+        "note.created",
+        "note.updated",
+        "note.deleted",
+        "schedule.created",
+        "schedule.updated",
+        "schedule.completed",
+        "schedule.reminder.due",
+        "conversation.message.created",
+        "tool.executed",
+        "google_calendar.synced",
+    } <= set(EVENT_PAYLOAD_REGISTRY.keys())

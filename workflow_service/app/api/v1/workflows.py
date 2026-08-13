@@ -12,10 +12,11 @@ import zoneinfo
 from app.database import get_db, AsyncSessionLocal
 from app.config import settings
 from app.core.security import get_current_user, CurrentUser
-from app.models.workflow import WorkflowDefinition, WorkflowStatus, TriggerType, WorkflowTriggerWebhook
+from app.models.workflow import WorkflowDefinition, WorkflowStatus, TriggerType, WorkflowTriggerWebhook, WorkflowTrigger
 from app.models.execution import WorkflowInstance, ExecutionStatus
 from app.schemas.workflow import (
-    WorkflowCreate, WorkflowUpdate, WorkflowResponse, WorkflowListResponse
+    WorkflowCreate, WorkflowUpdate, WorkflowResponse, WorkflowListResponse,
+    WorkflowTriggerCreate, WorkflowTriggerUpdate, WorkflowTriggerResponse,
 )
 from app.schemas.execution import ManualTriggerRequest
 from app.temporal.client import create_workflow_schedule, delete_workflow_schedule
@@ -182,6 +183,117 @@ async def _delete_temporal_schedules(trigger_config: dict) -> None:
     for sid in ids:
         await delete_workflow_schedule(sid)
 
+
+async def _supplementary_triggers(workflow_id, db: AsyncSession, *, trigger_type: TriggerType | None = None) -> list[WorkflowTrigger]:
+    """All rows in workflow_triggers for a workflow (multi-trigger support) —
+    optionally narrowed to one trigger_type. These are *additional* triggers
+    on top of the workflow's own primary trigger_type/trigger_config, which
+    is untouched by this table."""
+    query = select(WorkflowTrigger).where(WorkflowTrigger.workflow_id == workflow_id)
+    if trigger_type is not None:
+        query = query.where(WorkflowTrigger.trigger_type == trigger_type)
+    result = await db.execute(query)
+    return list(result.scalars().all())
+
+
+async def _activate_schedule_trigger(workflow: WorkflowDefinition, trigger_config: dict) -> dict:
+    """Create Temporal schedule(s) from trigger_config (a `schedules` list,
+    legacy single `cron`, or a one-time `run_at`) and return trigger_config
+    updated with `temporal_schedule_ids`. Shared by the workflow's primary
+    trigger and any supplementary SCHEDULE-type WorkflowTrigger row — the
+    Temporal/DB side of "create a schedule" was already keyed purely by
+    workflow_id/ids, not by "the" trigger_type, so this needed no new
+    plumbing, just extracting what activate_workflow already did inline."""
+    trigger_config = dict(trigger_config or {})
+
+    # Remove any existing schedules first
+    await _delete_temporal_schedules(trigger_config)
+    trigger_config.pop("temporal_schedule_ids", None)
+    trigger_config.pop("temporal_schedule_id", None)
+
+    # Support multiple schedules from the new frontend config
+    schedules = trigger_config.get("schedules")
+    old_cron = trigger_config.get("cron")
+    run_at = trigger_config.get("run_at")
+    tz_name = trigger_config.get("timezone", "UTC")
+
+    temporal_ids: list[str] = []
+
+    if isinstance(schedules, list) and schedules:
+        for entry in schedules:
+            cron = entry.get("cron")
+            if cron:
+                sid = await create_workflow_schedule(
+                    workflow_id=str(workflow.id),
+                    cron=cron,
+                    timezone=tz_name,
+                    user_id=str(workflow.user_id),
+                    schedule_id=entry.get("schedule_id"),
+                )
+                temporal_ids.append(sid)
+    elif old_cron:
+        sid = await create_workflow_schedule(
+            workflow_id=str(workflow.id),
+            cron=old_cron,
+            timezone=tz_name,
+            user_id=str(workflow.user_id),
+            schedule_id=trigger_config.get("schedule_id"),
+        )
+        temporal_ids.append(sid)
+    elif run_at:
+        # One-time: schedule a single execution at run_at time
+        from app.temporal.client import get_temporal_client
+        from app.temporal.workflows import CortexWorkflow, CortexWorkflowInput
+
+        run_dt = datetime.fromisoformat(run_at.replace("Z", "+00:00"))
+        delay = (run_dt - datetime.now(timezone.utc)).total_seconds()
+        if delay > 0:
+            instance_id = str(uuid.uuid4())
+            temporal_workflow_id = f"cortex-wf-scheduled-{instance_id}"
+
+            async with AsyncSessionLocal() as session:
+                instance = WorkflowInstance(
+                    id=instance_id,
+                    workflow_id=workflow.id,
+                    user_id=workflow.user_id,
+                    status=ExecutionStatus.PENDING,
+                    trigger_data={"event": "schedule.trigger", "schedule_id": trigger_config.get("schedule_id"), "run_at": run_at},
+                )
+                session.add(instance)
+                await session.commit()
+
+            client = await get_temporal_client()
+            await client.start_workflow(
+                CortexWorkflow.run,
+                CortexWorkflowInput(
+                    instance_id=instance_id,
+                    workflow_id=str(workflow.id),
+                    user_id=str(workflow.user_id),
+                    workspace_id=str(workflow.workspace_id) if workflow.workspace_id else None,
+                    definition=workflow.definition,
+                    trigger_data={
+                        "event": "schedule.trigger",
+                        "schedule_id": trigger_config.get("schedule_id"),
+                        "timestamp": run_dt.isoformat(),
+                        "timezone": tz_name,
+                    },
+                ),
+                id=temporal_workflow_id,
+                task_queue=settings.temporal_task_queue,
+                start_delay=timedelta(seconds=delay),
+            )
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Schedule trigger requires 'schedules', 'cron', or 'run_at' in trigger_config",
+        )
+
+    if temporal_ids:
+        trigger_config["temporal_schedule_ids"] = temporal_ids
+
+    return trigger_config
+
+
 @router.delete("/{workflow_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_workflow(
     workflow_id: str,
@@ -190,9 +302,11 @@ async def delete_workflow(
 ):
     workflow = await _get_workflow_or_404(workflow_id, current_user.user_id, db)
 
-    # Remove Temporal cron schedules if any
-    trigger_config = workflow.trigger_config or {}
-    await _delete_temporal_schedules(trigger_config)
+    # Remove Temporal cron schedules if any — primary trigger, then any
+    # supplementary ones (multi-trigger support).
+    await _delete_temporal_schedules(workflow.trigger_config or {})
+    for trigger in await _supplementary_triggers(workflow.id, db):
+        await _delete_temporal_schedules(trigger.trigger_config or {})
 
     workflow.is_deleted = True
     workflow.status = WorkflowStatus.ARCHIVED
@@ -217,95 +331,13 @@ async def activate_workflow(
     if not action_nodes:
         raise HTTPException(status_code=400, detail="Workflow must have at least one action node")
 
-    # Create Temporal schedule(s) if trigger type is schedule
-    trigger_config = workflow.trigger_config or {}
     if workflow.trigger_type == TriggerType.SCHEDULE:
-        # Remove any existing schedules first
-        await _delete_temporal_schedules(trigger_config)
-        trigger_config.pop("temporal_schedule_ids", None)
-        trigger_config.pop("temporal_schedule_id", None)
+        workflow.trigger_config = await _activate_schedule_trigger(workflow, workflow.trigger_config or {})
 
-        # Support multiple schedules from the new frontend config
-        schedules = trigger_config.get("schedules")
-        old_cron = trigger_config.get("cron")
-        run_at = trigger_config.get("run_at")
-        timezone = trigger_config.get("timezone", "UTC")
-
-        temporal_ids: list[str] = []
-
-        if isinstance(schedules, list) and schedules:
-            for i, entry in enumerate(schedules):
-                cron = entry.get("cron")
-                if cron:
-                    sid = await create_workflow_schedule(
-                        workflow_id=str(workflow.id),
-                        cron=cron,
-                        timezone=timezone,
-                        user_id=str(workflow.user_id),
-                        schedule_id=entry.get("schedule_id"),
-                    )
-                    temporal_ids.append(sid)
-        elif old_cron:
-            sid = await create_workflow_schedule(
-                workflow_id=str(workflow.id),
-                cron=old_cron,
-                timezone=timezone,
-                user_id=str(workflow.user_id),
-                schedule_id=trigger_config.get("schedule_id"),
-            )
-            temporal_ids.append(sid)
-        elif run_at:
-            # One-time: schedule a single execution at run_at time
-            from app.temporal.client import get_temporal_client
-            from app.temporal.workflows import CortexWorkflow, CortexWorkflowInput
-
-            run_dt = datetime.fromisoformat(run_at.replace("Z", "+00:00"))
-            delay = (run_dt - datetime.now(timezone.utc)).total_seconds()
-            if delay > 0:
-                instance_id = str(uuid.uuid4())
-                temporal_workflow_id = f"cortex-wf-scheduled-{instance_id}"
-
-                async with AsyncSessionLocal() as session:
-                    instance = WorkflowInstance(
-                        id=instance_id,
-                        workflow_id=workflow.id,
-                        user_id=workflow.user_id,
-                        status=ExecutionStatus.PENDING,
-                        trigger_data={"event": "schedule.trigger", "schedule_id": trigger_config.get("schedule_id"), "run_at": run_at},
-                    )
-                    session.add(instance)
-                    await session.commit()
-
-                client = await get_temporal_client()
-                await client.start_workflow(
-                    CortexWorkflow.run,
-                    CortexWorkflowInput(
-                        instance_id=instance_id,
-                        workflow_id=str(workflow.id),
-                        user_id=str(workflow.user_id),
-                        workspace_id=str(workflow.workspace_id) if workflow.workspace_id else None,
-                        definition=workflow.definition,
-                        trigger_data={
-                            "event": "schedule.trigger",
-                            "schedule_id": trigger_config.get("schedule_id"),
-                            "timestamp": run_dt.isoformat(),
-                            "timezone": trigger_config.get("timezone", "UTC"),
-                        },
-                    ),
-                    id=temporal_workflow_id,
-                    task_queue=settings.temporal_task_queue,
-                    start_delay=timedelta(seconds=delay),
-                )
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail="Schedule trigger requires 'schedules', 'cron', or 'run_at' in trigger_config",
-            )
-
-        if temporal_ids:
-            trigger_config["temporal_schedule_ids"] = temporal_ids
-
-        workflow.trigger_config = trigger_config
+    # Activate any supplementary SCHEDULE triggers too (multi-trigger support).
+    for trigger in await _supplementary_triggers(workflow.id, db, trigger_type=TriggerType.SCHEDULE):
+        if trigger.is_active:
+            trigger.trigger_config = await _activate_schedule_trigger(workflow, trigger.trigger_config or {})
 
     workflow.status = WorkflowStatus.ACTIVE
     await db.commit()
@@ -328,10 +360,145 @@ async def pause_workflow(
     trigger_config.pop("temporal_schedule_id", None)
     workflow.trigger_config = trigger_config
 
+    # Same cleanup for any supplementary SCHEDULE triggers (multi-trigger support).
+    for trigger in await _supplementary_triggers(workflow.id, db, trigger_type=TriggerType.SCHEDULE):
+        supp_config = dict(trigger.trigger_config or {})
+        await _delete_temporal_schedules(supp_config)
+        supp_config.pop("temporal_schedule_ids", None)
+        supp_config.pop("temporal_schedule_id", None)
+        trigger.trigger_config = supp_config
+
     workflow.status = WorkflowStatus.PAUSED
     await db.commit()
     await db.refresh(workflow)
     return _to_response(workflow)
+
+
+async def _get_workflow_trigger_or_404(
+    workflow_id: str, trigger_id: str, user_id: str, db: AsyncSession
+) -> tuple[WorkflowDefinition, WorkflowTrigger]:
+    workflow = await _get_workflow_or_404(workflow_id, user_id, db)
+    result = await db.execute(
+        select(WorkflowTrigger).where(
+            WorkflowTrigger.id == trigger_id,
+            WorkflowTrigger.workflow_id == workflow.id,
+        )
+    )
+    trigger = result.scalar_one_or_none()
+    if not trigger:
+        raise HTTPException(status_code=404, detail="Trigger not found")
+    return workflow, trigger
+
+
+def _to_trigger_response(
+    trigger: WorkflowTrigger, webhook_url: str | None = None, webhook_secret: str | None = None
+) -> WorkflowTriggerResponse:
+    return WorkflowTriggerResponse(
+        id=trigger.id,
+        workflow_id=trigger.workflow_id,
+        trigger_type=trigger.trigger_type.value if hasattr(trigger.trigger_type, "value") else trigger.trigger_type,
+        trigger_config=trigger.trigger_config,
+        is_active=trigger.is_active,
+        webhook_url=webhook_url,
+        webhook_secret=webhook_secret,
+        created_at=trigger.created_at,
+        updated_at=trigger.updated_at,
+    )
+
+
+@router.post("/{workflow_id}/triggers", response_model=WorkflowTriggerResponse, status_code=status.HTTP_201_CREATED)
+async def create_workflow_trigger(
+    workflow_id: str,
+    data: WorkflowTriggerCreate,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Add a supplementary trigger to a workflow — on top of, not instead
+    of, its primary trigger_type/trigger_config (multi-trigger support)."""
+    workflow = await _get_workflow_or_404(workflow_id, current_user.user_id, db)
+
+    trigger = WorkflowTrigger(
+        workflow_id=workflow.id,
+        trigger_type=TriggerType(data.trigger_type.value),
+        trigger_config=data.trigger_config,
+    )
+    db.add(trigger)
+    await db.flush()
+
+    webhook_url = None
+    webhook_secret = None
+    if data.trigger_type.value == "webhook":
+        webhook_secret = secrets.token_urlsafe(32)
+        webhook_path = str(uuid.uuid4()).replace("-", "")
+        webhook = WorkflowTriggerWebhook(
+            workflow_id=workflow.id,
+            trigger_id=trigger.id,
+            webhook_path=webhook_path,
+            secret_hash=hashlib.sha256(webhook_secret.encode()).hexdigest(),
+        )
+        db.add(webhook)
+        webhook_url = f"/api/v1/webhooks/{webhook_path}"
+    elif data.trigger_type.value == "schedule" and workflow.status == WorkflowStatus.ACTIVE:
+        # Workflow is already running — a schedule added now should take
+        # effect immediately, not wait for the next activate call.
+        trigger.trigger_config = await _activate_schedule_trigger(workflow, trigger.trigger_config or {})
+
+    await db.commit()
+    await db.refresh(trigger)
+
+    return _to_trigger_response(trigger, webhook_url=webhook_url, webhook_secret=webhook_secret)
+
+
+@router.get("/{workflow_id}/triggers", response_model=list[WorkflowTriggerResponse])
+async def list_workflow_triggers(
+    workflow_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    workflow = await _get_workflow_or_404(workflow_id, current_user.user_id, db)
+    triggers = await _supplementary_triggers(workflow.id, db)
+    return [_to_trigger_response(t) for t in triggers]
+
+
+@router.patch("/{workflow_id}/triggers/{trigger_id}", response_model=WorkflowTriggerResponse)
+async def update_workflow_trigger(
+    workflow_id: str,
+    trigger_id: str,
+    data: WorkflowTriggerUpdate,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    _workflow, trigger = await _get_workflow_trigger_or_404(workflow_id, trigger_id, current_user.user_id, db)
+
+    if data.trigger_config is not None:
+        trigger.trigger_config = data.trigger_config
+    if data.is_active is not None:
+        trigger.is_active = data.is_active
+
+    await db.commit()
+    await db.refresh(trigger)
+    return _to_trigger_response(trigger)
+
+
+@router.delete("/{workflow_id}/triggers/{trigger_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_workflow_trigger(
+    workflow_id: str,
+    trigger_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    _workflow, trigger = await _get_workflow_trigger_or_404(workflow_id, trigger_id, current_user.user_id, db)
+
+    await _delete_temporal_schedules(trigger.trigger_config or {})
+
+    webhook_result = await db.execute(
+        select(WorkflowTriggerWebhook).where(WorkflowTriggerWebhook.trigger_id == trigger.id)
+    )
+    for webhook in webhook_result.scalars().all():
+        webhook.is_active = False
+
+    await db.delete(trigger)
+    await db.commit()
 
 
 @router.post("/{workflow_id}/trigger", status_code=status.HTTP_202_ACCEPTED)
