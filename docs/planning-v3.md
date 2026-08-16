@@ -229,8 +229,12 @@ Nếu chọn **B**, theo đúng thứ tự (không đảo, xem lý do ở QĐ-1)
 4. State Evaluator thêm predicate `task.awaiting_other` (`direction=owed_to_me`, quá hạn).
 5. Gate soạn sẵn lời nhắc ở cấp **Ask Approval** — không bao giờ tự gửi cho người khác.
 
-### 6.8 · Risk Detection *(viết lại — bỏ Goal)*
-Công thức mới không có goal progress. Đầu vào thay thế: `priority` × số ngày trễ × cascade subtask chưa xong (`parent_task_id`). Implement dưới dạng **action** (4.4), có unit test riêng, không vẽ thành graph.
+### 6.8 · Risk Detection *(viết lại — bỏ Goal)* — ✅ Công thức xong (2026-08-16)
+Công thức mới không có goal progress. Đầu vào thay thế: `priority` × số ngày trễ × cascade subtask chưa xong (`parent_task_id`).
+
+`app/services/risk_detection.py`: `compute_risk(priority, overdue_days, open_subtask_count)` — hàm thuần, `overdue_days ≤ 0` luôn trả 0 (chưa trễ thì chưa có rủi ro), subtask mở khuếch đại chứ không thay thế điểm gốc (`× (1 + open_subtask_count)`), priority chưa set vẫn có trọng số nền (không bao giờ nhân về 0). `list_at_risk_tasks(session, user_id, min_risk)` — query thật, tái dùng đúng cách tính cascade của `state_evaluator._evaluate_task_blocked_cascade`, trả danh sách đã sắp theo rủi ro giảm dần. 6 unit test (công thức thuần) + 5 integration test (query thật, DB riêng vì đọc toàn bộ task của user không lọc theo title — như `TodayService`).
+
+**Chưa làm:** biến thành action (4.4) — hàm mới dừng ở chỗ tính điểm, chưa nối vào Gate/workflow. Không vẽ thành graph, đúng như roadmap yêu cầu — điểm chỉ tính một tầng (cha–con trực tiếp), không đệ quy nhiều cấp.
 
 ## KHỐI D — Sau khi A + B xong
 
