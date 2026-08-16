@@ -245,7 +245,7 @@ Công thức mới không có goal progress. Đầu vào thay thế: `priority` 
 | ~~4.2~~ | ~~Trigger Catalog (JSON, sinh từ vocabulary)~~ | ✅ Xong 2026-08-16 — xem bảng ✅ ở mục III |
 | ~~4.5~~ | ~~Trang audit workflow + nút "đừng nhắc kiểu này nữa"~~ | ✅ Xong 2026-08-14, dạng khác với thiết kế gốc — xem A2 đã đổi hướng. Danh sách reason toggle trong `SettingsPanel.tsx` phủ đúng nhu cầu "đừng nhắc kiểu này nữa" mà không cần trang audit workflow riêng |
 | ~~4.4~~ | ~~Chuyển công thức thành action~~ | ✅ Xong 2026-08-16 cùng 6.8, xem mục Khối C |
-| 3.4/3.5 | Dynamic re-planning, next-action endpoint | Cần A1 (`task.blocked_cascade`) |
+| ~~3.4/3.5~~ | ~~Dynamic re-planning, next-action endpoint~~ | ✅ Xong 2026-08-16. **3.4 hoá ra trùng với 6.8/4.4** — M1 (mức độ nghiêm trọng deterministic từ priority+cascade) và M2 (ngưỡng quyết định) chính là `compute_risk` + `task.at_risk`, không dựng lại lần hai. **3.5** là phần thật sự mới: `GET /api/planning/next-action` (`app/api/planning.py`, `NextActionService`) gộp 3.1 (`TodayService.get_today`) với `list_at_risk_tasks` (cùng ngưỡng `task.at_risk` dùng, không phải ngưỡng mặc định thấp hơn của hàm đó) thành một response, để lộ đúng những task rủi ro cao mà bị 3.1's `MAX_NOW_ACTIONS=3` che mất. Tool `get_today` (3.1 M4) chuyển sang gọi `NextActionService` thay vì `TodayService` trực tiếp — một tool, không hai — đúng M2 ("AI skill dùng endpoint này thay vì gọi rời rạc nhiều tool"). Không dựng cơ chế "tự đề xuất dời hạn rồi bấm áp dụng" mới — không có hạ tầng nào trong hệ thống tự mutate task thay người dùng, `impact` chỉ là câu gợi ý bằng lời. 6 test mới (3 service-level, 3 qua tool). |
 
 ## KHỐI E — Chưa cần bàn
 
@@ -291,7 +291,7 @@ B/2.3 ───────┘                                          nới pr
 B: 3.3 find_free_slots      ────→ status line màn Hôm nay
 ```
 
-**Critical path mới:** `A1 ✅ → A3 ✅ → 4.5 redesigned ✅ → 6.9 ✅ → 4.2 ✅`. Toàn bộ khối A đã đóng, không còn "chặn cứng" gì cả. Việc còn lại chạy song song, độc lập nhau: khối B (2.3 M1 dataset, 3.3 find_free_slots, 3.1 M4), 3.4/3.5 (giờ có thể đọc Trigger Catalog thay vì tự map event), hoặc đo tỷ lệ Gate "không quyết được" để biết 6.4 (AI) đã tới lúc chưa. A2 (seed system workflow theo thiết kế gốc) **đứng ngoài critical path** — hạ tầng 4.0 vẫn còn đó, chỉ chờ một nhu cầu thật sự cần multi-step workflow.
+**Critical path mới:** `A1 ✅ → A3 ✅ → 4.5 redesigned ✅ → 6.9 ✅ → 4.2 ✅`. Khối A, khối B, khối C (6.7 chờ dataset thật — xem QĐ-1), và 3.4/3.5 đều đã đóng — xem mục III/Khối B/Khối C/Khối D. Việc còn lại: **6.4** (cần đo tỷ lệ Gate "không quyết được" trước — chưa có cách đo, xem mục VII), **6.7 bước 2 trở đi** (chờ hội thoại thật bổ sung vào dataset 2.3 M1, không phải việc code), hoặc Phase 5/7 (khối E, chưa cần bàn). A2 (seed system workflow theo thiết kế gốc) **đứng ngoài critical path** — hạ tầng 4.0 vẫn còn đó, chỉ chờ một nhu cầu thật sự cần multi-step workflow.
 **Song song được:** toàn bộ khối B, và khối C **sau khi có** dataset 2.3 M1 (QĐ-1 đã chốt = B, không còn là điều kiện chờ).
 
 ---

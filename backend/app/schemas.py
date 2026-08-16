@@ -539,6 +539,34 @@ class TodayResponse(BaseModel):
     needs_confirmation: list[TodayNeedsConfirmationItem] = Field(default_factory=list)
 
 
+class NextActionAtRisk(BaseModel):
+    """One task whose `compute_risk` score crossed the risk threshold
+    (Milestone 6.8/4.4), surfaced on its own rather than folded into
+    `now_actions` — 3.1 caps `now_actions` at `MAX_NOW_ACTIONS`, so a
+    severely at-risk task can still get crowded out of that top-3 list by
+    other overdue work. This is where it stays visible regardless."""
+    task_id: UUID
+    title: str
+    risk_score: float
+    impact: str = Field(
+        ..., description="The consequence, in one sentence the user can act on — "
+                          "same convention as TodayReason.impact",
+    )
+
+
+class NextActionResponse(BaseModel):
+    """The "what should I do next?" entry point (Milestone 3.5) — 3.1's
+    ranking plus 6.8/4.4's severity signal in one response, so a caller
+    doesn't have to hit two endpoints and reconcile risk scores itself."""
+    state: Literal[
+        "onboarding", "nothing_urgent", "all_clear", "has_actions"
+    ] = Field(..., description="Same state machine as TodayResponse.state.")
+    now_actions: list[TodayNowAction] = Field(default_factory=list)
+    suggestions: list[TodayNowAction] = Field(default_factory=list)
+    needs_confirmation: list[TodayNeedsConfirmationItem] = Field(default_factory=list)
+    at_risk: list[NextActionAtRisk] = Field(default_factory=list)
+
+
 class CalendarItem(BaseModel):
     """One row on the calendar, from either table (Milestone 2.6).
 

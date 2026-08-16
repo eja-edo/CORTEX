@@ -1,10 +1,12 @@
 """
-Integration test for the `get_today` agent tool (Milestone 3.1 M4).
+Integration test for the `get_today` agent tool (Milestone 3.1 M4, extended
+for 3.5's `at_risk` field).
 
-`TodayService`'s ranking itself is already covered end-to-end in
-test_today.py; this only proves `get_today_handler` reaches the real
-service through `ToolContext` and translates `TodayResponse` into the
-tool's dict shape correctly — the thing an agent actually sees.
+`TodayService`'s ranking and `risk_detection`'s scoring are already covered
+end-to-end in test_today.py and test_risk_detection_integration.py; this
+only proves `get_today_handler` reaches `NextActionService` through
+`ToolContext` and translates its response into the tool's dict shape
+correctly — the thing an agent actually sees.
 """
 
 from datetime import datetime, timedelta
@@ -24,6 +26,7 @@ TEST_USER_ID = ISOLATED_TEST_USER_ID
 # Task.due_date is a naive TIMESTAMP WITHOUT TIME ZONE column — match it,
 # same as test_today.py's own fixtures do.
 YESTERDAY = datetime.now().replace(microsecond=0) - timedelta(days=1)
+TWO_DAYS_AGO = datetime.now().replace(microsecond=0) - timedelta(days=2)
 
 
 @pytest_asyncio.fixture
@@ -83,6 +86,28 @@ async def test_reports_overdue_task_with_its_reason_and_pending_confirmation(asy
     assert len(result["needs_confirmation"]) == 1
     assert result["needs_confirmation"][0]["task_id"] == str(candidate.id)
 
+    # HIGH(3) * 1 day overdue * 1 = 3.0 — below the default risk threshold.
+    assert result["at_risk"] == []
+
+
+@pytest.mark.asyncio
+async def test_reports_at_risk_task_alongside_now_actions(async_db):
+    tasks = TaskService(async_db)
+    # HIGH(3) * 2 days overdue * 1 = 6.0 — at the default risk threshold.
+    at_risk_task = await tasks.create_task(
+        TaskCreate(title="[test-3.5] báo cáo trễ nặng", due_date=TWO_DAYS_AGO, priority=TaskPriority.HIGH),
+        TEST_USER_ID,
+    )
+
+    ctx = ToolContext(user_id=TEST_USER_ID, async_db=async_db)
+    result = await get_today_handler({}, ctx)
+
+    assert len(result["at_risk"]) == 1
+    at_risk = result["at_risk"][0]
+    assert at_risk["task_id"] == str(at_risk_task.id)
+    assert at_risk["risk_score"] == 6.0
+    assert "rủi ro" in at_risk["reason"].lower()
+
 
 @pytest.mark.asyncio
 async def test_empty_account_reports_onboarding_with_no_actions(async_db):
@@ -94,3 +119,4 @@ async def test_empty_account_reports_onboarding_with_no_actions(async_db):
     assert result["now_actions"] == []
     assert result["suggestions"] == []
     assert result["needs_confirmation"] == []
+    assert result["at_risk"] == []

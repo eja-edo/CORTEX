@@ -21,6 +21,7 @@ from app.api.attention_log import router as attention_log_router
 from app.api.user_preferences import router as user_preferences_router
 from app.api.calendar import router as calendar_router
 from app.api.today import router as today_router
+from app.api.planning import router as planning_router
 from app.api.images import router as images_router
 from app.api.notifications import router as notifications_router
 from app.api.schedules import router as schedules_router
@@ -288,6 +289,7 @@ app.include_router(attention_log_router, prefix=settings.API_STR)
 app.include_router(user_preferences_router, prefix=settings.API_STR)
 app.include_router(calendar_router, prefix=settings.API_STR)
 app.include_router(today_router, prefix=settings.API_STR)
+app.include_router(planning_router, prefix=settings.API_STR)
 app.include_router(assets_router, prefix=settings.API_STR)
 app.include_router(images_router, prefix=settings.API_STR)
 app.include_router(notifications_router, prefix=settings.API_STR)
