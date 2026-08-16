@@ -21,7 +21,7 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     # Create agent_conversations table
     op.create_table('agent_conversations',
-        sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True, server_default=sa.text('gen_random_uuid()')),
+        sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True, server_default=sa.text('uuid_generate_v7()')),
         sa.Column('user_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('users.id'), nullable=False),
         sa.Column('workspace_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('workspaces.id', ondelete='CASCADE'), nullable=True),
         sa.Column('title', sa.String(255), nullable=True),
@@ -34,7 +34,7 @@ def upgrade() -> None:
 
     # Create agent_messages table
     op.create_table('agent_messages',
-        sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True, server_default=sa.text('gen_random_uuid()')),
+        sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True, server_default=sa.text('uuid_generate_v7()')),
         sa.Column('conversation_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('agent_conversations.id', ondelete='CASCADE'), nullable=False),
         sa.Column('role', sa.String(20), nullable=False),
         sa.Column('content', sa.Text, nullable=True),

@@ -28,7 +28,7 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     # ── conversation_summaries (Layer 2) ──────────────────────────────────────
     op.create_table('conversation_summaries',
-        sa.Column('id', UUID(as_uuid=True), primary_key=True, server_default=sa.text('gen_random_uuid()')),
+        sa.Column('id', UUID(as_uuid=True), primary_key=True, server_default=sa.text('uuid_generate_v7()')),
         sa.Column('conversation_id', UUID(as_uuid=True), sa.ForeignKey('agent_conversations.id', ondelete='CASCADE'), nullable=False),
         sa.Column('user_id', UUID(as_uuid=True), nullable=False),
         sa.Column('summary_text', sa.Text, nullable=False),
@@ -46,7 +46,7 @@ def upgrade() -> None:
 
     # ── semantic_memories (Layer 3) ───────────────────────────────────────────
     op.create_table('semantic_memories',
-        sa.Column('id', UUID(as_uuid=True), primary_key=True, server_default=sa.text('gen_random_uuid()')),
+        sa.Column('id', UUID(as_uuid=True), primary_key=True, server_default=sa.text('uuid_generate_v7()')),
         sa.Column('user_id', UUID(as_uuid=True), nullable=False),
         sa.Column('workspace_id', UUID(as_uuid=True), nullable=True),
         sa.Column('memory_type', sa.String(50), nullable=False),
@@ -70,7 +70,7 @@ def upgrade() -> None:
 
     # ── preference_memories (Layer 4) ─────────────────────────────────────────
     op.create_table('preference_memories',
-        sa.Column('id', UUID(as_uuid=True), primary_key=True, server_default=sa.text('gen_random_uuid()')),
+        sa.Column('id', UUID(as_uuid=True), primary_key=True, server_default=sa.text('uuid_generate_v7()')),
         sa.Column('user_id', UUID(as_uuid=True), nullable=False),
         sa.Column('category', sa.String(100), nullable=False),
         sa.Column('key', sa.String(200), nullable=False),
@@ -90,7 +90,7 @@ def upgrade() -> None:
 
     # ── episodic_memories (Layer 5) ───────────────────────────────────────────
     op.create_table('episodic_memories',
-        sa.Column('id', UUID(as_uuid=True), primary_key=True, server_default=sa.text('gen_random_uuid()')),
+        sa.Column('id', UUID(as_uuid=True), primary_key=True, server_default=sa.text('uuid_generate_v7()')),
         sa.Column('user_id', UUID(as_uuid=True), nullable=False),
         sa.Column('event_type', sa.String(100), nullable=False),
         sa.Column('event_title', sa.String(300), nullable=False),
@@ -112,7 +112,7 @@ def upgrade() -> None:
 
     # ── knowledge_chunks (Layer 6) ────────────────────────────────────────────
     op.create_table('knowledge_chunks',
-        sa.Column('id', UUID(as_uuid=True), primary_key=True, server_default=sa.text('gen_random_uuid()')),
+        sa.Column('id', UUID(as_uuid=True), primary_key=True, server_default=sa.text('uuid_generate_v7()')),
         sa.Column('user_id', UUID(as_uuid=True), nullable=False),
         sa.Column('source_type', sa.String(50), nullable=False),
         sa.Column('source_id', UUID(as_uuid=True), nullable=True),
@@ -132,7 +132,7 @@ def upgrade() -> None:
 
     # ── action_history (Layer 7) ──────────────────────────────────────────────
     op.create_table('action_history',
-        sa.Column('id', UUID(as_uuid=True), primary_key=True, server_default=sa.text('gen_random_uuid()')),
+        sa.Column('id', UUID(as_uuid=True), primary_key=True, server_default=sa.text('uuid_generate_v7()')),
         sa.Column('user_id', UUID(as_uuid=True), nullable=False),
         sa.Column('conversation_id', UUID(as_uuid=True), nullable=True),
         sa.Column('tool_name', sa.String(100), nullable=False),
@@ -152,7 +152,7 @@ def upgrade() -> None:
 
     # ── memory_links ──────────────────────────────────────────────────────────
     op.create_table('memory_links',
-        sa.Column('id', UUID(as_uuid=True), primary_key=True, server_default=sa.text('gen_random_uuid()')),
+        sa.Column('id', UUID(as_uuid=True), primary_key=True, server_default=sa.text('uuid_generate_v7()')),
         sa.Column('user_id', UUID(as_uuid=True), nullable=False),
         sa.Column('source_type', sa.String(30), nullable=False),
         sa.Column('source_id', UUID(as_uuid=True), nullable=False),
@@ -169,7 +169,7 @@ def upgrade() -> None:
 
     # ── memory_embeddings (polymorphic, for semantic/episodic) ─────────────────
     op.create_table('memory_embeddings',
-        sa.Column('id', UUID(as_uuid=True), primary_key=True, server_default=sa.text('gen_random_uuid()')),
+        sa.Column('id', UUID(as_uuid=True), primary_key=True, server_default=sa.text('uuid_generate_v7()')),
         sa.Column('user_id', UUID(as_uuid=True), nullable=False),
         sa.Column('memory_type', sa.String(30), nullable=False),
         sa.Column('memory_id', UUID(as_uuid=True), nullable=False),

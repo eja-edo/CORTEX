@@ -34,7 +34,19 @@ class RequestAttentionAction(BaseAction):
                     "title": "Loại",
                     "enum": ["info", "success", "warning", "error"],
                     "default": "info"
-                }
+                },
+                # Optional. Name the domain item this candidate is about
+                # (e.g. "{{trigger.item_type}}"/"{{trigger.task_id}}") to let
+                # the backend's Attention Gate actually dedup/rank it —
+                # omit all three and it falls back to unconditional
+                # pass-through (see backend's app.services.attention_gate).
+                "item_type": {
+                    "type": "string",
+                    "title": "Loại đối tượng (tuỳ chọn)",
+                    "enum": ["task", "commitment", "schedule"],
+                },
+                "item_id": {"type": "string", "title": "ID đối tượng (tuỳ chọn)"},
+                "reason_key": {"type": "string", "title": "Lý do (tuỳ chọn)"},
             },
             "required": ["title"]
         }
@@ -85,6 +97,15 @@ class RequestAttentionAction(BaseAction):
                     payload["content"] = resolved_content
                 if resolved_actions:
                     payload["actions"] = resolved_actions
+
+                item_type = config.get("item_type")
+                item_id = config.get("item_id")
+                reason_key = config.get("reason_key")
+                if item_type and item_id and reason_key:
+                    payload["item_type"] = item_type
+                    payload["item_id"] = self.resolve_template(item_id, context)
+                    payload["reason_key"] = self.resolve_template(reason_key, context)
+
                 response = await client.post(
                     f"{settings.cortex_backend_url}/internal/attention/request",
                     json=payload,

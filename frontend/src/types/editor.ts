@@ -1,3 +1,5 @@
+import { uuid7 } from '../utils/uuid'
+
 export type BlockType =
   | 'paragraph'
   | 'heading_1'
@@ -61,5 +63,5 @@ export interface BlockDragState {
 export type SyntheticListenerMap = Record<string, (event: React.SyntheticEvent) => void>
 
 export function generateBlockId(): string {
-  return crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+  return uuid7()
 }

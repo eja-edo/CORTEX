@@ -1,13 +1,13 @@
 """Main agent service — thin orchestrator delegating to ConversationService, ToolExecutionService, MemoryTriggerService."""
 
 import asyncio
-import uuid
 from datetime import datetime, timezone
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database_async import AsyncSessionLocal
+from app.ids import uuid7
 from app.models import User
 from app.schemas import AgentChatRequest as ChatRequest
 from app.ai.agents.conversation_service import ConversationService, _build_history_contents, _inject_context_into_text, _format_timestamp, _trim_incomplete_tail
@@ -421,7 +421,7 @@ class AgentService:
                     break
 
                 tool_result_msgs = []
-                current_turn_id = uuid.uuid4()
+                current_turn_id = uuid7()
 
                 if settings.AGENT_PARALLEL_TOOL_EXECUTION:
                     for tc, tool_name, tool_args in execution_list:

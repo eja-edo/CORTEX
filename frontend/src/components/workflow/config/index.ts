@@ -13,6 +13,9 @@ import { GetSchedulesConfig } from './GetSchedulesConfig'
 import { WaitConfig } from './WaitConfig'
 import { ConditionConfig } from './ConditionConfig'
 import { ScheduleTriggerConfig } from './ScheduleTriggerConfig'
+import { ManualTriggerConfig } from './ManualTriggerConfig'
+import { WebhookTriggerConfig } from './WebhookTriggerConfig'
+import { InternalEventTriggerConfig } from './InternalEventTriggerConfig'
 
 export type ConfigPanelProps = {
   config: Record<string, unknown>
@@ -34,6 +37,9 @@ const configPanels: Record<string, ComponentType<ConfigPanelProps>> = {
   'action.wait': WaitConfig,
   'action.condition': ConditionConfig,
   'trigger.schedule': ScheduleTriggerConfig,
+  'trigger.manual': ManualTriggerConfig,
+  'trigger.webhook': WebhookTriggerConfig,
+  'trigger.internal_event': InternalEventTriggerConfig,
 }
 
 export function getConfigPanel(type: string): ComponentType<ConfigPanelProps> | null {

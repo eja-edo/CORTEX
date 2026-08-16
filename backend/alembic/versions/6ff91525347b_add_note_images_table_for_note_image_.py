@@ -21,7 +21,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     op.create_table('note_images',
-        sa.Column('id', UUID(as_uuid=True), primary_key=True, server_default=sa.text('gen_random_uuid()')),
+        sa.Column('id', UUID(as_uuid=True), primary_key=True, server_default=sa.text('uuid_generate_v7()')),
         sa.Column('note_id', UUID(as_uuid=True), sa.ForeignKey('notes.id', ondelete='CASCADE'), nullable=False, index=True),
         sa.Column('user_id', UUID(as_uuid=True), sa.ForeignKey('users.id'), nullable=False, index=True),
         sa.Column('object_key', sa.String(length=1024), nullable=False),

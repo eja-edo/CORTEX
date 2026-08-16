@@ -5,87 +5,156 @@
     {
       "event_type": "asset.processed",
       "description": "Reserved \u2014 not yet published by any backend service",
-      "has_payload_schema": false
+      "has_payload_schema": false,
+      "has_direct_backend_delivery": false,
+      "label_vi": "T\u1ec7p x\u1eed l\u00fd xong (ch\u01b0a d\u00f9ng \u0111\u01b0\u1ee3c)"
     },
     {
       "event_type": "asset.uploaded",
       "description": "Reserved \u2014 not yet published by any backend service",
-      "has_payload_schema": false
+      "has_payload_schema": false,
+      "has_direct_backend_delivery": false,
+      "label_vi": "T\u1ec7p \u0111\u01b0\u1ee3c t\u1ea3i l\u00ean (ch\u01b0a d\u00f9ng \u0111\u01b0\u1ee3c)"
     },
     {
       "event_type": "conversation.message.created",
       "description": "A chat message was saved",
-      "has_payload_schema": true
+      "has_payload_schema": true,
+      "has_direct_backend_delivery": false,
+      "label_vi": "C\u00f3 tin nh\u1eafn m\u1edbi trong h\u1ed9i tho\u1ea1i"
+    },
+    {
+      "event_type": "day.review",
+      "description": "A user still has open tasks as the day reaches its review hour (polled)",
+      "has_payload_schema": true,
+      "has_direct_backend_delivery": true,
+      "label_vi": "Cu\u1ed1i ng\u00e0y c\u00f2n vi\u1ec7c ch\u01b0a xong"
     },
     {
       "event_type": "google_calendar.synced",
       "description": "A Google Calendar sync batch finished",
-      "has_payload_schema": true
+      "has_payload_schema": true,
+      "has_direct_backend_delivery": false,
+      "label_vi": "\u0110\u1ed3ng b\u1ed9 Google Calendar xong"
     },
     {
       "event_type": "note.created",
       "description": "A note was created",
-      "has_payload_schema": true
+      "has_payload_schema": true,
+      "has_direct_backend_delivery": false,
+      "label_vi": "Ghi ch\u00fa m\u1edbi \u0111\u01b0\u1ee3c t\u1ea1o"
     },
     {
       "event_type": "note.deleted",
       "description": "A note was soft-deleted",
-      "has_payload_schema": true
+      "has_payload_schema": true,
+      "has_direct_backend_delivery": false,
+      "label_vi": "Ghi ch\u00fa b\u1ecb xo\u00e1"
     },
     {
       "event_type": "note.updated",
       "description": "A note was updated (metadata or content patch)",
-      "has_payload_schema": true
+      "has_payload_schema": true,
+      "has_direct_backend_delivery": false,
+      "label_vi": "Ghi ch\u00fa \u0111\u01b0\u1ee3c c\u1eadp nh\u1eadt"
     },
     {
       "event_type": "schedule.completed",
       "description": "A schedule transitioned to completed",
-      "has_payload_schema": true
+      "has_payload_schema": true,
+      "has_direct_backend_delivery": false,
+      "label_vi": "L\u1ecbch ho\u00e0n th\u00e0nh"
     },
     {
       "event_type": "schedule.created",
       "description": "A schedule was created",
-      "has_payload_schema": true
+      "has_payload_schema": true,
+      "has_direct_backend_delivery": false,
+      "label_vi": "L\u1ecbch m\u1edbi \u0111\u01b0\u1ee3c t\u1ea1o"
     },
     {
       "event_type": "schedule.reminder.due",
       "description": "A reminder fired",
-      "has_payload_schema": true
+      "has_payload_schema": true,
+      "has_direct_backend_delivery": true,
+      "label_vi": "\u0110\u1ebfn gi\u1edd nh\u1eafc l\u1ecbch"
+    },
+    {
+      "event_type": "schedule.starts_soon",
+      "description": "A schedule entered its starts-soon lookahead window (polled)",
+      "has_payload_schema": true,
+      "has_direct_backend_delivery": true,
+      "label_vi": "L\u1ecbch s\u1eafp b\u1eaft \u0111\u1ea7u"
     },
     {
       "event_type": "schedule.updated",
       "description": "A schedule was updated",
-      "has_payload_schema": true
+      "has_payload_schema": true,
+      "has_direct_backend_delivery": false,
+      "label_vi": "L\u1ecbch \u0111\u01b0\u1ee3c c\u1eadp nh\u1eadt"
+    },
+    {
+      "event_type": "task.blocked_cascade",
+      "description": "An overdue task has at least one open subtask (polled)",
+      "has_payload_schema": true,
+      "has_direct_backend_delivery": true,
+      "label_vi": "Vi\u1ec7c tr\u1ec5 h\u1ea1n c\u00f2n vi\u1ec7c con ch\u01b0a xong"
     },
     {
       "event_type": "task.completed",
       "description": "A task transitioned to done \u2014 published instead of task.updated for that transition",
-      "has_payload_schema": true
+      "has_payload_schema": true,
+      "has_direct_backend_delivery": false,
+      "label_vi": "Vi\u1ec7c ho\u00e0n th\u00e0nh"
     },
     {
       "event_type": "task.created",
       "description": "A task was created",
-      "has_payload_schema": true
+      "has_payload_schema": true,
+      "has_direct_backend_delivery": false,
+      "label_vi": "Vi\u1ec7c m\u1edbi \u0111\u01b0\u1ee3c t\u1ea1o"
     },
     {
       "event_type": "task.deleted",
       "description": "A task was deleted",
-      "has_payload_schema": true
+      "has_payload_schema": true,
+      "has_direct_backend_delivery": false,
+      "label_vi": "Vi\u1ec7c b\u1ecb xo\u00e1"
+    },
+    {
+      "event_type": "task.due_soon",
+      "description": "An open task entered its due-soon window, not yet in_progress (polled)",
+      "has_payload_schema": true,
+      "has_direct_backend_delivery": true,
+      "label_vi": "Vi\u1ec7c s\u1eafp \u0111\u1ebfn h\u1ea1n"
     },
     {
       "event_type": "task.overdue",
       "description": "A task transitioned into overdue (polled, not from a mutation)",
-      "has_payload_schema": true
+      "has_payload_schema": true,
+      "has_direct_backend_delivery": true,
+      "label_vi": "Vi\u1ec7c qu\u00e1 h\u1ea1n"
+    },
+    {
+      "event_type": "task.stale",
+      "description": "An open, undated task went untouched past the staleness threshold (polled)",
+      "has_payload_schema": true,
+      "has_direct_backend_delivery": true,
+      "label_vi": "Vi\u1ec7c b\u1ecb b\u1ecf qu\u00ean (kh\u00f4ng h\u1ea1n, l\u00e2u kh\u00f4ng \u0111\u1ed9ng t\u1edbi)"
     },
     {
       "event_type": "task.updated",
       "description": "A task changed (carries fields_changed)",
-      "has_payload_schema": true
+      "has_payload_schema": true,
+      "has_direct_backend_delivery": false,
+      "label_vi": "Vi\u1ec7c \u0111\u01b0\u1ee3c c\u1eadp nh\u1eadt"
     },
     {
       "event_type": "tool.executed",
       "description": "An AI tool call finished",
-      "has_payload_schema": true
+      "has_payload_schema": true,
+      "has_direct_backend_delivery": false,
+      "label_vi": "AI v\u1eeba th\u1ef1c hi\u1ec7n xong m\u1ed9t thao t\u00e1c"
     }
   ]
 }

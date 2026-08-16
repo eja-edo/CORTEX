@@ -1,4 +1,3 @@
-import uuid
 import enum
 
 from sqlalchemy import Column, String, Text, Integer, DateTime, JSON, ForeignKey, Enum
@@ -6,6 +5,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
+from app.core.ids import uuid7
 from app.database import Base
 
 
@@ -23,7 +23,7 @@ class WorkflowInstance(Base):
     __tablename__ = "workflow_instances"
     __table_args__ = {"schema": "workflow"}
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     workflow_id = Column(UUID(as_uuid=True), ForeignKey("workflow.workflow_definitions.id"), nullable=False, index=True)
     user_id = Column(UUID(as_uuid=True), nullable=False, index=True)
 
@@ -53,7 +53,7 @@ class WorkflowStepExecution(Base):
     __tablename__ = "workflow_step_executions"
     __table_args__ = {"schema": "workflow"}
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     instance_id = Column(UUID(as_uuid=True), ForeignKey("workflow.workflow_instances.id"), nullable=False, index=True)
 
     node_id = Column(String(255), nullable=False)

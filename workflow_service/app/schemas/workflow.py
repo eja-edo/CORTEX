@@ -1,7 +1,8 @@
-from pydantic import BaseModel, Field, UUID4
+from pydantic import BaseModel, Field
 from typing import Optional, Any
 from datetime import datetime
 from enum import Enum
+from uuid import UUID
 
 
 class WorkflowStatusEnum(str, Enum):
@@ -47,7 +48,7 @@ class WorkflowDefinitionSchema(BaseModel):
 class WorkflowCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
-    workspace_id: Optional[UUID4] = None
+    workspace_id: Optional[UUID] = None
     trigger_type: TriggerTypeEnum
     trigger_config: dict[str, Any] = {}
     definition: WorkflowDefinitionSchema
@@ -61,10 +62,22 @@ class WorkflowUpdate(BaseModel):
     definition: Optional[WorkflowDefinitionSchema] = None
 
 
+class WorkflowConflict(BaseModel):
+    """A duplicate-delivery risk (Milestone A3) — see
+    app/services/workflow_conflicts.py. Informational: never blocks a save
+    or an activation, just names the overlap so it isn't silent."""
+    kind: str  # "backend_direct" | "workflow"
+    event_type: str
+    action_type: str
+    message: str
+    conflicting_workflow_id: Optional[UUID] = None
+    conflicting_workflow_name: Optional[str] = None
+
+
 class WorkflowResponse(BaseModel):
-    id: UUID4
-    user_id: UUID4
-    workspace_id: Optional[UUID4]
+    id: UUID
+    user_id: UUID
+    workspace_id: Optional[UUID]
     name: str
     description: Optional[str]
     status: WorkflowStatusEnum
@@ -76,6 +89,10 @@ class WorkflowResponse(BaseModel):
     webhook_secret: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    # None = not computed for this response (most endpoints). A list
+    # (possibly empty) = computed — currently only `activate_workflow` and
+    # `GET /workflows/{id}/conflicts` populate this; see A3.
+    warnings: Optional[list[WorkflowConflict]] = None
 
     model_config = {"from_attributes": True}
 
@@ -98,8 +115,8 @@ class WorkflowTriggerUpdate(BaseModel):
 
 
 class WorkflowTriggerResponse(BaseModel):
-    id: UUID4
-    workflow_id: UUID4
+    id: UUID
+    workflow_id: UUID
     trigger_type: TriggerTypeEnum
     trigger_config: dict[str, Any]
     is_active: bool

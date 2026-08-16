@@ -133,6 +133,13 @@
   line-height: 1.4;
 }
 
+/* Feedback Loop auto-downgrade note (6.9) */
+.settings-toggle-note {
+  font-size: 11px;
+  color: var(--yellow);
+  font-style: italic;
+}
+
 .settings-toggle {
   flex-shrink: 0;
   width: 40px;
@@ -166,4 +173,45 @@
 
 .settings-toggle:checked::after {
   transform: translateX(18px);
+}
+
+/* Quiet hours (6.2) + reason toggle list (redesigned 4.5 / A2 follow-up) */
+.settings-quiet-hours-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-quiet-hours-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.settings-quiet-hours-field input[type="time"] {
+  padding: 6px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.settings-reason-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-reason-list .settings-toggle-row {
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-reason-list .settings-toggle-row:last-child {
+  border-bottom: none;
 }

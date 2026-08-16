@@ -2,9 +2,18 @@ from fastapi import APIRouter, Depends
 
 from app.core.security import get_current_user, CurrentUser
 from app.actions.registry import action_registry
-from app.triggers.internal_event_listener import load_implemented_event_types
+from app.triggers.internal_event_listener import load_implemented_event_types, load_trigger_catalog
 
 router = APIRouter()
+
+
+@router.get("/triggers/catalog")
+async def get_trigger_catalog(current_user: CurrentUser = Depends(get_current_user)):
+    """Milestone 4.2 — the Trigger Catalog itself: every event a workflow
+    can trigger on, with a short Vietnamese label and whether it already
+    has direct backend delivery (A3), so the builder can warn *before*
+    the user picks it, not just at activate."""
+    return load_trigger_catalog()
 
 
 @router.get("")

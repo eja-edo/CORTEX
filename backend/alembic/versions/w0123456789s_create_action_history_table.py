@@ -18,7 +18,7 @@ never casts it, so this table doesn't add a constraint the app layer itself
 doesn't enforce. It carries the UNIQUE constraint the existing
 `ON CONFLICT DO NOTHING` INSERT depends on.
 
-`id` needs a **server-side** default (`gen_random_uuid()`), not just the
+`id` needs a **server-side** default (`uuid_generate_v7()`), not just the
 model's Python-side `default=uuid.uuid4`. `action_snapshot_store.py` writes
 this table with a raw `text()` INSERT rather than the ORM, and a Python-side
 `Column(default=...)` only fires through `session.add()` — a raw SQL INSERT
@@ -52,7 +52,7 @@ def upgrade() -> None:
             postgresql.UUID(as_uuid=True),
             primary_key=True,
             nullable=False,
-            server_default=sa.text("gen_random_uuid()"),
+            server_default=sa.text("uuid_generate_v7()"),
         ),
         sa.Column(
             "user_id",

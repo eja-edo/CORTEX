@@ -3,13 +3,13 @@
 import asyncio
 import json
 import time
-import uuid
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database_async import AsyncSessionLocal
+from app.ids import uuid7
 from app.events.event_bus import get_event_bus
 from app.events.payloads import ToolExecutedPayload
 from app.events.schemas import EventEnvelope
@@ -295,7 +295,7 @@ class ToolExecutionService:
         should_break = False
         reply_text = None
         tool_result_messages: list[Message] = []
-        current_turn_id = uuid.uuid4()
+        current_turn_id = uuid7()
 
         execution_list = []
         for tc in tool_calls:

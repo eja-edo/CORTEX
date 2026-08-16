@@ -5,6 +5,7 @@ from sqlalchemy import Column, String, Text, Boolean, Integer, DateTime, JSON, F
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 
+from app.core.ids import uuid7
 from app.database import Base
 
 
@@ -32,7 +33,7 @@ class WorkflowDefinition(Base):
     __tablename__ = "workflow_definitions"
     __table_args__ = {"schema": "workflow"}
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     user_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     workspace_id = Column(UUID(as_uuid=True), nullable=True, index=True)
 
@@ -63,7 +64,7 @@ class WorkflowTrigger(Base):
     __tablename__ = "workflow_triggers"
     __table_args__ = {"schema": "workflow"}
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     workflow_id = Column(UUID(as_uuid=True), ForeignKey("workflow.workflow_definitions.id"), nullable=False, index=True)
     trigger_type = Column(Enum(TriggerType), nullable=False)
     trigger_config = Column(JSON, nullable=False, default=dict)
@@ -76,7 +77,7 @@ class WorkflowTriggerWebhook(Base):
     __tablename__ = "workflow_trigger_webhooks"
     __table_args__ = {"schema": "workflow"}
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     workflow_id = Column(UUID(as_uuid=True), ForeignKey("workflow.workflow_definitions.id"), nullable=False)
     # NULL = webhook belongs to the workflow's primary trigger (unchanged
     # behavior). Set = belongs to a specific supplementary WorkflowTrigger
@@ -96,7 +97,7 @@ class WorkspaceWorkflowSetting(Base):
     __tablename__ = "workspace_workflow_settings"
     __table_args__ = {"schema": "workflow"}
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     workspace_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     workflow_id = Column(UUID(as_uuid=True), ForeignKey("workflow.workflow_definitions.id"), nullable=False)
     enabled = Column(Boolean, nullable=False, default=True)

@@ -20,6 +20,7 @@ from app.events.payloads import (
     TaskCompletedPayload,
     TaskCreatedPayload,
     TaskDeletedPayload,
+    TaskOverduePayload,
     TaskUpdatedPayload,
 )
 from app.events.vocabulary import EVENT_VOCABULARY, implemented_event_types
@@ -261,11 +262,14 @@ def test_task_event_payload_classes():
     assert EVENT_PAYLOAD_REGISTRY["task.deleted"] is TaskDeletedPayload
 
 
-def test_task_overdue_is_not_published_here():
-    """Overdue is a property of the clock, not of a write — the State
-    Evaluator (4.6) owns it. Declaring it here would imply a publisher."""
-    assert "task.overdue" not in EVENT_VOCABULARY
-    assert "task.overdue" not in EVENT_PAYLOAD_REGISTRY
+def test_task_overdue_is_published_by_state_evaluator_not_a_mutation():
+    """Overdue is a property of the clock, not of a write — so unlike the
+    task.* events above (published_by=TaskService), this one is owned by
+    the State Evaluator (4.6), which polls rather than reacts to a mutation."""
+    assert "task.overdue" in EVENT_VOCABULARY
+    assert EVENT_VOCABULARY["task.overdue"].published_by == "app.services.state_evaluator.StateEvaluator"
+    assert "task.overdue" in EVENT_PAYLOAD_REGISTRY
+    assert EVENT_PAYLOAD_REGISTRY["task.overdue"] is TaskOverduePayload
 
 
 def test_task_updated_payload_carries_fields_changed():

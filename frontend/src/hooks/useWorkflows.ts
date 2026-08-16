@@ -10,7 +10,7 @@ import type {
 } from '../types'
 import { getCurrentTokens, setCurrentTokens, ApiError } from '../services/api'
 
-async function workflowRequest<T>(path: string, init?: RequestInit): Promise<T> {
+export async function workflowRequest<T>(path: string, init?: RequestInit): Promise<T> {
   let tokens = getCurrentTokens()
   if (!tokens?.accessToken) throw new Error('Please login first')
 

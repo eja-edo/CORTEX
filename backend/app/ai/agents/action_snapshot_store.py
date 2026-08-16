@@ -7,7 +7,6 @@ Key format: revert:snapshot:{user_id}:{action_id}
 
 import json
 import time
-import uuid
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 
@@ -15,6 +14,7 @@ import redis.asyncio as redis
 from sqlalchemy import text
 
 from app.config import settings
+from app.ids import uuid7
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -55,7 +55,7 @@ class ActionSnapshot:
     user_id: str
     conversation_id: str
     snapshot: dict
-    action_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    action_id: str = field(default_factory=lambda: str(uuid7()))
     created_at: float = field(default_factory=time.time)
     reverted_at: Optional[float] = None
 

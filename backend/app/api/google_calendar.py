@@ -2,7 +2,6 @@ from datetime import datetime, timedelta, timezone
 import base64
 import hashlib
 import secrets
-import uuid
 from urllib.parse import quote, urlencode, urlparse, parse_qsl, urlunparse
 
 import httpx
@@ -12,6 +11,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.ids import uuid7
 from app.database import get_db
 from app.dependencies import get_current_active_user
 from app.models import CalendarConnection, CalendarProvider, OAuthState, Schedule, User
@@ -85,7 +85,7 @@ def _watch_events(connection: CalendarConnection, access_token: str) -> None:
 
     now = datetime.utcnow()
     requested_expiration_ms = int((now + timedelta(seconds=settings.GOOGLE_CALENDAR_CHANNEL_TTL_SECONDS)).timestamp() * 1000)
-    channel_id = str(uuid.uuid4())
+    channel_id = str(uuid7())
 
     if connection.channel_id and connection.channel_resource_id:
         try:

@@ -14,6 +14,7 @@ import json
 
 from app.events.payloads import EVENT_PAYLOAD_REGISTRY
 from app.events.vocabulary import EVENT_VOCABULARY, all_event_types, implemented_event_types
+from app.services.notification_subscribers import DIRECT_DELIVERY_HANDLERS
 from scripts.generate_event_vocabulary import OUTPUT_PATH, build_vocabulary_json
 
 
@@ -40,6 +41,19 @@ def test_reserved_events_have_no_payload_schema():
     assert EVENT_VOCABULARY["asset.uploaded"].has_payload_schema is False
     assert EVENT_VOCABULARY["asset.processed"].has_payload_schema is False
     assert "asset.uploaded" not in implemented_event_types()
+
+
+def test_direct_delivery_handlers_are_all_known_event_types():
+    """A3: every event `notification_subscribers.py` handles directly must
+    be a real vocabulary entry — same "nothing invisible" invariant as
+    `test_every_payload_registry_type_is_in_vocabulary`, for the registry
+    workflow_service's conflict detector reads."""
+    assert set(DIRECT_DELIVERY_HANDLERS.keys()) <= set(EVENT_VOCABULARY.keys())
+
+
+def test_has_direct_backend_delivery_matches_the_handler_registry():
+    generated = {e["event_type"] for e in build_vocabulary_json()["event_types"] if e["has_direct_backend_delivery"]}
+    assert generated == set(DIRECT_DELIVERY_HANDLERS.keys())
 
 
 def test_workflow_vocabulary_is_in_sync():

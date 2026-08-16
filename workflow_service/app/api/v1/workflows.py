@@ -11,14 +11,17 @@ import zoneinfo
 
 from app.database import get_db, AsyncSessionLocal
 from app.config import settings
+from app.core.ids import uuid7
 from app.core.security import get_current_user, CurrentUser
 from app.models.workflow import WorkflowDefinition, WorkflowStatus, TriggerType, WorkflowTriggerWebhook, WorkflowTrigger
 from app.models.execution import WorkflowInstance, ExecutionStatus
 from app.schemas.workflow import (
     WorkflowCreate, WorkflowUpdate, WorkflowResponse, WorkflowListResponse,
     WorkflowTriggerCreate, WorkflowTriggerUpdate, WorkflowTriggerResponse,
+    WorkflowConflict,
 )
 from app.schemas.execution import ManualTriggerRequest
+from app.services.workflow_conflicts import find_trigger_conflicts
 from app.temporal.client import create_workflow_schedule, delete_workflow_schedule
 
 
@@ -44,7 +47,7 @@ async def _get_workflow_or_404(workflow_id: str, user_id: str, db: AsyncSession)
     return workflow
 
 
-def _to_response(wf: WorkflowDefinition) -> WorkflowResponse:
+def _to_response(wf: WorkflowDefinition, *, warnings: list[WorkflowConflict] | None = None) -> WorkflowResponse:
     return WorkflowResponse(
         id=wf.id,
         user_id=wf.user_id,
@@ -58,7 +61,31 @@ def _to_response(wf: WorkflowDefinition) -> WorkflowResponse:
         definition=wf.definition,
         created_at=wf.created_at,
         updated_at=wf.updated_at,
+        warnings=warnings,
     )
+
+
+async def _conflicts_for_workflow(
+    workflow: WorkflowDefinition, db: AsyncSession, *, user_id: str
+) -> list[WorkflowConflict]:
+    """A3: what `find_trigger_conflicts` finds for this workflow's own
+    primary trigger + action nodes, excluding itself. `[]` when the
+    trigger isn't `internal_event` or names no event — nothing to check."""
+    if workflow.trigger_type != TriggerType.INTERNAL_EVENT:
+        return []
+    event_type = (workflow.trigger_config or {}).get("event")
+    if not event_type:
+        return []
+    action_types = {
+        n.get("type", "")
+        for n in (workflow.definition or {}).get("nodes", [])
+        if n.get("type", "").startswith("action.")
+    }
+    conflicts = await find_trigger_conflicts(
+        db, user_id=user_id, event_type=event_type, action_types=action_types,
+        exclude_workflow_id=workflow.id,
+    )
+    return [WorkflowConflict(**c.to_dict()) for c in conflicts]
 
 
 @router.get("", response_model=WorkflowListResponse)
@@ -121,6 +148,10 @@ async def create_workflow(
     webhook_secret = None
     if data.trigger_type.value == "webhook":
         webhook_secret = secrets.token_urlsafe(32)
+        # Deliberately v4, not the uuid7() used for row ids: this value is a
+        # capability URL whose only job is to be unguessable. v7 would spend 48
+        # of its 122 random bits on a timestamp and publish the webhook's
+        # creation time to anyone holding the URL.
         webhook_path = str(uuid.uuid4()).replace("-", "")
 
         webhook = WorkflowTriggerWebhook(
@@ -248,7 +279,7 @@ async def _activate_schedule_trigger(workflow: WorkflowDefinition, trigger_confi
         run_dt = datetime.fromisoformat(run_at.replace("Z", "+00:00"))
         delay = (run_dt - datetime.now(timezone.utc)).total_seconds()
         if delay > 0:
-            instance_id = str(uuid.uuid4())
+            instance_id = str(uuid7())
             temporal_workflow_id = f"cortex-wf-scheduled-{instance_id}"
 
             async with AsyncSessionLocal() as session:
@@ -342,7 +373,26 @@ async def activate_workflow(
     workflow.status = WorkflowStatus.ACTIVE
     await db.commit()
     await db.refresh(workflow)
-    return _to_response(workflow)
+
+    # A3: computed *after* commit, against the now-ACTIVE row, so a
+    # self-comparison can't occur through a stale pre-commit status — the
+    # workflow being activated already matches its own query criteria by
+    # the time this runs, which is exactly why `_conflicts_for_workflow`
+    # excludes it by id rather than relying on status timing.
+    warnings = await _conflicts_for_workflow(workflow, db, user_id=current_user.user_id)
+    return _to_response(workflow, warnings=warnings)
+
+
+@router.get("/{workflow_id}/conflicts", response_model=list[WorkflowConflict])
+async def get_workflow_conflicts(
+    workflow_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """A3 M2: on-demand check, independent of activation — lets the editor
+    (or a future 4.5 audit page) warn before the user even hits Activate."""
+    workflow = await _get_workflow_or_404(workflow_id, current_user.user_id, db)
+    return await _conflicts_for_workflow(workflow, db, user_id=current_user.user_id)
 
 
 @router.post("/{workflow_id}/pause", response_model=WorkflowResponse)
@@ -429,6 +479,10 @@ async def create_workflow_trigger(
     webhook_secret = None
     if data.trigger_type.value == "webhook":
         webhook_secret = secrets.token_urlsafe(32)
+        # Deliberately v4, not the uuid7() used for row ids: this value is a
+        # capability URL whose only job is to be unguessable. v7 would spend 48
+        # of its 122 random bits on a timestamp and publish the webhook's
+        # creation time to anyone holding the URL.
         webhook_path = str(uuid.uuid4()).replace("-", "")
         webhook = WorkflowTriggerWebhook(
             workflow_id=workflow.id,

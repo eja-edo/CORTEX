@@ -161,6 +161,30 @@ class Settings:
     # table, so it has to be tunable without a deploy.
     ATTENTION_DEDUP_WINDOW_HOURS: int = int(os.getenv("ATTENTION_DEDUP_WINDOW_HOURS", "24"))
 
+    # ── State Evaluator (Milestone 4.6, predicates added in A1) ──────────────
+    # All tunable without a deploy for the same reason as the dedup window
+    # above: the right thresholds are an empirical question, not a law.
+    STATE_EVALUATOR_DUE_SOON_HOURS: int = int(os.getenv("STATE_EVALUATOR_DUE_SOON_HOURS", "24"))
+    STATE_EVALUATOR_STALE_DAYS: int = int(os.getenv("STATE_EVALUATOR_STALE_DAYS", "7"))
+    STATE_EVALUATOR_SCHEDULE_STARTS_SOON_MIN_MINUTES: int = int(
+        os.getenv("STATE_EVALUATOR_SCHEDULE_STARTS_SOON_MIN_MINUTES", "15")
+    )
+    STATE_EVALUATOR_SCHEDULE_STARTS_SOON_MAX_MINUTES: int = int(
+        os.getenv("STATE_EVALUATOR_SCHEDULE_STARTS_SOON_MAX_MINUTES", "30")
+    )
+    # No per-user timezone exists anywhere in this schema (see
+    # UserPreferences' docstring) — "end of day" is a fixed UTC hour, the
+    # same convention-with-a-known-limitation as quiet hours.
+    STATE_EVALUATOR_DAY_REVIEW_HOUR_UTC: int = int(os.getenv("STATE_EVALUATOR_DAY_REVIEW_HOUR_UTC", "14"))
+
+    # ── Feedback Loop (Milestone 6.9) ─────────────────────────────────────────
+    # Every N dismissals of a given reason_key drops it one rung down the
+    # level ladder (ACT/ASK/RECOMMEND/INFORM/SILENT) for that user. 3 is a
+    # starting guess, not a law — same reasoning as ATTENTION_DEDUP_WINDOW_HOURS,
+    # and 6.9's own M2 (dismiss-rate visibility) is what will let a real
+    # number replace it. 0 disables auto-downgrade entirely.
+    FEEDBACK_LOOP_DISMISS_THRESHOLD: int = int(os.getenv("FEEDBACK_LOOP_DISMISS_THRESHOLD", "3"))
+
     # ── Agent feature flags ──────────────────────────────────────────────────
     AGENT_PARALLEL_TOOL_EXECUTION: bool = os.getenv("AGENT_PARALLEL_TOOL_EXECUTION", "true").lower() == "true"
     AGENT_TOOL_CALL_COUNT_SCOPE: str = os.getenv("AGENT_TOOL_CALL_COUNT_SCOPE", "turn")

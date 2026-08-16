@@ -37,6 +37,7 @@ import { useCalendarItems } from './hooks/useCalendarItems'
 import { useAssets } from './hooks/useAssets'
 import { useWorkflows } from './hooks/useWorkflows'
 import { useNotifications } from './hooks/useNotifications'
+import { usePreferences } from './hooks/usePreferences'
 import { requestWithAuth, getCurrentTokens, setCurrentTokens } from './services/api'
 import { ROUTES, extractWorkspaceId, isKnownRoute, noteRoute, knowledgeRoute, scheduleRoute, tasksRoute, todayRoute, notificationsRoute, workspaceRoute, workflowRoute } from './services/routes'
 import { TasksPage } from './components/TasksPage'
@@ -256,6 +257,7 @@ function App() {
    const [sectionRecordOpen, setSectionRecordOpen] = useState(true)
    const [sectionWorkflowOpen, setSectionWorkflowOpen] = useState(true)
    const notif = useNotifications()
+   const preferences = usePreferences()
    const syncToastTimerRef = useRef<number | null>(null)
 
   const activeWorkspaceView = routeWorkspaceState.view
@@ -349,6 +351,12 @@ useEffect(() => {
      }
    // eslint-disable-next-line react-hooks/exhaustive-deps
    }, [auth.tokens])
+
+useEffect(() => {
+     if (!auth.tokens || activeWorkspaceView !== 'settings') return
+     void preferences.fetchPreferences()
+   // eslint-disable-next-line react-hooks/exhaustive-deps
+   }, [auth.tokens, activeWorkspaceView])
 
 useEffect(() => {
      if (!routeWorkspaceState.workspaceId || workspaces.workspaces.length === 0) return
@@ -742,6 +750,7 @@ const processNotificationChunk = (chunk: string): void => {
             type: string
             payload: Record<string, unknown>
             occurred_at: string
+            attention_log_id?: string | null
           }
           if (payload.event !== 'notification.created') return
 
@@ -755,6 +764,7 @@ const processNotificationChunk = (chunk: string): void => {
             payload: payload.payload || {},
             content: payload.content as AppNotification['content'],
             actions: payload.actions as AppNotification['actions'],
+            attentionLogId: payload.attention_log_id ?? null,
           }
           notif.addNotification(newNotif)
 
@@ -914,6 +924,7 @@ const processNotificationChunk = (chunk: string): void => {
                 onMarkAllRead={notif.handleMarkAllRead}
                 onDismiss={notif.handleDismiss}
                 onNavigate={navigate}
+                onAccept={notif.handleAccept}
               />
               <button type="button" className="topbar-icon-btn" title="Help">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1321,6 +1332,10 @@ const processNotificationChunk = (chunk: string): void => {
                   _setBlockEditingEnabled(enabled)
                   setBlockEditingEnabled(enabled)
                 }}
+                quietHours={preferences.quietHours}
+                onSaveQuietHours={preferences.saveQuietHours}
+                reasonPreferences={preferences.reasons}
+                onToggleReasonPreference={preferences.toggleReason}
               />
                         ) : activeWorkspaceView === 'schedule' ? (
               <section className="home-workspace">

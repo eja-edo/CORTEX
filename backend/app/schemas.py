@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, time
 from typing import Any, List, Literal, Optional
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, EmailStr, field_validator, model_validator
@@ -761,6 +761,53 @@ class AttentionItemHistory(BaseModel):
     reasons: list[AttentionReasonSummary]
 
 
+class UserPreferencesResponse(BaseModel):
+    """Both fields null means no quiet hours configured — see
+    UserPreferences' docstring in app.models."""
+    model_config = ConfigDict(from_attributes=True)
+
+    quiet_hours_start: time | None
+    quiet_hours_end: time | None
+
+
+class UserPreferencesUpdate(BaseModel):
+    """Both fields required together: partial update would leave a start
+    with no end (or vice versa), which `is_in_quiet_hours` can't interpret.
+    Send both as null to clear quiet hours entirely."""
+    quiet_hours_start: time | None
+    quiet_hours_end: time | None
+
+    @model_validator(mode="after")
+    def _both_or_neither(self) -> "UserPreferencesUpdate":
+        if (self.quiet_hours_start is None) != (self.quiet_hours_end is None):
+            raise ValueError("quiet_hours_start and quiet_hours_end must be set together, or both null")
+        return self
+
+
+class ReasonPreference(BaseModel):
+    """One row of the redesigned 4.5 audit/toggle list — see A2's section
+    in docs/planning-v3.md for why this is a per-user column instead of a
+    system-workflow toggle. `base_level`/`description` come from the
+    catalog (app.services.attention_reason_catalog), `enabled` from
+    `UserPreferences.disabled_reason_keys`.
+
+    `dismiss_count`/`effective_level` are the Feedback Loop's visibility
+    half (6.9 M2): `effective_level` is what `base_level` actually becomes
+    after `app.services.feedback_loop.apply_downgrade` — the same
+    computation the Gate itself runs, surfaced here so a user can see
+    *why* a reason quieted down, not just that it did."""
+    reason_key: str
+    description: str
+    base_level: AttentionLevel
+    enabled: bool
+    dismiss_count: int
+    effective_level: AttentionLevel
+
+
+class ReasonPreferenceUpdate(BaseModel):
+    enabled: bool
+
+
 class GoogleConnectUrlResponse(BaseModel):
     authorization_url: str
     state: str
@@ -957,6 +1004,14 @@ class NotificationResponse(BaseModel):
     payload: dict[str, Any]
     read_at: datetime | None
     created_at: datetime
+    # Null for notifications created outside the Attention Gate's gated
+    # path (pass-through system alerts — see attention_gate.py's module
+    # docstring). When set, `attention_log_id` is what the client should
+    # send back to POST /attention-log/{id}/response on dismiss/click —
+    # the raw material for the Feedback Loop (6.9).
+    reason_key: str | None = None
+    attention_level: AttentionLevel | None = None
+    attention_log_id: UUID | None = None
 
 
 class NotificationListResponse(BaseModel):

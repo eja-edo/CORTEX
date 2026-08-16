@@ -40,7 +40,9 @@ BACKEND_ROOT = Path(__file__).resolve().parents[2]
 # ============================================================================
 
 def test_item_type_values():
-    assert {v.value for v in AttentionItemType} == {"task", "commitment", "schedule"}
+    # `user` was added in A1 for `day.review` — a per-user, not per-item,
+    # digest (see AttentionItemType's docstring).
+    assert {v.value for v in AttentionItemType} == {"task", "commitment", "schedule", "user"}
 
 
 def test_level_values_are_the_five_intervention_levels():

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.dependencies import get_current_active_user
-from app.models import User, RefreshToken, AuthorizationCode
+from app.models import User, RefreshToken, AuthorizationCode, Workspace, WorkspaceMember, WorkspaceRole
 from app.schemas import (
     UserCreate,
     UserResponse,
@@ -128,6 +128,23 @@ def register_user(user_input: UserCreate, db: Session = Depends(get_db)):
         is_active=True,
     )
     db.add(user)
+    db.flush()
+
+    workspace = Workspace(
+        owner_id=user.id,
+        name=f"{user.email}'s Workspace",
+        is_personal=True,
+    )
+    db.add(workspace)
+    db.flush()
+
+    member = WorkspaceMember(
+        workspace_id=workspace.id,
+        user_id=user.id,
+        role=WorkspaceRole.OWNER,
+    )
+    db.add(member)
+
     db.commit()
     db.refresh(user)
     return user

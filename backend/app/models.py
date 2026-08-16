@@ -1,12 +1,13 @@
 from datetime import datetime, timezone
 from enum import Enum
-import uuid
 
-from sqlalchemy import BigInteger, Boolean, Column, DateTime, Enum as SQLEnum, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, text
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, Enum as SQLEnum, ForeignKey, Index, Integer, Numeric, String, Text, Time, UniqueConstraint, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from pgvector.sqlalchemy import Vector
+
+from app.ids import uuid7
 
 Base = declarative_base()
 
@@ -112,10 +113,17 @@ class AttentionItemType(str, Enum):
 
     `attention_log.item_id` points at whichever table this names — it is
     polymorphic and therefore carries no foreign key.
+
+    `USER` is the one exception to "points at a domain row": it names the
+    user themselves, `item_id = users.id`, for a reason that isn't about
+    any single task/schedule — e.g. `day.review` (A1), a per-user daily
+    digest. Still a real row `attention_log`/`state_evaluator_flags` can
+    point at, just not a domain-specific one.
     """
     TASK = "task"
     COMMITMENT = "commitment"
     SCHEDULE = "schedule"
+    USER = "user"
 
 
 class AttentionLevel(str, Enum):
@@ -201,7 +209,7 @@ class Asset(Base):
     """Uploaded or recorded media source tracked by processing pipeline."""
     __tablename__ = "assets"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True)
     type = Column(SQLEnum(AssetType, values_callable=_enum_values, name="assettype"), nullable=False)
@@ -236,7 +244,7 @@ class Notification(Base):
     """User notification for ingest and knowledge events."""
     __tablename__ = "notifications"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     type = Column(String(64), nullable=False)
     title = Column(String(255), nullable=False)
@@ -246,6 +254,25 @@ class Notification(Base):
     payload = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
     read_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=_utcnow, nullable=False)
+
+    # Set only for notifications that went through the deterministic
+    # Attention Gate pipeline (6.1 M2) — the pass-through branch (system
+    # alerts with no domain item, e.g. "reconnect Google Calendar") leaves
+    # all three null, which is a valid, permanent state, not a gap to
+    # backfill. `reason_key` is what 4.5 M3's "đừng nhắc kiểu này nữa"
+    # button downgrades; `attention_log_id` is what 6.9 joins back to the
+    # surfacing decision (and its eventual response) that created this row.
+    reason_key = Column(String(100), nullable=True)
+    attention_level = Column(
+        SQLEnum(AttentionLevel, values_callable=_enum_values, name="attentionlevel"),
+        nullable=True,
+    )
+    attention_log_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("attention_log.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     __table_args__ = (
         Index("ix_notifications_user_read_created", "user_id", "read_at", "created_at"),
@@ -258,7 +285,7 @@ class User(Base):
     """User model for authentication and ownership"""
     __tablename__ = "users"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     email = Column(String(255), nullable=False, unique=True, index=True)
     full_name = Column(String(255), nullable=True)
     hashed_password = Column(String(255), nullable=False)
@@ -271,7 +298,7 @@ class RefreshToken(Base):
     """Persisted refresh token metadata for rotation and logout revocation."""
     __tablename__ = "refresh_tokens"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     jti = Column(UUID(as_uuid=True), nullable=False, unique=True, index=True)
     expires_at = Column(DateTime, nullable=False)
@@ -282,7 +309,7 @@ class AuthorizationCode(Base):
     """One-time authorization code for OAuth2 Authorization Code + PKCE."""
     __tablename__ = "authorization_codes"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     code_hash = Column(String(255), nullable=False, unique=True, index=True)
     client_id = Column(String(255), nullable=False)
@@ -297,7 +324,7 @@ class Schedule(Base):
     """Schedule/Event model"""
     __tablename__ = "schedules"
     
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     title = Column(String(255), nullable=False)
     type = Column(SQLEnum(ScheduleType), nullable=False)
@@ -336,7 +363,7 @@ class CalendarConnection(Base):
     """Per-user external calendar connection state and sync cursor."""
     __tablename__ = "calendar_connections"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     provider = Column(SQLEnum(CalendarProvider), nullable=False, default=CalendarProvider.GOOGLE)
     provider_calendar_id = Column(String(255), nullable=False, default="primary", server_default=text("'primary'"))
@@ -364,7 +391,7 @@ class ScheduleExternalMap(Base):
     """Mapping between internal schedules and external provider events."""
     __tablename__ = "schedule_external_maps"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     schedule_id = Column(UUID(as_uuid=True), ForeignKey("schedules.id", ondelete="CASCADE"), nullable=False, index=True)
     provider = Column(SQLEnum(CalendarProvider), nullable=False, default=CalendarProvider.GOOGLE)
@@ -390,7 +417,7 @@ class ScheduleReminder(Base):
     """Reminder configuration for schedule events."""
     __tablename__ = "schedule_reminders"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     schedule_id = Column(UUID(as_uuid=True), ForeignKey("schedules.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     minutes_before = Column(Integer, nullable=False, default=10)
@@ -415,7 +442,7 @@ class ScheduleSyncQueue(Base):
     """Queue for async Google Calendar synchronization."""
     __tablename__ = "schedule_sync_queue"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     schedule_id = Column(UUID(as_uuid=True), ForeignKey("schedules.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(UUID(as_uuid=True), nullable=False)
     operation = Column(SQLEnum(SyncOperation, values_callable=_enum_values, name="syncoperation"), nullable=False)
@@ -435,7 +462,7 @@ class OAuthState(Base):
     """One-time state values for external OAuth callbacks."""
     __tablename__ = "oauth_states"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     provider = Column(SQLEnum(CalendarProvider), nullable=False, default=CalendarProvider.GOOGLE)
     state_hash = Column(String(128), nullable=False, unique=True, index=True)
@@ -451,7 +478,7 @@ class OAuthState(Base):
 class Note(Base):
     __tablename__ = "notes"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     user_id = Column(UUID(as_uuid=True), nullable=False)
     workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=True, index=True)
     parent_note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="SET NULL"), nullable=True, index=True)
@@ -497,7 +524,7 @@ class NoteRevision(Base):
     """Incremental delta record for note content edits."""
     __tablename__ = "note_revisions"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     version = Column(Integer, nullable=False)
@@ -517,7 +544,7 @@ class NoteImage(Base):
     """Track images uploaded for a note."""
     __tablename__ = "note_images"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     object_key = Column(String(1024), nullable=False)
@@ -543,7 +570,7 @@ class Upload(Base):
     """Track multipart upload sessions owned by users."""
     __tablename__ = "uploads"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     status = Column(
         SQLEnum(UploadStatus, values_callable=_enum_values, name="uploadstatus"),
@@ -569,7 +596,7 @@ class UploadPart(Base):
     """Track confirmed uploaded parts per upload session."""
     __tablename__ = "upload_parts"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     upload_record_id = Column(UUID(as_uuid=True), ForeignKey("uploads.id", ondelete="CASCADE"), nullable=False, index=True)
     part_number = Column(Integer, nullable=False)
     etag = Column(String(255), nullable=False)
@@ -587,7 +614,7 @@ class Workspace(Base):
     """Workspace: organizational unit for grouping notes and assets."""
     __tablename__ = "workspaces"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     name = Column(String(255), nullable=False)
     slug = Column(String(255), nullable=True, unique=True)
@@ -602,7 +629,7 @@ class WorkspaceMember(Base):
     """Workspace membership: which users belong to which workspace with what role."""
     __tablename__ = "workspace_members"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     role = Column(SQLEnum(WorkspaceRole, values_callable=_enum_values, name="workspacerole"), nullable=False, default=WorkspaceRole.VIEWER)
@@ -620,7 +647,7 @@ class NoteEditProposal(Base):
     """Reviewable proposal for AI-generated note edits (not yet applied to the note)."""
     __tablename__ = "note_edit_proposals"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="CASCADE"), nullable=False, index=True)
 
     # Content reference: patch is applied on top of base_revision (or note.content if NULL)
@@ -666,7 +693,7 @@ class PlanProposal(Base):
     """
     __tablename__ = "plan_proposals"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
 
     # List of draft {type: "task"|"event", key, title, ...} dicts — see
@@ -702,7 +729,7 @@ class AgentConversation(Base):
     """Multi-turn conversation thread with an AI agent."""
     __tablename__ = "agent_conversations"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=True, index=True)
     title = Column(String(255), nullable=True)
@@ -727,7 +754,7 @@ class AgentMessage(Base):
     """Message in an agent conversation (user, assistant, or tool result)."""
     __tablename__ = "agent_messages"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     conversation_id = Column(UUID(as_uuid=True), ForeignKey("agent_conversations.id", ondelete="CASCADE"), nullable=False, index=True)
     role = Column(String(20), nullable=False)  # "user" | "assistant" | "tool"
     content = Column(Text, nullable=True)
@@ -767,7 +794,7 @@ class Task(Base):
     """
     __tablename__ = "tasks"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     title = Column(String(255), nullable=False)
     status = Column(
@@ -874,7 +901,7 @@ class AttentionLog(Base):
     """
     __tablename__ = "attention_log"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     item_type = Column(
         SQLEnum(AttentionItemType, values_callable=_enum_values, name="attentionitemtype"),
@@ -933,7 +960,7 @@ class StateEvaluatorFlag(Base):
     """
     __tablename__ = "state_evaluator_flags"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     item_type = Column(
         SQLEnum(AttentionItemType, values_callable=_enum_values, name="attentionitemtype"),
@@ -949,6 +976,106 @@ class StateEvaluatorFlag(Base):
 
     def __repr__(self):
         return f"<StateEvaluatorFlag(item={self.item_type}:{self.item_id}, flag={self.flag_key})>"
+
+
+class AttentionBundleQueue(Base):
+    """One row per candidate the Attention Gate silenced for being busy,
+    not for any other reason (Milestone 6.1 M3).
+
+    Step 3 of the Gate (attention_gate.py) can downgrade a non-critical
+    candidate to SILENT while the user is in a meeting — `attention_log`
+    (2.9) records that decision, but by itself a SILENT decision is just
+    "not delivered", not "held for later". This table is the "held for
+    later" half: `AttentionBundleWorker` polls for users who are no longer
+    busy and have unflushed rows here, and turns every one of them into a
+    single bundled Notification — the plan's own acceptance scenario ("8
+    candidates during a meeting -> 0 during, 1 bundled after").
+
+    Denormalized (`title`/`body`/`payload`/`actions` copied in rather than
+    re-read from the item at flush time) because the item can change or be
+    deleted in the gap between being silenced and being flushed, and the
+    bundle should say what was true when Cortex decided to stay quiet, not
+    re-derive a possibly-different current state.
+    """
+    __tablename__ = "attention_bundle_queue"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    item_type = Column(
+        SQLEnum(AttentionItemType, values_callable=_enum_values, name="attentionitemtype"),
+        nullable=False,
+    )
+    item_id = Column(UUID(as_uuid=True), nullable=False)
+    reason_key = Column(String(100), nullable=False)
+    title = Column(String(255), nullable=False)
+    body = Column(Text, nullable=True)
+    payload = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    actions = Column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
+    attention_log_id = Column(
+        UUID(as_uuid=True), ForeignKey("attention_log.id", ondelete="SET NULL"), nullable=True
+    )
+    queued_at = Column(DateTime, default=_utcnow, nullable=False, server_default=text("NOW()"))
+    flushed_at = Column(DateTime, nullable=True)
+    bundle_notification_id = Column(
+        UUID(as_uuid=True), ForeignKey("notifications.id", ondelete="SET NULL"), nullable=True
+    )
+
+    __table_args__ = (
+        Index("ix_attention_bundle_queue_user_flushed", "user_id", "flushed_at"),
+    )
+
+    def __repr__(self):
+        return f"<AttentionBundleQueue(user_id={self.user_id}, item={self.item_type}:{self.item_id})>"
+
+
+class UserPreferences(Base):
+    """Per-user delivery preferences (Milestone 6.2) — quiet hours, the
+    cheapest, highest-impact half of interruptibility the planning doc
+    calls out: `schedules` already answers "is the user busy right now"
+    (app.services.availability); this answers the other half, "is it
+    just a bad time of day regardless of the calendar" — no new signal,
+    two columns.
+
+    A missing row means "no quiet hours configured", not "not set up yet"
+    — `get_preferences` treats it as all-null defaults rather than
+    requiring a write on first read, matching boundary #2 (a preferences
+    page a user never opens must not degrade the product).
+
+    Both columns are UTC time-of-day. There is no per-user timezone
+    anywhere else in this schema (`User` has none), so this is the same
+    UTC-everywhere convention the rest of the codebase already uses, not a
+    scope cut specific to this table — adding real per-user timezone
+    support is its own feature.
+    """
+    __tablename__ = "user_preferences"
+
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), primary_key=True)
+    quiet_hours_start = Column(Time, nullable=True)
+    quiet_hours_end = Column(Time, nullable=True)
+    # Per-user opt-out of a `reason_key` (the same string attention_log
+    # and the reason catalog use — e.g. "task.stale", "day.review"),
+    # checked by the Attention Gate before it computes a level at all
+    # (app.services.attention_gate._decide_level_async/_sync). Empty list
+    # (the default) means every reason is on — matches boundary #2 ("trang
+    # cấu hình là nơi tắt, không phải nơi bật"): this column only ever
+    # turns something off from its on-by-default state, a missing row is
+    # never why a nudge doesn't fire.
+    #
+    # This exists because A1 wired 6 predicates straight from the backend
+    # to the Gate with zero workflow involved (see notification_
+    # subscribers.py's DIRECT_DELIVERY_HANDLERS) — there's no
+    # WorkflowDefinition row A2/4.5 could toggle for them, so the on/off
+    # switch has to live here instead. See docs/planning-v3.md's A2
+    # section for why the original "toggle via system workflow" design
+    # doesn't apply to these events.
+    disabled_reason_keys = Column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    created_at = Column(DateTime, default=_utcnow, nullable=False, server_default=text("NOW()"))
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False, server_default=text("NOW()"))
+
+    def __repr__(self):
+        return f"<UserPreferences(user_id={self.user_id}, quiet_hours={self.quiet_hours_start}-{self.quiet_hours_end})>"
 
 
 class ActionHistory(Base):
@@ -979,11 +1106,11 @@ class ActionHistory(Base):
     # Server-side default, not just Python-side: this table is written via a
     # raw SQL INSERT (action_snapshot_store.py), which never goes through
     # session.add() — a Column(default=...) only fires there, so without
-    # gen_random_uuid() at the database level every insert would violate
+    # uuid_generate_v7() at the database level every insert would violate
     # this column's NOT NULL constraint.
     id = Column(
         UUID(as_uuid=True), primary_key=True,
-        default=uuid.uuid4, server_default=text("gen_random_uuid()"),
+        default=uuid7, server_default=text("uuid_generate_v7()"),
     )
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     # SET NULL, not CASCADE: the audit record that a command ran must outlive

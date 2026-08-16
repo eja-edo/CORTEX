@@ -18,6 +18,7 @@ from app.api.assets import router as assets_router
 from app.api.notes import router as notes_router
 from app.api.tasks import router as tasks_router
 from app.api.attention_log import router as attention_log_router
+from app.api.user_preferences import router as user_preferences_router
 from app.api.calendar import router as calendar_router
 from app.api.today import router as today_router
 from app.api.images import router as images_router
@@ -36,6 +37,7 @@ from app.services.transcription_results_consumer import transcription_results_co
 from app.services.llm_processor_worker import get_llm_processor_worker
 from app.services.reminder_worker import ReminderWorker
 from app.services.state_evaluator import StateEvaluator
+from app.services.attention_bundle_worker import AttentionBundleWorker
 from app.services.google_sync_worker import GoogleSyncWorker
 from app.services.task_flush_worker import TaskFlushWorker
 from app.api.sse.sse_manager import SSEManager
@@ -123,6 +125,7 @@ original_sigterm = signal.getsignal(signal.SIGTERM)
 _llm_worker_thread: Optional[WorkerThread] = None
 _reminder_worker_thread: Optional[WorkerThread] = None
 _state_evaluator_thread: Optional[WorkerThread] = None
+_attention_bundle_worker_thread: Optional[WorkerThread] = None
 _google_sync_worker_thread: Optional[WorkerThread] = None
 _task_flush_worker_thread: Optional[WorkerThread] = None
 
@@ -181,8 +184,9 @@ async def lifespan(app: FastAPI):
         # leave a window where task.* events are read and dropped. (Late
         # subscribers do still work — route_event() re-reads _subscribers
         # each time — but there's no reason to open the gap.)
-        from app.services.notification_subscribers import handle_schedule_reminder_due
-        event_bus.subscribe("schedule.reminder.due", handle_schedule_reminder_due)
+        from app.services.notification_subscribers import DIRECT_DELIVERY_HANDLERS
+        for event_type, handler in DIRECT_DELIVERY_HANDLERS.items():
+            event_bus.subscribe(event_type, handler)
         await event_bus.start_consumer()
     except Exception as exc:
         logger.warning(f"EventBus durable consumer disabled: {exc}")
@@ -204,6 +208,13 @@ async def lifespan(app: FastAPI):
     global _state_evaluator_thread
     _state_evaluator_thread = WorkerThread("StateEvaluator", StateEvaluator())
     _state_evaluator_thread.start()
+
+    # Start AttentionBundleWorker in separate thread (Milestone 6.1 M3) —
+    # flushes candidates the Gate silenced for being busy, once the user
+    # isn't anymore.
+    global _attention_bundle_worker_thread
+    _attention_bundle_worker_thread = WorkerThread("AttentionBundle", AttentionBundleWorker())
+    _attention_bundle_worker_thread.start()
 
     # Start GoogleSyncWorker in separate thread
     google_sync_worker = GoogleSyncWorker()
@@ -233,6 +244,8 @@ async def lifespan(app: FastAPI):
             _reminder_worker_thread.stop()
         if _state_evaluator_thread:
             _state_evaluator_thread.stop()
+        if _attention_bundle_worker_thread:
+            _attention_bundle_worker_thread.stop()
         if _google_sync_worker_thread:
             _google_sync_worker_thread.stop()
         if _task_flush_worker_thread:
@@ -272,6 +285,7 @@ app.include_router(schedules_router, prefix=settings.API_STR)
 app.include_router(notes_router, prefix=settings.API_STR)
 app.include_router(tasks_router, prefix=settings.API_STR)
 app.include_router(attention_log_router, prefix=settings.API_STR)
+app.include_router(user_preferences_router, prefix=settings.API_STR)
 app.include_router(calendar_router, prefix=settings.API_STR)
 app.include_router(today_router, prefix=settings.API_STR)
 app.include_router(assets_router, prefix=settings.API_STR)

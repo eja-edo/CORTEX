@@ -23,6 +23,7 @@ import json
 from pathlib import Path
 
 from app.events.vocabulary import EVENT_VOCABULARY
+from app.services.notification_subscribers import DIRECT_DELIVERY_HANDLERS
 
 OUTPUT_PATH = (
     Path(__file__).resolve().parent.parent.parent
@@ -39,6 +40,16 @@ def build_vocabulary_json() -> dict:
                 "event_type": e.event_type,
                 "description": e.description,
                 "has_payload_schema": e.has_payload_schema,
+                # Milestone A3: this event already reaches the Gate via a
+                # hardcoded backend subscriber (notification_subscribers.py),
+                # independent of workflow_service. A workflow triggering on
+                # it with an action.request_attention node would duplicate
+                # that delivery — see workflow_conflicts.py.
+                "has_direct_backend_delivery": e.event_type in DIRECT_DELIVERY_HANDLERS,
+                # Milestone 4.2 — Trigger Catalog: short user-facing label,
+                # so a workflow builder can list triggers without a second,
+                # independently-maintained label list on the frontend.
+                "label_vi": e.label_vi,
             }
             for e in sorted(EVENT_VOCABULARY.values(), key=lambda e: e.event_type)
         ],

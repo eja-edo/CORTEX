@@ -22,6 +22,7 @@ import type {
   WorkflowUpdatePayload,
   WorkflowStatus,
   TriggerType,
+  WorkflowConflict,
 } from '../types'
 import { useWorkflows } from '../hooks/useWorkflows'
 import { nodeTypes } from './workflow/nodes'
@@ -98,6 +99,7 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate, onW
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
+  const [conflictWarnings, setConflictWarnings] = useState<WorkflowConflict[]>([])
   const [nodeOutputs, setNodeOutputs] = useState<Record<string, { success: boolean; output: Record<string, unknown>; error: string | null }>>({})
   const [runningNodeId, setRunningNodeId] = useState<string | null>(null)
 
@@ -401,6 +403,11 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate, onW
     const updated = await wf.activateWorkflow(currentWorkflowId)
     if (updated && 'status' in updated) {
       setWorkflowStatus(updated.status)
+      // A3: the activate response may carry conflict warnings (this
+      // workflow duplicates the backend's own delivery for this event, or
+      // another active workflow already covers it) — informational, the
+      // workflow is still active either way.
+      setConflictWarnings(updated.warnings ?? [])
     } else if (updated && 'error' in updated) {
       setError(`Failed to activate workflow: ${updated.error}`)
     }
@@ -456,6 +463,7 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate, onW
         return
       }
       setWorkflowStatus(updated.status)
+      setConflictWarnings(updated.warnings ?? [])
     }
 
     const result = await wf.triggerWorkflow(currentWorkflowId)
@@ -607,6 +615,19 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate, onW
         <div className="wf-success-banner">
           <span>{successMessage}</span>
           <button type="button" onClick={() => setSuccessMessage(null)}>×</button>
+        </div>
+      )}
+      {conflictWarnings.length > 0 && (
+        <div className="wf-warning-banner">
+          <div className="wf-warning-banner-header">
+            <span>Có thể bắn thông báo trùng</span>
+            <button type="button" onClick={() => setConflictWarnings([])}>×</button>
+          </div>
+          <ul>
+            {conflictWarnings.map((w, i) => (
+              <li key={i}>{w.message}</li>
+            ))}
+          </ul>
         </div>
       )}
 

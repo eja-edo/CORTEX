@@ -10,6 +10,7 @@ from temporalio import activity
 
 from app.actions import action_registry
 from app.actions.base import ActionContext, ActionResult
+from app.core.ids import uuid7
 from app.database import AsyncSessionLocal
 from app.models.execution import (
     WorkflowStepExecution,
@@ -97,7 +98,7 @@ async def update_step_status(input: UpdateStepStatusInput):
 
         if not step:
             step = WorkflowStepExecution(
-                id=str(uuid.uuid4()),
+                id=str(uuid7()),
                 instance_id=input.instance_id,
                 node_id=input.node_id,
                 node_type=input.node_type or "",

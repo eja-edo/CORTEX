@@ -5,7 +5,7 @@ import { NotificationDetailModal } from './NotificationDetailModal'
 import { KIND_META, timeAgo } from '../utils/notificationDisplay'
 import type { NotificationBlock, NotificationActionDef } from '../types'
 
-export type NotificationKind = 'sync' | 'schedule' | 'reminder' | 'note' | 'system' | 'info' | 'success' | 'warning' | 'error'
+export type NotificationKind = 'sync' | 'schedule' | 'reminder' | 'note' | 'system' | 'info' | 'success' | 'warning' | 'error' | 'task_overdue' | 'attention_bundle'
 
 export type AppNotification = {
    id: string
@@ -17,6 +17,10 @@ export type AppNotification = {
    payload?: Record<string, unknown>
    content?: NotificationBlock[]
    actions?: NotificationActionDef[]
+   /** Set only for notifications the Attention Gate actually gated (not
+    * pass-through system alerts) — send back to POST /attention-log/{id}/response
+    * on dismiss/click. See NotificationResponse.attention_log_id (backend). */
+   attentionLogId?: string | null
 }
 
 interface NotificationBellProps {
@@ -25,6 +29,9 @@ interface NotificationBellProps {
    onMarkAllRead: () => void
    onDismiss: (id: string) => void
    onNavigate?: (path: string) => void
+   /** Feedback Loop (6.9) — called when the user actually acts on a
+    * notification (navigates via one of its actions), not just opens it. */
+   onAccept?: (id: string) => void
 }
 
 export function NotificationBell({
@@ -33,6 +40,7 @@ export function NotificationBell({
    onMarkAllRead,
    onDismiss,
    onNavigate,
+   onAccept,
 }: NotificationBellProps) {
    const [isOpen, setIsOpen] = useState(false)
    const [animatingIds, setAnimatingIds] = useState<Set<string>>(new Set())
@@ -60,10 +68,11 @@ export function NotificationBell({
 
    const handleDetailNavigate = useCallback(
        (path: string) => {
+           if (detailNotif) onAccept?.(detailNotif.id)
            setDetailNotif(null)
            onNavigate?.(path)
        },
-       [onNavigate],
+       [onNavigate, onAccept, detailNotif],
    )
 
     const handleDismiss = useCallback(
@@ -158,7 +167,11 @@ export function NotificationBell({
                                         <div className="notif-item-body">
                                              <div className="notif-item-title">{n.title}</div>
                                              {n.content && n.content.length > 0 ? (
-                                                <BlockRenderer blocks={n.content} actions={n.actions} onNavigate={onNavigate} />
+                                                <BlockRenderer
+                                                    blocks={n.content}
+                                                    actions={n.actions}
+                                                    onNavigate={(path) => { onAccept?.(n.id); onNavigate?.(path) }}
+                                                />
                                              ) : n.body ? (
                                                 <div className="notif-item-text">{n.body}</div>
                                              ) : null}

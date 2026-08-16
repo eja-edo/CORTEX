@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react'
 import type { NotificationListResponse, NotificationResponse } from '../types'
-import { listNotifications, markNotificationRead, markAllNotificationsRead, deleteNotification } from '../services/api'
+import { listNotifications, markNotificationRead, markAllNotificationsRead, deleteNotification, recordAttentionResponse } from '../services/api'
 import type { AppNotification, NotificationKind } from '../components/NotificationBell'
 
 function mapApiNotification(apiNotif: NotificationResponse): AppNotification {
@@ -14,6 +14,7 @@ function mapApiNotification(apiNotif: NotificationResponse): AppNotification {
        payload: apiNotif.payload || {},
        content: apiNotif.content || undefined,
        actions: apiNotif.actions || undefined,
+       attentionLogId: apiNotif.attention_log_id,
    }
 }
 
@@ -60,13 +61,27 @@ export function useNotifications() {
    }, [])
 
    const handleDismiss = useCallback(async (id: string) => {
+       const dismissed = notifications.find((n) => n.id === id)
        setNotifications((prev) => prev.filter((n) => n.id !== id))
+       if (dismissed?.attentionLogId) {
+           recordAttentionResponse(dismissed.attentionLogId, 'dismissed')
+       }
        try {
            await deleteNotification(id)
        } catch (error) {
            console.error('Failed to delete notification:', error)
        }
-   }, [])
+   }, [notifications])
+
+   // Feedback Loop (6.9) raw material for the other outcome: the user
+   // clicked through instead of dismissing. Fire-and-forget, same as
+   // dismiss — never blocks the navigation it's reporting on.
+   const handleAccept = useCallback((id: string) => {
+       const notif = notifications.find((n) => n.id === id)
+       if (notif?.attentionLogId) {
+           recordAttentionResponse(notif.attentionLogId, 'accepted')
+       }
+   }, [notifications])
 
    return {
        notifications,
@@ -77,5 +92,6 @@ export function useNotifications() {
        handleMarkRead,
        handleMarkAllRead,
        handleDismiss,
+       handleAccept,
    }
 }

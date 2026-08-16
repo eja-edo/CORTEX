@@ -8,6 +8,7 @@ import {
     markNotificationRead,
     markAllNotificationsRead,
     deleteNotification,
+    recordAttentionResponse,
 } from '../services/api'
 import type { NotificationResponse } from '../types'
 
@@ -131,6 +132,13 @@ export function NotificationsPage({ onNavigate, onNotificationsChanged }: Notifi
         if (!window.confirm(confirmMsg)) return
 
         setBusyIds((prev) => new Set([...prev, ...ids]))
+        // Feedback Loop (6.9) raw material — a bulk/single delete here is a
+        // dismiss, for every id that came from a gated (not pass-through)
+        // notification.
+        ids.forEach((id) => {
+            const logId = items.find((it) => it.id === id)?.attention_log_id
+            if (logId) recordAttentionResponse(logId, 'dismissed')
+        })
         try {
             await Promise.all(ids.map((id) => deleteNotification(id)))
             setDetail((prev) => (prev && ids.includes(prev.id) ? null : prev))
@@ -150,7 +158,7 @@ export function NotificationsPage({ onNavigate, onNotificationsChanged }: Notifi
                 return next
             })
         }
-    }, [fetchPage, onNotificationsChanged, page, total])
+    }, [fetchPage, items, onNotificationsChanged, page, total])
 
     const handleRowClick = useCallback((n: NotificationResponse) => {
         setDetail(n)
@@ -158,9 +166,10 @@ export function NotificationsPage({ onNavigate, onNotificationsChanged }: Notifi
     }, [handleMarkRead])
 
     const handleDetailNavigate = useCallback((path: string) => {
+        if (detail?.attention_log_id) recordAttentionResponse(detail.attention_log_id, 'accepted')
         setDetail(null)
         onNavigate?.(path)
-    }, [onNavigate])
+    }, [onNavigate, detail])
 
     const selectedCount = selected.size
     const rangeStart = total === 0 ? 0 : page * PAGE_SIZE + 1

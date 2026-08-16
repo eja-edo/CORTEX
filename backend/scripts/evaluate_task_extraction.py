@@ -1,25 +1,34 @@
 """
-Measure commitment extraction against the labelled set (Milestone 2.3, M1/M2).
+Measure task extraction against the labelled set (Milestone 2.3, M1/M2).
 
 Runs the **real** prompt against the **real** model over
-`tests/data/commitment_extraction_dataset.json` and reports precision and
-recall. It is a script and not a test because it costs money and needs a
-live model; CI covers the deterministic half (the validator) in
-`tests/unit/test_commitment_extraction_rules.py`.
+`tests/data/task_extraction_dataset.json` and reports precision and recall.
+It is a script and not a test because it costs money and needs a live
+model; CI covers the deterministic half (the validator) in
+`tests/unit/test_task_extraction_rules.py`.
 
-    python -m scripts.evaluate_commitment_extraction
-    python -m scripts.evaluate_commitment_extraction --no-validator
+    python -m scripts.evaluate_task_extraction
+    python -m scripts.evaluate_task_extraction --no-validator
 
 **The acceptance threshold is precision ≥ 0.90.** Recall is measured and
-reported but deliberately has no threshold in this first version: a promise
-Cortex invents costs the user's trust in the feature, a promise it misses
+reported but deliberately has no threshold in this first version: a task
+Cortex invents costs the user's trust in the feature, a task it misses
 costs much less. If precision comes in under the bar, tighten the prompt —
-adding examples, sharpening the three conditions — rather than lowering the
+adding examples, sharpening the two conditions — rather than lowering the
 bar.
 
 `--no-validator` reports the prompt's own precision with the deterministic
 guard switched off. Useful for prompt work: it separates "the prompt got
 better" from "the guard caught more".
+
+Renamed from `evaluate_commitment_extraction.py` when Commitment was folded
+into Task (see task_extraction.py's docstring). The dataset this script
+reads does not exist yet in this tree — `commitment_extraction_dataset.json`
+and its labels were written for the old three-condition Commitment rules
+and would misgrade the two-condition Task rules. Rebuilding a ≥50-item
+labelled set (real Vietnamese/English/mixed conversations, hand-labelled)
+is 2.3 M1 and hasn't been redone since the rename; this script is wired
+correctly but has nothing to run against until that dataset exists.
 """
 
 import argparse
@@ -29,11 +38,11 @@ from pathlib import Path
 
 from app.ai.agents.model_client import ModelClient
 from app.ai.agents.provider_types import GenerationConfig, Message
-from app.services.commitment_extraction import validate_candidate
 from app.services.memory_extraction_prompt import build_extraction_messages
 from app.services.memory_extraction_service import _parse_extraction_response
+from app.services.task_extraction import validate_candidate
 
-DATASET_PATH = Path(__file__).resolve().parent.parent / "tests" / "data" / "commitment_extraction_dataset.json"
+DATASET_PATH = Path(__file__).resolve().parent.parent / "tests" / "data" / "task_extraction_dataset.json"
 PRECISION_THRESHOLD = 0.90
 
 
@@ -42,7 +51,7 @@ async def _extract(client: ModelClient, text: str) -> list[dict]:
     messages = build_extraction_messages(
         conversation_text=f"User: {text}",
         existing_summary=None,
-        include_commitments=True,
+        include_tasks=True,
     )
     _, response = await client.generate(
         messages=[Message(role=m["role"], content=m["content"]) for m in messages],
@@ -52,10 +61,23 @@ async def _extract(client: ModelClient, text: str) -> list[dict]:
     if not response or not response.content:
         return []
     parsed = _parse_extraction_response(response.content)
-    return (parsed or {}).get("commitments") or []
+    return (parsed or {}).get("tasks") or []
 
 
 async def main(use_validator: bool = True) -> int:
+    if not DATASET_PATH.exists():
+        print(
+            f"No dataset at {DATASET_PATH}.\n"
+            "This is 2.3 M1 (≥50 labelled real conversations, Vietnamese/English/"
+            "mixed) and hasn't been rebuilt since Commitment was folded into Task — "
+            "the old commitment_extraction_dataset.json used a three-condition rule "
+            "set (it required a named counterparty) that no longer matches "
+            "task_extraction.py's two conditions, so it can't be reused as-is.\n"
+            'Expected shape: {"items": [{"id": ..., "text": ..., "language": '
+            '"vi"|"en"|"mixed", "is_task": true|false}, ...]}'
+        )
+        return 2
+
     dataset = json.loads(DATASET_PATH.read_text())
     items = dataset["items"]
     client = ModelClient()
@@ -78,7 +100,7 @@ async def main(use_validator: bool = True) -> int:
             accepted = raw_candidates
 
         predicted = bool(accepted)
-        actual = item["is_commitment"]
+        actual = item["is_task"]
 
         if predicted and actual:
             true_positives += 1

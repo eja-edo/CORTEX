@@ -6,8 +6,11 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from app.api.sse.channels.notification_events import publish_notification
-from app.models import Notification
+from app.api.sse.channels.notification_events import (
+    publish_notification,
+    publish_notification_async,
+)
+from app.models import AttentionLevel, Notification
 
 
 def _build_notification(
@@ -19,6 +22,9 @@ def _build_notification(
     content: list[dict[str, Any]] | None = None,
     actions: list[dict[str, Any]] | None = None,
     payload: dict[str, Any] | None = None,
+    reason_key: str | None = None,
+    attention_level: AttentionLevel | None = None,
+    attention_log_id: UUID | None = None,
 ) -> Notification:
     if not content and body:
         content = [{"type": "text", "text": body}]
@@ -30,6 +36,9 @@ def _build_notification(
         content=content or [],
         actions=actions or [],
         payload=payload or {},
+        reason_key=reason_key,
+        attention_level=attention_level,
+        attention_log_id=attention_log_id,
     )
 
 
@@ -43,16 +52,21 @@ async def create_notification_async(
     content: list[dict[str, Any]] | None = None,
     actions: list[dict[str, Any]] | None = None,
     payload: dict[str, Any] | None = None,
+    reason_key: str | None = None,
+    attention_level: AttentionLevel | None = None,
+    attention_log_id: UUID | None = None,
 ) -> Notification:
     notification = _build_notification(
         user_id=user_id, type=type, title=title, body=body,
         content=content, actions=actions, payload=payload,
+        reason_key=reason_key, attention_level=attention_level,
+        attention_log_id=attention_log_id,
     )
     db.add(notification)
     await db.commit()
     await db.refresh(notification)
 
-    publish_notification(
+    await publish_notification_async(
         user_id=str(user_id),
         notification_id=str(notification.id),
         title=notification.title,
@@ -61,6 +75,9 @@ async def create_notification_async(
         actions=notification.actions,
         notification_type=notification.type,
         payload=notification.payload,
+        reason_key=notification.reason_key,
+        attention_level=notification.attention_level.value if notification.attention_level else None,
+        attention_log_id=str(notification.attention_log_id) if notification.attention_log_id else None,
     )
     return notification
 
@@ -79,10 +96,15 @@ class NotificationService:
         content: list[dict[str, Any]] | None = None,
         actions: list[dict[str, Any]] | None = None,
         payload: dict[str, Any] | None = None,
+        reason_key: str | None = None,
+        attention_level: AttentionLevel | None = None,
+        attention_log_id: UUID | None = None,
     ) -> Notification:
         notification = _build_notification(
             user_id=user_id, type=type, title=title, body=body,
             content=content, actions=actions, payload=payload,
+            reason_key=reason_key, attention_level=attention_level,
+            attention_log_id=attention_log_id,
         )
         self.db.add(notification)
         self.db.commit()
@@ -97,6 +119,9 @@ class NotificationService:
             actions=notification.actions,
             notification_type=notification.type,
             payload=notification.payload,
+            reason_key=notification.reason_key,
+            attention_level=notification.attention_level.value if notification.attention_level else None,
+            attention_log_id=str(notification.attention_log_id) if notification.attention_log_id else None,
         )
         return notification
 

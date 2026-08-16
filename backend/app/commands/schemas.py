@@ -8,9 +8,11 @@ AI never touches DB directly - only through CommandRegistry.
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from pydantic import BaseModel, Field
+
+from app.ids import uuid7
 
 
 class PermissionScope(str, Enum):
@@ -42,7 +44,7 @@ class Command(BaseModel):
     Flow:
       Tool handler → Command → CommandRegistry → Permission check → Execute → Audit
     """
-    command_id: str = Field(default_factory=lambda: str(uuid4()))
+    command_id: str = Field(default_factory=lambda: str(uuid7()))
     command_name: str = Field(..., description="Command name: domain.action")
     args: dict[str, Any] = Field(default_factory=dict, description="Validated arguments")
 

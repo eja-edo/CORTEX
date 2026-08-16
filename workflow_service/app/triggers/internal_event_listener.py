@@ -89,6 +89,33 @@ def load_implemented_event_types() -> list[str]:
     )
 
 
+def load_trigger_catalog() -> list[dict]:
+    """Milestone 4.2 — the same `has_payload_schema` set as
+    `load_implemented_event_types()`, but with the fields a workflow
+    builder UI needs to render a real list instead of bare event-type
+    strings: `label_vi` (short user-facing label, generated from
+    `backend/app/events/vocabulary.py`) and `has_direct_backend_delivery`
+    (A3 — warn before the user even picks this trigger, not just at
+    activate). Replaces the frontend's own hardcoded `EVENT_TYPES` array
+    (`InternalEventTriggerConfig.tsx`), which was exactly the kind of
+    second, independently-maintained list 1.9 already fixed once between
+    the backend and workflow_service."""
+    with open(VOCABULARY_PATH) as f:
+        data = json.load(f)
+    return sorted(
+        (
+            {
+                "event_type": entry["event_type"],
+                "label_vi": entry["label_vi"],
+                "has_direct_backend_delivery": entry["has_direct_backend_delivery"],
+            }
+            for entry in data["event_types"]
+            if entry["has_payload_schema"]
+        ),
+        key=lambda e: e["event_type"],
+    )
+
+
 async def _ensure_consumer_groups(redis: aioredis.Redis, event_types: list[str]) -> None:
     for event_type in event_types:
         stream_key = f"{STREAM_PREFIX}{event_type}"

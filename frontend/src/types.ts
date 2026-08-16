@@ -254,6 +254,28 @@ export type WorkflowDefinitionSchema = {
   variables: Record<string, unknown>
 }
 
+// Milestone 4.2 — Trigger Catalog. GET /api/v1/actions/triggers/catalog.
+// Replaces the frontend's own hardcoded event-type list, which was the
+// same "second independently-maintained list" drift risk 1.9 fixed once
+// already between the backend and workflow_service.
+export type TriggerCatalogEntry = {
+  event_type: string
+  label_vi: string
+  has_direct_backend_delivery: boolean
+}
+
+// A duplicate-delivery risk (Milestone A3) — see workflow_service's
+// app/services/workflow_conflicts.py. Informational only, never blocks
+// activation.
+export type WorkflowConflict = {
+  kind: 'backend_direct' | 'workflow'
+  event_type: string
+  action_type: string
+  message: string
+  conflicting_workflow_id: string | null
+  conflicting_workflow_name: string | null
+}
+
 export type WorkflowResponse = {
   id: string
   user_id: string
@@ -269,6 +291,9 @@ export type WorkflowResponse = {
   webhook_secret: string | null
   created_at: string
   updated_at: string
+  // null/undefined = not computed for this response. Populated by
+  // /activate and GET /workflows/{id}/conflicts — see A3.
+  warnings?: WorkflowConflict[] | null
 }
 
 export type WorkflowListResponse = {
@@ -344,9 +369,34 @@ export type NotificationResponse = {
    payload: Record<string, unknown>
    read_at: string | null
    created_at: string
+   // Null for notifications created outside the Attention Gate's gated
+   // path. When set, attention_log_id is what to send back to
+   // POST /attention-log/{id}/response on dismiss/click (Feedback Loop, 6.9).
+   reason_key: string | null
+   attention_level: 'silent' | 'inform' | 'recommend' | 'ask' | 'act' | null
+   attention_log_id: string | null
 }
 
 export type NotificationListResponse = {
    items: NotificationResponse[]
    total: number
+}
+
+// Milestone 6.2 — quiet hours. Both fields null means not configured.
+export type UserPreferencesResponse = {
+   quiet_hours_start: string | null
+   quiet_hours_end: string | null
+}
+
+// Redesigned 4.5 / A2 follow-up: per-reason on/off, backend-side (see
+// docs/planning-v3.md's A2 section for why this isn't a workflow toggle).
+// dismiss_count/effective_level are the Feedback Loop's visibility half
+// (Milestone 6.9 M2) — effective_level is base_level after auto-downgrade.
+export type ReasonPreference = {
+   reason_key: string
+   description: string
+   base_level: 'silent' | 'inform' | 'recommend' | 'ask' | 'act'
+   enabled: boolean
+   dismiss_count: number
+   effective_level: 'silent' | 'inform' | 'recommend' | 'ask' | 'act'
 }

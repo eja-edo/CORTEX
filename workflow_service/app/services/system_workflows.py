@@ -9,11 +9,12 @@ workspace gets the default behavior with zero rows written anywhere.
 """
 
 from typing import Any, Optional
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.ids import uuid7
 from app.models.workflow import (
     SYSTEM_WORKFLOW_USER_ID,
     TriggerType,
@@ -70,7 +71,7 @@ async def set_workspace_workflow_enabled(
     setting = await _get_setting(db, workspace_id=workspace_id, workflow_id=workflow_id)
     if setting is None:
         setting = WorkspaceWorkflowSetting(
-            id=uuid4(), workspace_id=workspace_id, workflow_id=workflow_id, enabled=enabled,
+            id=uuid7(), workspace_id=workspace_id, workflow_id=workflow_id, enabled=enabled,
         )
         db.add(setting)
     else:
@@ -109,7 +110,7 @@ async def fork_system_workflow(
         raise ValueError(f"System workflow {workflow_id} not found")
 
     fork = WorkflowDefinition(
-        id=uuid4(),
+        id=uuid7(),
         user_id=user_id,
         workspace_id=workspace_id,
         name=name or system_workflow.name,
@@ -125,7 +126,7 @@ async def fork_system_workflow(
     setting = await _get_setting(db, workspace_id=workspace_id, workflow_id=workflow_id)
     if setting is None:
         setting = WorkspaceWorkflowSetting(
-            id=uuid4(), workspace_id=workspace_id, workflow_id=workflow_id,
+            id=uuid7(), workspace_id=workspace_id, workflow_id=workflow_id,
         )
         db.add(setting)
     setting.forked_workflow_id = fork.id

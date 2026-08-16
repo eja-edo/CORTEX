@@ -1,4 +1,4 @@
-import type { TokenPair, NotificationListResponse, NotificationResponse } from '../types'
+import type { TokenPair, NotificationListResponse, NotificationResponse, UserPreferencesResponse, ReasonPreference } from '../types'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api'
 const TOKEN_STORAGE_KEY = 'cortex_tokens'
@@ -576,6 +576,50 @@ export async function markAllNotificationsRead(): Promise<{ message: string }> {
 
 export async function deleteNotification(notificationId: string): Promise<{ message: string }> {
    return requestWithAuth(`/notifications/${notificationId}`, { method: 'DELETE' })
+}
+
+// Feedback Loop (6.9) raw material — see NotificationResponse.attention_log_id.
+// Never throws into the caller's UI flow: recording feedback must not block
+// or roll back the dismiss/click action the user already performed.
+export async function recordAttentionResponse(
+   attentionLogId: string,
+   response: 'accepted' | 'dismissed' | 'ignored'
+): Promise<void> {
+   try {
+      await requestWithAuth(`/attention-log/${attentionLogId}/response`, {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify({ response }),
+      })
+   } catch (error) {
+      console.error('Failed to record attention response:', error)
+   }
+}
+
+export async function getUserPreferences(): Promise<UserPreferencesResponse> {
+   return requestWithAuth('/preferences')
+}
+
+export async function updateQuietHours(
+   quietHoursStart: string | null, quietHoursEnd: string | null
+): Promise<UserPreferencesResponse> {
+   return requestWithAuth('/preferences', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ quiet_hours_start: quietHoursStart, quiet_hours_end: quietHoursEnd }),
+   })
+}
+
+export async function listReasonPreferences(): Promise<ReasonPreference[]> {
+   return requestWithAuth('/preferences/reasons')
+}
+
+export async function updateReasonPreference(reasonKey: string, enabled: boolean): Promise<ReasonPreference> {
+   return requestWithAuth(`/preferences/reasons/${encodeURIComponent(reasonKey)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+   })
 }
 
 export { API_BASE_URL }

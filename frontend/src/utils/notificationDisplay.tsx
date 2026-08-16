@@ -1,4 +1,4 @@
-import { AlertTriangle, Calendar, CheckCircle2, CheckSquare, Info, RefreshCw, StickyNote, BellRing } from 'lucide-react'
+import { AlertTriangle, Calendar, CheckCircle2, CheckSquare, Info, Layers, RefreshCw, StickyNote, BellRing } from 'lucide-react'
 import type { NotificationKind } from '../components/NotificationBell'
 
 export function timeAgo(date: Date): string {
@@ -47,5 +47,13 @@ export const KIND_META: Record<NotificationKind, { icon: React.ReactNode; color:
     error: {
         icon: <AlertTriangle size={13} />,
         color: 'var(--red)',
+    },
+    task_overdue: {
+        icon: <CheckSquare size={13} />,
+        color: 'var(--red)',
+    },
+    attention_bundle: {
+        icon: <Layers size={13} />,
+        color: 'var(--accent)',
     },
 }

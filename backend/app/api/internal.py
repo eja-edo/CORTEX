@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
-from app.models import Asset, AssetStatus
+from app.models import Asset, AssetStatus, AttentionItemType
 from app.services.attention_gate import request_attention_sync
 from app.core.internal_auth import verify_internal_key, get_internal_user, InternalUser
 from app.utils.logger import get_logger
@@ -125,6 +125,14 @@ class CreateNotificationRequest(BaseModel):
     type: str = "system"
     content: list[NotificationBlockSchema] = []
     actions: list[NotificationActionSchema] = []
+    # Optional — present once a workflow trigger names the domain item it's
+    # about (System Workflow Reference Model, 4.0, not built yet). All
+    # three or none: a partial triple falls back to the pass-through branch
+    # in attention_gate.py rather than erroring, since a caller mid-rollout
+    # is a normal state, not a bug.
+    item_type: AttentionItemType | None = None
+    item_id: str | None = None
+    reason_key: str | None = None
 
 
 def _create_attention_request(payload: CreateNotificationRequest, db: Session) -> dict:
@@ -132,6 +140,13 @@ def _create_attention_request(payload: CreateNotificationRequest, db: Session) -
         user_uuid = UUID(payload.user_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid user_id format")
+
+    item_id_uuid: UUID | None = None
+    if payload.item_id is not None:
+        try:
+            item_id_uuid = UUID(payload.item_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid item_id format")
 
     notification = request_attention_sync(
         db,
@@ -141,8 +156,13 @@ def _create_attention_request(payload: CreateNotificationRequest, db: Session) -
         body=payload.body,
         content=[b.model_dump() for b in payload.content] or None,
         actions=[a.model_dump() for a in payload.actions],
+        item_type=payload.item_type,
+        item_id=item_id_uuid,
+        reason_key=payload.reason_key,
     )
 
+    if notification is None:
+        return {"ok": True, "notification_id": None, "gated": True}
     return {"ok": True, "notification_id": str(notification.id)}
 
 

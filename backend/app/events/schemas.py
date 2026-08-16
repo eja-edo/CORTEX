@@ -6,9 +6,11 @@ All events in the system follow this unified envelope format.
 
 from datetime import datetime, timezone
 from typing import Any, Optional
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from pydantic import BaseModel, Field
+
+from app.ids import uuid7
 
 
 class EventEnvelope(BaseModel):
@@ -28,7 +30,7 @@ class EventEnvelope(BaseModel):
     - Timestamped: UTC timestamp for ordering
     """
 
-    event_id: str = Field(default_factory=lambda: str(uuid4()))
+    event_id: str = Field(default_factory=lambda: str(uuid7()))
     type: str = Field(..., description="Event type: domain.entity.action")
     source: str = Field(..., description="Event source service/component")
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

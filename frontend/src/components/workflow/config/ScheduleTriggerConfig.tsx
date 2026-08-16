@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { Clock, Repeat, Plus, Trash2, X } from 'lucide-react'
 import type { RecurrenceFreq } from '../../../types'
+import { uuid7 } from '../../../utils/uuid'
 
 type ScheduleEntry = {
   id: string
@@ -120,7 +121,7 @@ function AddTimeModal({ initial, onClose, onCreated, onUpdated }: {
     if (!cron) { setError('Invalid time'); return }
 
     const entry: ScheduleEntry = {
-      id: initial?.id ?? crypto.randomUUID(),
+      id: initial?.id ?? uuid7(),
       cron,
       start: new Date(startTime).toISOString(),
       freq,
@@ -232,7 +233,7 @@ export function ScheduleTriggerConfig({ config, onChange }: Props) {
     }
     if (config.cron) {
       return [{
-        id: crypto.randomUUID(),
+        id: uuid7(),
         cron: config.cron as string,
         start: (config.schedule_start as string) || new Date().toISOString(),
         freq: (config.schedule_freq as RecurrenceFreq) || 'DAILY',

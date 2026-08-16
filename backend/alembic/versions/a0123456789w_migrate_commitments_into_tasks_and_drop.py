@@ -54,7 +54,7 @@ def upgrade() -> None:
             source_conversation_id, source_message_id, created_at, updated_at
         )
         SELECT
-            gen_random_uuid(),
+            uuid_generate_v7(),
             user_id,
             LEFT(expected_action || ' (' || counterparty || ')', 255),
             (CASE status::text

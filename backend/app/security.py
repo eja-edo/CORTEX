@@ -3,13 +3,13 @@ import base64
 import hashlib
 import secrets
 from typing import Optional
-from uuid import uuid4
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from fastapi.security import OAuth2PasswordBearer
 
 from app.config import settings
+from app.ids import uuid7
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token")
@@ -33,7 +33,7 @@ def create_access_token(subject: str, expires_delta: Optional[timedelta] = None)
         "exp": expire,
         "sub": subject,
         "type": "access",
-        "jti": str(uuid4()),
+        "jti": str(uuid7()),
     }
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
@@ -48,7 +48,7 @@ def create_refresh_token(subject: str, expires_delta: Optional[timedelta] = None
         "exp": expire,
         "sub": subject,
         "type": "refresh",
-        "jti": str(uuid4()),
+        "jti": str(uuid7()),
     }
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 

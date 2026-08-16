@@ -3,6 +3,7 @@ import uuid
 from temporalio.client import Client, Schedule, ScheduleSpec, ScheduleActionStartWorkflow, SchedulePolicy, ScheduleOverlapPolicy
 
 from app.config import settings
+from app.core.ids import uuid7
 from app.database import AsyncSessionLocal
 from app.models.execution import WorkflowInstance, ExecutionStatus
 from app.models.workflow import WorkflowDefinition
@@ -33,7 +34,7 @@ async def start_workflow_execution(
 ) -> str:
     from sqlalchemy import select
 
-    instance_id = str(uuid.uuid4())
+    instance_id = str(uuid7())
     temporal_workflow_id = f"cortex-wf-{instance_id}"
 
     async with AsyncSessionLocal() as db:

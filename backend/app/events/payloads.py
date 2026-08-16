@@ -130,6 +130,50 @@ class TaskOverduePayload(BaseModel):
     overdue_days: int
 
 
+class TaskDueSoonPayload(BaseModel):
+    """Payload for task.due_soon event (Milestone 4.6 / A1). Published once
+    per transition into the due-soon window — see StateEvaluator."""
+    task_id: UUID
+    title: str
+    due_date: datetime
+    priority: Optional[str] = Field(None, description="low, medium, high, or urgent")
+    hours_until_due: int
+
+
+class TaskStalePayload(BaseModel):
+    """Payload for task.stale event (Milestone 4.6 / A1) — an open,
+    undated task nobody has touched in a while."""
+    task_id: UUID
+    title: str
+    created_at: datetime
+    days_since_update: int
+
+
+class TaskBlockedCascadePayload(BaseModel):
+    """Payload for task.blocked_cascade event (Milestone 4.6 / A1) — a
+    parent task is overdue and at least one of its subtasks is still open.
+    `task_id` names the parent, since that's the item the reason is about."""
+    task_id: UUID
+    title: str
+    overdue_days: int
+    open_subtask_count: int
+
+
+class ScheduleStartsSoonPayload(BaseModel):
+    """Payload for schedule.starts_soon event (Milestone 4.6 / A1)."""
+    schedule_id: UUID
+    title: str
+    start_time: datetime
+    minutes_until_start: int
+
+
+class DayReviewPayload(BaseModel):
+    """Payload for day.review event (Milestone 4.6 / A1) — a per-user, not
+    per-item, digest anchor: still work open as the day winds down."""
+    open_task_count: int
+    overdue_task_count: int
+
+
 # ============================================================================
 # Conversation Events
 # ============================================================================
@@ -187,6 +231,11 @@ EVENT_PAYLOAD_REGISTRY: dict[str, type[BaseModel]] = {
     "task.completed": TaskCompletedPayload,
     "task.deleted": TaskDeletedPayload,
     "task.overdue": TaskOverduePayload,
+    "task.due_soon": TaskDueSoonPayload,
+    "task.stale": TaskStalePayload,
+    "task.blocked_cascade": TaskBlockedCascadePayload,
+    "schedule.starts_soon": ScheduleStartsSoonPayload,
+    "day.review": DayReviewPayload,
     "conversation.message.created": ConversationMessageCreatedPayload,
     "tool.executed": ToolExecutedPayload,
     "google_calendar.synced": GoogleCalendarSyncedPayload,

@@ -59,6 +59,45 @@
   opacity: 0.8;
 }
 
+/* ---- Conflict Warning Banner (Milestone A3) ---- */
+.wf-warning-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 16px;
+  background: var(--yellow-light);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.wf-warning-banner-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-weight: 600;
+  color: var(--yellow);
+}
+
+.wf-warning-banner-header button {
+  background: none;
+  border: none;
+  color: inherit;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.wf-warning-banner-header button:hover {
+  opacity: 0.8;
+}
+
+.wf-warning-banner ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
 /* ---- List View ---- */
 .wf-list-view {
   display: flex;
@@ -1495,6 +1534,11 @@
   font-size: 11px;
   color: var(--text-tertiary);
   margin-top: 2px;
+}
+
+/* A3 early warning inside the trigger picker itself, before Activate. */
+.wf-config-hint--warning {
+  color: var(--yellow);
 }
 
 /* ---- Node Output Display ---- */

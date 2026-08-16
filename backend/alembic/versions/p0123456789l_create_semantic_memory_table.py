@@ -23,7 +23,7 @@ def upgrade() -> None:
     op.execute("CREATE EXTENSION IF NOT EXISTS vector;")
 
     op.create_table("semantic_memories",
-        sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
+        sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("uuid_generate_v7()")),
         # NOTE: "user_id" currently holds workspace_id (str), matching how
         #       ZepMemoryService uses the "user_id" parameter. Memory is
         #       scoped per workspace, not per individual user.
