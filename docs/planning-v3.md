@@ -84,7 +84,7 @@ candidate → 1. importance (catalog + escalate theo priority/overdue)
 |---|---|
 | 2.3 M1 | ✅ **Đo được lần đầu (2026-08-16).** `tests/data/task_extraction_dataset.json` — 65 item tự viết (VI/EN/mixed, chủ đề kế hoạch học tập/công việc theo ngày), chạy `evaluate_task_extraction.py` qua model thật: precision **1.000** (≥0.9, PASS), recall **0.967** (1 FN: câu "deploy" bị bỏ sót). ⚠️ Dataset tự viết trong một phiên, không phải hội thoại thật đã log — coi là baseline khởi động, nên bổ sung thêm case thật trước khi dùng số này làm căn cứ nới prompt ở 6.7 |
 | 3.1 M4 | Chưa có AI tool nào gọi `TodayService` — agent vẫn tự suy luận thay vì hỏi engine |
-| 3.3 | Chỉ có `is_user_busy` (một thời điểm). **Chưa có `find_free_slots`** (dải thời gian) → câu "bạn có 4 tiếng trống" ở màn Hôm nay chưa làm được |
+| ~~3.3~~ | ✅ Xong 2026-08-16 — `find_free_slots(session, user_id, start, end, min_duration)` trong `availability.py`, dùng chung định nghĩa "busy" với `is_user_busy` (`_schedule_intervals_stmt`). 9 unit test cho phần merge/invert (`_gaps`, thuần không cần DB) + 5 integration test qua DB thật. **Chưa nối vào API/UI màn Hôm nay** — hàm đã sẵn sàng để gọi, việc nối dây là bước riêng |
 | 4.0 | Hạ tầng đủ (bảng override, copy-on-write, lọc SQL) nhưng **DB có 0 system workflow**. M4 (seed 5 workflow) **không còn áp dụng cho 6 predicate của A1** — xem mục A2 đã đổi hướng bên dưới. Hạ tầng này vẫn chờ dùng cho workflow thật sự cần multi-step/multi-event, chưa có nhu cầu cụ thể |
 
 ## ⬜ Chưa bắt đầu
@@ -216,7 +216,7 @@ Không xếp theo số phase nữa, vì thứ tự phase cũ không còn phản 
 |---|---|---|
 | ~~6.2 M3~~ | ~~UI Settings quiet hours~~ | ✅ Xong 2026-08-14 — `SettingsPanel.tsx`'s "Notifications" card, cùng lúc với reason toggle (4.5 redesigned) vì chung một trang/API |
 | ~~2.3 M1~~ | ~~Dataset ≥50 hội thoại gán nhãn (Việt/Anh/trộn)~~ | ✅ Đo lần đầu 2026-08-16 — 65 item, precision 1.000/recall 0.967, xem bảng 🟡→✅ ở mục III. Dataset còn nhỏ và tự viết, nên vẫn cần bổ sung hội thoại thật trước khi dùng làm căn cứ nới prompt ở 6.7 |
-| 3.3 | `find_free_slots(user_id, start, end)` | Mở rộng `availability.py`. Mở khoá câu "bạn có 4 tiếng trống" ở màn Hôm nay |
+| ~~3.3~~ | ~~`find_free_slots(user_id, start, end)`~~ | ✅ Xong 2026-08-16, xem bảng 🟡→✅ ở mục III. Còn lại: nối vào endpoint Hôm nay để hiện câu "bạn có N tiếng trống" — chưa làm, không thuộc milestone gốc |
 | 3.1 M4 | Tool cho agent gọi `TodayService` | Agent hiện tự suy luận việc mà engine đã tính đúng |
 
 ## KHỐI C — Thiết kế lại phần đã chết
