@@ -343,6 +343,12 @@ what changed and what is next.
 * Chain tools intelligently to form a complete understanding.
 * A single request may require multiple tool calls.
 * Never call the same tool with the same arguments more than once per turn.
+* When the user asks what to do today, what's most urgent, or what to focus
+  on — call `get_today` rather than guessing from a task list you already
+  have loaded. The ranking (overdue, priority, due date) and the reason
+  sentence for each item are a product answer, computed the same way the
+  "Hôm nay" screen computes them; reasoning it out yourself risks an answer
+  that quietly disagrees with what the screen shows.
 
 ### Before calling a tool — validate arguments first
 

@@ -11,6 +11,7 @@ from app.ai.tools.create_schedule import CREATE_SCHEDULE_DEFINITION
 from app.ai.tools.create_task import CREATE_TASK_DEFINITION
 from app.ai.tools.propose_plan import PROPOSE_PLAN_DEFINITION
 from app.ai.tools.list_pending_tasks import LIST_PENDING_TASKS_DEFINITION
+from app.ai.tools.get_today import GET_TODAY_DEFINITION
 from app.ai.tools.confirm_task import CONFIRM_TASK_DEFINITION
 from app.ai.tools.update_schedule import UPDATE_SCHEDULE_DEFINITION
 from app.ai.tools.search_knowledge import SEARCH_KNOWLEDGE_DEFINITION
@@ -38,6 +39,7 @@ def register_all_tools() -> None:
         CREATE_TASK_DEFINITION,
         PROPOSE_PLAN_DEFINITION,
         LIST_PENDING_TASKS_DEFINITION,
+        GET_TODAY_DEFINITION,
         CONFIRM_TASK_DEFINITION,
         UPDATE_SCHEDULE_DEFINITION,
         SEARCH_KNOWLEDGE_DEFINITION,
