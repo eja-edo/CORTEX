@@ -73,6 +73,7 @@ EVENT_VOCABULARY: dict[str, EventVocabularyEntry] = {
         _entry("task.due_soon", "An open task entered its due-soon window, not yet in_progress (polled)", "app.services.state_evaluator.StateEvaluator", "Việc sắp đến hạn"),
         _entry("task.stale", "An open, undated task went untouched past the staleness threshold (polled)", "app.services.state_evaluator.StateEvaluator", "Việc bị bỏ quên (không hạn, lâu không động tới)"),
         _entry("task.blocked_cascade", "An overdue task has at least one open subtask (polled)", "app.services.state_evaluator.StateEvaluator", "Việc trễ hạn còn việc con chưa xong"),
+        _entry("task.at_risk", "An overdue task's compute_risk score (priority x overdue_days x cascade) crossed the risk threshold (polled)", "app.services.state_evaluator.StateEvaluator", "Việc có nguy cơ trễ cao"),
         _entry("schedule.starts_soon", "A schedule entered its starts-soon lookahead window (polled)", "app.services.state_evaluator.StateEvaluator", "Lịch sắp bắt đầu"),
         _entry("day.review", "A user still has open tasks as the day reaches its review hour (polled)", "app.services.state_evaluator.StateEvaluator", "Cuối ngày còn việc chưa xong"),
         _entry("conversation.message.created", "A chat message was saved", "app.ai.agents.conversation_store.ConversationStore", "Có tin nhắn mới trong hội thoại"),

@@ -189,6 +189,51 @@ async def handle_task_blocked_cascade(event: EventEnvelope) -> None:
         )
 
 
+async def handle_task_at_risk(event: EventEnvelope) -> None:
+    """Detection→delivery for `task.at_risk` (6.8/4.4) — an escalation on
+    top of `task.overdue`: this task's combined priority, lateness, and
+    blocked subtasks crossed `compute_risk`'s threshold, not just its due
+    date. Fires alongside `task.overdue` for the same task, at a higher
+    base level (ASK vs RECOMMEND) — see attention_reason_catalog.py."""
+    if event.user_id is None:
+        logger.warning("task.at_risk event missing user_id, skipping: %s", event.event_id)
+        return
+
+    task_id = event.payload.get("task_id")
+    if not task_id:
+        logger.warning("task.at_risk event missing task_id, skipping: %s", event.event_id)
+        return
+
+    title = event.payload.get("title", "")
+    risk_score = event.payload.get("risk_score", 0)
+    overdue_days = event.payload.get("overdue_days", 0)
+    open_subtask_count = event.payload.get("open_subtask_count", 0)
+
+    body = f"Trễ {overdue_days} ngày"
+    if open_subtask_count:
+        body += f", còn {open_subtask_count} việc con chưa xong"
+    body += " — nguy cơ trễ tiếp tục tăng."
+
+    async with AsyncSessionLocal() as db:
+        await request_attention_async(
+            db,
+            user_id=event.user_id,
+            type="task_at_risk",
+            title=f"Rủi ro cao: {title}",
+            body=body,
+            actions=[{"label": "Xem", "action": "navigate", "url": "/tasks"}],
+            payload={
+                "task_id": task_id,
+                "risk_score": risk_score,
+                "overdue_days": overdue_days,
+                "open_subtask_count": open_subtask_count,
+            },
+            item_type=AttentionItemType.TASK,
+            item_id=UUID(task_id),
+            reason_key="task.at_risk",
+        )
+
+
 async def handle_schedule_starts_soon(event: EventEnvelope) -> None:
     """Detection→delivery for `schedule.starts_soon` (A1) — separate from
     `schedule.reminder.due` (a reminder the user explicitly set): this
@@ -270,6 +315,7 @@ DIRECT_DELIVERY_HANDLERS = {
     "task.due_soon": handle_task_due_soon,
     "task.stale": handle_task_stale,
     "task.blocked_cascade": handle_task_blocked_cascade,
+    "task.at_risk": handle_task_at_risk,
     "schedule.starts_soon": handle_schedule_starts_soon,
     "day.review": handle_day_review,
 }

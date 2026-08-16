@@ -12,6 +12,12 @@ VI/A1 for why each one exists — the short version is Detection had almost
 nothing for the Attention Gate to gate, so this is where content comes
 from before more Delivery machinery gets built.
 
+`task.at_risk` (6.8/4.4) is a seventh, added later: `risk_detection.
+compute_risk` scores every overdue task, and this publishes when that
+score crosses `settings.STATE_EVALUATOR_RISK_THRESHOLD` — an escalation
+layered on top of `task.overdue`, not a new independent condition (see
+that predicate's own docstring).
+
 `goal.at_risk`/`commitment.*` from the old planning doc's example set
 still don't exist as their own predicates: neither Goal nor Commitment is
 a model in this codebase (Task absorbed both — see Task's own docstring in
@@ -47,6 +53,7 @@ from app.events.event_bus import get_event_bus
 from app.events.payloads import (
     DayReviewPayload,
     ScheduleStartsSoonPayload,
+    TaskAtRiskPayload,
     TaskBlockedCascadePayload,
     TaskDueSoonPayload,
     TaskOverduePayload,
@@ -54,6 +61,7 @@ from app.events.payloads import (
 )
 from app.events.schemas import EventEnvelope
 from app.models import AttentionItemType, Schedule, StateEvaluatorFlag, Task, TaskStatus
+from app.services.risk_detection import compute_risk
 from app.services.today import OPEN_STATUSES, _due_day, _today
 from app.utils.logger import get_logger
 
@@ -65,6 +73,7 @@ STALE_FLAG_KEY = "stale"
 BLOCKED_CASCADE_FLAG_KEY = "blocked_cascade"
 STARTS_SOON_FLAG_KEY = "starts_soon"
 DAY_REVIEW_FLAG_KEY = "day_review"
+AT_RISK_FLAG_KEY = "at_risk"
 
 
 def _utcnow() -> datetime:
@@ -135,6 +144,7 @@ class StateEvaluator:
             self._evaluate_task_due_soon,
             self._evaluate_task_stale,
             self._evaluate_task_blocked_cascade,
+            self._evaluate_task_at_risk,
             self._evaluate_schedule_starts_soon,
             self._evaluate_day_review,
         )
@@ -399,6 +409,87 @@ class StateEvaluator:
             ))
         except Exception as exc:
             logger.warning(f"Failed to publish task.blocked_cascade event for task {parent.id}: {exc}")
+
+    # ------------------------------------------------------------------
+    # task.at_risk — compute_risk(priority, overdue_days, cascade) vượt
+    # ngưỡng (6.8/4.4)
+    # ------------------------------------------------------------------
+
+    async def _evaluate_task_at_risk(self):
+        """Escalation on top of `task.overdue`, not a replacement for it —
+        every `at_risk` task is also `overdue`, but most overdue tasks
+        never cross `STATE_EVALUATOR_RISK_THRESHOLD`. Reuses the same
+        overdue-parent + open-subtask-count query `_evaluate_task_blocked_
+        cascade` already runs (same cascade input, per `risk_detection`'s
+        module docstring), then scores every overdue task — not just ones
+        with subtasks — through `compute_risk`."""
+        async with self._session_maker() as db:
+            today = _today()
+            today_start = datetime.combine(today, time.min)
+
+            overdue_result = await db.execute(
+                select(Task).where(
+                    Task.status.in_(OPEN_STATUSES),
+                    Task.due_date.isnot(None),
+                    Task.due_date < today_start,
+                )
+            )
+            overdue_tasks = {t.id: t for t in overdue_result.scalars().all()}
+
+            at_risk: dict[UUID, tuple[float, int]] = {}
+            if overdue_tasks:
+                subtask_counts_result = await db.execute(
+                    select(Task.parent_task_id, func.count(Task.id))
+                    .where(
+                        Task.parent_task_id.in_(overdue_tasks),
+                        Task.status.in_(OPEN_STATUSES),
+                    )
+                    .group_by(Task.parent_task_id)
+                )
+                subtask_counts = dict(subtask_counts_result.all())
+
+                for task_id, task in overdue_tasks.items():
+                    overdue_days = (today - _due_day(task)).days
+                    open_subtask_count = subtask_counts.get(task_id, 0)
+                    risk = compute_risk(task.priority, overdue_days, open_subtask_count)
+                    if risk >= settings.STATE_EVALUATOR_RISK_THRESHOLD:
+                        at_risk[task_id] = (risk, open_subtask_count)
+
+            to_publish, _ = await self._diff_flags(
+                db,
+                item_type=AttentionItemType.TASK,
+                flag_key=AT_RISK_FLAG_KEY,
+                current_ids=set(at_risk),
+                user_id_by_item={tid: overdue_tasks[tid].user_id for tid in at_risk},
+            )
+
+            for task_id in to_publish:
+                risk_score, open_subtask_count = at_risk[task_id]
+                await self._publish_task_at_risk(
+                    overdue_tasks[task_id], today, risk_score, open_subtask_count
+                )
+
+    async def _publish_task_at_risk(
+        self, task: Task, today, risk_score: float, open_subtask_count: int
+    ) -> None:
+        try:
+            due_day = _due_day(task)
+            event_bus = await self._get_event_bus()
+            await event_bus.publish(EventEnvelope(
+                type="task.at_risk",
+                source="StateEvaluator",
+                user_id=task.user_id,
+                payload=TaskAtRiskPayload(
+                    task_id=task.id,
+                    title=task.title,
+                    risk_score=risk_score,
+                    overdue_days=(today - due_day).days,
+                    open_subtask_count=open_subtask_count,
+                    priority=task.priority.value if task.priority else None,
+                ).model_dump(),
+            ))
+        except Exception as exc:
+            logger.warning(f"Failed to publish task.at_risk event for task {task.id}: {exc}")
 
     # ------------------------------------------------------------------
     # schedule.starts_soon — event bắt đầu trong [MIN, MAX] phút

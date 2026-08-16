@@ -94,6 +94,13 @@
       "label_vi": "L\u1ecbch \u0111\u01b0\u1ee3c c\u1eadp nh\u1eadt"
     },
     {
+      "event_type": "task.at_risk",
+      "description": "An overdue task's compute_risk score (priority x overdue_days x cascade) crossed the risk threshold (polled)",
+      "has_payload_schema": false,
+      "has_direct_backend_delivery": true,
+      "label_vi": "Vi\u1ec7c c\u00f3 nguy c\u01a1 tr\u1ec5 cao"
+    },
+    {
       "event_type": "task.blocked_cascade",
       "description": "An overdue task has at least one open subtask (polled)",
       "has_payload_schema": true,

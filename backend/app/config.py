@@ -176,6 +176,11 @@ class Settings:
     # UserPreferences' docstring) — "end of day" is a fixed UTC hour, the
     # same convention-with-a-known-limitation as quiet hours.
     STATE_EVALUATOR_DAY_REVIEW_HOUR_UTC: int = int(os.getenv("STATE_EVALUATOR_DAY_REVIEW_HOUR_UTC", "14"))
+    # Floor for `task.at_risk` (6.8/4.4) — below this, `compute_risk`'s score
+    # isn't worth a separate escalation on top of the plain `task.overdue`
+    # nudge. 6.0 is a HIGH-priority task (weight 3) two days overdue with no
+    # open subtasks (3 * 2 * 1) — worse than that and it starts compounding.
+    STATE_EVALUATOR_RISK_THRESHOLD: float = float(os.getenv("STATE_EVALUATOR_RISK_THRESHOLD", "6.0"))
 
     # ── Feedback Loop (Milestone 6.9) ─────────────────────────────────────────
     # Every N dismissals of a given reason_key drops it one rung down the

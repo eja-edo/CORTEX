@@ -31,6 +31,7 @@ TEST_USER_ID = UUID("73552833-a6de-40a1-bb69-6e034ca75460")
 TITLE_PREFIX = "[test-4.6] "
 
 YESTERDAY = datetime.combine(date.today() - timedelta(days=1), time(9, 0))
+TWO_DAYS_AGO = datetime.combine(date.today() - timedelta(days=2), time(9, 0))
 
 
 def _utcnow() -> datetime:
@@ -90,6 +91,7 @@ ALL_EVENT_TYPES = (
     "task.due_soon",
     "task.stale",
     "task.blocked_cascade",
+    "task.at_risk",
     "schedule.starts_soon",
     "day.review",
 )
@@ -364,6 +366,73 @@ async def test_blocked_cascade_requires_an_open_subtask(async_db, evaluator, eve
 
     assert len(_events_of_type(event_subscriber, "task.blocked_cascade")) == 0
     assert await _flag(async_db, parent.id, flag_key="blocked_cascade") is None
+
+
+# ---------------------------------------------------------------------------
+# task.at_risk (6.8/4.4)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_at_risk_publishes_when_score_crosses_threshold(async_db, evaluator, event_subscriber):
+    # HIGH weight (3) * 2 days overdue * (1 + 0 subtasks) = 6.0, at the
+    # default STATE_EVALUATOR_RISK_THRESHOLD.
+    task = await _make_task(
+        async_db, title_suffix="at_risk", status=TaskStatus.TODO, due_date=TWO_DAYS_AGO, priority=TaskPriority.HIGH,
+    )
+
+    await evaluator._evaluate_task_at_risk()
+
+    events = _events_of_type(event_subscriber, "task.at_risk")
+    assert len(events) == 1
+    assert events[0].payload["task_id"] == task.id
+    assert events[0].payload["risk_score"] == 6.0
+    assert await _flag(async_db, task.id, flag_key="at_risk") is not None
+
+    # Second scan, nothing changed: must not republish.
+    await evaluator._evaluate_task_at_risk()
+    assert len(_events_of_type(event_subscriber, "task.at_risk")) == 1
+
+
+@pytest.mark.asyncio
+async def test_at_risk_not_published_below_threshold(async_db, evaluator, event_subscriber):
+    # LOW weight (1) * 1 day overdue * (1 + 0) = 1.0 — well under threshold.
+    task = await _make_task(
+        async_db, title_suffix="mild", status=TaskStatus.TODO, due_date=YESTERDAY, priority=TaskPriority.LOW,
+    )
+
+    await evaluator._evaluate_task_at_risk()
+
+    assert len(_events_of_type(event_subscriber, "task.at_risk")) == 0
+    assert await _flag(async_db, task.id, flag_key="at_risk") is None
+
+
+@pytest.mark.asyncio
+async def test_at_risk_clears_when_score_drops_back_below_threshold(async_db, evaluator, event_subscriber):
+    # MEDIUM weight (2) * 1 day * (1 + 2 open subtasks) = 6.0 — crosses via
+    # the cascade term, not lateness alone.
+    parent = await _make_task(
+        async_db, title_suffix="at_risk_parent", status=TaskStatus.TODO, due_date=YESTERDAY, priority=TaskPriority.MEDIUM,
+    )
+    child_a = await _make_task(
+        async_db, title_suffix="at_risk_child_a", status=TaskStatus.TODO, due_date=None, parent_task_id=parent.id,
+    )
+    child_b = await _make_task(
+        async_db, title_suffix="at_risk_child_b", status=TaskStatus.TODO, due_date=None, parent_task_id=parent.id,
+    )
+
+    await evaluator._evaluate_task_at_risk()
+    assert await _flag(async_db, parent.id, flag_key="at_risk") is not None
+
+    # Both subtasks finish: (1 + 0) drops the score to 2.0, under threshold.
+    child_a.status = TaskStatus.DONE
+    child_b.status = TaskStatus.DONE
+    async_db.add(child_a)
+    async_db.add(child_b)
+    await async_db.commit()
+
+    await evaluator._evaluate_task_at_risk()
+    assert await _flag(async_db, parent.id, flag_key="at_risk") is None
 
 
 # ---------------------------------------------------------------------------

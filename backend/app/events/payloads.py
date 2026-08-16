@@ -167,6 +167,20 @@ class ScheduleStartsSoonPayload(BaseModel):
     minutes_until_start: int
 
 
+class TaskAtRiskPayload(BaseModel):
+    """Payload for task.at_risk event (Milestone 6.8/4.4) — an overdue
+    task whose `compute_risk` score (priority x overdue_days x cascade)
+    crossed `settings.STATE_EVALUATOR_RISK_THRESHOLD`. Escalation on top
+    of `task.overdue`, not a replacement for it — a task can be overdue
+    without being `at_risk`."""
+    task_id: UUID
+    title: str
+    risk_score: float
+    overdue_days: int
+    open_subtask_count: int
+    priority: Optional[str] = Field(None, description="low, medium, high, or urgent")
+
+
 class DayReviewPayload(BaseModel):
     """Payload for day.review event (Milestone 4.6 / A1) — a per-user, not
     per-item, digest anchor: still work open as the day winds down."""

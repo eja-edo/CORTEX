@@ -89,7 +89,7 @@ candidate → 1. importance (catalog + escalate theo priority/overdue)
 
 ## ⬜ Chưa bắt đầu
 
-4.4 Công thức là action · 3.4 Dynamic re-planning · 3.5 Next-action endpoint · 6.4 AI proactive reasoning · 6.5 Smart reminders · 6.6 Meeting intelligence · **toàn bộ Phase 5** (integrations) · **toàn bộ Phase 7** (AI cost)
+3.4 Dynamic re-planning · 3.5 Next-action endpoint · 6.4 AI proactive reasoning · 6.5 Smart reminders · 6.6 Meeting intelligence · **toàn bộ Phase 5** (integrations) · **toàn bộ Phase 7** (AI cost)
 
 ---
 
@@ -229,12 +229,12 @@ Nếu chọn **B**, theo đúng thứ tự (không đảo, xem lý do ở QĐ-1)
 4. State Evaluator thêm predicate `task.awaiting_other` (`direction=owed_to_me`, quá hạn).
 5. Gate soạn sẵn lời nhắc ở cấp **Ask Approval** — không bao giờ tự gửi cho người khác.
 
-### 6.8 · Risk Detection *(viết lại — bỏ Goal)* — ✅ Công thức xong (2026-08-16)
+### 6.8 · Risk Detection *(viết lại — bỏ Goal)* — ✅ Xong, kèm 4.4 (2026-08-16)
 Công thức mới không có goal progress. Đầu vào thay thế: `priority` × số ngày trễ × cascade subtask chưa xong (`parent_task_id`).
 
 `app/services/risk_detection.py`: `compute_risk(priority, overdue_days, open_subtask_count)` — hàm thuần, `overdue_days ≤ 0` luôn trả 0 (chưa trễ thì chưa có rủi ro), subtask mở khuếch đại chứ không thay thế điểm gốc (`× (1 + open_subtask_count)`), priority chưa set vẫn có trọng số nền (không bao giờ nhân về 0). `list_at_risk_tasks(session, user_id, min_risk)` — query thật, tái dùng đúng cách tính cascade của `state_evaluator._evaluate_task_blocked_cascade`, trả danh sách đã sắp theo rủi ro giảm dần. 6 unit test (công thức thuần) + 5 integration test (query thật, DB riêng vì đọc toàn bộ task của user không lọc theo title — như `TodayService`).
 
-**Chưa làm:** biến thành action (4.4) — hàm mới dừng ở chỗ tính điểm, chưa nối vào Gate/workflow. Không vẽ thành graph, đúng như roadmap yêu cầu — điểm chỉ tính một tầng (cha–con trực tiếp), không đệ quy nhiều cấp.
+**4.4 (biến công thức thành action) làm luôn cùng ngày, không tách riêng nữa:** predicate thứ 7 của State Evaluator, `task.at_risk` — mỗi task quá hạn được chấm điểm qua `compute_risk`, publish khi vượt `settings.STATE_EVALUATOR_RISK_THRESHOLD` (mặc định 6.0). Đây là **escalation chồng lên `task.overdue`**, không thay thế: một task có thể overdue mà không at_risk, nhưng at_risk luôn kèm overdue. `reason_key` mới `task.at_risk` đăng ký mức nền **ASK** (cao hơn RECOMMEND của overdue/blocked_cascade) trong `attention_reason_catalog.py`, đi thẳng tới Gate qua `notification_subscribers.py::DIRECT_DELIVERY_HANDLERS` — **không dùng workflow_service's action framework**, cùng lý do A2 đã chốt: predicate này là "một điều kiện → một nhắc" xác định, seed thành workflow riêng chỉ tạo nguy cơ trùng lặp mà A3 đã phát hiện. 3 test mới trong `test_state_evaluator.py` (publish khi vượt ngưỡng, im lặng khi dưới ngưỡng, tự xoá flag khi cascade rã).
 
 ## KHỐI D — Sau khi A + B xong
 
@@ -244,7 +244,7 @@ Công thức mới không có goal progress. Đầu vào thay thế: `priority` 
 | 6.4 | AI reasoning cho case mơ hồ | **Chỉ khi** đo được tỷ lệ Gate "không quyết được" — xem mục VII |
 | ~~4.2~~ | ~~Trigger Catalog (JSON, sinh từ vocabulary)~~ | ✅ Xong 2026-08-16 — xem bảng ✅ ở mục III |
 | ~~4.5~~ | ~~Trang audit workflow + nút "đừng nhắc kiểu này nữa"~~ | ✅ Xong 2026-08-14, dạng khác với thiết kế gốc — xem A2 đã đổi hướng. Danh sách reason toggle trong `SettingsPanel.tsx` phủ đúng nhu cầu "đừng nhắc kiểu này nữa" mà không cần trang audit workflow riêng |
-| 4.4 | Chuyển công thức thành action | Cần 6.8 |
+| ~~4.4~~ | ~~Chuyển công thức thành action~~ | ✅ Xong 2026-08-16 cùng 6.8, xem mục Khối C |
 | 3.4/3.5 | Dynamic re-planning, next-action endpoint | Cần A1 (`task.blocked_cascade`) |
 
 ## KHỐI E — Chưa cần bàn

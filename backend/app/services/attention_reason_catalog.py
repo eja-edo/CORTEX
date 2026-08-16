@@ -56,6 +56,13 @@ REASON_CATALOG: dict[str, ReasonMeta] = {
         base_level=AttentionLevel.RECOMMEND,
         description="An overdue task still has unfinished subtasks under it.",
     ),
+    "task.at_risk": ReasonMeta(
+        base_level=AttentionLevel.ASK,
+        description=(
+            "A task's combined priority, lateness, and blocked subtasks crossed the risk "
+            "threshold — worse than a plain overdue nudge accounts for."
+        ),
+    ),
     "schedule.starts_soon": ReasonMeta(
         base_level=AttentionLevel.INFORM,
         description="A scheduled event is about to start.",
