@@ -51,11 +51,24 @@ def test_level_values_are_the_five_intervention_levels():
     ]
 
 
-def test_channel_declares_phase_5_channels_up_front():
-    """telegram/email have no delivery path yet. Declaring them now means
-    enabling one later is a code change, not a migration on a table that by
-    then holds live history."""
-    assert {v.value for v in AttentionChannel} == {"in_app", "push", "telegram", "email"}
+def test_channel_declares_future_channels_up_front():
+    """Only `in_app` has an adapter today (app/services/delivery/); the rest
+    are declared ahead of theirs.
+
+    The original reasoning here — "so enabling one later is a code change,
+    not a migration" — was half right: adding an enum *value* to PostgreSQL
+    is itself a migration, so declaring them early saves one migration per
+    channel rather than avoiding migrations altogether. What it does buy is
+    real: `user_channels` and `notification_deliveries` both reference this
+    type, and the delivery roadmap (web push → chat bot → email) is already
+    known, so the values landed in one migration instead of three.
+
+    A value with no adapter is a defined state, not a half-finished one —
+    the dispatcher records `skipped/no_adapter` and the settings API
+    refuses to register it (`registry.is_registerable`)."""
+    assert {v.value for v in AttentionChannel} == {
+        "in_app", "push", "telegram", "email", "slack", "mezon", "webhook",
+    }
 
 
 def test_response_values():

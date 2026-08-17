@@ -145,3 +145,28 @@ def get_current_user_or_internal(
         raise HTTPException(status_code=400, detail="Inactive user")
 
     return user
+
+
+def require_internal_service(
+    x_internal_api_key: str | None = Header(None, alias="X-Internal-API-Key"),
+) -> bool:
+    """Service-to-service auth with **no user identity attached**.
+
+    Distinct from `get_current_user_or_internal`, which takes `X-User-ID`
+    and acts as that person. Some internal endpoints must not work that
+    way: channel redemption (M1) decides *which* account to link from the
+    one-time code alone, so accepting a caller-supplied user id would let
+    the key holder attach any chat account to anybody — exactly the attack
+    the code exists to prevent.
+
+    Use this wherever the endpoint derives the subject from its own
+    payload rather than from the caller.
+    """
+    if not settings.INTERNAL_API_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="INTERNAL_API_KEY not configured in backend",
+        )
+    if not x_internal_api_key or x_internal_api_key != settings.INTERNAL_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid internal API key")
+    return True

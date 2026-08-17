@@ -39,6 +39,7 @@ from app.services.llm_processor_worker import get_llm_processor_worker
 from app.services.reminder_worker import ReminderWorker
 from app.services.state_evaluator import StateEvaluator
 from app.services.attention_bundle_worker import AttentionBundleWorker
+from app.services.delivery_worker import DeliveryWorker
 from app.services.google_sync_worker import GoogleSyncWorker
 from app.services.task_flush_worker import TaskFlushWorker
 from app.api.sse.sse_manager import SSEManager
@@ -127,6 +128,7 @@ _llm_worker_thread: Optional[WorkerThread] = None
 _reminder_worker_thread: Optional[WorkerThread] = None
 _state_evaluator_thread: Optional[WorkerThread] = None
 _attention_bundle_worker_thread: Optional[WorkerThread] = None
+_delivery_worker_thread: Optional[WorkerThread] = None
 _google_sync_worker_thread: Optional[WorkerThread] = None
 _task_flush_worker_thread: Optional[WorkerThread] = None
 
@@ -217,6 +219,15 @@ async def lifespan(app: FastAPI):
     _attention_bundle_worker_thread = WorkerThread("AttentionBundle", AttentionBundleWorker())
     _attention_bundle_worker_thread.start()
 
+    # Start DeliveryWorker in separate thread — drains the
+    # notification_deliveries outbox for every channel outside the browser.
+    # Without it, a notification created while the user has no tab open is
+    # persisted and then goes nowhere, which is the gap the delivery layer
+    # exists to close (app/services/delivery/).
+    global _delivery_worker_thread
+    _delivery_worker_thread = WorkerThread("Delivery", DeliveryWorker())
+    _delivery_worker_thread.start()
+
     # Start GoogleSyncWorker in separate thread
     google_sync_worker = GoogleSyncWorker()
     _google_sync_worker_thread = WorkerThread("GoogleSync", google_sync_worker)
@@ -247,6 +258,8 @@ async def lifespan(app: FastAPI):
             _state_evaluator_thread.stop()
         if _attention_bundle_worker_thread:
             _attention_bundle_worker_thread.stop()
+        if _delivery_worker_thread:
+            _delivery_worker_thread.stop()
         if _google_sync_worker_thread:
             _google_sync_worker_thread.stop()
         if _task_flush_worker_thread:

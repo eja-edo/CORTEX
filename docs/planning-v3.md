@@ -67,6 +67,7 @@ Bốn nguyên tắc P1–P4 và ba ranh giới của Bản 2 **vẫn đúng nguy
 | **4.5 (redesigned)** | **Bật/tắt từng loại nhắc theo reason_key — thay cho "system workflow toggle"** | `disabled_reason_keys` (migration `m1234567890n`), `GET/PUT /preferences/reasons`, `attention_gate.py`'s `_decide_level_async/_sync` short-circuit, `SettingsPanel.tsx` |
 | **6.9** | **Feedback Loop — auto-downgrade theo tỷ lệ dismiss (M1–M4 đủ cả)** | `app/services/feedback_loop.py` (`apply_downgrade`, ladder ACT→ASK→RECOMMEND→INFORM→SILENT, mỗi `FEEDBACK_LOOP_DISMISS_THRESHOLD` lần dismiss hạ 1 bậc), wired vào Gate, `dismiss_count`/`effective_level` hiện trong `/preferences/reasons` (M2) + `SettingsPanel.tsx`, 16 test (6 unit + 5 gate integration + 1 API) |
 | **4.2** | **Trigger Catalog (M1–M4 đủ cả)** | `EventVocabularyEntry.label_vi` (`vocabulary.py`) → `event_vocabulary.json` → `GET /api/v1/actions/triggers/catalog` (workflow_service) → `InternalEventTriggerConfig.tsx` fetch động, xoá `EVENT_TYPES` hard-code cũ. Kèm cảnh báo `has_direct_backend_delivery` (A3) ngay ở bước chọn trigger, không đợi tới Activate. 8 test mới (workflow_service) |
+| **F0** | **Delivery layer — tách "tạo notification" khỏi "gửi đi đâu"** | `app/services/delivery/` (`base.py` contract, `registry.py`, `in_app.py`, `dispatcher.py`) + `delivery_worker.py` + 2 bảng (`user_channels`, `notification_deliveries`, migration `n1234567890o`) + `GET/POST/PUT/DELETE /preferences/channels`. 20 test mới (9 unit, 11 integration). Xem mục XI |
 
 **Gate hiện chạy đủ 5 bước, toàn bộ deterministic:**
 
@@ -251,6 +252,29 @@ Công thức mới không có goal progress. Đầu vào thay thế: `priority` 
 
 Phase 5 (Email/Telegram/GitHub), Phase 7 (AI cost). Cả hai đứng *trên* A–D nên xây sau vẫn rẻ. Phase 7 đặc biệt: kiến trúc hiện tại đã gần như không tốn token cho proactive, nên **đo lại baseline sau khối A** trước khi kết luận cần tối ưu gì.
 
+> ⚠️ **Phần *outbound* của Phase 5 đã bị nâng lên khối F (2026-08-17)** và không còn "chưa cần bàn". Phần còn ở đây là *inbound* — Email/Git làm **nguồn detection**, tức là thêm thứ đáng nói. Hai chuyện khác loại nhau và trước đây bị gộp chung dưới một chữ "integrations": xem mục XI.
+
+## KHỐI F — Kênh Phát *(mới, 2026-08-17)*
+
+### F0 · Delivery layer — ✅ Đã xong (2026-08-17)
+Chi tiết ở mục XI. Tóm tắt: `create_notification_*` giờ chỉ *tạo* notification; việc *gửi* đi kênh nào là một lớp riêng, adapter-based, có outbox + worker + retry.
+
+### F1 · Web Push + PWA — ⬜ Chưa bắt đầu *(khuyến nghị làm trước)*
+Rẻ nhất trong các kênh thật: tái dùng nguyên frontend và auth hiện có, không cần app store, phủ desktop + Android **khi đã tắt tab**. iOS cần add-to-homescreen — chấp nhận được. Sau F0 thì phần backend còn lại đúng bằng **một file adapter + một dòng `register(...)`**; phần frontend là service worker + xin quyền + `POST /preferences/channels`.
+
+### F2 · Bot hai chiều — **✅ đã chốt nền tảng: Mezon** (2026-08-17). Kế hoạch chi tiết: `docs/mezon-bot-plan.md`
+Đây là bước tạo đột phá, không phải F1. Lý do: Gate đã có mức **ASK/ACT** (`task.at_risk` đang ở ASK) nhưng **hiện không có nơi nào để user trả lời** — mọi notification đều là một chiều. Bot biến "nhắc" thành "nhắc + xong rồi / dời sang mai" ngay trong luồng chat.
+
+Ba điều đã xác minh từ source SDK (không phải từ docs — docs thiếu hẳn phần này): Mezon **không có modal**, form là embed có field mang `inputs` + nút submit; `message.update()` đi qua socket nên **giả-realtime khả thi**; SDK **chỉ có TypeScript** ⇒ bot là service Node riêng. Chi tiết + 6 milestone ở tài liệu riêng.
+
+**F2 có thể chạy trước F1** — thứ tự F1→F2 ở trên là theo chi phí, không phải phụ thuộc kỹ thuật. Cả hai đều chỉ cần F0.
+
+### F3 · Inbound integrations (Email/Git) — ⬜ Sau F1/F2
+Đúng thứ tự này chứ không đảo: thêm nguồn detection khi chưa có đường phát sẽ lặp lại đúng lỗi mục IV, chỉ theo chiều ngược — *nhiều thứ đáng nói, không nói tới được ai*.
+
+### Mobile app native — hoãn vô thời hạn
+Chỉ đáng làm khi cần widget màn hình chính, offline thật, hoặc nhắc theo vị trí. F1 phủ ~95% giá trị với ~5% chi phí.
+
 ---
 
 # VII. Vị Trí Của AI Trong Bản 3
@@ -291,7 +315,13 @@ B/2.3 ───────┘                                          nới pr
 B: 3.3 find_free_slots      ────→ status line màn Hôm nay
 ```
 
-**Critical path mới:** `A1 ✅ → A3 ✅ → 4.5 redesigned ✅ → 6.9 ✅ → 4.2 ✅`. Khối A, khối B, khối C (6.7 chờ dataset thật — xem QĐ-1), và 3.4/3.5 đều đã đóng — xem mục III/Khối B/Khối C/Khối D. Việc còn lại: **6.4** (cần đo tỷ lệ Gate "không quyết được" trước — chưa có cách đo, xem mục VII), **6.7 bước 2 trở đi** (chờ hội thoại thật bổ sung vào dataset 2.3 M1, không phải việc code), hoặc Phase 5/7 (khối E, chưa cần bàn). A2 (seed system workflow theo thiết kế gốc) **đứng ngoài critical path** — hạ tầng 4.0 vẫn còn đó, chỉ chờ một nhu cầu thật sự cần multi-step workflow.
+```
+✅ F0 Delivery layer ─┬─→ F1 Web Push (một file adapter + service worker)
+   (2026-08-17)       ├─→ F2 Bot hai chiều  ← chờ chốt nền tảng
+                      └─→ (F3 inbound Email/Git đứng sau F1/F2)
+```
+
+**Critical path mới:** `A1 ✅ → A3 ✅ → 4.5 redesigned ✅ → 6.9 ✅ → 4.2 ✅ → F0 ✅ → F1`. Khối A, khối B, khối C (6.7 chờ dataset thật — xem QĐ-1), và 3.4/3.5 đều đã đóng — xem mục III/Khối B/Khối C/Khối D. Việc còn lại: **6.4** (cần đo tỷ lệ Gate "không quyết được" trước — chưa có cách đo, xem mục VII), **6.7 bước 2 trở đi** (chờ hội thoại thật bổ sung vào dataset 2.3 M1, không phải việc code), hoặc Phase 5/7 (khối E, chưa cần bàn). A2 (seed system workflow theo thiết kế gốc) **đứng ngoài critical path** — hạ tầng 4.0 vẫn còn đó, chỉ chờ một nhu cầu thật sự cần multi-step workflow.
 **Song song được:** toàn bộ khối B, và khối C **sau khi có** dataset 2.3 M1 (QĐ-1 đã chốt = B, không còn là điều kiện chờ).
 
 ---
@@ -319,3 +349,71 @@ Giữ lại để không mất tham chiếu chéo trong `tasks/` và tài liệu
 - **Mục tiêu** là tiêu chí nghiệm thu — code xong mà mục tiêu chưa đạt thì chưa done.
 - Khi một thiết kế mâu thuẫn với **P1–P4** hoặc ba ranh giới ở mục II: **sửa thiết kế, không sửa nguyên tắc.**
 - Khi schema đổi lần nữa: cập nhật mục III + IX **trước**, rồi mới sửa roadmap. Bản 2 lạc hậu chính vì bước này bị bỏ qua.
+
+---
+
+# XI. Delivery Layer (F0) — ✅ Xong 2026-08-17
+
+## Vấn đề
+
+Mục IV kết luận Detection đã đóng và Delivery "đã đủ". **Cả hai đúng, và cùng nhau vẫn không đủ** — vì "Delivery" ở mục IV chỉ có nghĩa *quyết định có nói không và nói ở mức nào*, chưa bao giờ có nghĩa *lời nói đó tới được người dùng*.
+
+Đường đi thật của một thông báo trước hôm nay:
+
+```
+State Evaluator → notification_subscribers → Attention Gate
+                → create_notification_async → INSERT notifications
+                                            → publish_notification_async  ← DUY NHẤT
+                                                └─ SSE tới tab đang mở
+```
+
+`task.at_risk` bắn lúc 2h chiều khi user đóng tab → row vẫn nằm trong DB, nhưng user chỉ biết khi tự mở web lại. Đây là mục IV bị lật ngược: **có nhiều thứ đáng nói nhưng không nói tới ai được.**
+
+## Ba quyết định thiết kế
+
+**QĐ-F0.1 — Lớp fan-out đặt ở `create_notification_*`, KHÔNG đặt ở Gate.**
+Dễ làm sai nhất. `attention_bundle.flush_due_bundles` **cố tình không đi qua Gate** (nó đã *là* output của Gate). Treo fan-out ở Gate ⇒ đúng cái notification *"trong lúc bạn bận có 4 việc"* — theo định nghĩa sinh ra lúc user không nhìn màn hình, tức là thứ cần push nhất — là thứ duy nhất không bao giờ được push. Điểm thoát thật sự duy nhất là chỗ tạo Notification.
+P1 vẫn nguyên: Gate vẫn là cổng duy nhất quyết định **có nói không**; lớp mới chỉ quyết định **nói qua đâu**. P2 (Detection ≠ Delivery) kéo dài thêm một nấc chứ không bị bẻ.
+
+**QĐ-F0.2 — Outbox, không gọi thẳng adapter.**
+Kênh thật là I/O mạng bên thứ ba. Gọi inline sẽ để một request treo cả `StateEvaluator` loop. Và `create_notification_async` commit *trước* rồi mới publish — với kênh ngoài đó là dual-write: gửi xong transaction rollback, hoặc ngược lại. Hai trong năm call site chạy trong background worker nuốt exception rồi retry cả vòng lặp, nên khoảng hở đó không phải lý thuyết mà là *có lịch*. Nên: ghi `notification_deliveries` **cùng transaction** với notification, `DeliveryWorker` đọc và gửi.
+
+**QĐ-F0.3 — `min_level` per-channel, không phải push mọi thứ.**
+Không có ngưỡng thì mọi INFORM (*"bạn có 4 tiếng trống chiều nay"*) thành một lần rung điện thoại — phá đúng thứ 5 bước của Gate dựng nên, ở đúng centimet cuối. Default lấy từ adapter và **copy vào row lúc đăng ký**, không đọc live: user hạ ngưỡng của mình rồi thì một default tự khẳng định lại mỗi lần gửi sẽ âm thầm ghi đè họ.
+
+## Kiến trúc
+
+```
+Gate (có nói không) → Notification row → dispatcher (nói qua đâu)
+                                          ├── in_app: SSE, INLINE, sau commit
+                                          └── còn lại: outbox row (pending)
+                                                        ↓
+                                              DeliveryWorker (claim → adapter → ghi kết quả)
+```
+
+| Thành phần | File |
+|---|---|
+| Contract 1 adapter | `app/services/delivery/base.py` — `DeliveryChannelAdapter`, `DeliveryPayload`, `DeliveryResult`/`DeliveryOutcome` |
+| Danh sách kênh có thật | `registry.py` |
+| Kênh in-app (SSE cũ, không đổi hành vi) | `in_app.py` |
+| Fan-out + outbox | `dispatcher.py` |
+| Drain outbox | `delivery_worker.py` |
+| Bảng | `user_channels`, `notification_deliveries` (migration `n1234567890o`) |
+| API | `GET/POST/PUT/DELETE /preferences/channels`, `GET /preferences/channels/available` |
+| Thứ tự level dùng chung | `attention_levels.py` (gỡ bản copy `_LEVEL_RANK` trong Gate) |
+
+**`inline` là lựa chọn cấu trúc duy nhất adapter phải tự quyết.** In-app inline vì ba tính chất khác *về bản chất* với mọi kênh sau nó: (1) in-process, không có third party để timeout; (2) thất bại **không** retry được — "không có tab nào mở" chính là điều kiện các kênh khác sinh ra để phủ, retry sau 30 giây là trả lời sai câu hỏi; (3) nuôi UI trực tiếp nên độ trễ poll-interval là regression thấy được. Vì thế nó là **thuộc tính khai báo của adapter**, không phải case đặc biệt trong dispatcher.
+
+## Tiêu chí nghiệm thu (mục X: mục tiêu là nghiệm thu)
+
+> Thêm một kênh thật = **một file trong `delivery/` + một dòng `register(...)`**. Không sửa `attention_gate.py`, `notifications.py`, hay `delivery_worker.py`.
+
+Nếu F1 (Web Push) phải sửa một trong ba file đó thì lớp trừu tượng này hỏng, và phải sửa nó chứ không lách qua.
+
+## Điểm cần biết trước khi làm F1/F2
+
+- **`AttentionChannel` đã khai sẵn `slack`/`mezon`/`webhook`** trong migration này. Sửa lại một nhận định cũ trong docstring: thêm value vào PG enum *vẫn là migration* — khai trước tiết kiệm 3 migration, không phải "không cần migration".
+- **Kênh chưa có adapter không phải lỗi**: dispatcher ghi `skipped/no_adapter`, API từ chối đăng ký (`registry.is_registerable`).
+- **`DeliveryOutcome.DEAD_ADDRESS` tự tắt `user_channels` row** (subscription bị thu hồi, bot bị chặn). Không có nó thì bảng delivery đầy rác và trang cấu hình hiển thị thiết bị vĩnh viễn không bao giờ reo.
+- **Chưa có UI**: `SettingsPanel.tsx` chưa có thẻ Channels. Cố ý — chưa có kênh nào để hiện ngoài in-app (vốn không đăng ký được). Làm cùng F1.
+- **`attention_log.channel` không bị đụng tới**: nó ghi *quyết định nói*, `notification_deliveries` ghi *đường ra*. Chuỗi join đã đủ: delivery → notification → `attention_log_id`.

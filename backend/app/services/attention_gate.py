@@ -61,6 +61,7 @@ from app.models import (
     TaskPriority,
 )
 from app.services.attention_bundle import enqueue_async, enqueue_sync
+from app.services.attention_levels import LEVEL_RANK as _LEVEL_RANK
 from app.services.attention_log import AttentionLogService
 from app.services.attention_reason_catalog import base_level_for
 from app.services.availability import should_stay_quiet_async, should_stay_quiet_sync
@@ -78,14 +79,6 @@ logger = get_logger(__name__)
 # instead when the user is busy (step 3). SILENT never reaches this check —
 # it's already the quietest outcome.
 _CRITICAL_LEVELS = {AttentionLevel.ASK, AttentionLevel.ACT}
-
-_LEVEL_RANK: dict[AttentionLevel, int] = {
-    AttentionLevel.SILENT: 0,
-    AttentionLevel.INFORM: 1,
-    AttentionLevel.RECOMMEND: 2,
-    AttentionLevel.ASK: 3,
-    AttentionLevel.ACT: 4,
-}
 
 
 def _escalate(level: AttentionLevel, at_least: AttentionLevel) -> AttentionLevel:

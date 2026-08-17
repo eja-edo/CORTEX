@@ -190,6 +190,42 @@ class Settings:
     # number replace it. 0 disables auto-downgrade entirely.
     FEEDBACK_LOOP_DISMISS_THRESHOLD: int = int(os.getenv("FEEDBACK_LOOP_DISMISS_THRESHOLD", "3"))
 
+    # ── Delivery layer (bước 0 — app/services/delivery/) ─────────────────────
+    # How often DeliveryWorker sweeps the outbox. Only external channels wait
+    # for it (in-app/SSE is dispatched inline, see NotificationDelivery's
+    # docstring), so this is the added latency of a push or a bot message —
+    # not of anything the user sees in an open tab.
+    DELIVERY_WORKER_POLL_SECONDS: int = int(os.getenv("DELIVERY_WORKER_POLL_SECONDS", "10"))
+    DELIVERY_WORKER_BATCH_SIZE: int = int(os.getenv("DELIVERY_WORKER_BATCH_SIZE", "50"))
+    # Attempts before a delivery is marked `failed` for good. Transient
+    # failures (a 503 from a push service) are the case this exists for;
+    # permanent ones (revoked subscription) short-circuit to `failed` on the
+    # first attempt regardless — see DeliveryOutcome.
+    DELIVERY_MAX_ATTEMPTS: int = int(os.getenv("DELIVERY_MAX_ATTEMPTS", "5"))
+    # Exponential backoff base: attempt N waits BASE * 2^(N-1) seconds.
+    DELIVERY_RETRY_BASE_SECONDS: int = int(os.getenv("DELIVERY_RETRY_BASE_SECONDS", "30"))
+    # Hard ceiling on one adapter's send. Without it, one unresponsive
+    # third-party endpoint stalls the whole sweep behind it.
+    DELIVERY_SEND_TIMEOUT_SECONDS: int = int(os.getenv("DELIVERY_SEND_TIMEOUT_SECONDS", "30"))
+    # A row left in `sending` longer than this is assumed to belong to a
+    # worker that died mid-send and is reclaimed. Must comfortably exceed the
+    # slowest adapter's own timeout, or a slow send gets sent twice.
+    DELIVERY_STALE_SENDING_SECONDS: int = int(os.getenv("DELIVERY_STALE_SENDING_SECONDS", "300"))
+
+    # ── Mezon bot ────────────────────────────────────────────────────────────
+    # Internal base URL of the Node bot service. Empty means "not deployed":
+    # the adapter then reports deliveries as retryable rather than failed,
+    # so they queue and drain once the bot exists instead of being lost.
+    # Must stay on an internal network — it is called with INTERNAL_API_KEY.
+    MEZON_BOT_INTERNAL_URL: str = os.getenv("MEZON_BOT_INTERNAL_URL", "")
+    MEZON_BOT_TIMEOUT_SECONDS: float = float(os.getenv("MEZON_BOT_TIMEOUT_SECONDS", "10"))
+
+    # ── Chat channel linking (M1) ────────────────────────────────────────────
+    # How long a link code stays valid. Short on purpose: the code is a
+    # credential, and the whole flow is "read it off one screen, type it
+    # into another" — minutes, not hours. Matches the OAuth state TTL.
+    CHANNEL_LINK_CODE_TTL_SECONDS: int = int(os.getenv("CHANNEL_LINK_CODE_TTL_SECONDS", "600"))
+
     # ── Agent feature flags ──────────────────────────────────────────────────
     AGENT_PARALLEL_TOOL_EXECUTION: bool = os.getenv("AGENT_PARALLEL_TOOL_EXECUTION", "true").lower() == "true"
     AGENT_TOOL_CALL_COUNT_SCOPE: str = os.getenv("AGENT_TOOL_CALL_COUNT_SCOPE", "turn")

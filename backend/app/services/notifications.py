@@ -1,3 +1,18 @@
+"""Creating and reading `Notification` rows.
+
+Creation is two steps, deliberately separated (see
+app/services/delivery/dispatcher.py for the full reasoning):
+
+1. Persist the row — the durable record, and the in-app inbox itself.
+2. Fan out to every channel the user can be reached on.
+
+Step 2 used to be a single hardcoded `publish_notification*` call, which
+made SSE the only way anything ever left the system: close the tab and
+Cortex went mute. It is now one adapter among N behind
+`app.services.delivery`, and nothing in this module knows which channels
+exist.
+"""
+
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -6,11 +21,13 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from app.api.sse.channels.notification_events import (
-    publish_notification,
-    publish_notification_async,
-)
 from app.models import AttentionLevel, Notification
+from app.services.delivery import (
+    plan_deliveries_async,
+    plan_deliveries_sync,
+    run_inline_deliveries_async,
+    run_inline_deliveries_sync,
+)
 
 
 def _build_notification(
@@ -63,22 +80,19 @@ async def create_notification_async(
         attention_log_id=attention_log_id,
     )
     db.add(notification)
+    # Flush, not commit: the delivery rows have to land in the *same*
+    # transaction as the notification (dispatcher.py explains why a
+    # dual-write here would lose or duplicate deliveries), and they need
+    # the id this flush assigns.
+    await db.flush()
+    planned = await plan_deliveries_async(db, notification)
     await db.commit()
     await db.refresh(notification)
 
-    await publish_notification_async(
-        user_id=str(user_id),
-        notification_id=str(notification.id),
-        title=notification.title,
-        body=notification.body or "",
-        content=notification.content,
-        actions=notification.actions,
-        notification_type=notification.type,
-        payload=notification.payload,
-        reason_key=notification.reason_key,
-        attention_level=notification.attention_level.value if notification.attention_level else None,
-        attention_log_id=str(notification.attention_log_id) if notification.attention_log_id else None,
-    )
+    # After the commit, never before: the SSE frame tells the browser to
+    # read a row that must already be visible to the connection serving
+    # that read.
+    await run_inline_deliveries_async(db, notification, planned)
     return notification
 
 
@@ -107,22 +121,12 @@ class NotificationService:
             attention_log_id=attention_log_id,
         )
         self.db.add(notification)
+        self.db.flush()
+        planned = plan_deliveries_sync(self.db, notification)
         self.db.commit()
         self.db.refresh(notification)
 
-        publish_notification(
-            user_id=str(user_id),
-            notification_id=str(notification.id),
-            title=notification.title,
-            body=notification.body or "",
-            content=notification.content,
-            actions=notification.actions,
-            notification_type=notification.type,
-            payload=notification.payload,
-            reason_key=notification.reason_key,
-            attention_level=notification.attention_level.value if notification.attention_level else None,
-            attention_log_id=str(notification.attention_log_id) if notification.attention_log_id else None,
-        )
+        run_inline_deliveries_sync(self.db, notification, planned)
         return notification
 
     def list_notifications(self, user_id: UUID, limit: int, offset: int) -> tuple[list[Notification], int]:

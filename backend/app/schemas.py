@@ -836,6 +836,82 @@ class ReasonPreferenceUpdate(BaseModel):
     enabled: bool
 
 
+class UserChannelResponse(BaseModel):
+    """One registered delivery route (bước 0 — app/services/delivery/).
+
+    `address` is echoed back masked, never in full: these are push
+    endpoints and chat ids, and the settings list only needs to let a user
+    tell their three browsers apart — which is what `label` is for.
+    `last_error` is here because a channel that silently stops working is
+    worse than one that says why.
+    """
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    channel: AttentionChannel
+    label: str | None
+    address_hint: str
+    enabled: bool
+    verified: bool
+    min_level: AttentionLevel
+    last_used_at: datetime | None
+    created_at: datetime
+
+
+class UserChannelCreate(BaseModel):
+    channel: AttentionChannel
+    address: str = Field(min_length=1, max_length=2048)
+    label: str | None = Field(default=None, max_length=120)
+    config: dict[str, Any] = Field(default_factory=dict)
+    # Omit to take the adapter's default floor. Boundary #2: registering a
+    # device must work without the user choosing anything.
+    min_level: AttentionLevel | None = None
+
+
+class ChannelLinkCodeResponse(BaseModel):
+    """What the web app shows the user to type into the chat."""
+    code: str
+    channel: AttentionChannel
+    expires_in: int
+    # The exact string to send, so the UI never has to hardcode the bot's
+    # command syntax and drift from it.
+    instruction: str
+
+
+class ChannelLinkCodeRequest(BaseModel):
+    channel: AttentionChannel
+
+
+class ChannelResolveResponse(BaseModel):
+    """Answer to "who is this chat account?".
+
+    `linked: false` instead of a 404 so the bot can distinguish "not linked
+    yet" — which deserves friendly instructions — from a transport failure,
+    which deserves an apology and a retry.
+    """
+    linked: bool
+    user_id: UUID | None = None
+    channel_id: UUID | None = None
+    enabled: bool | None = None
+
+
+class ChannelRedeemRequest(BaseModel):
+    """Sent by the bot, never by a browser — see `redeem_link_code`."""
+    code: str = Field(min_length=1, max_length=12)
+    channel: AttentionChannel
+    address: str = Field(min_length=1, max_length=2048)
+    label: str | None = Field(default=None, max_length=120)
+
+
+class UserChannelUpdate(BaseModel):
+    """Every field optional — this endpoint is how a user turns a channel
+    off or raises its floor, and neither should require restating the
+    other."""
+    enabled: bool | None = None
+    min_level: AttentionLevel | None = None
+    label: str | None = Field(default=None, max_length=120)
+
+
 class GoogleConnectUrlResponse(BaseModel):
     authorization_url: str
     state: str

@@ -140,16 +140,30 @@ class AttentionLevel(str, Enum):
 
 
 class AttentionChannel(str, Enum):
-    """Where the surfacing went.
+    """A way of reaching the user.
 
-    `telegram` and `email` have no delivery path until Phase 5; they are
-    declared now so adding one later is a code change, not a migration on a
-    table that by then holds history.
+    Used in two places with two different meanings, deliberately kept on
+    one enum: `attention_log.channel` records the *surface* a Gate decision
+    was made for, while `user_channels.channel` /
+    `notification_deliveries.channel` record an actual **delivery route**
+    (see those tables and app/services/delivery/).
+
+    Only channels with an adapter registered in
+    `app.services.delivery.registry` can actually deliver anything. The
+    rest are declared ahead of their adapters on purpose: adding an enum
+    *value* to PostgreSQL is a migration, and doing one migration per new
+    channel while the delivery roadmap (web push → chat bot → email) is
+    already known would be three migrations for no reason. A row naming a
+    channel with no adapter is a defined state, not corruption — the
+    dispatcher marks that delivery `skipped`.
     """
     IN_APP = "in_app"
     PUSH = "push"
     TELEGRAM = "telegram"
     EMAIL = "email"
+    SLACK = "slack"
+    MEZON = "mezon"
+    WEBHOOK = "webhook"
 
 
 class AttentionResponse(str, Enum):
@@ -1076,6 +1090,217 @@ class UserPreferences(Base):
 
     def __repr__(self):
         return f"<UserPreferences(user_id={self.user_id}, quiet_hours={self.quiet_hours_start}-{self.quiet_hours_end})>"
+
+
+class DeliveryStatus(str, Enum):
+    """Lifecycle of one attempt to push one Notification down one channel.
+
+    `skipped` is not a failure: it is the recorded decision that this
+    channel was not used (no adapter registered for it, or the
+    notification's level sat below the channel's `min_level`). Keeping it
+    as a row rather than simply not writing one preserves the same property
+    `attention_log` was built for — *why did nothing arrive?* has an
+    answer, instead of an absence that could equally mean "not attempted"
+    or "lost".
+
+    `failed` is terminal: either the adapter reported a permanent error
+    (a revoked push subscription, a bot blocked by the user) or retries ran
+    out. `pending` rows are what `DeliveryWorker` claims.
+    """
+    PENDING = "pending"
+    SENDING = "sending"
+    SENT = "sent"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class UserChannel(Base):
+    """One route Cortex can reach a user through (bước 0 of the delivery
+    plan — see docs/planning-v3.md).
+
+    Until this table existed, `notifications` + SSE *was* the whole delivery
+    story: a nudge computed while the user had no tab open sat in the
+    database until they came back on their own, which quietly cancelled the
+    entire point of a proactive assistant. This is the registry of the other
+    ways out; `app/services/delivery/` is what uses it.
+
+    **`min_level` is the product-critical column, not `address`.** A
+    delivery layer without a per-channel importance floor turns every
+    INFORM ("you have four hours free this afternoon") into a phone
+    vibration, which is exactly the behaviour the Attention Gate's five
+    steps exist to prevent — it would undo that work at the last inch. The
+    default comes from the adapter (`DeliveryChannelAdapter.
+    default_min_level`) and is applied at registration time, so a user who
+    never opens the settings page still gets a sane floor: boundary #2
+    ("trang cấu hình là nơi tắt, không phải nơi bật") holds.
+
+    `address` is whatever identifies the user on that channel — a push
+    endpoint, a Telegram chat id, an email. Opaque to everything except the
+    channel's own adapter; anything structured the adapter needs beyond it
+    (push p256dh/auth keys, a bot token scope) goes in `config`.
+
+    `verified_at` gates delivery for channels where an address can be
+    claimed without proof (email, a chat id typed by hand). Channels whose
+    registration is itself proof of possession — a browser handing over its
+    own push subscription — set it at creation. `enabled` is the user's own
+    off switch and is deliberately separate: turning a channel off must not
+    lose the verification and force re-linking to turn it back on.
+    """
+    __tablename__ = "user_channels"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    channel = Column(
+        SQLEnum(AttentionChannel, values_callable=_enum_values, name="attentionchannel"),
+        nullable=False,
+    )
+    address = Column(Text, nullable=False)
+    # Human label for the settings list ("Chrome trên laptop", "Telegram cá
+    # nhân") — one user with three browsers needs to know which row to
+    # revoke. Nullable: the API falls back to the channel name.
+    label = Column(String(120), nullable=True)
+    config = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    enabled = Column(Boolean, nullable=False, default=True, server_default=text("true"))
+    verified_at = Column(DateTime, nullable=True)
+    min_level = Column(
+        SQLEnum(AttentionLevel, values_callable=_enum_values, name="attentionlevel"),
+        nullable=False,
+    )
+    # Last successful send. Drives "this device hasn't been reached in 90
+    # days" cleanup later; also the cheapest signal for debugging a channel
+    # that looks registered but never arrives.
+    last_used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=_utcnow, nullable=False, server_default=text("NOW()"))
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False, server_default=text("NOW()"))
+
+    __table_args__ = (
+        # Re-registering the same browser or re-linking the same chat must
+        # update the existing row, never create a duplicate that then
+        # double-delivers every notification.
+        UniqueConstraint("user_id", "channel", "address", name="uq_user_channels_user_channel_address"),
+        Index("ix_user_channels_user_enabled", "user_id", "enabled"),
+    )
+
+    def __repr__(self):
+        return f"<UserChannel(user_id={self.user_id}, channel={self.channel}, enabled={self.enabled})>"
+
+
+class ChannelLinkCode(Base):
+    """A one-time code that proves a chat account belongs to a Cortex user.
+
+    Same shape and lifecycle as `OAuthState` (one-time, expiring, `used_at`
+    kept rather than deleted) because it does the same job for a channel
+    that has no OAuth to lean on: a Mezon user id is just a number the bot
+    receives, and nothing about receiving it proves the sender owns *this*
+    Cortex account.
+
+    **Direction matters.** The code is minted in the web app, where the
+    person is already authenticated, and typed into the chat. The reverse —
+    typing a Mezon id into the web app — would let anyone claim anyone
+    else's chat account, since ids are visible to everyone in a clan.
+
+    Six digits is deliberately short enough to retype from memory. That is
+    only safe because the row is single-use, expires in minutes, and is
+    scoped to one user_id — brute force gets one guess per issued code, not
+    a search space to grind. `attempts` exists so a code being hammered can
+    be spotted and burned.
+    """
+    __tablename__ = "channel_link_codes"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    channel = Column(
+        SQLEnum(AttentionChannel, values_callable=_enum_values, name="attentionchannel"),
+        nullable=False,
+    )
+    code = Column(String(12), nullable=False, index=True)
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+    # What the code was redeemed *to* — kept for the audit question "which
+    # chat account got attached to this person, and when".
+    redeemed_address = Column(Text, nullable=True)
+    attempts = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    created_at = Column(DateTime, default=_utcnow, nullable=False, server_default=text("NOW()"))
+
+    __table_args__ = (
+        Index("ix_channel_link_codes_code_channel", "code", "channel"),
+    )
+
+    def __repr__(self):
+        return f"<ChannelLinkCode(user_id={self.user_id}, channel={self.channel}, used={self.used_at is not None})>"
+
+
+class NotificationDelivery(Base):
+    """The outbox: one row per (notification, channel) delivery attempt.
+
+    Written in the **same transaction** as the `Notification` itself
+    (app/services/delivery/dispatcher.py), which is the whole reason this
+    is a table and not a direct call. Sending inside `create_notification_*`
+    would mean either sending before the commit (and delivering a
+    notification a rollback then erases) or after it (and losing the
+    delivery if the process dies in between) — the classic dual-write
+    problem, made worse here because two of the five call sites run inside
+    background workers where an exception is swallowed and retried later.
+    An INSERT next to the INSERT has neither failure mode, and gives retry
+    state somewhere to live.
+
+    In-app/SSE is dispatched inline rather than by the worker
+    (`DeliveryChannelAdapter.inline`) — it is in-process, sub-millisecond,
+    and its failure mode ("no tab connected") is not retryable, it is
+    precisely the condition the other channels exist for. It still gets a
+    row, so `SELECT ... GROUP BY channel, status` answers "where did this
+    notification actually go" for every channel uniformly.
+
+    `attempts`/`next_attempt_at` carry the backoff; `last_error` is kept
+    for the settings UI ("Telegram: bot bị chặn"), because a channel that
+    silently stops working is worse than one that says why.
+    """
+    __tablename__ = "notification_deliveries"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
+    notification_id = Column(
+        UUID(as_uuid=True), ForeignKey("notifications.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    channel = Column(
+        SQLEnum(AttentionChannel, values_callable=_enum_values, name="attentionchannel"),
+        nullable=False,
+    )
+    # Null for channels that aren't user-registered rows — in-app is the
+    # standing example: every user has it implicitly, there is nothing to
+    # register and nothing to revoke.
+    user_channel_id = Column(
+        UUID(as_uuid=True), ForeignKey("user_channels.id", ondelete="SET NULL"), nullable=True
+    )
+    status = Column(
+        SQLEnum(DeliveryStatus, values_callable=_enum_values, name="deliverystatus"),
+        nullable=False,
+        default=DeliveryStatus.PENDING,
+    )
+    # Why a row is `skipped`, or which of the two it was — "below
+    # min_level" and "no adapter" are very different bugs to chase.
+    skip_reason = Column(String(64), nullable=True)
+    attempts = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    last_error = Column(Text, nullable=True)
+    next_attempt_at = Column(DateTime, nullable=True, index=True)
+    delivered_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=_utcnow, nullable=False, server_default=text("NOW()"))
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False, server_default=text("NOW()"))
+
+    __table_args__ = (
+        # Idempotency: a retry sweep, a duplicated event, or two workers
+        # racing must not produce two sends of the same notification to the
+        # same registered channel. `user_channel_id` is nullable so this
+        # constraint does not cover in-app (Postgres treats NULLs as
+        # distinct) — in-app is dispatched exactly once, inline, by the
+        # same call that creates the row, so there is no second writer to
+        # race with.
+        UniqueConstraint("notification_id", "user_channel_id", name="uq_notification_deliveries_notif_channel"),
+        Index("ix_notification_deliveries_claimable", "status", "next_attempt_at"),
+    )
+
+    def __repr__(self):
+        return f"<NotificationDelivery(notification_id={self.notification_id}, channel={self.channel}, status={self.status})>"
 
 
 class ActionHistory(Base):
