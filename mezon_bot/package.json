@@ -1,0 +1,17 @@
+{
+  "name": "cortex-mezon-bot",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Cortex bot for Mezon. Currently: M0 probe only \u2014 see docs/mezon-bot-plan.md",
+  "type": "commonjs",
+  "scripts": {
+    "probe": "node probe.js",
+    "dry-run": "node dry-run.js",
+    "start": "node src/index.js",
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "mezon-sdk": "2.8.55",
+    "dotenv": "^17.2.3"
+  }
+}

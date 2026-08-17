@@ -47,6 +47,13 @@ frontend/node_modules/
 frontend/dist/
 frontend/.vite/
 
+# Mezon bot (mezon_bot/.gitignore giữ phần chi tiết; đây là lưới an toàn
+# thứ hai cho những thứ tuyệt đối không được rời máy: token bot, khoá
+# internal, và dữ liệu chat thật thu được lúc khảo sát)
+mezon_bot/node_modules/
+mezon_bot/mezon-cache/
+mezon_bot/probe-findings*.jsonl
+
 # TypeScript
 *.tsbuildinfo
 

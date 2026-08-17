@@ -1,0 +1,21 @@
+node_modules/
+
+# Bot credentials. MEZON_BOT_TOKEN và CORTEX_INTERNAL_API_KEY — khoá thứ
+# hai cho phép hành động với tư cách bất kỳ user nào, nên file này tuyệt
+# đối không được commit. .env.example là bản mẫu, không có giá trị thật.
+.env
+.env.*
+!.env.example
+
+# Kết quả probe M0. Chứa id người dùng thật và nội dung tin nhắn thật, và
+# là dữ liệu khảo sát một lần — kết luận đã ghi vào docs/mezon-bot-plan.md,
+# file thô không cần theo repo.
+probe-findings*.jsonl
+probe.out
+probe.err
+
+# Log runtime (run.sh ghi song song ra đây để chẩn đoán).
+*.log
+
+# SQLite cache của mezon-sdk — dựng lại được, và chứa nội dung tin nhắn.
+/mezon-cache
