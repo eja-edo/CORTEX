@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Sun, Moon, Waves, Trees, Flower2, BookOpen } from 'lucide-react'
-import type { GoogleCalendarStatus, ReasonPreference, UserPreferencesResponse } from '../types'
+import type { ChannelLinkCode, GoogleCalendarStatus, ReasonPreference, UserChannel, UserPreferencesResponse } from '../types'
+import { ChannelsCard } from './ChannelsCard'
 import type { AppTheme } from '../utils/theme'
 import { THEME_OPTIONS } from '../utils/theme'
 
@@ -30,6 +31,12 @@ type SettingsPanelProps = {
   onSaveQuietHours: (start: string | null, end: string | null) => Promise<UserPreferencesResponse>
   reasonPreferences: ReasonPreference[]
   onToggleReasonPreference: (reasonKey: string, enabled: boolean) => Promise<void>
+  // M1 — delivery channels. See ChannelsCard for why the link code is
+  // minted here and typed into the chat, never the reverse.
+  channels: UserChannel[]
+  onCreateLinkCode: (channel: string) => Promise<ChannelLinkCode>
+  onUpdateChannel: (channelId: string, updates: { enabled?: boolean; min_level?: string }) => Promise<void>
+  onDeleteChannel: (channelId: string) => Promise<void>
 }
 
 // "22:00:00" (backend) <-> "22:00" (<input type="time">).
@@ -57,6 +64,10 @@ export function SettingsPanel({
   onSaveQuietHours,
   reasonPreferences,
   onToggleReasonPreference,
+  channels,
+  onCreateLinkCode,
+  onUpdateChannel,
+  onDeleteChannel,
 }: SettingsPanelProps) {
   const [quietStart, setQuietStart] = useState(() => toTimeInputValue(quietHours?.quiet_hours_start ?? null))
   const [quietEnd, setQuietEnd] = useState(() => toTimeInputValue(quietHours?.quiet_hours_end ?? null))
@@ -219,6 +230,14 @@ export function SettingsPanel({
           ))}
         </div>
       </div>
+
+      <ChannelsCard
+        channels={channels}
+        onCreateLinkCode={onCreateLinkCode}
+        onUpdateChannel={onUpdateChannel}
+        onDeleteChannel={onDeleteChannel}
+        formatDateTimeVi={formatDateTimeVi}
+      />
 
       {/* Google Calendar Card */}
       <div className="settings-card">

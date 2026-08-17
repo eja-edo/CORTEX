@@ -1336,6 +1336,10 @@ const processNotificationChunk = (chunk: string): void => {
                 onSaveQuietHours={preferences.saveQuietHours}
                 reasonPreferences={preferences.reasons}
                 onToggleReasonPreference={preferences.toggleReason}
+                channels={preferences.channels}
+                onCreateLinkCode={preferences.createLinkCode}
+                onUpdateChannel={preferences.updateChannel}
+                onDeleteChannel={preferences.removeChannel}
               />
                         ) : activeWorkspaceView === 'schedule' ? (
               <section className="home-workspace">

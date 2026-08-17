@@ -395,8 +395,38 @@ export type UserPreferencesResponse = {
 export type ReasonPreference = {
    reason_key: string
    description: string
-   base_level: 'silent' | 'inform' | 'recommend' | 'ask' | 'act'
+   base_level: AttentionLevel
    enabled: boolean
    dismiss_count: number
-   effective_level: 'silent' | 'inform' | 'recommend' | 'ask' | 'act'
+   effective_level: AttentionLevel
+}
+
+export type AttentionLevel = 'silent' | 'inform' | 'recommend' | 'ask' | 'act'
+
+// Delivery channels (bước 0 + M1). A channel is a way Cortex can reach the
+// user outside an open browser tab — see docs/planning-v3.md §XI.
+//
+// `address_hint` is a masked tail, never the full address: push endpoints
+// and chat ids are bearer-ish capabilities, and the settings list only
+// needs enough to tell two devices apart.
+export type UserChannel = {
+   id: string
+   channel: 'in_app' | 'push' | 'telegram' | 'email' | 'slack' | 'mezon' | 'webhook'
+   label: string | null
+   address_hint: string
+   enabled: boolean
+   verified: boolean
+   min_level: AttentionLevel
+   last_used_at: string | null
+   created_at: string
+}
+
+// One-time code the user types into the chat app. Minted here, where they
+// are already authenticated — never the other way round, since chat user
+// ids are visible to anyone and would prove nothing.
+export type ChannelLinkCode = {
+   code: string
+   channel: string
+   expires_in: number
+   instruction: string
 }

@@ -1,4 +1,4 @@
-import type { TokenPair, NotificationListResponse, NotificationResponse, UserPreferencesResponse, ReasonPreference } from '../types'
+import type { TokenPair, NotificationListResponse, NotificationResponse, UserPreferencesResponse, ReasonPreference, UserChannel, ChannelLinkCode } from '../types'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api'
 const TOKEN_STORAGE_KEY = 'cortex_tokens'
@@ -619,6 +619,37 @@ export async function updateReasonPreference(reasonKey: string, enabled: boolean
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled }),
+   })
+}
+
+// ── Delivery channels (bước 0 + M1) ──────────────────────────────────────
+
+export async function listUserChannels(): Promise<UserChannel[]> {
+   return requestWithAuth('/preferences/channels')
+}
+
+export async function createChannelLinkCode(channel: string): Promise<ChannelLinkCode> {
+   return requestWithAuth('/preferences/channels/link-code', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel }),
+   })
+}
+
+export async function updateUserChannel(
+   channelId: string,
+   updates: { enabled?: boolean; min_level?: string; label?: string }
+): Promise<UserChannel> {
+   return requestWithAuth(`/preferences/channels/${encodeURIComponent(channelId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+   })
+}
+
+export async function deleteUserChannel(channelId: string): Promise<void> {
+   await requestWithAuth(`/preferences/channels/${encodeURIComponent(channelId)}`, {
+      method: 'DELETE',
    })
 }
 

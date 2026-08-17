@@ -215,3 +215,120 @@
 .settings-reason-list .settings-toggle-row:last-child {
   border-bottom: none;
 }
+
+/* ── Delivery channels (M1) ──────────────────────────────────────────────
+   Reuses the reason-list rhythm above so the two halves of "Notifications"
+   read as one section rather than two designs stacked. */
+
+.settings-channel-list {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 12px;
+}
+
+.settings-channel-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-channel-row:last-child {
+  border-bottom: none;
+}
+
+.settings-channel-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-channel-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.settings-channel-meta {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  line-height: 1.4;
+  /* Address hints and timestamps can run long on a narrow panel; clipping
+     beats reflowing the row height per channel. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-channel-level {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-primary);
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.settings-channel-level:disabled {
+  opacity: 0.5;
+}
+
+.settings-channel-toggle {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.settings-channel-delete {
+  padding: 6px;
+  flex-shrink: 0;
+}
+
+/* The code panel. Deliberately loud: it is a short-lived credential the
+   user has to carry to another app, and a countdown they can miss. */
+.settings-link-code {
+  margin-top: 12px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.settings-link-code-value {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-link-code-value code {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  color: var(--text-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.settings-link-steps {
+  margin: 12px 0 8px;
+  padding-left: 20px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.7;
+}
+
+.settings-link-steps code {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.settings-link-code-expiry {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
