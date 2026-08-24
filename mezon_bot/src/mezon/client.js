@@ -225,9 +225,12 @@ class MezonGateway {
     };
   }
 
-  async sendToChannel(channelId, content) {
+  /** `attachments` (images from `toMezonContent`, F2/M3) is the SDK's own
+   *  third argument to `channel.send` — not a field on `content` — see
+   *  `mezon/markdown.js`'s docstring for why the two can't be merged. */
+  async sendToChannel(channelId, content, attachments) {
     const channel = await this.client.channels.fetch(channelId);
-    return channel.send(content);
+    return channel.send(content, undefined, attachments);
   }
 
   /**
@@ -239,18 +242,34 @@ class MezonGateway {
    * itself when there isn't one; `createDmChannel` is private and cannot
    * be called from here.
    */
-  async sendDirectMessage(mezonUserId, content) {
+  async sendDirectMessage(mezonUserId, content, attachments) {
     const user = await this.client.users.fetch(mezonUserId);
-    return user.sendDM(content);
+    return user.sendDM(content, undefined, attachments);
   }
 
   /** Editing a live message is how streaming is faked (R3). The probe
    *  confirmed the server stores edits reliably down to 60ms intervals;
-   *  the throttling that matters is in the caller, not here. */
-  async editMessage(channelId, messageId, content) {
+   *  the throttling that matters is in the caller, not here. `attachments`
+   *  — see `sendToChannel`'s note. */
+  async editMessage(channelId, messageId, content, attachments) {
     const channel = await this.client.channels.fetch(channelId);
     const message = await channel.messages.fetch(messageId);
-    return message.update(content);
+    return message.update(content, undefined, attachments);
+  }
+
+  /**
+   * Remove a message the bot sent.
+   *
+   * Used for one thing: the thinking transcript, when the bot is
+   * configured to hide it once a turn ends (`BOT_KEEP_THINKING=false`).
+   * An edit cannot express "this was never worth a message" — the web
+   * genuinely unmounts its timeline — and leaving a hollowed-out message
+   * behind is a worse artefact than the transcript itself.
+   */
+  async deleteMessage(channelId, messageId) {
+    const channel = await this.client.channels.fetch(channelId);
+    const message = await channel.messages.fetch(messageId);
+    return message.delete();
   }
 }
 

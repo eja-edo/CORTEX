@@ -34,6 +34,15 @@ function number(name, fallback) {
   return parsed;
 }
 
+/** `"false"`/`"0"`/`"no"` are the only ways to turn something off — an
+ *  unset or empty variable falls back rather than reading as `false`, so
+ *  a half-filled `.env` never silently disables a default-on feature. */
+function boolean(name, fallback) {
+  const raw = optional(name, null);
+  if (raw === null) return fallback;
+  return !["false", "0", "no", "off"].includes(String(raw).trim().toLowerCase());
+}
+
 const config = {
   mezon: {
     // botId is required by the SDK constructor itself — the Mezon docs'
@@ -58,6 +67,27 @@ const config = {
 
   bot: {
     commandPrefix: optional("BOT_COMMAND_PREFIX", "*"),
+    // Leave the "🧠 Đã suy nghĩ" transcript message standing once the
+    // turn ends, instead of deleting it the way the web UI unmounts its
+    // timeline. On by default because on Mezon it is the only way to see
+    // what the agent reasoned and which tools it ran — the web has a
+    // conversation pane and a devtools network tab to fall back on, a DM
+    // has neither. `BOT_KEEP_THINKING=false` restores web parity: the
+    // transcript message is deleted, leaving only the answer.
+    keepThinking: boolean("BOT_KEEP_THINKING", true),
+  },
+
+  // `*test svg` only — not required to start the bot, since nothing else
+  // uses object storage. `endpoint` is where THIS process reaches MinIO
+  // (same machine, so plain localhost is fine); `publicBaseUrl` is what
+  // Mezon's own servers fetch the resulting image from, which localhost
+  // can never be for them — see mezon/storage.js's docstring.
+  storage: {
+    endpoint: optional("MINIO_ENDPOINT", null),
+    accessKey: optional("MINIO_ACCESS_KEY", null),
+    secretKey: optional("MINIO_SECRET_KEY", null),
+    bucket: optional("MINIO_BUCKET", "cortex-recordings"),
+    publicBaseUrl: optional("MINIO_PUBLIC_URL", null)?.replace(/\/$/, "") ?? null,
   },
 
   logLevel: optional("LOG_LEVEL", "info"),

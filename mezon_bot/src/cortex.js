@@ -123,6 +123,242 @@ class CortexClient {
     return this._request("GET", "/api/preferences/channels", { userId });
   }
 
+  /**
+   * Stream a chat turn from `/api/agent/stream/chat`, calling `onEvent`
+   * with each parsed SSE frame as it arrives (F2/M3, R2).
+   *
+   * Not built on `_request` — that reads the whole body with
+   * `response.text()` before returning, which for a streaming reply means
+   * waiting for `done` before the caller sees a single token. `onEvent` is
+   * how the caller finds out about tokens as they happen; this method
+   * itself resolves once the stream ends (on `done`, `error`, or the
+   * connection closing).
+   *
+   * `surface: "mezon"` is what tells the backend to reuse this user's one
+   * long-running Mezon conversation instead of starting a new one every
+   * message — see `AgentService.handle_streaming_generator`'s `surface`
+   * parameter. No `conversation_id` is ever sent from here; the backend
+   * owns finding or creating it.
+   *
+   * `timeoutMs` is an *idle* timeout, reset on every chunk received, not a
+   * deadline for the whole stream. A single fixed deadline was the first
+   * version of this and it was wrong: an agent turn with a few tool calls
+   * can legitimately run past 30s while still actively streaming, and a
+   * flat timeout aborted those mid-answer. Silence, not duration, is what
+   * actually indicates something is wrong.
+   *
+   * `model: "auto"` sent explicitly rather than left out: both resolve to
+   * the backend's default model (`ModelClient._resolve` treats an absent,
+   * `"auto"`, or unrecognised id the same way), but saying it makes the
+   * bot's position explicit rather than accidental — it has no UI to pick
+   * a model and wants whatever the default is.
+   *
+   * This used to describe a round-robin across every enabled model. The
+   * backend no longer rotates: one turn runs on one model, so a Mezon
+   * conversation is answered by the same model throughout instead of
+   * changing voice between turns.
+   */
+  async streamChat({ userId, message, onEvent, timeoutMs }) {
+    const idleTimeout = timeoutMs ?? this.timeoutMs ?? 30000;
+    const url = `${this.baseUrl}/api/agent/stream/chat`;
+    const controller = new AbortController();
+    let timer = setTimeout(() => controller.abort(), idleTimeout);
+    const resetIdleTimer = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => controller.abort(), idleTimeout);
+    };
+
+    let response;
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers: this._headers(userId),
+        body: JSON.stringify({ message, surface: "mezon", model: "auto" }),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      if (err?.name === "AbortError") {
+        throw new CortexError(`Cortex timeout sau ${idleTimeout}ms không có phản hồi`, 408, null);
+      }
+      throw new CortexError(`Không gọi được Cortex: ${err?.message}`, 503, null);
+    }
+
+    if (!response.ok) {
+      clearTimeout(timer);
+      const raw = await response.text().catch(() => "");
+      throw new CortexError(raw || response.statusText, response.status, null);
+    }
+    if (!response.body) {
+      clearTimeout(timer);
+      throw new CortexError("Cortex trả về stream rỗng", 502, null);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        resetIdleTimer();
+        buffer += decoder.decode(value, { stream: true });
+
+        // SSE frames are blank-line-separated; each frame may carry
+        // several "data: ..." lines, though this endpoint only ever
+        // emits one per frame.
+        let sep;
+        while ((sep = buffer.indexOf("\n\n")) !== -1) {
+          const frame = buffer.slice(0, sep);
+          buffer = buffer.slice(sep + 2);
+          for (const line of frame.split("\n")) {
+            if (!line.startsWith("data:")) continue;
+            const jsonText = line.slice(5).trim();
+            if (!jsonText) continue;
+            try {
+              onEvent(JSON.parse(jsonText));
+            } catch (parseErr) {
+              logger.warn("could not parse stream frame", {
+                error: parseErr?.message,
+                frame: jsonText.slice(0, 200),
+              });
+            }
+          }
+        }
+      }
+    } catch (err) {
+      if (err?.name === "AbortError") {
+        throw new CortexError(`Cortex im lặng quá ${idleTimeout}ms giữa chừng stream`, 408, null);
+      }
+      throw new CortexError(`Stream bị ngắt: ${err?.message}`, 503, null);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  // ── Feature endpoints the commands sit on ───────────────────────────
+  //
+  // Every one of these is a call the web app already makes. The bot picks
+  // the endpoint and renders the answer; it never computes one — ranking,
+  // risk, "why this task" sentences and permission checks all stay where
+  // they are, which is the whole point of the thin-bot rule.
+
+  /** The "Hôm nay" screen: what to do now, and what it costs to skip. */
+  getToday(userId) {
+    return this._request("GET", "/api/today", { userId });
+  }
+
+  /** "What should I do next?" — the same ranking plus the at-risk list. */
+  getNextAction(userId) {
+    return this._request("GET", "/api/planning/next-action", { userId });
+  }
+
+  /** `params` maps straight to the endpoint's query string (`status`,
+   *  `due_before`, …) — see `get_tasks` in app/api/tasks.py. */
+  listTasks(userId, params = {}) {
+    const query = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v !== undefined && v !== null)
+    );
+    const suffix = query.toString() ? `?${query}` : "";
+    return this._request("GET", `/api/tasks${suffix}`, { userId });
+  }
+
+  completeTask(taskId, userId) {
+    return this._request("POST", `/api/tasks/${encodeURIComponent(taskId)}/complete`, { userId });
+  }
+
+  createTask(body, userId) {
+    return this._request("POST", "/api/tasks", { body, userId });
+  }
+
+  /** Every registered reason_key with its level and on/off state — the
+   *  list `*mute` picks from, fetched rather than hard-coded for the same
+   *  reason the model list is. */
+  listReasonPreferences(userId) {
+    return this._request("GET", "/api/preferences/reasons", { userId });
+  }
+
+  setReasonEnabled(reasonKey, enabled, userId) {
+    return this._request("PUT", `/api/preferences/reasons/${encodeURIComponent(reasonKey)}`, {
+      body: { enabled },
+      userId,
+    });
+  }
+
+  /** `{ items, total }`. The endpoint has no unread filter — every row
+   *  carries `read_at`, so which ones are new is decided at render time
+   *  rather than by a query parameter that doesn't exist. */
+  listNotifications(userId, { limit = 10 } = {}) {
+    const query = new URLSearchParams({ limit: String(limit) });
+    return this._request("GET", `/api/notifications?${query}`, { userId });
+  }
+
+  markAllNotificationsRead(userId) {
+    return this._request("POST", "/api/notifications/read-all", { userId });
+  }
+
+  /**
+   * The models this user may switch between.
+   *
+   * Fetched, never hard-coded. A list baked into the bot is a list that
+   * goes stale the first time the catalogue moves — the exact mistake the
+   * plan calls out from 4.2 (Trigger Catalog), where a hard-coded
+   * frontend list had to be torn out and replaced with a fetched one.
+   */
+  listModels(userId) {
+    return this._request("GET", "/api/agent/models", { userId });
+  }
+
+  getPreferences(userId) {
+    return this._request("GET", "/api/preferences", { userId });
+  }
+
+  /** Record which model this user's turns run on. `null` clears the
+   *  choice, which keeps following the default if the default changes. */
+  setChatModel(modelId, userId) {
+    return this._request("PUT", "/api/preferences/chat-model", {
+      body: { chat_model: modelId ?? null },
+      userId,
+    });
+  }
+
+  /**
+   * The items behind a `plan_proposal` stream event.
+   *
+   * The event carries only an id and a count — deliberately, since a
+   * proposal is a DB row that outlives the stream announcing it. So a
+   * preview is always this fetch, and approving one long after the
+   * conversation moved on still works.
+   */
+  getPlanProposal(proposalId, userId) {
+    return this._request("GET", `/api/plan-proposals/${encodeURIComponent(proposalId)}`, { userId });
+  }
+
+  /**
+   * Turn the proposal into real tasks and events.
+   *
+   * No `items` in the body means "create exactly what was proposed" —
+   * the endpoint's own default. This surface has no per-item editing (a
+   * Mezon form cannot express "drop item 3 and change item 5's date"
+   * without becoming a worse version of the web's list), so it is always
+   * all or nothing, and "nothing" is the reject button.
+   *
+   * A longer timeout than the default: approval creates every item
+   * one at a time through the same command path the AI uses, so a
+   * fifteen-item plan is fifteen writes, not one.
+   */
+  approvePlanProposal(proposalId, userId) {
+    return this._request("POST", `/api/plan-proposals/${encodeURIComponent(proposalId)}/approve`, {
+      body: {},
+      userId,
+      timeoutMs: Math.max(this.timeoutMs, 60000),
+    });
+  }
+
+  rejectPlanProposal(proposalId, userId) {
+    return this._request("POST", `/api/plan-proposals/${encodeURIComponent(proposalId)}/reject`, { userId });
+  }
+
   async health() {
     try {
       await this._request("GET", "/health", { timeoutMs: 5000 });

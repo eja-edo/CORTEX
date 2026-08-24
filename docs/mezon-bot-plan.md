@@ -124,9 +124,9 @@ Không có SDK Python. Backend Cortex là Python. ⇒ **Bot bắt buộc là m�
 | Event | Payload | Render sang Mezon thế nào |
 |---|---|---|
 | `token` | `text` | Nối vào buffer, edit message (R3) |
-| `reasoning_token` | `text` | Bỏ hoặc thu gọn — không đổ vào chat |
-| `tool_start` | `tool_name`, `tool_args` | Dòng trạng thái tạm "🔧 đang tạo task…" |
-| `tool_result` | `tool_name`, `success`, `result`, `error` | Thay dòng trạng thái bằng kết quả |
+| `reasoning_token` | `text` | Thu gọn vào khối "🧠 Đang suy nghĩ" tạm thời (`mezon/thinking.js`) |
+| `tool_start` | `tool_name`, `tool_args` | Một bước trong khối đó: `🔧 search_notes → tìm "họp"` |
+| `tool_result` | `tool_name`, `success`, `result`, `error` | Bước kế tiếp: `✅ search_notes · 3 kết quả` |
 | `ask_choice` | `questions[]` | **Radio field + nút submit** — gần như 1:1 |
 | `plan_proposal` | `proposal_id`, `item_count` | Embed + nút Đồng ý / Bỏ qua |
 | `note_diff` | `proposal_id`, `note_id` | Embed diff + nút áp dụng |
@@ -256,7 +256,25 @@ Ba điều bắt buộc, mỗi điều đều là một cách hỏng thật:
 
 1. **Tiết chế là bắt buộc, không phải tối ưu.** `AsyncThrottleQueue` của SDK chỉ *xếp hàng*, không *gộp*. Edit mỗi token ⇒ hàng đợi phình vô hạn và message nhấp nháy.
 2. **Gửi tin nhắn "⏳ đang nghĩ…" trước, rồi edit nó.** Không đợi token đầu tiên mới gửi — độ trễ tới token đầu là chỗ người dùng cảm thấy lâu nhất.
-3. **`tool_start` là dòng trạng thái tạm**, bị thay khi `tool_result` về. Nếu không, một câu trả lời có 3 tool call sẽ để lại 3 dòng rác giữa nội dung.
+3. **Khối trạng thái là một ô, không phải một log.** `setStatus` thay thế chứ không nối thêm — nếu không, một câu trả lời có 3 tool call sẽ để lại 3 dòng rác giữa nội dung. Thứ nằm trong ô đó là `ThinkingTimeline` (`mezon/thinking.js`): nó tự gom `reasoning_token` + các bước tool thành một khối, render lại toàn bộ mỗi lần.
+
+**Bám theo hành vi của web UI** (`ToolExecutionIndicator.tsx` + `useAgentStream.ts`), vì đó là cùng một stream:
+
+- suy nghĩ và các bước tool hiện *trong lúc* lượt chat đang chạy, rồi **biến mất khi xong** — web chỉ render timeline khi `msg.loading`. **Trừ khi `BOT_KEEP_THINKING=true`** (mặc định): transcript ở lại để debug, render lại với header "🧠 Đã suy nghĩ" — giống web đổi nhãn nút từ "Thinking" sang "Thoughts". Trên Mezon đây là cách duy nhất thấy agent đã nghĩ gì; web còn có pane hội thoại và devtools, DM thì không;
+- một `tool_start` "chốt" đoạn suy nghĩ trước nó — đoạn sau là step mới, **cả hai đều hiện nguyên vẹn**;
+- bước tool đọc như câu tiếng Việt (`tìm "họp"`, `3 kết quả`) chứ không phải tên tool trần.
+
+### Hai message, không phải một
+
+Transcript và câu trả lời là **hai message riêng**, transcript nằm trên. Không phải chuyện thẩm mỹ — bản đầu nhét chung một message và sai ở ba điểm:
+
+1. **Không thể đầy đủ.** Khối bị nối vào câu trả lời *trước* khi `splitMezonContent` cắt, nên mỗi ký tự reasoning là một ký tự câu trả lời không được có. Phải cap rất chặt (900 ký tự, đoạn đã settle thu còn 110), kết quả là nó đọc như *bản tóm tắt* của suy nghĩ chứ không phải suy nghĩ. Parity với web là bất khả thi trong một message.
+2. **Sai thứ tự.** Web đặt timeline *trên* câu trả lời. Message Mezon xếp theo thứ tự gửi, nên chỉ có một thời điểm duy nhất đặt được nó lên trên: transcript **giành lấy chính message placeholder** khi reasoning tới trước token đầu tiên (trường hợp thường, vì model nghĩ trước khi trả lời), rồi câu trả lời mở message mới bên dưới. Lượt nào không có reasoning thì placeholder vẫn là câu trả lời, y như M3.
+3. **`_syncMultiMessage` niêm chunk.** Một khối phình lên rồi biến mất ở cuối lượt có thể để lại message đã niêm mang nội dung không còn thuộc về gì cả.
+
+**Hệ quả bắt buộc: render của `ThinkingTimeline` chỉ được nối thêm vào cuối.** Mọi giới hạn trong `thinking.js` đều cắt từ *đuôi* — hết budget thì dừng, không bao giờ trim từ đầu hay nén giữa một đoạn dài, vì cả hai đều viết lại phần đã gửi vào message đã niêm. `thinking.test.js` khoá tính chất này bằng một test so từng bước render phải là prefix của bước sau.
+
+`BOT_KEEP_THINKING=false` **xoá** message transcript (`Message.delete()` có thật trong SDK) chứ không edit nó thành gì khác — web unmount timeline, còn một message bị edit rỗng ruột là artefact tệ hơn chính transcript.
 
 ## R4 · Thông báo qua bot — **đây là chỗ F0 trả cổ tức**
 
@@ -308,7 +326,7 @@ Nội dung ghi vào history khi có thông báo:
 | **M1** | ✅ **Xong 2026-08-17.** Bot skeleton + liên kết tài khoản, đã chạy thật đầu-cuối. Xem mục XII | Không có ánh xạ user thì không có gì khác chạy được |
 | **M2** | Schema R5 (cột `source` + xử lý gộp) **+** adapter `mezon.py` + `/internal/deliver` | Schema đi **trước** thông báo đầu tiên, vì lịch sử mất rồi không dựng lại được. Đây cũng là bài kiểm tra tiêu chí nghiệm thu của F0 |
 | **M3** | R2 + R3: internal auth cho `stream/chat`, chat qua DM, streaming-by-edit | Giá trị lớn nhất cho người dùng, và tự nhiên ghi lượt chat vào history |
-| **M4** | Render `ask_choice` / `plan_proposal` / `note_diff` sang embed + button | Cần M0 xong. Đây là lúc bot thành hai chiều thật |
+| **M4** | Render `ask_choice` / `plan_proposal` / `note_diff` sang embed + button | Cần M0 xong. Đây là lúc bot thành hai chiều thật. **`ask_choice` + `plan_proposal`: xong 2026-08-20 — xem mục XIII. `note_diff`: chưa** |
 | **M5** | R1: `GET /commands/catalog` + router lệnh + form | Nhiều bề mặt nhất, phụ thuộc M0 và M4 |
 
 **M2 trước M3 có chủ đích.** M2 là thứ nhỏ nhất giao được đúng lý do bot tồn tại — *Cortex nói được khi user đã tắt web*. M3 to hơn, hay hơn, nhưng nếu chỉ làm được một cái thì M2 mới là cái đáng.
@@ -558,3 +576,94 @@ Gateway chỉ giao mỗi tin cho **một** socket. Triệu chứng là "bot ch�
 - UI chưa sinh danh sách kênh động từ `GET /channels/available` (đang hardcode `'mezon'`) — phải sửa trước khi thêm kênh thứ hai, đúng bài học 4.2.
 - Bot chưa có HTTP server nhận `/internal/deliver` (M2).
 - Chat thường vẫn trả lời placeholder (M3).
+
+---
+
+# XIII. M4 (một phần) — `ask_choice` + `plan_proposal` (2026-08-20)
+
+Hai trong ba event tương tác của M4 đã đi được cả hai chiều. **`note_diff` thì chưa** — nó dùng đúng bộ máy này (`note-proposals` có sẵn `GET`/`approve`/`reject`, y hệt `plan-proposals`), nhưng phần render *diff* của nội dung note trong chat là một bài toán trình bày khác hẳn, không phải chép lại card.
+
+## Đã xây
+
+| Thành phần | Chỗ | Việc |
+|---|---|---|
+| Không gian `button_id` | `mezon/actions.js` | `pa:`/`pr:`/`as:` + id đích. Tự mô tả, nên sống qua restart |
+| Card `ask_choice` | `mezon/askChoice.js` | radio mỗi câu + ô "Ý khác" + nút Gửi; đọc submission ngược thành text |
+| Card `plan_proposal` | `mezon/planCard.js` | preview từng mục + Tạo tất cả / Bỏ qua + card kết quả |
+| Kho form đang chờ | `mezon/pendingForms.js` | in-memory, TTL 30 phút, có cap |
+| Gọi backend | `cortex.js` | `getPlanProposal` / `approvePlanProposal` / `rejectPlanProposal` |
+| Định tuyến click | `router.js` `handleButton` | + gửi card sau mỗi lượt chat |
+
+## Bốn quyết định đáng ghi lại
+
+**1. Card là message riêng, gửi *sau* câu trả lời.** Message đang stream bị `StreamThrottle` ghi đè liên tục — đặt embed lên nó thì trong vòng một giây là mất. Web cũng render card dưới phần text (`MessageList.tsx`), nên thứ tự này giống nhau ở cả hai bề mặt.
+
+**2. Gửi card cả khi stream lỗi.** `plan_proposal` là một dòng đã ghi vào DB. Stream chết sau đó làm câu trả lời dở dang, không làm đề xuất biến mất — nuốt card đi thì người dùng chỉ còn cách mở web mới thấy.
+
+**3. ⚠️ Duyệt lại một plan đã duyệt thì backend TẠO LẠI TOÀN BỘ.** `approve_proposal` chỉ chặn `rejected` và `expired`, không chặn `approved`. Trên web card biến mất khi đã quyết; trên Mezon một message có nút sống lâu hơn cả process gửi nó — bấm lại sau khi bot restart, hoặc bấm trong scrollback tuần sau, là đúng hình dạng của bug tạo trùng. Nên `_handlePlanDecision` **đọc status trước khi hành động**, cộng một `Set` in-flight để hai click liên tiếp không cùng lọt qua khe giữa lúc đọc và lúc ghi.
+
+**4. Câu trả lời `ask_choice` đi vào hội thoại như một lượt chat thật.** `ask_user_choice.py` không có endpoint — đích duy nhất của đáp án là chính cuộc hội thoại, dưới dạng tin nhắn kế tiếp của người dùng. Chuỗi gửi lên giữ nguyên định dạng của web (`1. <câu hỏi> → <đáp án>`), vì đó là thứ model đọc; hai bề mặt cùng một hình dạng thì hội thoại chuyển từ web sang Mezon vẫn liền mạch.
+
+## Giới hạn còn lại
+
+- **Không sửa được từng mục** trước khi duyệt — là tất-cả-hoặc-không. Form Mezon không diễn đạt nổi "bỏ mục 3, đổi ngày mục 5" mà không trở thành bản kém hơn của danh sách bên web.
+- **Form mất khi bot restart** — card cũ trả lời "form đã hết hạn, bạn cứ gõ tin nhắn thường". Xem docstring `pendingForms.js` để biết vì sao không persist.
+- **`note_diff` vẫn bị bỏ qua im lặng** trong `onEvent`.
+
+---
+
+# XIV. Lệnh `*model` — đổi model trong Mezon (2026-08-20)
+
+Gõ `*model` → form radio các model → chọn → Lưu. Từ đó mọi câu trả lời trong Mezon dùng model đó.
+
+## Ba quyết định
+
+**1. Danh sách model lấy từ backend, không hard-code trong bot.** `GET /api/agent/models` (đã mở cho internal auth để bot gọi được). Đây là bài học 4.2 áp dụng lần thứ hai — y như R1 yêu cầu với danh mục lệnh. Danh sách nằm trong bot là danh sách hỏng lần đầu tiên catalog đổi, và không ai biết cho tới lúc có người chọn phải model không còn tồn tại.
+
+**2. Lựa chọn lưu ở backend (`user_preferences.chat_model`), không phải trong process bot.** Một setting tự reset mỗi lần bot restart thì tệ hơn là không có setting — mà restart là chuyện thường ngày. Migration `q1234567890r`.
+
+**3. ⚠️ Chỉ áp dụng cho `surface="mezon"`.** Web có picker riêng (localStorage). Nếu để lựa chọn này đè lên web thì dropdown bên web sẽ hiện "Auto (mặc định)" trong khi thực tế đang chạy model ai đó chọn trong một DM — dropdown nói dối. Card xác nhận cũng nói thẳng "các câu trả lời **trong Mezon**", để người dùng không kết luận là bug khi thấy web khác.
+
+## Chi tiết đáng nhớ
+
+- **Radio của Mezon không có trạng thái "đã chọn".** `addRadioField` chỉ nhận options/description/max. Nên model đang dùng được đánh dấu trong *nhãn* (`Gemma 4 31B — đang dùng`) và nhắc lại ở description. Đó là bản trung thực của một control không thể hiện được trạng thái.
+- **Backend validate id theo catalog** (`update_chat_model` trả 400 cho id lạ) chứ không lưu bừa. Nếu lưu, `ModelClient._resolve` sẽ lặng lẽ bỏ qua lúc chạy và người dùng nhìn vào một lựa chọn không bao giờ có hiệu lực — đây là chỗ duy nhất khác biệt đó nhìn thấy được.
+- **`chat_model = NULL`** nghĩa là "chưa chọn" → dùng mặc định. Model bị gỡ khỏi catalog cũng rơi về mặc định (`_resolve`), nên retire một model không làm kẹt user nào.
+
+---
+
+# XV. Lệnh tính năng — Tier 1 + Tier 2 (2026-08-20)
+
+Dùng Cortex từ Mezon mà không phải chat với AI. Sáu lệnh, tất cả đều là "chọn endpoint + render câu trả lời", không lệnh nào tự tính toán gì.
+
+| Lệnh | Endpoint | Ghi |
+|---|---|---|
+| `*today` | `GET /api/today` | — |
+| `*next` | `GET /api/planning/next-action` | — |
+| `*tasks [today]` | `GET /api/tasks?status=todo` | + `POST /{id}/complete` qua nút |
+| `*new <tiêu đề>` | `POST /api/tasks` | form: title / datepicker / priority |
+| `*mute [reason_key]` | `GET|PUT /api/preferences/reasons` | — |
+| `*inbox` | `GET /api/notifications` | + `POST /read-all` qua nút |
+
+## Bốn quyết định
+
+**1. `*tasks` là danh sách *và* hành động trong một card.** Phương án kia là `*tasks` để xem rồi `*done <id>` để làm — trên bề mặt này nghĩa là bắt người ta gõ lại một UUID đang hiện ngay trên màn hình. Radio + một nút là cùng hai bước đó, bỏ phần gõ.
+
+**2. `*new` chứ không phải `*task`.** `*tasks` đã giữ số nhiều, và một chữ khác biệt giữa "xem việc của tôi" với "tạo việc mới" là tai nạn chờ xảy ra trên bàn phím điện thoại. Tham số điền sẵn tiêu đề chứ không tạo luôn: một task tạo từ đúng một dòng chat, không kịp thêm hạn, là loại entry biến task list thành nhiễu.
+
+**3. `*mute` chỉ hiện những loại nhắc đang BẬT.** Bật lại là hành động khác hẳn — `*mute` là nút dừng, trộn cả dòng "đang tắt" vào cùng radio sẽ khiến một cú tap lặng lẽ mang nghĩa ngược với cú trước. Bật lại vẫn ở danh sách audit bên web, nơi có dismiss count và effective level mà card này không đủ chỗ.
+
+**4. `*mute` đáng nằm Tier 1.** Lý do tồn tại của bot là làm phiền người ta (R4), và đây là câu trả lời cho sự làm phiền đó. Mọi notification bot gửi **đã in sẵn `reason_key`** ở footer, nên `*mute task.overdue` dùng đúng chuỗi đang ở trước mặt người dùng. Không có nó thì rủi ro "thông báo DM gây phiền" (§VII) chỉ còn một lối thoát là chặn bot.
+
+## Hai chi tiết kỹ thuật
+
+**`due_date` gửi lúc `T00:00:00Z`.** Datepicker cho `YYYY-MM-DD` còn `TaskCreate.due_date` là datetime, nên phải bịa ra một giờ. Nửa đêm UTC là lựa chọn trung thực: `today.py` so `.date()` cả hai vế — "quá hạn"/"đến hạn hôm nay" ở đó là day-granular theo thiết kế — nên phần giờ không bao giờ đi vào quyết định nào, mà chọn một giờ *trông có vẻ có nghĩa* (23:59, hay cuối ngày giờ địa phương) lại ngụ ý một độ chính xác mà ranking không dùng. `getDate` vẫn chặn năm 5 chữ số mà chính nền tảng để lọt (§VIII bis 8a).
+
+**`/api/notifications` phải mở cho internal auth.** Cả 4 endpoint đang là JWT-only; đã đổi sang `get_current_user_or_internal`. Một thông báo bot DM cho người dùng nhưng chỉ đánh dấu đã đọc được trên web là một việc-phải-làm do chính bot tạo ra.
+
+## Chưa làm, và vì sao
+
+- **`*event`** (`POST /api/schedules`) — ⚠️ chặn bởi timezone. `start_time`/`end_time` là `DateTime(timezone=True)` nhưng **không có per-user timezone ở bất kỳ đâu trong schema**; web không vướng vì trình duyệt tự gắn offset, còn form Mezon thu "09:00" thì không có offset nào để gắn. Phải chốt trước: thêm cột timezone cho user, hay giả định offset cố định trong config.
+- **`*quiet`** — dính đúng cái đó (cột quiet hours là UTC).
+- **`*find` note** — giá trị thấp nhất; chat là editor tồi cho văn bản dài.
+- **`*task`/`*event` qua `GET /commands/catalog`** — M5. Catalog chỉ giúp phần *form tạo dữ liệu*; lệnh đọc render bespoke nên catalog không giúp gì. `*new` hiện viết tay, khi M5 xong thì chuyển sang catalog-driven.

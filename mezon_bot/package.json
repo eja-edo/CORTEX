@@ -2,8 +2,11 @@
   "name": "cortex-mezon-bot",
   "version": "0.0.1",
   "private": true,
-  "description": "Cortex bot for Mezon. Currently: M0 probe only \u2014 see docs/mezon-bot-plan.md",
+  "description": "Cortex bot for Mezon. Currently: M0 probe only — see docs/mezon-bot-plan.md",
   "type": "commonjs",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "probe": "node probe.js",
     "dry-run": "node dry-run.js",
@@ -11,7 +14,10 @@
     "test": "node --test test/"
   },
   "dependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "csv-stringify": "^6.8.3",
+    "dotenv": "^17.2.3",
     "mezon-sdk": "2.8.55",
-    "dotenv": "^17.2.3"
+    "minio": "^8.0.7"
   }
 }

@@ -19,14 +19,42 @@
 const LEVELS = { error: 0, warn: 1, info: 2, debug: 3 };
 const threshold = LEVELS[process.env.LOG_LEVEL] ?? LEVELS.info;
 
-const SECRET_KEYS = /token|key|secret|password|authorization/i;
+/**
+ * Field names whose values must never be logged.
+ *
+ * Matched against the name with separators stripped, so `api_key`,
+ * `apiKey`, `X-Internal-API-Key` and `APIKEY` all collapse to `apikey` and
+ * are caught by one entry.
+ *
+ * A bare `key` used to be on this list and was actively harmful:
+ * `reason_key` matched it, so every delivery log said `«redacted»` for the
+ * one field that says *why* Cortex spoke — the single most useful thing
+ * when debugging a notification. Redaction that hides ordinary data
+ * teaches people to distrust the logs, which is worse than the leak it was
+ * guarding against. Only patterns that name a credential belong here.
+ */
+const SECRET_FRAGMENTS = [
+  "token",
+  "secret",
+  "password",
+  "authorization",
+  "apikey",
+  "privatekey",
+  "credential",
+];
+
+function isSecretName(name) {
+  const normalized = String(name).toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (normalized === "key") return true;
+  return SECRET_FRAGMENTS.some((fragment) => normalized.includes(fragment));
+}
 
 function redact(value, depth = 0) {
   if (depth > 4 || value === null || typeof value !== "object") return value;
   if (Array.isArray(value)) return value.map((v) => redact(v, depth + 1));
   const out = {};
   for (const [k, v] of Object.entries(value)) {
-    out[k] = SECRET_KEYS.test(k) ? "«redacted»" : redact(v, depth + 1);
+    out[k] = isSecretName(k) ? "«redacted»" : redact(v, depth + 1);
   }
   return out;
 }
@@ -48,4 +76,4 @@ const logger = {
   debug: (m, c) => emit("debug", m, c),
 };
 
-module.exports = { logger, redact };
+module.exports = { logger, redact, isSecretName };
