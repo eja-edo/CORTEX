@@ -1,4 +1,6 @@
 import { Zap, X } from 'lucide-react'
+import { useEscapeToClose } from '../hooks/useEscapeToClose'
+import { strings } from '../i18n/strings'
 
 type ProcessAssetDialogProps = {
     assetTitle: string
@@ -12,6 +14,7 @@ export function ProcessAssetDialog({ assetTitle, isLoading, onProcess, onSkip }:
     const handleOverlayClick = () => {
         if (!isLoading) onSkip();
     };
+    useEscapeToClose(onSkip, !isLoading)
     return (
         <div className="pad-overlay" onClick={handleOverlayClick}>
             <div className="pad-box" onClick={e => e.stopPropagation()}>
@@ -23,17 +26,17 @@ export function ProcessAssetDialog({ assetTitle, isLoading, onProcess, onSkip }:
                 <div className="pad-icon">
                     <Zap size={32} />
                 </div>
-                <div className="pad-title">Process Recording?</div>
+                <div className="pad-title">{strings.records.processDialog.title}</div>
                 <div className="pad-body">
                     <p className="pad-name">{assetTitle}</p>
-                    <p className="pad-desc">Extract transcript, text, and insights using AI analysis</p>
+                    <p className="pad-desc">{strings.records.processDialog.desc}</p>
                 </div>
                 <div className="pad-actions">
                     <button type="button" className="pad-btn pad-btn--secondary" onClick={onSkip} disabled={isLoading}>
-                        Skip
+                        {strings.records.processDialog.skip}
                     </button>
                     <button type="button" className="pad-btn pad-btn--primary" onClick={onProcess} disabled={isLoading}>
-                        {isLoading ? 'Processing…' : 'Process Now'}
+                        {isLoading ? strings.records.processDialog.processing : strings.records.processDialog.processNow}
                     </button>
                 </div>
             </div>

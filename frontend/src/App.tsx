@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, CheckCircle2, ChevronDown, GitBranch, Home, ListChecks, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings, StickyNote, Trash2, Video, X } from 'lucide-react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ChevronDown, GitBranch, Home, ListChecks, Menu, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings, StickyNote, Trash2, Video, X } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
 import 'react-big-calendar/lib/css/react-big-calendar.css'
 import './App.css'
@@ -8,11 +8,8 @@ import './styles/globalHome.css'
 import './styles/workspace-settings.css'
 import { AuthPanel } from './components/AuthPanel'
 import { ScheduleForm } from './components/ScheduleForm'
-import { CalendarView } from './components/CalendarView'
-import { RecordPanel } from './components/RecordPanel'
-import { AssetKnowledgeView } from './components/AssetKnowledgeView'
 import { SettingsPanel } from './components/SettingsPanel'
-import type { Schedule, SyncUpdateEvent } from './types'
+import type { EditScope, Schedule, SyncUpdateEvent } from './types'
 import type { AppNotification } from './components/NotificationBell'
 import { NotificationBell } from './components/NotificationBell'
 import type { NotificationKind } from './components/NotificationBell'
@@ -25,7 +22,10 @@ import { WorkspaceMembersModal } from './components/WorkspaceMembersModal'
 import { WorkspaceSettingsModal } from './components/WorkspaceSettingsModal'
 import { GlobalHome } from './components/GlobalHome'
 import { AskAI } from './components/AskAI'
-import { WorkflowBuilder } from './components/WorkflowBuilder'
+import { ErrorBoundary } from './components/ErrorBoundary'
+import { useEscapeToClose } from './hooks/useEscapeToClose'
+import { useToast } from './hooks/useToast'
+import { useConfirmDialog } from './hooks/useConfirmDialog'
 import { getStoredTheme, applyThemeToDocument } from './utils/theme'
 import type { AppTheme } from './utils/theme'
 import { getBlockEditingEnabled, setBlockEditingEnabled } from './utils/noteSettings'
@@ -39,10 +39,20 @@ import { useWorkflows } from './hooks/useWorkflows'
 import { useNotifications } from './hooks/useNotifications'
 import { usePreferences } from './hooks/usePreferences'
 import { requestWithAuth, getCurrentTokens, setCurrentTokens } from './services/api'
+import { strings } from './i18n/strings'
 import { ROUTES, extractWorkspaceId, isKnownRoute, noteRoute, knowledgeRoute, scheduleRoute, tasksRoute, todayRoute, notificationsRoute, workspaceRoute, workflowRoute } from './services/routes'
 import { TasksPage } from './components/TasksPage'
 import { NotificationsPage } from './components/NotificationsPage'
 import type { Workspace } from './types'
+
+// Lazy-loaded: each of these pulls in a large dependency (ReactFlow,
+// react-big-calendar, video/audio playback, or the block editor) that a
+// user who never opens that view still had to download up front. Splitting
+// them out cuts the initial bundle a login-only visit pays for.
+const CalendarView = lazy(() => import('./components/CalendarView').then(m => ({ default: m.CalendarView })))
+const RecordPanel = lazy(() => import('./components/RecordPanel').then(m => ({ default: m.RecordPanel })))
+const AssetKnowledgeView = lazy(() => import('./components/AssetKnowledgeView').then(m => ({ default: m.AssetKnowledgeView })))
+const WorkflowBuilder = lazy(() => import('./components/WorkflowBuilder').then(m => ({ default: m.WorkflowBuilder })))
 
 const SSE_TAB_APPID_KEY = 'cortex_sse_appid'
 
@@ -233,6 +243,8 @@ function App() {
   })
   const [pendingSelection, setPendingSelection] = useState<string>('')
   const [isCreateWorkspaceOpen, setIsCreateWorkspaceOpen] = useState(false)
+  const toast = useToast()
+  const { confirm, dialog: confirmDialog } = useConfirmDialog()
   const [managingMembersWorkspace, setManagingMembersWorkspace] = useState<{ id: string; name: string; is_personal: boolean } | null>(null)
   const [settingsWorkspace, setSettingsWorkspace] = useState<Workspace | null>(null)
   const [createEventInitialTimes, setCreateEventInitialTimes] = useState<{ startDate: string; endDate: string } | null>(null)
@@ -250,6 +262,51 @@ function App() {
       // ignore storage failures
     }
   }, [isWorkspaceSidebarCollapsed])
+
+  /* auth still owns these two strings; they used to render as in-flow
+     `.status-bar` banners that pushed the whole app down and had no dismiss.
+     Routing them through the toast channel keeps auth untouched while the
+     feedback stops moving the layout. */
+  useEffect(() => {
+    if (auth.statusMessage && !auth.errorMessage) {
+      toast.show({ kind: 'success', message: auth.statusMessage })
+    }
+  }, [auth.statusMessage, auth.errorMessage, toast])
+
+  useEffect(() => {
+    if (auth.errorMessage) {
+      toast.show({ kind: 'error', message: auth.errorMessage })
+    }
+  }, [auth.errorMessage, toast])
+
+  /* Below 700px the sidebar leaves the layout flow and becomes an overlay
+     drawer. It used to be plain `display: none` with the only re-open button
+     living inside the sidebar itself, which made every nav destination
+     unreachable on a phone. */
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false)
+
+  // A drawer that survives navigation would cover the page the user just
+  // asked for, so close it whenever the route changes. Done as a
+  // render-phase adjustment rather than an effect: React re-runs the render
+  // before committing, so the drawer never paints open on the new route, and
+  // it avoids the cascading extra render an effect would cause.
+  const [navPathAtDrawerOpen, setNavPathAtDrawerOpen] = useState(location.pathname)
+  if (navPathAtDrawerOpen !== location.pathname) {
+    setNavPathAtDrawerOpen(location.pathname)
+    setIsMobileNavOpen(false)
+  }
+
+  // Escape closes the drawer — the same way every other overlay in the app
+  // behaves, and the WCAG-expected way out of a modal surface.
+  useEffect(() => {
+    if (!isMobileNavOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsMobileNavOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [isMobileNavOpen])
+
    const [theme, _setTheme] = useState<AppTheme>(getStoredTheme)
   const [reviewProposal, setReviewProposal] = useState<{ noteId: string; proposalId: string } | null>(null)
    const [blockEditingEnabled, _setBlockEditingEnabled] = useState<boolean>(getBlockEditingEnabled)
@@ -464,8 +521,9 @@ const renderWorkspaceSidebarNoteTree = useCallback((parentId: string | null, dep
 
      return childNotes.map((note) => (
        <div key={note.id}>
-         <button
-           type="button"
+         <div
+           role="button"
+           tabIndex={0}
         className={[
               'app-sidebar-sub-item',
                activeWorkspaceView === 'note' && routeWorkspaceState.noteId === note.id ? 'active' : '',
@@ -473,6 +531,11 @@ const renderWorkspaceSidebarNoteTree = useCallback((parentId: string | null, dep
             ].filter(Boolean).join(' ')}
            style={{ paddingLeft: `${10 + (depth * 14)}px` }}
            onClick={() => openWorkspaceNote(note.id)}
+           onKeyDown={(e) => {
+             if (e.key !== 'Enter' && e.key !== ' ') return
+             e.preventDefault()
+             openWorkspaceNote(note.id)
+           }}
            title={note.title}
            draggable
            onDragStart={(e) => {
@@ -506,18 +569,24 @@ const renderWorkspaceSidebarNoteTree = useCallback((parentId: string | null, dep
               <button
                 type="button"
                 className="app-sidebar-sub-action-btn danger"
-               title="Delete"
+               title={strings.nav.deleteTitle}
                onClick={(e) => {
                  e.stopPropagation()
-                 if (window.confirm('Are you sure you want to delete this note?')) {
-                   void handleDeleteNote(note.id)
-                 }
+                 void (async () => {
+                   const ok = await confirm({
+                     title: 'Xoá note',
+                     message: `Xoá "${note.title || 'Untitled'}"? Các note con cũng sẽ bị xoá.`,
+                     confirmLabel: 'Xoá',
+                     cancelLabel: 'Huỷ',
+                   })
+                   if (ok) await handleDeleteNote(note.id)
+                 })()
                }}
              >
                <Trash2 size={12} />
              </button>
            </div>
-         </button>
+         </div>
          {/* eslint-disable-next-line react-hooks/immutability */}
          {renderWorkspaceSidebarNoteTree(note.id, depth + 1)}
        </div>
@@ -555,6 +624,7 @@ const renderWorkspaceSidebarNoteTree = useCallback((parentId: string | null, dep
     setIsCreateEventOpen(false)
     setCreateEventInitialTimes(null)
   }, [])
+  useEscapeToClose(handleCloseCreateEvent, isCreateEventOpen)
 
   // `CalendarView` draws its grid entirely from `calendarItems` (the unified
   // schedules+tasks feed), not from `schedules.schedules` — that array only
@@ -584,6 +654,16 @@ const renderWorkspaceSidebarNoteTree = useCallback((parentId: string | null, dep
   const handleToggleScheduleComplete = useCallback(async (item: Schedule): Promise<void> => {
     await schedules.handleToggleComplete(item)
     await calendarItems.fetchItems()
+  }, [schedules, calendarItems])
+
+  const handleUpdateScheduleInstance = useCallback(async (
+    item: Schedule,
+    editScope: EditScope,
+    patch: Partial<Schedule>,
+  ): Promise<boolean> => {
+    const ok = await schedules.handleUpdateScheduleInstance(item, editScope, patch)
+    if (ok) await calendarItems.fetchItems()
+    return ok
   }, [schedules, calendarItems])
 
   const handleRemoveSchedule = useCallback(async (id: string): Promise<void> => {
@@ -880,6 +960,21 @@ const processNotificationChunk = (chunk: string): void => {
       {/* TOP BAR */}
       <header className="topbar">
         <div className="topbar-left">
+          {/* Lives in the topbar, not the sidebar: the drawer's own toggle
+              is unreachable once the drawer is closed. Hidden above 700px,
+              where the sidebar is always on screen. */}
+          {auth.tokens && (
+            <button
+              type="button"
+              className="topbar-nav-toggle"
+              onClick={() => setIsMobileNavOpen(true)}
+              aria-label="Mở menu điều hướng"
+              aria-expanded={isMobileNavOpen}
+              aria-controls="app-sidebar"
+            >
+              <Menu size={20} />
+            </button>
+          )}
           <div className="brand-logo">
             <div className="brand-icon">C</div>
             <span className="brand-name">Cortex</span>
@@ -943,20 +1038,6 @@ const processNotificationChunk = (chunk: string): void => {
         </div>
       </header>
 
-      {/* STATUS BAR */}
-      {auth.statusMessage && !auth.errorMessage && (
-        <div className="status-bar ok">
-          <CheckCircle2 size={14} />
-          <span>{auth.statusMessage}</span>
-        </div>
-      )}
-      {auth.errorMessage && (
-        <div className="status-bar error">
-          <AlertCircle size={14} />
-          <span>{auth.errorMessage}</span>
-        </div>
-      )}
-
       {/* MAIN CONTENT */}
       {!auth.tokens ? (
         <div className="main-layout">
@@ -964,7 +1045,19 @@ const processNotificationChunk = (chunk: string): void => {
         </div>
       ) : (
         <div className="main-layout">
-          <aside className={`app-sidebar ${isWorkspaceSidebarCollapsed ? 'collapsed' : ''}`}>
+          {/* Scrim: only rendered on mobile via CSS, and only when open.
+              Clicking it dismisses, matching the modal convention. */}
+          {isMobileNavOpen && (
+            <div
+              className="app-sidebar-scrim"
+              onClick={() => setIsMobileNavOpen(false)}
+              aria-hidden="true"
+            />
+          )}
+          <aside
+            id="app-sidebar"
+            className={`app-sidebar ${isWorkspaceSidebarCollapsed ? 'collapsed' : ''} ${isMobileNavOpen ? 'is-mobile-open' : ''}`}
+          >
             <div className="app-sidebar-profile">
               {workspaces.currentWorkspace && (
                 <WorkspaceSwitcher
@@ -997,7 +1090,7 @@ const processNotificationChunk = (chunk: string): void => {
                   onClick={() => navigate('/')}
                 >
                   <Home size={16} />
-                  <span className="app-sidebar-nav-label">HOME</span>
+                  <span className="app-sidebar-nav-label">{strings.nav.home}</span>
                 </button>
 
                 <button
@@ -1009,7 +1102,7 @@ const processNotificationChunk = (chunk: string): void => {
                     <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
                     <path d="M13.73 21a2 2 0 0 1-3.46 0" />
                   </svg>
-                  <span className="app-sidebar-nav-label">NOTIFICATIONS</span>
+                  <span className="app-sidebar-nav-label">{strings.nav.notifications}</span>
                   {notif.notifications.some((n) => !n.read) && (
                     <span className="app-sidebar-nav-badge" aria-hidden />
                   )}
@@ -1026,7 +1119,7 @@ const processNotificationChunk = (chunk: string): void => {
                     <line x1="8" y1="2" x2="8" y2="6" />
                     <line x1="3" y1="10" x2="21" y2="10" />
                   </svg>
-                  <span className="app-sidebar-nav-label">SCHEDULE</span>
+                  <span className="app-sidebar-nav-label">{strings.nav.schedule}</span>
                 </button>
 
                 <button
@@ -1035,7 +1128,7 @@ const processNotificationChunk = (chunk: string): void => {
                   onClick={() => navigate(tasksRoute())}
                 >
                   <ListChecks size={16} />
-                  <span className="app-sidebar-nav-label">TASKS</span>
+                  <span className="app-sidebar-nav-label">{strings.nav.tasks}</span>
                 </button>
               </div>
 
@@ -1045,7 +1138,7 @@ const processNotificationChunk = (chunk: string): void => {
 
                   <SidebarSection
                     icon={<StickyNote size={15} />}
-                    label="Notes"
+                    label={strings.nav.notes}
                     isOpen={sectionNoteOpen}
                     onToggle={() => setSectionNoteOpen(v => !v)}
                     isCollapsed={isWorkspaceSidebarCollapsed}
@@ -1074,20 +1167,26 @@ const processNotificationChunk = (chunk: string): void => {
                     <div className="workspace-note-links">
                       {notes.workspaceRootNotes.length === 0 ? (
                         <div className="app-sidebar-sub-item" style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                          <span>No notes yet</span>
+                          <span>{strings.nav.noNotesYet}</span>
                         </div>
                       ) : (
                         <>
                           {notes.workspaceRootNotes.map((note) => (
                             <div key={note.id}>
-                              <button
-                                type="button"
+                              <div
+                                role="button"
+                                tabIndex={0}
                                 className={[
                                   'app-sidebar-sub-item',
                                   activeWorkspaceView === 'note' && routeWorkspaceState.noteId === note.id ? 'active' : '',
                                   notes.workspaceDropTargetParentId === note.id ? 'workspace-nav-item--drop-target' : '',
                                 ].filter(Boolean).join(' ')}
                                 onClick={() => openWorkspaceNote(note.id)}
+                                onKeyDown={(e) => {
+                                  if (e.key !== 'Enter' && e.key !== ' ') return
+                                  e.preventDefault()
+                                  openWorkspaceNote(note.id)
+                                }}
                                 title={note.title}
                                 draggable
                                 onDragStart={(e) => {
@@ -1121,18 +1220,24 @@ const processNotificationChunk = (chunk: string): void => {
                                   <button
                                     type="button"
                                     className="app-sidebar-sub-action-btn danger"
-                                    title="Delete"
+                                    title={strings.nav.deleteTitle}
                                     onClick={(e) => {
                                       e.stopPropagation()
-                                      if (window.confirm('Are you sure you want to delete this note?')) {
-                                        void handleDeleteNote(note.id)
-                                      }
+                                      void (async () => {
+                                        const ok = await confirm({
+                                          title: 'Xoá note',
+                                          message: `Xoá "${note.title || 'Untitled'}"? Các note con cũng sẽ bị xoá.`,
+                                          confirmLabel: 'Xoá',
+                                          cancelLabel: 'Huỷ',
+                                        })
+                                        if (ok) await handleDeleteNote(note.id)
+                                      })()
                                     }}
                                   >
                                     <Trash2 size={12} />
                                   </button>
                                 </div>
-                              </button>
+                              </div>
                               {renderWorkspaceSidebarNoteTree(note.id, 1)}
                             </div>
                           ))}
@@ -1142,17 +1247,17 @@ const processNotificationChunk = (chunk: string): void => {
                         type="button"
                         className="app-sidebar-sub-item app-sidebar-sub-item--add"
                         onClick={() => handleCreateNote(routeWorkspaceState.noteId ?? undefined)}
-                        title={routeWorkspaceState.noteId ? 'Add sub-note' : 'New note'}
+                        title={routeWorkspaceState.noteId ? strings.nav.addSubNote : strings.nav.newNote}
                       >
                         <Plus size={13} />
-                        <span>{routeWorkspaceState.noteId ? 'Add sub-note' : 'New note'}</span>
+                        <span>{routeWorkspaceState.noteId ? strings.nav.addSubNote : strings.nav.newNote}</span>
                       </button>
                     </div>
                   </SidebarSection>
 
                   <SidebarSection
                     icon={<Video size={15} />}
-                    label="Records"
+                    label={strings.nav.records}
                     isOpen={sectionRecordOpen}
                     onToggle={() => {
                       setSectionRecordOpen(v => !v)
@@ -1167,23 +1272,30 @@ const processNotificationChunk = (chunk: string): void => {
                       {assets.sidebarAssetsLoading ? (
                         <div className="app-sidebar-sub-item" >
                           <Video size={13} />
-                          <span>Loading...</span>
+                          <span>{strings.nav.loading}</span>
                         </div>
                       ) : assets.sidebarAssets.length === 0 ? (
                         <div className="app-sidebar-sub-item" >
                           <Video size={13} />
-                          <span>No recordings yet</span>
+                          <span>{strings.nav.noRecordings}</span>
                         </div>
                       ) : (
                         <>
                           {assets.sidebarAssets.map(asset => {
                             const displayName = asset.title || asset.id.slice(0, 8)
                             return (
-                              <button
+                              <div
                                 key={asset.id}
-                                type="button"
+                                role="button"
+                                tabIndex={0}
                                 className={`app-sidebar-sub-item ${activeWorkspaceView === 'records' && activeWorkspaceAssetId === asset.id ? 'active' : ''}`}
                                 onClick={() => {
+                                  const workspaceId = workspaces.currentWorkspace?.id
+                                  if (workspaceId) navigate(knowledgeRoute(workspaceId, asset.id))
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key !== 'Enter' && e.key !== ' ') return
+                                  e.preventDefault()
                                   const workspaceId = workspaces.currentWorkspace?.id
                                   if (workspaceId) navigate(knowledgeRoute(workspaceId, asset.id))
                                 }}
@@ -1195,13 +1307,22 @@ const processNotificationChunk = (chunk: string): void => {
                                   <button
                                     type="button"
                                     className="app-sidebar-sub-action-btn danger"
-                                    title="Delete"
+                                    title={strings.nav.deleteTitle}
                                     onClick={async (e) => {
                                       e.stopPropagation()
-                                      if (window.confirm('Are you sure you want to delete this recording?')) {
+                                      const ok = await confirm({
+                                        title: 'Xoá bản ghi',
+                                        message: `Xoá "${asset.title || 'bản ghi này'}"? Không thể hoàn tác.`,
+                                        confirmLabel: 'Xoá',
+                                        cancelLabel: 'Huỷ',
+                                      })
+                                      if (ok) {
                                         const deleted = await assets.deleteAsset(asset.id)
                                         if (deleted) {
                                           void assets.loadSidebarAssets()
+                                          toast.show({ message: 'Đã xoá bản ghi.' })
+                                        } else {
+                                          toast.show({ kind: 'error', message: 'Không xoá được bản ghi. Thử lại sau.' })
                                         }
                                       }
                                     }}
@@ -1209,7 +1330,7 @@ const processNotificationChunk = (chunk: string): void => {
                                     <Trash2 size={12} />
                                   </button>
                                 </div>
-                              </button>
+                              </div>
                             )
                           })}
                         </>
@@ -1219,7 +1340,7 @@ const processNotificationChunk = (chunk: string): void => {
 
                   <SidebarSection
                     icon={<GitBranch size={15} />}
-                    label="Workflows"
+                    label={strings.nav.workflows}
                     isOpen={sectionWorkflowOpen}
                     onToggle={() => setSectionWorkflowOpen(v => !v)}
                     isCollapsed={isWorkspaceSidebarCollapsed}
@@ -1232,21 +1353,28 @@ const processNotificationChunk = (chunk: string): void => {
                       {sidebarWorkflows.loading ? (
                         <div className="app-sidebar-sub-item">
                           <GitBranch size={13} />
-                          <span>Loading...</span>
+                          <span>{strings.nav.loading}</span>
                         </div>
                       ) : sidebarWorkflows.workflows.length === 0 ? (
                         <div className="app-sidebar-sub-item">
                           <GitBranch size={13} />
-                          <span>No workflows yet</span>
+                          <span>{strings.nav.noWorkflows}</span>
                         </div>
                       ) : (
                         <>
                           {sidebarWorkflows.workflows.map(wf => (
-                            <button
+                            <div
                               key={wf.id}
-                              type="button"
+                              role="button"
+                              tabIndex={0}
                               className={`app-sidebar-sub-item ${activeWorkspaceView === 'workflow' && activeWorkspaceWorkflowId === wf.id ? 'active' : ''}`}
                               onClick={() => {
+                                const workspaceId = workspaces.currentWorkspace?.id
+                                if (workspaceId) navigate(workflowRoute(workspaceId, wf.id))
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key !== 'Enter' && e.key !== ' ') return
+                                e.preventDefault()
                                 const workspaceId = workspaces.currentWorkspace?.id
                                 if (workspaceId) navigate(workflowRoute(workspaceId, wf.id))
                               }}
@@ -1258,18 +1386,25 @@ const processNotificationChunk = (chunk: string): void => {
                                 <button
                                   type="button"
                                   className="app-sidebar-sub-action-btn danger"
-                                  title="Delete"
+                                  title={strings.nav.deleteTitle}
                                   onClick={async (e) => {
                                     e.stopPropagation()
-                                    if (window.confirm('Are you sure you want to delete this workflow?')) {
+                                    const ok = await confirm({
+                                      title: 'Xoá workflow',
+                                      message: `Xoá "${wf.name || 'workflow này'}"? Không thể hoàn tác.`,
+                                      confirmLabel: 'Xoá',
+                                      cancelLabel: 'Huỷ',
+                                    })
+                                    if (ok) {
                                       await sidebarWorkflows.deleteWorkflow(wf.id)
+                                      toast.show({ message: 'Đã xoá workflow.' })
                                     }
                                   }}
                                 >
                                   <Trash2 size={12} />
                                 </button>
                               </div>
-                            </button>
+                            </div>
                           ))}
                         </>
                       )}
@@ -1282,7 +1417,7 @@ const processNotificationChunk = (chunk: string): void => {
                         }}
                       >
                         <Plus size={13} />
-                        <span>New Workflow</span>
+                        <span>{strings.nav.newWorkflow}</span>
                       </button>
                     </div>
                   </SidebarSection>
@@ -1297,7 +1432,7 @@ const processNotificationChunk = (chunk: string): void => {
                 onClick={() => navigate('/settings')}
               >
                 <Settings size={16} />
-                <span className="app-sidebar-nav-label">SETTINGS</span>
+                  <span className="app-sidebar-nav-label">{strings.nav.settings}</span>
               </button>
               <button
                 type="button"
@@ -1306,12 +1441,17 @@ const processNotificationChunk = (chunk: string): void => {
                 title={isWorkspaceSidebarCollapsed ? 'Mở rộng sidebar' : 'Thu gọn sidebar'}
               >
                 {isWorkspaceSidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
-                <span className="app-sidebar-nav-label">{isWorkspaceSidebarCollapsed ? 'MỞ RỘNG' : 'THU GỌN'}</span>
+                <span className="app-sidebar-nav-label">{isWorkspaceSidebarCollapsed ? 'Mở rộng' : 'Thu gọn'}</span>
               </button>
             </div>
           </aside>
 
           <div className="workspace-area" style={{ maxWidth: '100%' }}>
+            {/* Keyed by route so a thrown error from one page does not
+               linger as a fallback after navigating to the next one — a
+               fresh key remounts the boundary along with the content. */}
+            <ErrorBoundary key={location.pathname} label="Nội dung trang">
+            <Suspense fallback={<div className="workspace-area-loading">Đang tải…</div>}>
             {activeWorkspaceView === 'settings' ? (
               <SettingsPanel
                 googleCalendarStatus={schedules.googleCalendarStatus}
@@ -1369,6 +1509,7 @@ const processNotificationChunk = (chunk: string): void => {
                     onSlotSelect={handleCalendarSlotSelect}
                     onToggleComplete={handleToggleScheduleComplete}
                     onUpdate={handleUpdateSchedule}
+                    onUpdateInstance={handleUpdateScheduleInstance}
                     onRemove={handleRemoveSchedule}
                   />
                 </div>
@@ -1403,14 +1544,6 @@ const processNotificationChunk = (chunk: string): void => {
                 workspaces={workspaces.workspaces}
                 recentNotes={notes.recentNotes}
                 upcomingSchedules={schedules.schedules}
-                onCreateNote={() => {
-                  if (workspaces.currentWorkspace) {
-                    handleCreateNote()
-                  } else if (workspaces.workspaces.length > 0) {
-                    handleWorkspaceSwitch(workspaces.workspaces[0])
-                  }
-                }}
-                onCreateEvent={() => setIsCreateEventOpen(true)}
                 onCreateWorkspace={() => setIsCreateWorkspaceOpen(true)}
                 onOpenWorkspace={(workspaceId) => {
                   const workspace = workspaces.workspaces.find(ws => ws.id === workspaceId)
@@ -1464,6 +1597,8 @@ const processNotificationChunk = (chunk: string): void => {
                 <p>Chọn một note từ sidebar để mở trong workspace.</p>
               </section>
             )}
+            </Suspense>
+            </ErrorBoundary>
           </div>
 
           {/* AskAI Side Panel */}
@@ -1579,6 +1714,10 @@ const processNotificationChunk = (chunk: string): void => {
           />
         )
       }
+
+      {/* Promise-based confirmations for this component's delete actions.
+          Rendered once; it is null until a confirmation is pending. */}
+      {confirmDialog}
 
       {/* Workspace Settings Modal */}
       {

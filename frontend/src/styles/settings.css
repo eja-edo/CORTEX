@@ -35,8 +35,18 @@
 /* Theme swatches grid */
 .theme-swatches-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  /* There are exactly six themes. `auto-fill` was packing five onto the first
+     row at typical widths and orphaning Sepia alone on the second. A fixed
+     three-column track divides six evenly into 3x2 at every desktop width,
+     and drops to 2x3 when the settings column gets narrow. */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
+}
+
+@media (max-width: 700px) {
+  .theme-swatches-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .theme-swatch {

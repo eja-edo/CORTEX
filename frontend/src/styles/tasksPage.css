@@ -81,7 +81,7 @@
 .tasks-page-tab.is-active {
     background: var(--accent);
     border-color: var(--accent);
-    color: #fff;
+    color: var(--accent-fg);
 }
 
 /* ── Status badges (closed tasks: cancelled / rejected) ──────────────── */
@@ -254,7 +254,7 @@
 
 .tasks-page-week-day-btn.is-selected {
     background: var(--accent);
-    color: #fff;
+    color: var(--accent-fg);
     border-color: var(--accent);
 }
 
@@ -279,7 +279,7 @@
     padding: 0 4px;
     border-radius: 999px;
     background: var(--red);
-    color: #fff;
+    color: var(--red-fg);
 }
 
 .tasks-page-week-day-btn-count.is-zero {
@@ -354,7 +354,7 @@
 
 .tasks-page-month-cell.is-selected {
     background: var(--accent);
-    color: #fff;
+    color: var(--accent-fg);
 }
 
 .tasks-page-month-cell.is-selected .tasks-page-month-cell-day {
@@ -367,7 +367,7 @@
     padding: 1px 4px;
     border-radius: 999px;
     background: var(--red);
-    color: #fff;
+    color: var(--red-fg);
 }
 
 .tasks-page-month-cell.is-selected .tasks-page-month-cell-count {

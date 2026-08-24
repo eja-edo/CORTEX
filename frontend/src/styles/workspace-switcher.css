@@ -239,7 +239,7 @@
   height: 36px;
   border-radius: 8px;
   background: var(--accent);
-  color: #ffffff;
+  color: var(--accent-fg);
   display: flex;
   align-items: center;
   justify-content: center;

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Plus } from 'lucide-react'
 import { useEventChecklist } from '../hooks/useEventChecklist'
+import type { PromptEditScope } from '../hooks/useEditScopeDialog'
 import { TaskChecklistRow } from './TaskChecklistRow'
 import { SubtaskCreatePanel } from './SubtaskCreatePanel'
 
@@ -26,12 +27,20 @@ import { SubtaskCreatePanel } from './SubtaskCreatePanel'
 export function EventChecklist({
     eventId,
     eventEndTime,
+    occurrenceStartTime,
+    isRecurring,
+    promptEditScope,
 }: {
     eventId: string | null
     eventEndTime?: string | null
+    // Only meaningful when `isRecurring` — disambiguates which occurrence's
+    // checklist state this is (see `useEventChecklist`'s docstring).
+    occurrenceStartTime?: string | null
+    isRecurring?: boolean
+    promptEditScope: PromptEditScope
 }) {
     const { tasks, isLoading, fetchTasks, addTask, toggleTask, removeTask, updateTask } =
-        useEventChecklist(eventId, eventEndTime ?? null)
+        useEventChecklist(eventId, eventEndTime ?? null, occurrenceStartTime ?? null, Boolean(isRecurring), promptEditScope)
     const [addingItem, setAddingItem] = useState(false)
 
     if (!eventId) return null

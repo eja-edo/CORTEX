@@ -104,6 +104,23 @@
     width: min(380px, 100%);
 }
 
+/* Inside a confirmation, the destructive choice IS the primary action, so it
+   gets a solid fill rather than the ghost treatment `.btn-danger` uses
+   elsewhere (where it sits beside other buttons as a secondary option).
+   Colour is not the only signal — the label says what will happen. */
+.confirm-dialog .btn-danger {
+    background: var(--red);
+    border-color: var(--red);
+    color: var(--red-fg);
+    font-weight: 600;
+}
+
+.confirm-dialog .btn-danger:hover {
+    background: var(--red);
+    border-color: var(--red);
+    opacity: 0.88;
+}
+
 .confirm-dialog-message {
     font-size: 13.5px;
     line-height: 1.5;

@@ -1,0 +1,233 @@
+/* ==========================================================================
+   Accessibility baseline.
+
+   Imported LAST from App.css on purpose. Most of the rules here have to beat
+   older component rules that call `outline: none` on form fields, and CSS
+   ties are broken by source order — so this file has to come after them.
+
+   Three things live here:
+     1. A visible keyboard focus ring for every interactive control.
+     2. Honouring `prefers-reduced-motion`.
+     3. A minimum pointer-target size helper.
+   ========================================================================== */
+
+
+/* --------------------------------------------------------------------------
+   1. Focus
+
+   Two problems this fixes:
+
+   (a) Buttons and links were falling back to Chrome's default ring
+       (`outline: auto 1px #0b57d0`). It exists, but it is a fixed blue that
+       measures 2.1–2.9:1 against the dark themes' surfaces — under the 3:1
+       WCAG 2.2 needs for a focus indicator — and it is invisible on the
+       accent-coloured buttons it most often lands on.
+
+   (b) 43 rules across the stylesheets set `outline: none` on inputs,
+       textareas, selects and contenteditable surfaces. Only 6 of them
+       replaced it with a box-shadow. The other 37 fields had no focus
+       indicator at all.
+
+   `:focus-visible` (not `:focus`) means a mouse click on a text field does
+   not draw a ring, which is the behaviour those `outline: none` rules were
+   reaching for in the first place.
+   -------------------------------------------------------------------------- */
+
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* The 37 fields that explicitly killed their outline.
+
+   The `:root:root` prefix is a deliberate specificity bump, not a typo. The
+   rules being overridden range from `.foo` (0,1,0) to
+   `.recurrence-group select:focus` (0,2,1), and App.tsx loads three
+   stylesheets *after* App.css — so source order alone cannot be relied on.
+   `:root:root` + `:focus-visible` lands at (0,3,0), which clears all of them
+   without reaching for `!important`. `:where()` itself adds nothing, so the
+   long list below stays free. */
+:root:root :where(
+  .ws-search-input,
+  .ask-ai-model-trigger,
+  .ask-ai-model-option,
+  .ask-ai-input,
+  .plan-proposal-item-title,
+  .ask-choice-custom-input,
+  .form-input,
+  .topbar-search-input,
+  .datetime-filter input[type='datetime-local'],
+  .rbc-btn-group button,
+  .recurrence-group select,
+  .recurrence-group input,
+  .conversation-search-input,
+  .editor-block-content,
+  .block-editable,
+  .slash-menu-input,
+  .task-detail-modal-title-input,
+  .task-detail-modal-description-input,
+  .task-detail-modal-property-field,
+  .subtask-create-title,
+  .subtask-create-description,
+  .markdown-field-textarea,
+  .note-search-input,
+  .note-md-textarea,
+  .rl2-inline-input,
+  .today-checklist-title-input,
+  .wf-list-search-input,
+  .wf-list-sort-select,
+  .wf-name-input,
+  .wf-sticky-textarea,
+  .wf-modal-input,
+  .wf-modal-select,
+  .wf-config-input,
+  .wf-config-select,
+  .wf-config-textarea,
+  .wf-palette-search,
+  .wne-title-input,
+  .wne-textarea,
+  .ws-settings-input,
+  .ws-settings-select,
+  .ws-people-search input,
+  .ws-role-select
+):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* One `!important` earns its place: react-big-calendar ships
+   `outline: none !important` in its own vendor stylesheet, and we cannot
+   lower the specificity of a rule we do not own. */
+.rbc-btn-group button:focus-visible,
+.rbc-event:focus-visible,
+.rbc-day-bg:focus-visible {
+  outline: 2px solid var(--focus-ring) !important;
+  outline-offset: -2px !important;
+}
+
+/* Editor surfaces are full-bleed; an offset ring would sit outside the
+   scroll container and get clipped. Tuck it inside instead. */
+:root:root :where(
+  .editor-block-content,
+  .block-editable,
+  .wne-textarea,
+  .note-md-textarea,
+  .markdown-field-textarea
+):focus-visible {
+  outline-offset: -2px;
+}
+
+/* Skip link — the keyboard route past the sidebar into page content. */
+.skip-to-content {
+  position: absolute;
+  left: 8px;
+  top: -100px;
+  z-index: 10000;
+  padding: 10px 16px;
+  border-radius: var(--radius);
+  background: var(--btn-solid-bg);
+  color: var(--btn-solid-fg);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: top 0.15s ease;
+}
+
+.skip-to-content:focus {
+  top: 8px;
+}
+
+
+/* --------------------------------------------------------------------------
+   2. Reduced motion
+
+   207 `transition` declarations and a full animation library, with nothing
+   checking whether the user asked for less of it.
+
+   Motion is not removed outright — durations collapse to ~0 so transition
+   and animation end events still fire, which some components rely on to
+   clean up state.
+   -------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+
+/* --------------------------------------------------------------------------
+   3. Pointer target size
+
+   WCAG 2.2 AA (2.5.8) asks for 24×24 CSS px on web. Applied by growing the
+   hit area with a pseudo-element rather than the box itself, so nothing in
+   the existing layout moves.
+   -------------------------------------------------------------------------- */
+
+.hit-area-min {
+  position: relative;
+}
+
+.hit-area-min::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  translate: -50% -50%;
+  width: max(100%, 24px);
+  height: max(100%, 24px);
+}
+
+/* Touch pointers need the larger target; `pointer: coarse` keeps desktop
+   layouts from growing hit areas they do not need. */
+@media (pointer: coarse) {
+  .hit-area-min::after {
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Error boundary fallback
+
+   Scoped to whatever it wraps rather than full-page, so one broken markdown
+   block or workflow node doesn't take the rest of the screen down with it.
+   --------------------------------------------------------------------------- */
+.error-boundary-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 32px 20px;
+  text-align: center;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  min-height: 120px;
+}
+
+.error-boundary-icon {
+  color: var(--red);
+}
+
+.error-boundary-message {
+  font-size: 14px;
+  color: var(--text-secondary);
+  max-width: 40ch;
+}
+
+.workspace-area-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+  color: var(--text-tertiary);
+  font-size: 14px;
+}

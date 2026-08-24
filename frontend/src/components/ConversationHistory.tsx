@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { MessageCircle, Trash2, AlertCircle, Loader } from 'lucide-react'
 import type { ConversationListItem } from '../types'
 import { listConversations, deleteConversation } from '../services/api'
+import { useConfirmDialog } from '../hooks/useConfirmDialog'
 import '../styles/conversation-history.css'
 
 interface ConversationHistoryProps {
@@ -45,11 +46,17 @@ export function ConversationHistory({ onSelectConversation, className = '' }: Co
         void loadConversations(0)
     }, [])
 
+    const { confirm, dialog: confirmDialog } = useConfirmDialog()
+
     const handleDelete = async (conversationId: string, e: React.MouseEvent) => {
         e.stopPropagation()
-        if (!window.confirm('Are you sure you want to delete this conversation? This action cannot be undone.')) {
-            return
-        }
+        const ok = await confirm({
+            title: 'Xoá cuộc trò chuyện',
+            message: 'Xoá cuộc trò chuyện này? Không thể hoàn tác.',
+            confirmLabel: 'Xoá',
+            cancelLabel: 'Huỷ',
+        })
+        if (!ok) return
 
         setDeletingId(conversationId)
         try {
@@ -180,6 +187,7 @@ export function ConversationHistory({ onSelectConversation, className = '' }: Co
                     )}
                 </>
             )}
+            {confirmDialog}
         </div>
     )
 }

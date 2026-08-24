@@ -3,6 +3,7 @@ import { Calendar, Clock, FileText, Plus, Zap, ChevronRight } from 'lucide-react
 import type { Workspace } from '../types'
 import type { AppNote } from '../hooks/useNotes'
 import type { Schedule } from '../types'
+import { strings } from '../i18n/strings'
 import { TodayChecklist } from './TodayChecklist'
 
 interface GlobalHomeProps {
@@ -22,18 +23,18 @@ function formatTimeAgo(dateStr: string): string {
   const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
   const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
 
-  if (diffHours < 1) return 'Just now'
-  if (diffHours < 24) return `${diffHours}h ago`
-  if (diffDays === 1) return 'Yesterday'
-  if (diffDays < 7) return `${diffDays}d ago`
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  if (diffHours < 1) return strings.home.timeAgo.justNow
+  if (diffHours < 24) return strings.home.timeAgo.hours(diffHours)
+  if (diffDays === 1) return 'Hôm qua'
+  if (diffDays < 7) return strings.home.timeAgo.days(diffDays)
+  return date.toLocaleDateString('vi-VN', { month: 'short', day: 'numeric' })
 }
 
 function getGreeting(): string {
   const hour = new Date().getHours()
-  if (hour < 12) return 'Good morning'
-  if (hour < 18) return 'Good afternoon'
-  return 'Good evening'
+  if (hour < 12) return 'Chào buổi sáng'
+  if (hour < 18) return 'Chào buổi chiều'
+  return 'Chào buổi tối'
 }
 
 export function GlobalHome({
@@ -45,7 +46,10 @@ export function GlobalHome({
   onOpenWorkspace,
   onOpenNote,
 }: GlobalHomeProps) {
-  const userName = user?.full_name || user?.email?.split('@')[0] || 'User'
+  /* Falls back to nothing rather than to the email's local part. Greeting a
+     person as "duyanhsadg" reads worse than not naming them at all — this is
+     the first line they see each day. */
+  const userName = user?.full_name?.trim() || null
   const greeting = getGreeting()
 
   const recentNotesWithTitles = useMemo(() => {
@@ -87,7 +91,7 @@ export function GlobalHome({
       {/* Welcome Header */}
       <div className="global-home-header">
         <h1 className="global-home-greeting">
-          {greeting}, {userName}
+          {userName ? `${greeting}, ${userName}` : greeting}
         </h1>
       </div>
 
@@ -100,7 +104,7 @@ export function GlobalHome({
             <div className="home-card-header">
               <div className="home-card-header-left">
                 <Calendar size={16} className="home-card-header-icon" />
-                <h2 className="home-card-header-label">Upcoming</h2>
+                <h2 className="home-card-header-label">{strings.home.upcoming.title}</h2>
               </div>
             </div>
 
@@ -110,12 +114,12 @@ export function GlobalHome({
                   <div key={schedule.id} className="home-schedule-item">
                     <div className="home-schedule-time-block">
                       <p className="home-schedule-time-value">
-                        {new Date(schedule.start_time).toLocaleTimeString('en-US', {
+                         {new Date(schedule.start_time).toLocaleTimeString('vi-VN', {
                           hour: '2-digit',
                           minute: '2-digit',
                         })}
                       </p>
-                      <p className="home-schedule-time-label">Today</p>
+                      <p className="home-schedule-time-label">{strings.home.today}</p>
                     </div>
                     <div className="home-schedule-content">
                       <h4 className="home-schedule-title">{schedule.title}</h4>
@@ -129,12 +133,12 @@ export function GlobalHome({
                   <div key={schedule.id} className="home-schedule-item home-schedule-item-dim">
                     <div className="home-schedule-time-block">
                       <p className="home-schedule-time-value">
-                        {new Date(schedule.start_time).toLocaleTimeString('en-US', {
+                         {new Date(schedule.start_time).toLocaleTimeString('vi-VN', {
                           hour: '2-digit',
                           minute: '2-digit',
                         })}
                       </p>
-                      <p className="home-schedule-time-label">Tomorrow</p>
+                      <p className="home-schedule-time-label">{strings.home.tomorrow}</p>
                     </div>
                     <div className="home-schedule-content">
                       <h4 className="home-schedule-title">{schedule.title}</h4>
@@ -145,8 +149,8 @@ export function GlobalHome({
             ) : (
               <div className="home-empty-state">
                 <Calendar size={48} className="home-empty-state-icon" />
-                <p className="home-empty-state-title">No upcoming events</p>
-                <p className="home-empty-state-desc">Events from your calendar will appear here.</p>
+                <p className="home-empty-state-title">{strings.home.noUpcomingEvents.title}</p>
+                <p className="home-empty-state-desc">{strings.home.noUpcomingEvents.desc}</p>
               </div>
             )}
           </section>
@@ -156,22 +160,22 @@ export function GlobalHome({
             <div className="home-card-header">
               <div className="home-card-header-left">
                 <Zap size={16} className="home-card-header-icon" />
-                <h2 className="home-card-header-label">Workspaces</h2>
+                <h2 className="home-card-header-label">{strings.home.workspaces.title}</h2>
               </div>
             </div>
 
             {workspaces.length === 0 ? (
               <div className="home-empty-state">
                 <Zap size={48} className="home-empty-state-icon" />
-                <p className="home-empty-state-title">No workspaces yet</p>
-                <p className="home-empty-state-desc">Create your first workspace to get started</p>
+                 <p className="home-empty-state-title">{strings.home.workspaces.noWorkspaces.title}</p>
+                 <p className="home-empty-state-desc">{strings.home.workspaces.noWorkspaces.desc}</p>
                 <button
                   className="home-create-workspace-btn"
                   onClick={onCreateWorkspace}
                   style={{ marginTop: '16px', width: 'auto', padding: '8px 24px', borderStyle: 'solid' }}
                 >
                   <Plus size={14} />
-                  Create Workspace
+                  {strings.home.workspaces.createBtn}
                 </button>
               </div>
             ) : (
@@ -191,7 +195,7 @@ export function GlobalHome({
                     <div className="home-workspace-info">
                       <div className="home-workspace-name">{workspace.name}</div>
                       <div className="home-workspace-role">
-                        {workspace.my_role} &middot; 0 Workflows
+                        {workspace.my_role} &middot; {strings.home.workspaces.noWorkflows}
                       </div>
                     </div>
                     <ChevronRight size={16} className="home-workspace-chevron" />
@@ -199,7 +203,7 @@ export function GlobalHome({
                 ))}
                 <button className="home-create-workspace-btn" onClick={onCreateWorkspace}>
                   <Plus size={14} />
-                  Create New Workspace
+                  {strings.home.workspaces.createBtn}
                 </button>
               </div>
             )}
@@ -222,7 +226,7 @@ export function GlobalHome({
             <div className="home-card-header">
               <div className="home-card-header-left">
                 <Clock size={16} className="home-card-header-icon" />
-                <h2 className="home-card-header-label">Recent Activity</h2>
+                <h2 className="home-card-header-label">{strings.home.recentActivity.title}</h2>
               </div>
             </div>
             <div className="home-activity-list">
@@ -247,8 +251,8 @@ export function GlobalHome({
               ) : (
                 <div className="home-empty-state">
                   <FileText size={48} className="home-empty-state-icon" />
-                  <p className="home-empty-state-title">No recent notes</p>
-                  <p className="home-empty-state-desc">Activities from your flows will appear here.</p>
+                   <p className="home-empty-state-title">{strings.home.recentActivity.noRecentNotes.title}</p>
+                   <p className="home-empty-state-desc">{strings.home.recentActivity.noRecentNotes.desc}</p>
                 </div>
               )}
             </div>

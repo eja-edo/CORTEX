@@ -98,7 +98,7 @@
 .akv-retry-btn {
     padding: 4px 10px;
     border-radius: var(--radius);
-    border: 1px solid rgba(235, 87, 87, 0.3);
+    border: 1px solid color-mix(in srgb, var(--red) 30%, transparent);
     background: var(--red-light);
     color: var(--red);
     font-size: 12px;
@@ -123,7 +123,7 @@
     gap: 14px;
     padding: 18px 20px;
     background: linear-gradient(135deg, var(--accent-light) 0%, var(--bg-secondary) 100%);
-    border: 1.5px solid rgba(35, 131, 226, 0.15);
+    border: 1.5px solid color-mix(in srgb, var(--accent) 15%, transparent);
     border-radius: 14px;
 }
 
@@ -132,12 +132,12 @@
     height: 42px;
     border-radius: 12px;
     background: var(--accent);
-    color: white;
+    color: var(--accent-fg);
     display: flex;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
-    box-shadow: 0 2px 8px rgba(35, 131, 226, 0.3);
+    box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 .akv-hero-text {
@@ -199,9 +199,9 @@
 
 /* Playing badge */
 .akv-badge--playing {
-    background: rgba(35, 131, 226, 0.12);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
     color: var(--accent);
-    border: 1px solid rgba(35, 131, 226, 0.25);
+    border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
 }
 
 .akv-badge-pulse {
@@ -256,7 +256,7 @@
 }
 
 .akv-player-audio-icon {
-    color: rgba(35, 131, 226, 0.6);
+    color: color-mix(in srgb, var(--accent) 60%, transparent);
     transition: color 0.3s;
 }
 
@@ -616,7 +616,7 @@
 
 .akv-tech-chip--primary {
     background: var(--accent-light);
-    border-color: rgba(35, 131, 226, 0.3);
+    border-color: color-mix(in srgb, var(--accent) 30%, transparent);
     color: var(--accent);
 }
 
@@ -670,13 +670,13 @@
 .akv-time-chip:hover {
     background: var(--accent-light);
     color: var(--accent);
-    border-color: rgba(35, 131, 226, 0.3);
+    border-color: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 /* Active/current time chip */
 .akv-time-chip--active {
     background: var(--accent);
-    color: white !important;
+    color: var(--accent-fg) !important;
     border-color: var(--accent) !important;
 }
 
@@ -744,7 +744,7 @@
 
 /* Active timeline entry */
 .akv-tl-entry--active {
-    background: rgba(35, 131, 226, 0.04);
+    background: color-mix(in srgb, var(--accent) 4%, transparent);
     border-radius: 10px;
 }
 
@@ -788,7 +788,7 @@
 /* Active dot */
 .akv-tl-dot--active {
     background: var(--accent);
-    box-shadow: 0 0 0 2px var(--accent), 0 0 0 4px rgba(35, 131, 226, 0.2);
+    box-shadow: 0 0 0 2px var(--accent), 0 0 0 4px color-mix(in srgb, var(--accent) 20%, transparent);
     width: 12px;
     height: 12px;
     animation: akvDotPulse 1.5s ease-in-out infinite;
@@ -798,11 +798,11 @@
 
     0%,
     100% {
-        box-shadow: 0 0 0 2px var(--accent), 0 0 0 4px rgba(35, 131, 226, 0.2);
+        box-shadow: 0 0 0 2px var(--accent), 0 0 0 4px color-mix(in srgb, var(--accent) 20%, transparent);
     }
 
     50% {
-        box-shadow: 0 0 0 2px var(--accent), 0 0 0 7px rgba(35, 131, 226, 0.1);
+        box-shadow: 0 0 0 2px var(--accent), 0 0 0 7px color-mix(in srgb, var(--accent) 10%, transparent);
     }
 }
 
@@ -892,15 +892,15 @@
 }
 
 .akv-wf-step:hover {
-    border-color: rgba(35, 131, 226, 0.2);
-    background: rgba(35, 131, 226, 0.02);
+    border-color: color-mix(in srgb, var(--accent) 20%, transparent);
+    background: color-mix(in srgb, var(--accent) 2%, transparent);
 }
 
 /* Active workflow step */
 .akv-wf-step--active {
     border-color: var(--accent) !important;
-    background: rgba(35, 131, 226, 0.05) !important;
-    box-shadow: 0 0 0 3px rgba(35, 131, 226, 0.08) !important;
+    background: color-mix(in srgb, var(--accent) 5%, transparent) !important;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 8%, transparent) !important;
 }
 
 .akv-wf-number {
@@ -920,7 +920,7 @@
 
 .akv-wf-number--active {
     background: var(--accent);
-    color: white;
+    color: var(--accent-fg);
 }
 
 /* Pulsing dot inside active step number */
@@ -978,7 +978,7 @@
     padding: 2px 8px;
     border-radius: 999px;
     background: var(--accent);
-    color: white;
+    color: var(--accent-fg);
     font-size: 10.5px;
     font-weight: 700;
     letter-spacing: 0.03em;

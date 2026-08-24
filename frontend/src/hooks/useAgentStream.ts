@@ -124,7 +124,11 @@ function buildPendingChange(
     }
 }
 
-const AUTO_MODEL_OPTION: AvailableModel = { id: 'auto', label: 'Auto (round-robin)' }
+// Sends no model at all, which the backend reads as "the default one".
+// It said "round-robin" while the backend rotated across the catalogue
+// per request; it no longer does — one turn now runs on one model, and
+// which one is decided by this dropdown alone.
+const AUTO_MODEL_OPTION: AvailableModel = { id: 'auto', label: 'Auto (mặc định)' }
 
 export function toolSemanticDescription(toolName: string, toolArgs?: Record<string, unknown>): string {
     if (!toolArgs) return ''

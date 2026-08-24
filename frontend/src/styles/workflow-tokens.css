@@ -279,7 +279,7 @@
   height: 40px;
   border-radius: 8px;
   background: var(--node-color, var(--accent));
-  color: #fff;
+  color: var(--accent-fg);
   flex-shrink: 0;
   transition: transform 0.15s;
 }

@@ -111,11 +111,11 @@
 }
 
 .notif-item.unread {
-    background: rgba(35, 131, 226, 0.03);
+    background: color-mix(in srgb, var(--accent) 3%, transparent);
 }
 
 .notif-item.unread:hover {
-    background: rgba(35, 131, 226, 0.06);
+    background: color-mix(in srgb, var(--accent) 6%, transparent);
 }
 
 .notif-item.exiting {

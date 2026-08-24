@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Search, X, FileText, Clock, ArrowRight } from 'lucide-react'
 import { plainTextFromMarkdown } from '../utils/noteMarkdown'
+import { strings } from '../i18n/strings'
 
 type NoteItem = {
     id: string
@@ -119,7 +120,7 @@ export function WorkspaceSearch({ notes, onOpenNote, onClose }: WorkspaceSearchP
                     <input
                         ref={inputRef}
                         className="ws-search-input"
-                        placeholder="Search notes…"
+                        placeholder={strings.search.placeholder}
                         value={query}
                         onChange={e => setQuery(e.target.value)}
                     />
@@ -135,18 +136,18 @@ export function WorkspaceSearch({ notes, onOpenNote, onClose }: WorkspaceSearchP
                     {results.length === 0 ? (
                         <div className="ws-search-empty">
                             <Search size={20} strokeWidth={1.5} />
-                            <span>No results for "{query}"</span>
+                            <span>{strings.search.noResults(query)}</span>
                         </div>
                     ) : (
                         <>
                             {!query && (
                                 <div className="ws-search-section-label">
-                                    <Clock size={11} /> Recent notes
+                                    <Clock size={11} /> {strings.search.recentNotes}
                                 </div>
                             )}
                             {query && results.length > 0 && (
                                 <div className="ws-search-section-label">
-                                    <FileText size={11} /> {results.length} result{results.length !== 1 ? 's' : ''}
+                                    <FileText size={11} /> {strings.search.resultsCount(results.length)}
                                 </div>
                             )}
                             {results.map((result, i) => (

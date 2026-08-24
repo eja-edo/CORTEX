@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Bold, Check, ChevronRight, Code, Italic, Link, Minus, Plus, Search, Trash2, Type, X } from 'lucide-react'
 import { plainTextFromMarkdown } from '../utils/noteMarkdown'
+import { useConfirmDialog } from '../hooks/useConfirmDialog'
 import {
   renderMarkdownToSanitizedHtml,
   toggleTaskInMarkdown,
@@ -288,10 +289,18 @@ function NoteCardItem({
     return () => document.removeEventListener('pointerdown', onPointerDown, true)
   }, [isExpanded, collapseAndSave])
 
-  const handleDelete = (e: React.MouseEvent) => {
+  const { confirm, dialog: confirmDialog } = useConfirmDialog()
+
+  const handleDelete = async (e: React.MouseEvent) => {
     e.stopPropagation()
     if (!onDeleteNote) return
-    if (window.confirm(`Xóa note "${title}"?`)) onDeleteNote(note.id)
+    const ok = await confirm({
+      title: 'Xoá note',
+      message: `Xoá "${title}"?`,
+      confirmLabel: 'Xoá',
+      cancelLabel: 'Huỷ',
+    })
+    if (ok) onDeleteNote(note.id)
   }
 
   const renderedHtml = renderMarkdownToSanitizedHtml(note.contentMd || '_Chưa có nội dung_', { interactiveTasks: true })
@@ -446,6 +455,7 @@ function NoteCardItem({
           </div>
         </div>
       </div>
+      {confirmDialog}
     </article>
   )
 }

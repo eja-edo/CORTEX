@@ -1,9 +1,19 @@
 import { useEffect, useState } from 'react'
 import { Calendar, CheckCircle2, Circle, Clock3, Layers, MapPin, Repeat, Trash2, X } from 'lucide-react'
-import type { Schedule, ScheduleType } from '../types'
+import type { EditScope, Schedule, ScheduleType } from '../types'
 import { parseServerDateTime } from '../utils/calendarItems'
 import { MarkdownField } from './MarkdownField'
 import { EventChecklist } from './EventChecklist'
+import { useEscapeToClose } from '../hooks/useEscapeToClose'
+import { useEditScopeDialog } from '../hooks/useEditScopeDialog'
+
+// Field edits (title/description/location/time) on a recurring event ask
+// which occurrences this applies to — completing/un-completing never does,
+// it's always scoped to the occurrence being viewed (see `toggleComplete`).
+const EDIT_SCOPE_OPTIONS: { scope: EditScope; label: string }[] = [
+  { scope: 'this_only', label: 'Chỉ sự kiện này' },
+  { scope: 'all', label: 'Toàn bộ chuỗi lặp' },
+]
 
 const TYPE_LABELS: Record<ScheduleType, string> = {
   CLASS: 'Lớp học (Class)',
@@ -35,6 +45,11 @@ interface EventDetailModalProps {
   canEdit: boolean
   onUpdate: (item: Schedule, patch: Partial<Schedule>) => Promise<boolean>
   onToggleComplete: (item: Schedule) => Promise<void>
+  // Recurring-only path: every occurrence without its own exception shares
+  // the root's id, so onUpdate/onToggleComplete would silently change every
+  // occurrence at once. Optional so a caller that never shows recurring
+  // events (none currently) doesn't have to wire it.
+  onUpdateInstance?: (item: Schedule, editScope: EditScope, patch: Partial<Schedule>) => Promise<boolean>
   onRemove: (id: string) => Promise<void>
   onClose: () => void
 }
@@ -52,9 +67,12 @@ export function EventDetailModal({
   canEdit,
   onUpdate,
   onToggleComplete,
+  onUpdateInstance,
   onRemove,
   onClose,
 }: EventDetailModalProps) {
+  useEscapeToClose(onClose)
+  const { promptEditScope, dialog: editScopeDialog } = useEditScopeDialog()
   // Snapshot for editing — we hold a local copy so the parent's `schedules`
   // array doesn't have to update instantly for the fields to show new drafts.
   const [draft, setDraft] = useState<Schedule>(schedule)
@@ -80,9 +98,34 @@ export function EventDetailModal({
 
   const patch = async (changes: Partial<Schedule>): Promise<boolean> => {
     if (!canEdit) return false
+    if (draft.is_recurring && onUpdateInstance) {
+      const scope = await promptEditScope({
+        title: 'Sự kiện lặp lại',
+        message: 'Áp dụng thay đổi này cho buổi nào?',
+        options: EDIT_SCOPE_OPTIONS,
+      })
+      if (!scope) return false
+      const ok = await onUpdateInstance(draft, scope, changes)
+      if (ok) setDraft({ ...draft, ...changes })
+      return ok
+    }
     const ok = await onUpdate(draft, changes)
     if (ok) setDraft({ ...draft, ...changes })
     return ok
+  }
+
+  const toggleComplete = async () => {
+    // Completing/un-completing never asks — it always applies to the
+    // occurrence being viewed, silently. Only a field edit (title,
+    // description, location, time) asks whether it's just this occurrence
+    // or the whole series (see `patch`).
+    if (draft.is_recurring && onUpdateInstance) {
+      const ok = await onUpdateInstance(draft, 'this_only', { is_completed: !draft.is_completed })
+      if (ok) setDraft((d) => ({ ...d, is_completed: !d.is_completed }))
+      return
+    }
+    setDraft((d) => ({ ...d, is_completed: !d.is_completed }))
+    void onToggleComplete(schedule)
   }
 
   const commitTitle = async () => {
@@ -115,6 +158,7 @@ export function EventDetailModal({
     : null
 
   return (
+    <>
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal task-detail-modal" onClick={(e) => e.stopPropagation()}>
         <div className="task-detail-modal-topbar">
@@ -170,7 +214,13 @@ export function EventDetailModal({
                 lives in `tasks`, where a due date, a status, a priority and a
                 description can actually be stored.
               */}
-              <EventChecklist eventId={schedule.id} eventEndTime={schedule.end_time} />
+              <EventChecklist
+                eventId={schedule.id}
+                eventEndTime={schedule.end_time}
+                occurrenceStartTime={draft.original_start_time ?? draft.start_time}
+                isRecurring={draft.is_recurring}
+                promptEditScope={promptEditScope}
+              />
             </div>
 
             <div className="task-detail-modal-sidebar">
@@ -180,14 +230,7 @@ export function EventDetailModal({
                 type="button"
                 className="task-detail-modal-property"
                 disabled={!canEdit}
-                onClick={() => {
-                  // `onToggleComplete` writes straight through the parent's
-                  // schedule list, not our `patch()` — it never touches
-                  // `draft`, so without this the label only catches up once
-                  // the modal is re-opened with a fresh `schedule` prop.
-                  setDraft((d) => ({ ...d, is_completed: !d.is_completed }))
-                  void onToggleComplete(schedule)
-                }}
+                onClick={() => void toggleComplete()}
               >
                 {draft.is_completed
                   ? <CheckCircle2 size={14} style={{ color: 'var(--green, #16a34a)' }} />
@@ -265,5 +308,7 @@ export function EventDetailModal({
         </div>
       </div>
     </div>
+    {editScopeDialog}
+    </>
   )
 }

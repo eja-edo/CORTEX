@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Bell, Plus, X, Clock } from 'lucide-react'
 import type { ReminderConfig, ReminderMethod } from '../types'
+import { useToast } from '../hooks/useToast'
 
 interface ReminderConfigProps {
   value: ReminderConfig[]
@@ -18,6 +19,7 @@ const PRESET_OPTIONS = [
 ]
 
 export function ReminderConfig({ value, onChange }: ReminderConfigProps) {
+  const toast = useToast()
   const [showPresets, setShowPresets] = useState(false)
 
   const addReminder = (minutes: number, method: ReminderMethod = 'push') => {
@@ -26,7 +28,7 @@ export function ReminderConfig({ value, onChange }: ReminderConfigProps) {
     if (exists) return
 
     if (value.length >= 5) {
-      alert('Maximum 5 reminders allowed')
+      toast.show({ kind: 'info', message: 'Mỗi sự kiện chỉ đặt được tối đa 5 lời nhắc.' })
       return
     }
 

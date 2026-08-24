@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import { startOfWeek, endOfWeek } from 'date-fns'
-import type { Schedule, ScheduleListResponse, GoogleCalendarStatus } from '../types'
+import type { EditScope, Schedule, ScheduleListResponse, GoogleCalendarStatus } from '../types'
 import { requestWithAuth } from '../services/api'
 
 function toLocalInputDateTime(value: Date): string {
@@ -156,6 +156,36 @@ export function useSchedules() {
         }
     }, [fetchSchedules])
 
+    // For a recurring schedule: every occurrence without its own exception
+    // reports the root's id (see generate_instances backend-side), so a
+    // plain PUT /schedules/{id} always mutates every occurrence at once.
+    // This targets exactly one occurrence, or the whole series, based on
+    // `editScope` — the same PUT /schedules/{id}/instances/{time} route
+    // ScheduleService.update_instance already implements.
+    const handleUpdateScheduleInstance = useCallback(async (
+        item: Schedule,
+        editScope: EditScope,
+        patch: Partial<Schedule>,
+    ): Promise<boolean> => {
+        if (!item.id) return false
+        const originalStartTime = item.original_start_time ?? item.start_time
+        try {
+            await requestWithAuth<Schedule>(
+                `/schedules/${item.id}/instances/${encodeURIComponent(originalStartTime)}`,
+                {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ edit_scope: editScope, updates: patch }),
+                }
+            )
+            await fetchSchedules()
+            return true
+        } catch (error) {
+            console.error('Cannot update schedule instance:', error)
+            return false
+        }
+    }, [fetchSchedules])
+
     const handleRemoveSchedule = useCallback(async (scheduleId: string): Promise<void> => {
         try {
             await requestWithAuth<void>(`/schedules/${scheduleId}`, { method: 'DELETE' })
@@ -184,6 +214,7 @@ export function useSchedules() {
         handleCreateSchedule,
         handleToggleComplete,
         handleUpdateSchedule,
+        handleUpdateScheduleInstance,
         handleRemoveSchedule,
     }
 }

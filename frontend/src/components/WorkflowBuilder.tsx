@@ -25,10 +25,12 @@ import type {
   WorkflowConflict,
 } from '../types'
 import { useWorkflows } from '../hooks/useWorkflows'
+import { useConfirmDialog } from '../hooks/useConfirmDialog'
 import { nodeTypes } from './workflow/nodes'
 import { getNodeConfig } from './workflow/nodeConfig'
 import { NodePalette } from './workflow/NodePalette'
 import { WorkflowCanvas } from './workflow/WorkflowCanvas'
+import { ErrorBoundary } from './ErrorBoundary'
 import { WorkflowToolbar } from './workflow/WorkflowToolbar'
 import { WorkflowList } from './workflow/WorkflowList'
 import { getConfigPanel } from './workflow/config'
@@ -56,6 +58,7 @@ export function WorkflowBuilder(props: WorkflowBuilderProps) {
 }
 
 function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate, onWorkflowsChanged }: WorkflowBuilderProps) {
+  const { confirm, dialog: confirmDialog } = useConfirmDialog()
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null)
   const [nodes, setNodes, onNodesChange] = useNodesState([])
@@ -421,7 +424,13 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate, onW
 
   const handleDelete = useCallback(async () => {
     if (!currentWorkflowId) return
-    if (!window.confirm('Are you sure you want to delete this workflow?')) return
+    const proceed = await confirm({
+      title: 'Xoá workflow',
+      message: `Xoá "${workflowName || 'workflow này'}"? Không thể hoàn tác.`,
+      confirmLabel: 'Xoá',
+      cancelLabel: 'Huỷ',
+    })
+    if (!proceed) return
     const ok = await wf.deleteWorkflow(currentWorkflowId)
     if (ok) {
       setCurrentWorkflowId(null)
@@ -434,7 +443,7 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate, onW
       if (workspaceId) void wf.fetchWorkflows({ workspace_id: workspaceId })
       onWorkflowsChanged?.()
     }
-  }, [currentWorkflowId, wf, setNodes, setEdges, workspaceId, onWorkflowsChanged])
+  }, [confirm, currentWorkflowId, wf, setNodes, setEdges, workflowName, workspaceId, onWorkflowsChanged])
 
   const handleRemoveNode = useCallback(() => {
     setSelectedNode(prev => {
@@ -634,21 +643,23 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate, onW
       <div className="wf-body">
         <NodePalette onDragStart={handlePaletteDragStart} onAddStickyNote={handleAddStickyNote} />
 
-        <WorkflowCanvas
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          onConnect={onConnect}
-          onDrop={onDrop}
-          onDragOver={onDragOver}
-          onNodeClick={onNodeClick}
-          onPaneClick={onPaneClick}
-          onSelectionChange={onSelectionChange}
-          onInit={setReactFlowInstance}
-          nodeTypes={nodeTypes}
-          reactFlowWrapperRef={reactFlowWrapper}
-        />
+        <ErrorBoundary label="Trình xây dựng workflow">
+          <WorkflowCanvas
+            nodes={nodes}
+            edges={edges}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
+            onDrop={onDrop}
+            onDragOver={onDragOver}
+            onNodeClick={onNodeClick}
+            onPaneClick={onPaneClick}
+            onSelectionChange={onSelectionChange}
+            onInit={setReactFlowInstance}
+            nodeTypes={nodeTypes}
+            reactFlowWrapperRef={reactFlowWrapper}
+          />
+        </ErrorBoundary>
 
         {selectedNode && selectedNode.type !== 'sticky_note' && (
           <aside className="wf-config">
@@ -778,6 +789,7 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate, onW
           </aside>
         )}
       </div>
+      {confirmDialog}
     </div>
   )
 }

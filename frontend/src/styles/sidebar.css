@@ -66,10 +66,12 @@
   transition: background 0.15s, color 0.15s;
   text-align: left;
   width: 100%;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  /* Was 11px all-caps with letter-spacing. All-caps text loses the word
+     shape (ascenders/descenders) that the eye uses to recognise a word at a
+     glance, which works against a nav list that's meant to be scanned fast.
+     Sentence case at a size close to the rest of the sidebar reads faster. */
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .app-sidebar-nav-item:hover {
@@ -122,10 +124,10 @@
   transition: background 0.15s, color 0.15s;
   text-align: left;
   width: 100%;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  /* Matches .app-sidebar-nav-item above — same reasoning, kept visually
+     consistent with the primary nav items directly above it. */
+  font-size: 13px;
+  font-weight: 600;
   transition: background 0.15s;
 }
 
@@ -145,10 +147,11 @@
 }
 
 .app-sidebar-section-header-label {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  /* Redeclared the parent .app-sidebar-section-header's old uppercase
+     styling directly on the span, which is what was actually winning —
+     fixing the parent alone left this one still rendering caps. */
+  font-size: 13px;
+  font-weight: 600;
   color: var(--text-secondary);
   flex: 1;
 }
@@ -578,8 +581,97 @@
   }
 }
 
+/* ---------------------------------------------------------------------------
+   Below 700px the sidebar becomes an overlay drawer.
+
+   It used to be `display: none` with no replacement, and the only control
+   that could bring it back lived inside the sidebar itself — so on a phone
+   every nav destination (Home, Notifications, Schedule, Tasks, Notes,
+   Records, Workflows, Settings, the workspace switcher) was unreachable.
+   The trigger now lives in the topbar; see `.topbar-nav-toggle` in base.css.
+   --------------------------------------------------------------------------- */
 @media (max-width: 700px) {
   .app-sidebar {
+    position: fixed;
+    top: var(--topbar-height);
+    left: 0;
+    bottom: 0;
+    width: min(300px, 86vw);
+    z-index: 900;
+    /* Off-canvas rather than hidden, so focus order and the drawer's own
+       scroll position survive open/close. */
+    transform: translateX(-100%);
+    transition: transform 0.22s ease;
+    box-shadow: var(--shadow-lg);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  /* The 900px rule above narrows the rail to 64px; the drawer needs its full
+     width back, and the collapsed state is meaningless as an overlay. */
+  .app-sidebar.collapsed {
+    width: min(300px, 86vw);
+  }
+
+  .app-sidebar.is-mobile-open {
+    transform: translateX(0);
+  }
+
+  /* A closed drawer must not be a keyboard trap: nothing inside it should be
+     tabbable while it is off-canvas. */
+  .app-sidebar:not(.is-mobile-open) {
+    visibility: hidden;
+  }
+
+  .app-sidebar.is-mobile-open {
+    visibility: visible;
+  }
+
+  .app-sidebar-scrim {
+    position: fixed;
+    inset: var(--topbar-height) 0 0 0;
+    z-index: 899;
+    background: rgba(0, 0, 0, 0.45);
+  }
+
+  /* Collapsed-rail overrides from the 900px block hide labels; inside the
+     drawer there is room for them, so put them back. */
+  .app-sidebar.collapsed .app-sidebar-nav-label,
+  .app-sidebar.collapsed .app-sidebar-section-header-label {
+    display: inline;
+  }
+
+  .app-sidebar.collapsed .app-sidebar-profile {
+    padding: 16px;
+    display: block;
+  }
+
+  .app-sidebar.collapsed .app-sidebar-nav-item,
+  .app-sidebar.collapsed .app-sidebar-section-header {
+    justify-content: flex-start;
+    padding: 8px 12px;
+  }
+
+  /* Collapsing is a desktop-only affordance — as an overlay there is nothing
+     to collapse into. */
+  .app-sidebar-collapse-toggle {
+    display: none;
+  }
+}
+
+/* The drawer slides; users who asked for less motion get an instant swap.
+   (a11y.css already collapses durations globally — this keeps the intent
+   explicit next to the animation it belongs to.) */
+@media (max-width: 700px) and (prefers-reduced-motion: reduce) {
+  .app-sidebar {
+    transition: none;
+  }
+}
+
+/* The scrim is mobile-only; above 700px the sidebar is part of the layout
+   and never needs one, even if state says the drawer is "open". */
+@media (min-width: 701px) {
+  .app-sidebar-scrim {
     display: none;
   }
 }

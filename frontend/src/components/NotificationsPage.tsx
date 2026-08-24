@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { BellOff, Check, ChevronLeft, ChevronRight, RefreshCw, Trash2 } from 'lucide-react'
 import { NotificationDetailModal } from './NotificationDetailModal'
 import { KIND_META, timeAgo } from '../utils/notificationDisplay'
+import { useConfirmDialog } from '../hooks/useConfirmDialog'
 import type { NotificationKind } from './NotificationBell'
 import {
     listNotifications,
@@ -41,6 +42,7 @@ export function NotificationsPage({ onNavigate, onNotificationsChanged }: Notifi
     const [selected, setSelected] = useState<Set<string>>(new Set())
     const [busyIds, setBusyIds] = useState<Set<string>>(new Set())
     const [detail, setDetail] = useState<NotificationResponse | null>(null)
+    const { confirm, dialog: confirmDialog } = useConfirmDialog()
 
     const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
@@ -129,7 +131,13 @@ export function NotificationsPage({ onNavigate, onNotificationsChanged }: Notifi
         const confirmMsg = ids.length === 1
             ? 'Xoá thông báo này?'
             : `Xoá ${ids.length} thông báo đã chọn?`
-        if (!window.confirm(confirmMsg)) return
+        const ok = await confirm({
+            title: 'Xoá thông báo',
+            message: confirmMsg,
+            confirmLabel: 'Xoá',
+            cancelLabel: 'Huỷ',
+        })
+        if (!ok) return
 
         setBusyIds((prev) => new Set([...prev, ...ids]))
         // Feedback Loop (6.9) raw material — a bulk/single delete here is a
@@ -158,7 +166,7 @@ export function NotificationsPage({ onNavigate, onNotificationsChanged }: Notifi
                 return next
             })
         }
-    }, [fetchPage, items, onNotificationsChanged, page, total])
+    }, [confirm, fetchPage, items, onNotificationsChanged, page, total])
 
     const handleRowClick = useCallback((n: NotificationResponse) => {
         setDetail(n)
@@ -374,6 +382,7 @@ export function NotificationsPage({ onNavigate, onNotificationsChanged }: Notifi
                     onDelete={() => void handleDelete([detail.id])}
                 />
             )}
+            {confirmDialog}
         </div>
     )
 }

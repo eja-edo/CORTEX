@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react'
 import type { FormEvent, FocusEvent } from 'react'
+import { strings } from '../i18n/strings'
 
 type AuthMode = 'login' | 'register'
 
@@ -42,10 +43,10 @@ export function AuthPanel({ onLogin, onRegister, isBusy }: AuthPanelProps) {
       <div className="auth-container">
         <div className="auth-card">
           <div className="auth-card-header">
-            <div className="auth-card-icon">C</div>
+            <div className="auth-card-icon">{strings.auth.brand.logo}</div>
             <div>
-              <div className="auth-card-title">Welcome to Cortex</div>
-              <div className="auth-card-sub">Your personal academic planner</div>
+              <div className="auth-card-title">{strings.auth.card.title}</div>
+              <div className="auth-card-sub">{strings.auth.brand.tagline}</div>
             </div>
           </div>
 
@@ -53,16 +54,16 @@ export function AuthPanel({ onLogin, onRegister, isBusy }: AuthPanelProps) {
             <button
               type="button"
               className={`auth-tab${authMode === 'login' ? ' active' : ''}`}
-              onClick={() => setAuthMode('login')}
+                onClick={() => setAuthMode('login')}
             >
-              Sign in
+              {strings.auth.tabs.login}
             </button>
             <button
               type="button"
               className={`auth-tab${authMode === 'register' ? ' active' : ''}`}
               onClick={() => setAuthMode('register')}
             >
-              Create account
+              {strings.auth.tabs.register}
             </button>
           </div>
 
@@ -70,13 +71,13 @@ export function AuthPanel({ onLogin, onRegister, isBusy }: AuthPanelProps) {
             {authMode === 'login' ? (
               <form className="auth-form" onSubmit={handleLogin}>
                 <div className="form-field">
-                  <label className="form-label" htmlFor="login-email">Email</label>
+                  <label className="form-label" htmlFor="login-email">{strings.auth.login.emailLabel}</label>
                   <input
                     id="login-email"
                     className="form-input"
                     type="email"
                     required
-                    placeholder="you@university.edu"
+                    placeholder={strings.auth.login.emailPlaceholder}
                     value={loginEmail}
                     onChange={(e) => setLoginEmail(e.target.value)}
                     onFocus={handleFocus}
@@ -84,14 +85,14 @@ export function AuthPanel({ onLogin, onRegister, isBusy }: AuthPanelProps) {
                   />
                 </div>
                 <div className="form-field">
-                  <label className="form-label" htmlFor="login-password">Password</label>
+                  <label className="form-label" htmlFor="login-password">{strings.auth.login.passwordLabel}</label>
                   <input
                     id="login-password"
                     className="form-input"
                     type="password"
                     required
                     minLength={8}
-                    placeholder="••••••••"
+                    placeholder={strings.auth.login.passwordPlaceholder}
                     value={loginPassword}
                     onChange={(e) => setLoginPassword(e.target.value)}
                     onFocus={handleFocus}
@@ -99,18 +100,18 @@ export function AuthPanel({ onLogin, onRegister, isBusy }: AuthPanelProps) {
                   />
                 </div>
                 <button className="form-submit" type="submit" disabled={isBusy}>
-                  {isBusy ? 'Signing in…' : 'Continue'}
+                  {isBusy ? strings.auth.login.submitting : strings.auth.login.submit}
                 </button>
               </form>
             ) : (
               <form className="auth-form" onSubmit={handleRegister}>
                 <div className="form-field">
-                  <label className="form-label" htmlFor="reg-name">Full name</label>
+                  <label className="form-label" htmlFor="reg-name">{strings.auth.register.nameLabel}</label>
                   <input
                     id="reg-name"
                     className="form-input"
                     type="text"
-                    placeholder="Alice Smith"
+                    placeholder={strings.auth.register.namePlaceholder}
                     value={registerName}
                     onChange={(e) => setRegisterName(e.target.value)}
                     onFocus={handleFocus}
@@ -118,13 +119,13 @@ export function AuthPanel({ onLogin, onRegister, isBusy }: AuthPanelProps) {
                   />
                 </div>
                 <div className="form-field">
-                  <label className="form-label" htmlFor="reg-email">Email</label>
+                  <label className="form-label" htmlFor="reg-email">{strings.auth.register.emailLabel}</label>
                   <input
                     id="reg-email"
                     className="form-input"
                     type="email"
                     required
-                    placeholder="you@university.edu"
+                    placeholder={strings.auth.register.emailPlaceholder}
                     value={registerEmail}
                     onChange={(e) => setRegisterEmail(e.target.value)}
                     onFocus={handleFocus}
@@ -132,14 +133,14 @@ export function AuthPanel({ onLogin, onRegister, isBusy }: AuthPanelProps) {
                   />
                 </div>
                 <div className="form-field">
-                  <label className="form-label" htmlFor="reg-password">Password</label>
+                  <label className="form-label" htmlFor="reg-password">{strings.auth.register.passwordLabel}</label>
                   <input
                     id="reg-password"
                     className="form-input"
                     type="password"
                     required
                     minLength={8}
-                    placeholder="Min. 8 characters"
+                    placeholder={strings.auth.register.passwordPlaceholder}
                     value={registerPassword}
                     onChange={(e) => setRegisterPassword(e.target.value)}
                     onFocus={handleFocus}
@@ -147,19 +148,19 @@ export function AuthPanel({ onLogin, onRegister, isBusy }: AuthPanelProps) {
                   />
                 </div>
                 <button className="form-submit" type="submit" disabled={isBusy}>
-                  {isBusy ? 'Creating account…' : 'Create account'}
+                  {isBusy ? strings.auth.register.submitting : strings.auth.register.submit}
                 </button>
               </form>
             )}
 
             <div className="auth-divider">
               <div className="auth-divider-line" />
-              <span className="auth-divider-text">Or continue with</span>
+              <span className="auth-divider-text">{strings.auth.divider.continueWith}</span>
               <div className="auth-divider-line" />
             </div>
 
             <div className="auth-social">
-              <button type="button" className="auth-social-btn" aria-label="Continue with Google">
+              <button type="button" className="auth-social-btn" aria-label={`Continue with ${strings.auth.social.google}`}>
                 <svg className="auth-social-icon" viewBox="0 0 24 24">
                   <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
                   <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
@@ -167,12 +168,12 @@ export function AuthPanel({ onLogin, onRegister, isBusy }: AuthPanelProps) {
                   <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335" />
                 </svg>
               </button>
-              <button type="button" className="auth-social-btn" aria-label="Continue with Apple">
+              <button type="button" className="auth-social-btn" aria-label={`Continue with ${strings.auth.social.apple}`}>
                 <svg className="auth-social-icon" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M17.05 20.28c-.96.95-2.06 1.81-3.23 1.81-1.12 0-1.48-.68-2.78-.68-1.31 0-1.7.67-2.78.67-1.14 0-2.31-1.11-3.27-2.07-1.98-1.98-3.03-4.88-3.03-7.58 0-4.38 2.76-6.68 5.42-6.68 1.41 0 2.5.91 3.36.91.84 0 2.09-.91 3.51-.91 1.22 0 2.37.5 3.12 1.34-2.82 1.66-2.36 5.6.45 6.84-.71 1.77-1.63 3.52-2.5 4.39zM12.01 4.6c-.02-1.98 1.62-3.7 3.52-3.83.19 1.94-1.74 3.79-3.52 3.83z" />
                 </svg>
               </button>
-              <button type="button" className="auth-social-btn" aria-label="Continue with Microsoft">
+              <button type="button" className="auth-social-btn" aria-label={`Continue with ${strings.auth.social.microsoft}`}>
                 <svg className="auth-social-icon" viewBox="0 0 23 23">
                   <path d="M0 0h11v11H0z" fill="#f35325" />
                   <path d="M12 0h11v11H12z" fill="#81bc06" />
@@ -189,13 +190,13 @@ export function AuthPanel({ onLogin, onRegister, isBusy }: AuthPanelProps) {
         <div className="auth-footer-inner">
           <div className="auth-footer-brand">
             <span className="auth-footer-logo">Cortex</span>
-            <span className="auth-footer-copy">© 2024 Cortex Academic. All rights reserved.</span>
+            <span className="auth-footer-copy">{strings.auth.brand.copyright}</span>
           </div>
           <nav className="auth-footer-links">
-            <a href="#" className="auth-footer-link">Forgot password?</a>
-            <a href="#" className="auth-footer-link">Help</a>
-            <a href="#" className="auth-footer-link">Privacy Policy</a>
-            <a href="#" className="auth-footer-link">Terms of Service</a>
+            <a href="#" className="auth-footer-link">{strings.auth.footer.forgotPassword}</a>
+            <a href="#" className="auth-footer-link">{strings.auth.footer.help}</a>
+            <a href="#" className="auth-footer-link">{strings.auth.footer.privacy}</a>
+            <a href="#" className="auth-footer-link">{strings.auth.footer.terms}</a>
           </nav>
         </div>
       </footer>

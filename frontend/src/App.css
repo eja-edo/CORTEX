@@ -22,3 +22,7 @@
 @import './styles/tasksPage.css';
 @import './styles/notificationsPage.css';
 @import './styles/diff-review.css';
+@import './styles/toast.css';
+/* Accessibility baseline — must stay last: several rules here win by
+   source order over component styles that call outline: none. */
+@import './styles/a11y.css';

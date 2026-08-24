@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import { useTasksPage, type TaskWire } from '../hooks/useTasksPage'
 import { useConfirmDialog } from '../hooks/useConfirmDialog'
+import { useToast } from '../hooks/useToast'
 import { TaskChecklistRow } from './TaskChecklistRow'
 import { SubtaskCreatePanel } from './SubtaskCreatePanel'
 import type { TaskDetailPatch } from './TaskDetailPopover'
@@ -95,6 +96,7 @@ export function TasksPage() {
         deleteTask,
     } = useTasksPage()
     const { confirm, dialog } = useConfirmDialog()
+    const toast = useToast()
 
     const [taskView, setTaskView] = useState<TaskViewMode>('day')
     const [dayDate, setDayDate] = useState<string>(todayIso())
@@ -130,16 +132,25 @@ export function TasksPage() {
     )
 
     const handleDeleteTask = async (task: TaskWire) => {
-        if (!window.confirm(`Xoá việc "${task.title}"?`)) return
+        const ok = await confirm({
+            title: 'Xoá việc',
+            message: `Xoá "${task.title}"?`,
+            confirmLabel: 'Xoá',
+            cancelLabel: 'Huỷ',
+        })
+        if (!ok) return
         setBusyTaskId(task.id)
         try {
             await deleteTask(task.id)
+            toast.show({ message: `Đã xoá "${task.title}".` })
+        } catch {
+            toast.show({ kind: 'error', message: 'Không xoá được việc này. Thử lại sau.' })
         } finally {
             setBusyTaskId(null)
         }
     }
 
-    const withBusy = async (taskId: string, action: () => Promise<void>) => {
+    const withBusy = async (taskId: string, action: () => Promise<unknown>) => {
         setBusyTaskId(taskId)
         try {
             await action()
@@ -177,7 +188,9 @@ export function TasksPage() {
             <section className="tasks-page-section">
                 <div className="tasks-page-section-header">
                     <div>
-                        <h2 className="today-section-label">Việc cần làm</h2>
+                        {/* The page <h1> right above already says "Việc cần
+                            làm"; repeating it 60px lower was two headings for
+                            one thing. Only the clarifying line survives. */}
                         <p className="tasks-page-section-subtitle">
                             Bao gồm việc do trò chuyện gợi ý, đang chờ bạn xác nhận.
                         </p>
@@ -289,8 +302,15 @@ function DateNav({
                 <ChevronRight size={14} />
             </button>
             {onToday && (
+                // Was "Hôm nay" — identical to the segmented tab's label just
+                // above it, even though this button jumps the date navigator
+                // back to the current day/week/month while the tab switches
+                // which of those three it's viewing. Two controls saying the
+                // same word for two different actions read as one confusing
+                // control; "Hiện tại" (current) reads naturally for all three
+                // view modes without colliding with the tab text.
                 <button type="button" className="tasks-page-date-nav-today" onClick={onToday}>
-                    Hôm nay
+                    Hiện tại
                 </button>
             )}
         </div>

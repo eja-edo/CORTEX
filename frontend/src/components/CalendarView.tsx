@@ -3,11 +3,12 @@ import { Calendar as BigCalendar } from 'react-big-calendar'
 import { Plus, RefreshCw, Repeat } from 'lucide-react'
 import { format, startOfWeek, endOfWeek } from 'date-fns'
 import { clsx } from 'clsx'
-import type { CalendarItem, Schedule } from '../types'
+import type { CalendarItem, EditScope, Schedule } from '../types'
 import { localizer } from '../utils/calendar'
 import {
     isMarker,
     isMarkerDone,
+    parseServerDateTime,
     toCalendarEntries,
     type CalendarEntry,
 } from '../utils/calendarItems'
@@ -54,6 +55,7 @@ interface CalendarViewProps {
     onSlotSelect?: (start: Date, end: Date) => void
     onToggleComplete: (item: Schedule) => Promise<void>
     onUpdate?: (item: Schedule, patch: Partial<Schedule>) => Promise<boolean>
+    onUpdateInstance?: (item: Schedule, editScope: EditScope, patch: Partial<Schedule>) => Promise<boolean>
     onRemove: (id: string) => Promise<void>
 }
 
@@ -61,7 +63,7 @@ export function CalendarView({
     isGoogleCalendarConnected = false,
     items, schedules, startDate, endDate,
     onStartDateChange, onEndDateChange,
-    onFetch, onOpenCreateEvent, onSlotSelect, onToggleComplete, onUpdate, onRemove,
+    onFetch, onOpenCreateEvent, onSlotSelect, onToggleComplete, onUpdate, onUpdateInstance, onRemove,
 }: CalendarViewProps) {
     const [selectedSchedule, setSelectedSchedule] = useState<Schedule | null>(null)
     const [currentDate, setCurrentDate] = useState<Date>(() => new Date(startDate))
@@ -244,7 +246,17 @@ export function CalendarView({
                         // task's own affordances live in the checklist and
                         // the "Hôm nay" screen (2.7).
                         if (isMarker(entry)) return
-                        const full = schedules.find((s) => s.id === entry.id)
+                        // Every occurrence of a recurring series shares the
+                        // root's id (see generate_instances backend-side),
+                        // so matching on `id` alone always resolves to
+                        // whichever occurrence happens to sit first in
+                        // `schedules` — not the one actually clicked. Match
+                        // on start time too so the modal opens (and any
+                        // this_only edit targets) the right occurrence.
+                        const clickedStart = entry.start.getTime()
+                        const full =
+                            schedules.find((s) => s.id === entry.id && parseServerDateTime(s.start_time).getTime() === clickedStart)
+                            ?? schedules.find((s) => s.id === entry.id)
                         if (full) setSelectedSchedule(full)
                     }}
                     onSelectSlot={handleSelectSlot}
@@ -278,8 +290,16 @@ export function CalendarView({
                                 )
                             }
 
-                            // Schedule → time block, as before.
-                            const full = schedules.find((s) => s.id === entry.id)
+                            // Schedule → time block, as before. `type`/
+                            // `recurrence` are series-wide (same on every
+                            // occurrence), so matching by id alone happens
+                            // to be harmless here — but match on start time
+                            // too anyway, so this can't silently go wrong if
+                            // an occurrence-specific field is ever added.
+                            const entryStart = entry.start.getTime()
+                            const full =
+                                schedules.find((s) => s.id === entry.id && parseServerDateTime(s.start_time).getTime() === entryStart)
+                                ?? schedules.find((s) => s.id === entry.id)
                             const typeClass = full ? `cal-event-${full.type}` : 'cal-event-PERSONAL'
                             return (
                                 <div
@@ -310,6 +330,7 @@ export function CalendarView({
                     canEdit={Boolean(selectedSchedule.id) && Boolean(onUpdate)}
                     onUpdate={onUpdate ?? (async () => false)}
                     onToggleComplete={onToggleComplete}
+                    onUpdateInstance={onUpdateInstance}
                     onRemove={onRemove}
                     onClose={() => setSelectedSchedule(null)}
                 />

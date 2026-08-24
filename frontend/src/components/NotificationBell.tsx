@@ -5,7 +5,18 @@ import { NotificationDetailModal } from './NotificationDetailModal'
 import { KIND_META, timeAgo } from '../utils/notificationDisplay'
 import type { NotificationBlock, NotificationActionDef } from '../types'
 
-export type NotificationKind = 'sync' | 'schedule' | 'reminder' | 'note' | 'system' | 'info' | 'success' | 'warning' | 'error' | 'task_overdue' | 'attention_bundle'
+/** Mirrors the `type` string every notification producer sets. The
+ * detection reasons (task_*, schedule_starts_soon, day_review) come from
+ * app/services/notification_subscribers.py — a kind missing here falls back
+ * to the grey `system` styling, which silently strips the severity signal
+ * the Attention Gate worked out. */
+export type NotificationKind =
+   | 'sync' | 'schedule' | 'reminder' | 'note' | 'system'
+   | 'info' | 'success' | 'warning' | 'error'
+   | 'task_overdue' | 'task_due_soon' | 'task_stale'
+   | 'task_blocked_cascade' | 'task_at_risk'
+   | 'schedule_starts_soon' | 'day_review' | 'day_plan'
+   | 'attention_bundle'
 
 export type AppNotification = {
    id: string

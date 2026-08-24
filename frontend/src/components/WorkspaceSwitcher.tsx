@@ -2,6 +2,9 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, Check, Plus, MoreVertical, Pencil, Trash2, UserPlus, Settings } from 'lucide-react'
 import type { Workspace } from '../types'
+import { useConfirmDialog } from '../hooks/useConfirmDialog'
+import { useToast } from '../hooks/useToast'
+import { strings } from '../i18n/strings'
 
 interface WorkspaceSwitcherProps {
   workspaces: Workspace[]
@@ -29,6 +32,8 @@ export function WorkspaceSwitcher({
   isCollapsed,
   user,
 }: WorkspaceSwitcherProps) {
+  const { confirm, dialog: confirmDialog } = useConfirmDialog()
+  const toast = useToast()
   const [isOpen, setIsOpen] = useState(false)
   const [contextMenuId, setContextMenuId] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -136,13 +141,22 @@ export function WorkspaceSwitcher({
 
   const handleDelete = async (workspace: Workspace) => {
     if (workspace.is_personal) {
-      alert('Cannot delete personal workspace')
+      toast.show({ kind: 'info', message: 'Không thể xoá workspace cá nhân.' })
       return
     }
-    if (window.confirm(`Are you sure you want to delete "${workspace.name}"? This action cannot be undone.`)) {
+    const ok = await confirm({
+      title: 'Xoá workspace',
+      message: `Xoá "${workspace.name}"? Toàn bộ nội dung bên trong sẽ mất và không thể hoàn tác.`,
+      confirmLabel: 'Xoá',
+      cancelLabel: 'Huỷ',
+    })
+    if (ok) {
       const success = await onDeleteWorkspace(workspace.id)
       if (success) {
         setContextMenuId(null)
+        toast.show({ message: `Đã xoá workspace "${workspace.name}".` })
+      } else {
+        toast.show({ kind: 'error', message: 'Không xoá được workspace. Thử lại sau.' })
       }
     }
   }
@@ -212,7 +226,7 @@ export function WorkspaceSwitcher({
                 <div className="workspace-dropdown-header-info">
                   <div className="workspace-dropdown-header-name">{currentWorkspace.name}</div>
                   <div className="workspace-dropdown-header-metadata">
-                    {currentWorkspace.is_personal ? 'Personal · Solo' : 'Team'}
+                    {currentWorkspace.is_personal ? strings.workspace.switcher.personalBadge : strings.workspace.switcher.teamBadge}
                   </div>
                 </div>
               </div>
@@ -220,7 +234,7 @@ export function WorkspaceSwitcher({
                 <button
                   type="button"
                   className="workspace-dropdown-header-action-btn"
-                  title="Settings"
+                    title={strings.workspace.switcher.settingsTitle}
                   onClick={() => {
                     onOpenSettings(currentWorkspace)
                     setIsOpen(false)
@@ -231,7 +245,7 @@ export function WorkspaceSwitcher({
                 <button
                   type="button"
                   className="workspace-dropdown-header-action-btn"
-                  title="Invite members"
+                    title={strings.workspace.switcher.inviteTitle}
                   onClick={() => {
                     onManageMembers(currentWorkspace)
                     setIsOpen(false)
@@ -253,7 +267,7 @@ export function WorkspaceSwitcher({
                   {user.full_name?.[0]?.toUpperCase() || user.email?.[0]?.toUpperCase() || '?'}
                 </div>
                 <div className="workspace-dropdown-account-info">
-                  <div className="workspace-dropdown-account-name">{user.full_name || 'User'}</div>
+                  <div className="workspace-dropdown-account-name">{user.full_name || strings.workspace.switcher.userFallback}</div>
                   <div className="workspace-dropdown-account-email">{user.email}</div>
                 </div>
               </div>
@@ -272,7 +286,7 @@ export function WorkspaceSwitcher({
 
           {/* 3. WORKSPACE LIST SECTION */}
           <div className="workspace-dropdown-section workspace-dropdown-workspaces-section">
-            <div className="workspace-dropdown-section-label">Your workspaces</div>
+            <div className="workspace-dropdown-section-label">{strings.workspace.switcher.yourWorkspaces}</div>
             <div className="workspace-dropdown-list">
               {workspaces.map((workspace) => {
                 const isActive = currentWorkspace && workspace.id === currentWorkspace.id
@@ -361,7 +375,7 @@ export function WorkspaceSwitcher({
                           }}
                         >
                           <Settings size={14} />
-                          <span>Settings</span>
+                          <span>{strings.workspace.switcher.ctxSettings}</span>
                         </button>
                         <button
                           type="button"
@@ -373,7 +387,7 @@ export function WorkspaceSwitcher({
                           }}
                         >
                           <Pencil size={14} />
-                          <span>Rename</span>
+                          <span>{strings.workspace.switcher.ctxRename}</span>
                         </button>
                         <button
                           type="button"
@@ -385,7 +399,7 @@ export function WorkspaceSwitcher({
                           }}
                         >
                           <UserPlus size={14} />
-                          <span>Manage Members</span>
+                          <span>{strings.workspace.switcher.ctxManageMembers}</span>
                         </button>
                         {!workspace.is_personal && (
                           <button
@@ -394,7 +408,7 @@ export function WorkspaceSwitcher({
                             onClick={() => handleDelete(workspace)}
                           >
                             <Trash2 size={14} />
-                            <span>Delete</span>
+                            <span>{strings.workspace.switcher.ctxDelete}</span>
                           </button>
                         )}
                       </div>
@@ -413,12 +427,13 @@ export function WorkspaceSwitcher({
               }}
             >
               <Plus size={14} />
-              <span>Create workspace</span>
+              <span>{strings.workspace.switcher.createWorkspaceBtn}</span>
             </button>
           </div>
         </div>,
         document.body
       )}
+      {confirmDialog}
     </div>
   )
 }

@@ -4,6 +4,7 @@ import type { ConversationListItem } from '../services/api'
 import { renderMarkdownToSanitizedHtml } from '../utils/markdown/renderToHtml'
 import { ToolExecutionIndicator } from './ToolExecutionIndicator'
 import { AskChoiceCard } from './AskChoiceCard'
+import { useConfirmDialog } from '../hooks/useConfirmDialog'
 import type { AgentMessage } from '../hooks/useAgentStream'
 
 interface MessageListProps {
@@ -43,6 +44,20 @@ export function MessageList({
         setThinkingOverrides(prev => ({ ...prev, [messageId]: !(prev[messageId] ?? true) }))
     }, [])
 
+    const { confirm, dialog: confirmDialog } = useConfirmDialog()
+
+    // Shared by the click and the Enter/Space handler on the delete affordance,
+    // which previously carried two copies of the same `window.confirm` block.
+    const confirmDeleteSession = useCallback(async (sessionId: string) => {
+        const ok = await confirm({
+            title: 'Xoá cuộc trò chuyện',
+            message: 'Xoá cuộc trò chuyện này? Không thể hoàn tác.',
+            confirmLabel: 'Xoá',
+            cancelLabel: 'Huỷ',
+        })
+        if (ok) onDeleteSession(sessionId)
+    }, [confirm, onDeleteSession])
+
     const handleCopy = useCallback(async (id: string, content: string) => {
         await navigator.clipboard.writeText(content)
         setCopiedId(id)
@@ -70,7 +85,7 @@ export function MessageList({
                     </div>
                     <div className="ask-ai-quick-actions">
                         {sessionsLoading ? (
-                            <div style={{ padding: '12px', textAlign: 'center', color: '#888', fontSize: '14px' }}>
+                            <div style={{ padding: '12px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '14px' }}>
                                 Loading sessions...
                             </div>
                         ) : sessions.length > 0 ? (
@@ -86,7 +101,7 @@ export function MessageList({
                                         <div style={{ fontWeight: 500, marginBottom: '2px' }}>
                                             {session.title || 'Untitled Session'}
                                         </div>
-                                        <div style={{ fontSize: '12px', color: '#999' }}>
+                                        <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
                                             {session.message_count} messages
                                         </div>
                                     </div>
@@ -100,18 +115,14 @@ export function MessageList({
                                         onClick={(e) => {
                                             e.stopPropagation()
                                             if (deletingSessionId) return
-                                            if (window.confirm('Are you sure you want to delete this conversation? This action cannot be undone.')) {
-                                                onDeleteSession(session.id)
-                                            }
+                                            void confirmDeleteSession(session.id)
                                         }}
                                         onKeyDown={(e) => {
                                             if (e.key === 'Enter' || e.key === ' ') {
                                                 e.preventDefault()
                                                 e.stopPropagation()
                                                 if (deletingSessionId) return
-                                                if (window.confirm('Are you sure you want to delete this conversation? This action cannot be undone.')) {
-                                                    onDeleteSession(session.id)
-                                                }
+                                                void confirmDeleteSession(session.id)
                                             }
                                         }}
                                     >
@@ -120,7 +131,7 @@ export function MessageList({
                                 </button>
                             ))
                         ) : (
-                            <div style={{ padding: '12px', textAlign: 'center', color: '#888', fontSize: '14px' }}>
+                            <div style={{ padding: '12px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '14px' }}>
                                 No sessions yet
                             </div>
                         )}
@@ -222,6 +233,7 @@ export function MessageList({
                 ))
             )}
             <div ref={messagesEndRef} />
+            {confirmDialog}
         </div>
     )
 }

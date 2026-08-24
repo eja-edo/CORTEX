@@ -2,6 +2,22 @@ import { create } from 'zustand'
 import type { Task, TaskPriority, TaskStatus } from '../types'
 import { requestWithAuth } from '../services/api'
 
+/** Scope for a write to a checklist task tied to a *recurring* event —
+ * see `Task.recurrence_id`. Unlike a Schedule, a task has no
+ * `this_and_after`: it doesn't own a recurrence rule, the event does. */
+export type TaskEditScope = 'this_only' | 'all'
+
+export type TaskOccurrence = { startTime: string; editScope: TaskEditScope }
+
+function occurrenceQuery(occurrence?: TaskOccurrence): string {
+    if (!occurrence) return ''
+    const params = new URLSearchParams({
+        occurrence_start_time: occurrence.startTime,
+        edit_scope: occurrence.editScope,
+    })
+    return `?${params.toString()}`
+}
+
 /**
  * The single source of truth for every screen that reads or writes `Task`
  * rows: the Home "Việc hôm nay" widget (`useTodayChecklist`), the Tasks
@@ -56,8 +72,8 @@ interface TaskStore {
 
     fetchAll: () => Promise<void>
     createTask: (input: CreateTaskInput) => Promise<Task>
-    updateTask: (taskId: string, patch: UpdateTaskInput) => Promise<Task>
-    completeTask: (taskId: string) => Promise<Task>
+    updateTask: (taskId: string, patch: UpdateTaskInput, occurrence?: TaskOccurrence) => Promise<Task>
+    completeTask: (taskId: string, occurrence?: TaskOccurrence) => Promise<Task>
     /** Completes a task and every sub-task beneath it, however deep — the
      * confirm-dialog flow for a parent task with its own checklist. Returns
      * every task the backend actually changed so the store can patch each
@@ -94,20 +110,28 @@ export const useTaskStore = create<TaskStore>((set) => ({
         return created
     },
 
-    updateTask: async (taskId, patch) => {
-        const updated = await requestWithAuth<Task>(`/tasks/${taskId}`, {
+    updateTask: async (taskId, patch, occurrence) => {
+        const updated = await requestWithAuth<Task>(`/tasks/${taskId}${occurrenceQuery(occurrence)}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(patch),
         })
+        // An occurrence-scoped write can return an exception row (a
+        // different id than `taskId`, created lazily for this_only) that
+        // was never part of the plain list to begin with — nothing to
+        // patch in place for it here, the checklist widget re-fetches its
+        // own occurrence-resolved view separately.
         set((state) => ({
             tasks: state.tasks.map((task) => (task.id === taskId ? updated : task)),
         }))
         return updated
     },
 
-    completeTask: async (taskId) => {
-        const updated = await requestWithAuth<Task>(`/tasks/${taskId}/complete`, { method: 'POST' })
+    completeTask: async (taskId, occurrence) => {
+        const updated = await requestWithAuth<Task>(
+            `/tasks/${taskId}/complete${occurrenceQuery(occurrence)}`,
+            { method: 'POST' },
+        )
         set((state) => ({
             tasks: state.tasks.map((task) => (task.id === taskId ? updated : task)),
         }))

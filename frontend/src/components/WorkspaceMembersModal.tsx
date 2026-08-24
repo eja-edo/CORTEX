@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { X, Shield, Users, Eye, UserPlus, Trash2 } from 'lucide-react'
+import { useEscapeToClose } from '../hooks/useEscapeToClose'
+import { strings } from '../i18n/strings'
 
 interface WorkspaceMember {
   id: string
@@ -26,6 +28,7 @@ export function WorkspaceMembersModal({
   onRemoveMember,
   onChangeRole,
 }: WorkspaceMembersModalProps) {
+  useEscapeToClose(onClose)
   const [email, setEmail] = useState('')
   const [role, setRole] = useState<'editor' | 'viewer'>('editor')
   const [isAdding, setIsAdding] = useState(false)
@@ -34,7 +37,7 @@ export function WorkspaceMembersModal({
   const handleAddMember = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!email.trim()) {
-      setError('Email is required')
+      setError(strings.workspace.members.emailRequired)
       return
     }
 
@@ -46,10 +49,10 @@ export function WorkspaceMembersModal({
       if (success) {
         setEmail('')
       } else {
-        setError('Failed to add member')
+        setError(strings.workspace.members.addError)
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to add member')
+      setError(err instanceof Error ? err.message : strings.workspace.members.addError)
     } finally {
       setIsAdding(false)
     }
@@ -86,7 +89,7 @@ export function WorkspaceMembersModal({
       <div className="modal workspace-members-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <div className="modal-title-area">
-            <div className="modal-title">Manage Members — {workspace.name}</div>
+            <div className="modal-title">{strings.workspace.members.title} — {workspace.name}</div>
           </div>
           <button type="button" className="modal-close" onClick={onClose}>
             <X size={16} />
@@ -98,9 +101,9 @@ export function WorkspaceMembersModal({
           {!workspace.is_personal && (
             <form onSubmit={handleAddMember} className="add-member-form">
               <div className="form-group">
-                <label htmlFor="member-email" className="form-label">
-                  Add Member by Email
-                </label>
+                 <label htmlFor="member-email" className="form-label">
+                   {strings.workspace.members.emailLabel}
+                 </label>
                 <div className="add-member-inputs">
                   <input
                     id="member-email"
@@ -108,7 +111,7 @@ export function WorkspaceMembersModal({
                     className="form-input"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder="user@example.com"
+                    placeholder={strings.workspace.members.emailPlaceholder}
                     disabled={isAdding}
                   />
                   <select
@@ -117,12 +120,12 @@ export function WorkspaceMembersModal({
                     onChange={(e) => setRole(e.target.value as 'editor' | 'viewer')}
                     disabled={isAdding}
                   >
-                    <option value="editor">Editor</option>
-                    <option value="viewer">Viewer</option>
-                  </select>
-                  <button type="submit" className="btn btn-primary" disabled={isAdding || !email.trim()}>
-                    <UserPlus size={14} />
-                    <span>{isAdding ? 'Adding...' : 'Add'}</span>
+                     <option value="editor">{strings.workspace.members.roleEditor}</option>
+                     <option value="viewer">{strings.workspace.members.roleViewer}</option>
+                   </select>
+                   <button type="submit" className="btn btn-primary" disabled={isAdding || !email.trim()}>
+                     <UserPlus size={14} />
+                     <span>{isAdding ? strings.workspace.members.adding : strings.workspace.members.addBtn}</span>
                   </button>
                 </div>
                 {error && <div className="form-error">{error}</div>}
@@ -133,10 +136,10 @@ export function WorkspaceMembersModal({
           {/* Members List */}
           <div className="members-list">
             <div className="members-list-header">
-              <span>Members ({members.length})</span>
+                <span>{strings.workspace.members.membersCount(members.length)}</span>
             </div>
             {members.length === 0 ? (
-              <div className="members-empty">No members yet</div>
+              <div className="members-empty">{strings.workspace.members.noMembers}</div>
             ) : (
               members.map((member) => (
                 <div key={member.user_id} className="member-item">
@@ -167,15 +170,14 @@ export function WorkspaceMembersModal({
                           value={member.role}
                           onChange={(e) => onChangeRole(member.user_id, e.target.value as 'editor' | 'viewer')}
                         >
-                          <option value="editor">Editor</option>
-                          <option value="viewer">Viewer</option>
+                          <option value="editor">{strings.workspace.members.roleEditor}</option>
+                          <option value="viewer">{strings.workspace.members.roleViewer}</option>
                         </select>
-                        <button
-                          type="button"
-                          className="member-remove-btn"
-                          onClick={() => onRemoveMember(member.user_id)}
-                          title="Remove member"
-                        >
+                           <button
+                           type="button"
+                           className="member-remove-btn"
+                           onClick={() => onRemoveMember(member.user_id)}
+                           title={strings.workspace.members.removeTooltip}>
                           <Trash2 size={14} />
                         </button>
                       </>
@@ -188,8 +190,8 @@ export function WorkspaceMembersModal({
         </div>
 
         <div className="modal-footer">
-          <button type="button" className="btn btn-primary" onClick={onClose}>
-            Done
+            <button type="button" className="btn btn-primary" onClick={onClose}>
+            {strings.workspace.members.doneBtn}
           </button>
         </div>
       </div>

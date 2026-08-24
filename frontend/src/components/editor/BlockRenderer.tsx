@@ -13,6 +13,7 @@ import { ImageBlock } from './blocks/ImageBlock'
 import { CalloutBlock } from './blocks/CalloutBlock'
 import { ToggleBlock } from './blocks/ToggleBlock'
 import { MermaidBlock } from './blocks/MermaidBlock'
+import { ErrorBoundary } from '../ErrorBoundary'
 
 interface BlockRendererProps {
   block: BlockNode
@@ -63,7 +64,13 @@ export function BlockRenderer({ block, dragHandleListeners }: BlockRendererProps
         return <ToggleBlock block={block} />
 
       case 'mermaid':
-        return <MermaidBlock block={block} />
+        // Mermaid parses arbitrary user/AI-authored diagram text; a malformed
+        // graph must not blank the whole note.
+        return (
+          <ErrorBoundary label="Sơ đồ">
+            <MermaidBlock block={block} />
+          </ErrorBoundary>
+        )
 
       case 'html':
         return <div className="block-html" dangerouslySetInnerHTML={{ __html: block.content }} />

@@ -4,7 +4,10 @@
 .app-shell {
   display: flex;
   flex-direction: column;
+  /* dvh accounts for mobile browser chrome (address bar) that vh ignores;
+     the vh line is a fallback for browsers that don't support dvh. */
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
   background: var(--bg);
 }
@@ -49,7 +52,7 @@
 .brand-icon {
   width: 20px;
   height: 20px;
-  background: var(--text-primary);
+  background: var(--btn-solid-bg);
   border-radius: 4px;
   display: grid;
   place-items: center;
@@ -133,7 +136,7 @@
 
 .topbar-btn-ask-ai {
   background: var(--accent);
-  color: white;
+  color: var(--accent-fg);
   padding: 8px 16px;
   border-radius: 8px;
   border: none;
@@ -181,7 +184,7 @@
   width: 16px;
   height: 16px;
   background: var(--red);
-  color: white;
+  color: var(--red-fg);
   font-size: 10px;
   font-weight: 700;
   display: flex;
@@ -331,13 +334,13 @@
 .status-bar.ok {
   background: var(--green-light);
   color: var(--green);
-  border-bottom: 1px solid rgba(15, 123, 108, 0.12);
+  border-bottom: 1px solid color-mix(in srgb, var(--green) 12%, transparent);
 }
 
 .status-bar.error {
   background: var(--red-light);
   color: var(--red);
-  border-bottom: 1px solid rgba(235, 87, 87, 0.12);
+  border-bottom: 1px solid color-mix(in srgb, var(--red) 12%, transparent);
 }
 
 .google-status-bar {
@@ -354,7 +357,7 @@
 }
 
 .google-status-bar.connected {
-  background: rgba(15, 123, 108, 0.06);
+  background: color-mix(in srgb, var(--green) 6%, transparent);
 }
 
 .google-status-pill {
@@ -460,7 +463,11 @@
 
 .btn-danger:hover {
   background: var(--red-light);
-  border-color: rgba(235, 87, 87, 0.3);
+  /* Was rgba(235, 87, 87, .3) — a literal copy of the pre-Wave-1 light-theme
+     red. Fixed once already (Wave 1) to derive from the token, then this
+     same literal turned out to have been copy-pasted into other files too;
+     the Wave 3 sweep below caught the rest of them at once. */
+  border-color: color-mix(in srgb, var(--red) 30%, transparent);
 }
 
 
@@ -491,4 +498,109 @@
   align-items: center;
   gap: 4px;
   min-width: 0;
+}
+
+/* ===========================================================================
+   Mobile topbar
+   =========================================================================== */
+
+/* Drawer trigger. Hidden on desktop, where the sidebar is always visible. */
+.topbar-nav-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.topbar-nav-toggle:hover {
+  background: var(--bg-hover);
+}
+
+@media (max-width: 700px) {
+  .topbar-nav-toggle {
+    display: flex;
+  }
+
+  /* At 390px the bar was overflowing: "Ask AI" wrapped onto two lines, the
+     search field collapsed into a bare shortcut chip, and the avatar was
+     pushed past the right edge of the viewport (measured 406px in a 390px
+     window). */
+  .topbar {
+    padding: 0 12px;
+    gap: 8px;
+  }
+
+  .topbar-left {
+    gap: 8px;
+    min-width: 0;
+  }
+
+  /* The brand wordmark is the cheapest thing to drop — the logo mark still
+     identifies the app and still links home. */
+  .brand-name {
+    display: none;
+  }
+
+  /* A read-only field that only opens a dialog does not need to be a field
+     on a phone. Show the icon as a button instead. */
+  .topbar-search {
+    width: 40px;
+    flex: none;
+  }
+
+  .topbar-search-input {
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    color: transparent;
+    cursor: pointer;
+  }
+
+  .topbar-search-input::placeholder {
+    color: transparent;
+  }
+
+  .topbar-search-icon {
+    left: 12px;
+    color: var(--text-primary);
+  }
+
+  .topbar-search-hint {
+    display: none;
+  }
+
+  .topbar-right {
+    gap: 2px;
+    flex-shrink: 0;
+  }
+
+  /* Icon-only: the label is what forced the two-line wrap. `title` and the
+     accessible name still carry the meaning. */
+  .topbar-btn-ask-ai {
+    padding: 0;
+    width: 40px;
+    height: 40px;
+    justify-content: center;
+    font-size: 0;
+    gap: 0;
+  }
+
+  .topbar-btn-ask-ai svg {
+    font-size: 14px;
+    flex-shrink: 0;
+  }
+
+  /* Help is the one topbar action with a home elsewhere; drop it first so
+     the avatar fits. */
+  .topbar-icon-btn[title='Help'] {
+    display: none;
+  }
 }

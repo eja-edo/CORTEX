@@ -1,43 +1,32 @@
 import { useEffect, useRef } from 'react'
+import type { EditScope } from '../types'
 
 /**
- * A generic yes/no confirmation modal — same `.modal-backdrop`/`.modal`
- * shell every other modal in the app uses, sized down to a single question.
- * Backdrop click and the cancel button both count as "no": the caller only
- * hears about an explicit choice, dismissal is never ambiguous with confirm.
- *
- * This is now the shared surface behind every destructive action in the app
- * (13 call sites that used to be `window.confirm`), so it carries the modal
- * behaviour those call sites need and the native dialog gave for free:
- * Escape to dismiss, focus kept inside while open, and focus handed back to
- * whatever opened it.
+ * "Which occurrences?" prompt for editing/completing one occurrence of a
+ * recurring schedule or a checklist task tied to one. Same modal shell as
+ * `ConfirmDialog`, but three choices instead of yes/no — a bare confirm
+ * dialog can't express this without conflating "cancel" with one of the
+ * real answers.
  */
-export function ConfirmDialog({
+export function EditScopeDialog({
     title,
     message,
-    confirmLabel,
-    cancelLabel,
-    onConfirm,
+    options,
+    onChoose,
     onCancel,
-    tone = 'danger',
 }: {
     title: string
     message: string
-    confirmLabel: string
-    cancelLabel: string
-    onConfirm: () => void
+    options: { scope: EditScope; label: string }[]
+    onChoose: (scope: EditScope) => void
     onCancel: () => void
-    /** Destructive by default — every current caller is a delete. */
-    tone?: 'danger' | 'neutral'
 }) {
     const dialogRef = useRef<HTMLDivElement>(null)
-    const confirmRef = useRef<HTMLButtonElement>(null)
+    const firstOptionRef = useRef<HTMLButtonElement>(null)
 
     useEffect(() => {
-        // Whatever had focus when the dialog opened gets it back on close,
-        // so keyboard users are not dumped at the top of the document.
         const previouslyFocused = document.activeElement as HTMLElement | null
-        confirmRef.current?.focus()
+        firstOptionRef.current?.focus()
 
         const onKeyDown = (e: KeyboardEvent) => {
             if (e.key === 'Escape') {
@@ -47,9 +36,6 @@ export function ConfirmDialog({
             }
             if (e.key !== 'Tab') return
 
-            // Focus trap. Without it, Tab walks straight out of the dialog and
-            // into the page behind, which is still visible through the
-            // backdrop — the user ends up operating controls they cannot see.
             const focusables = dialogRef.current?.querySelectorAll<HTMLElement>(
                 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
             )
@@ -81,29 +67,32 @@ export function ConfirmDialog({
                 onClick={(e) => e.stopPropagation()}
                 role="alertdialog"
                 aria-modal="true"
-                aria-labelledby="confirm-dialog-title"
-                aria-describedby="confirm-dialog-message"
+                aria-labelledby="edit-scope-dialog-title"
+                aria-describedby="edit-scope-dialog-message"
             >
                 <div className="modal-header">
                     <div className="modal-title-area">
-                        <div className="modal-title" id="confirm-dialog-title">{title}</div>
+                        <div className="modal-title" id="edit-scope-dialog-title">{title}</div>
                     </div>
                 </div>
                 <div className="modal-body">
-                    <p className="confirm-dialog-message" id="confirm-dialog-message">{message}</p>
+                    <p className="confirm-dialog-message" id="edit-scope-dialog-message">{message}</p>
                 </div>
                 <div className="modal-footer">
                     <button type="button" className="btn btn-ghost" onClick={onCancel}>
-                        {cancelLabel}
+                        Huỷ
                     </button>
-                    <button
-                        ref={confirmRef}
-                        type="button"
-                        className={tone === 'danger' ? 'btn btn-danger' : 'btn btn-primary'}
-                        onClick={onConfirm}
-                    >
-                        {confirmLabel}
-                    </button>
+                    {options.map((opt, i) => (
+                        <button
+                            key={opt.scope}
+                            ref={i === 0 ? firstOptionRef : undefined}
+                            type="button"
+                            className="btn btn-primary"
+                            onClick={() => onChoose(opt.scope)}
+                        >
+                            {opt.label}
+                        </button>
+                    ))}
                 </div>
             </div>
         </div>

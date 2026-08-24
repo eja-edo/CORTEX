@@ -227,7 +227,7 @@
 
 .note-md-textarea:focus {
     border-color: var(--accent);
-    box-shadow: 0 0 0 2px rgba(35, 131, 226, 0.1);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .note-md-textarea::placeholder {
@@ -413,9 +413,9 @@
 }
 
 .note-done-btn:hover {
-    background: var(--text-primary);
-    color: #fff;
-    border-color: var(--text-primary);
+    background: var(--btn-solid-bg);
+    color: var(--btn-solid-fg);
+    border-color: var(--btn-solid-bg);
 }
 
 /* ========== SIDEBAR COLLAPSIBLE SECTIONS ========== */

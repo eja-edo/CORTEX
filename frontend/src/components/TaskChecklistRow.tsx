@@ -146,14 +146,26 @@ export function TaskChecklistRow({
                     <span className="today-checklist-date-wrap">
                         <button
                             type="button"
-                            className={clsx('today-checklist-date', isOverdue && 'is-overdue')}
+                            className={clsx(
+                                'today-checklist-date',
+                                isOverdue && 'is-overdue',
+                                // A task without a deadline used to render the
+                                // literal string "hạn?" on every row, so a list
+                                // of eight tasks showed a column of question
+                                // marks. Empty state is now quiet: the control
+                                // only surfaces on hover/focus (see CSS), which
+                                // is also where the invitation to set one
+                                // belongs.
+                                !task.due_date && 'is-unset',
+                            )}
                             onClick={() => setEditingDate(true)}
                             title={isOverdue ? 'Đã quá hạn' : 'Đặt hạn'}
+                            aria-label={task.due_date ? undefined : 'Đặt hạn'}
                         >
                             <CalendarDays size={11} />
                             {task.due_date
                                 ? `${formatCompactDate(dateOnly(task.due_date))}${timePartOf(task.due_date) ? `, ${timePartOf(task.due_date)}` : ''}`
-                                : 'hạn?'}
+                                : <span className="today-checklist-date-hint">Đặt hạn</span>}
                         </button>
                         {task.due_date && (
                             <button

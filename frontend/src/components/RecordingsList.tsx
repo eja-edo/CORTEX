@@ -10,7 +10,9 @@ import {
 } from 'lucide-react'
 
 import type { AuthRequest, Recording } from './recordingTypes'
+import { useConfirmDialog } from '../hooks/useConfirmDialog'
 import { ProcessAssetDialog } from './ProcessAssetDialog'
+import { strings } from '../i18n/strings'
 
 /* ─────────────────────────── Types ─────────────────────────── */
 
@@ -67,10 +69,10 @@ function formatRelativeTime(isoString: string): string {
     const diffMins = Math.floor(diffMs / 60000)
     const diffHours = Math.floor(diffMs / 3600000)
     const diffDays = Math.floor(diffMs / 86400000)
-    if (diffMins < 1) return 'Just now'
-    if (diffMins < 60) return `${diffMins}m ago`
-    if (diffHours < 24) return `${diffHours}h ago`
-    if (diffDays < 7) return `${diffDays}d ago`
+    if (diffMins < 1) return strings.records.justNow
+    if (diffMins < 60) return `${diffMins}${strings.records.minAgo}`
+    if (diffHours < 24) return `${diffHours}${strings.records.hourAgo}`
+    if (diffDays < 7) return `${diffDays}${strings.records.dayAgo}`
     return date.toLocaleDateString('vi-VN')
 }
 
@@ -85,15 +87,15 @@ function formatDuration(seconds: number): string {
 function AssetStatusBadge({ status }: { status: string }) {
     switch (status.toUpperCase()) {
         case 'READY':
-            return <span className="rl2-badge rl2-badge--ok"><Check size={10} />Ready</span>
+            return <span className="rl2-badge rl2-badge--ok"><Check size={10} />{strings.records.status.ready}</span>
         case 'PROCESSING':
-            return <span className="rl2-badge rl2-badge--uploading"><RefreshCw size={10} className="rl2-spin" />Processing</span>
+            return <span className="rl2-badge rl2-badge--uploading"><RefreshCw size={10} className="rl2-spin" />{strings.records.status.processing}</span>
         case 'PENDING':
-            return <span className="rl2-badge rl2-badge--local"><Clock size={10} />Pending</span>
+            return <span className="rl2-badge rl2-badge--local"><Clock size={10} />{strings.records.status.pending}</span>
         case 'ERROR':
-            return <span className="rl2-badge rl2-badge--err"><AlertCircle size={10} />Error</span>
+            return <span className="rl2-badge rl2-badge--err"><AlertCircle size={10} />{strings.records.status.error}</span>
         case 'COMPLETED':
-            return <span className="rl2-badge rl2-badge--ok"><Check size={10} />Completed</span>
+            return <span className="rl2-badge rl2-badge--ok"><Check size={10} />{strings.records.status.completed}</span>
         default:
             return <span className="rl2-badge rl2-badge--local">{status}</span>
     }
@@ -116,24 +118,6 @@ function InlineEdit({ value, onSave, onCancel }: { value: string; onSave: (v: st
                 onChange={e => setDraft(e.target.value)} onKeyDown={handleKey} onBlur={commit} />
             <button type="button" className="rl2-icon-btn rl2-icon-btn--confirm" onClick={commit}><Check size={11} /></button>
             <button type="button" className="rl2-icon-btn rl2-icon-btn--cancel" onClick={onCancel}><X size={11} /></button>
-        </div>
-    )
-}
-
-/* ─────────────────────── Confirm delete ────────────────────── */
-
-function ConfirmDelete({ name, onConfirm, onCancel }: { name: string; onConfirm: () => void; onCancel: () => void }) {
-    return (
-        <div className="rl2-confirm-overlay" onClick={onCancel}>
-            <div className="rl2-confirm-box" onClick={e => e.stopPropagation()}>
-                <div className="rl2-confirm-icon"><Trash2 size={18} /></div>
-                <div className="rl2-confirm-title">Delete recording?</div>
-                <div className="rl2-confirm-body"><span className="rl2-confirm-name">{name}</span> will be permanently removed.</div>
-                <div className="rl2-confirm-actions">
-                    <button type="button" className="rl2-confirm-btn rl2-confirm-btn--cancel" onClick={onCancel}>Cancel</button>
-                    <button type="button" className="rl2-confirm-btn rl2-confirm-btn--delete" onClick={onConfirm}>Delete</button>
-                </div>
-            </div>
         </div>
     )
 }
@@ -262,7 +246,7 @@ function AssetRow({ asset, isPlaying, isActionLoading, onPlay, onDownload, onDel
 }) {
     const [isEditing, setIsEditing] = useState(false)
     const [menuOpen, setMenuOpen] = useState(false)
-    const [confirmDelete, setConfirmDelete] = useState(false)
+    const { confirm, dialog: confirmDialog } = useConfirmDialog()
 
     const displayName = asset.title || asset.source_object_key.split('/').pop() || asset.id
     const canProcess = asset.status.toUpperCase() === 'READY'
@@ -271,11 +255,21 @@ function AssetRow({ asset, isPlaying, isActionLoading, onPlay, onDownload, onDel
     const hasKnowledge = asset.status.toUpperCase() === 'COMPLETED'
 
     const menuItems = [
-        { label: 'Rename', icon: <Edit2 size={12} />, onClick: () => setIsEditing(true) },
-        { label: 'Download', icon: <Download size={12} />, onClick: onDownload },
-        { label: 'Process with AI', icon: <Zap size={12} />, disabled: !canProcess, onClick: onProcess },
-        { label: 'View Knowledge', icon: <Brain size={12} />, disabled: !hasKnowledge || !onViewKnowledge, onClick: () => onViewKnowledge?.() },
-        { label: 'Delete', icon: <Trash2 size={12} />, danger: true, onClick: () => setConfirmDelete(true) },
+        { label: strings.records.menu.rename, icon: <Edit2 size={12} />, onClick: () => setIsEditing(true) },
+        { label: strings.records.menu.download, icon: <Download size={12} />, onClick: onDownload },
+        { label: strings.records.menu.processAI, icon: <Zap size={12} />, disabled: !canProcess, onClick: onProcess },
+        { label: strings.records.menu.viewKnowledge, icon: <Brain size={12} />, disabled: !hasKnowledge || !onViewKnowledge, onClick: () => onViewKnowledge?.() },
+        {
+            label: strings.records.menu.delete, icon: <Trash2 size={12} />, danger: true,
+            onClick: () => {
+                void confirm({
+                    title: 'Xoá bản ghi',
+                    message: `Xoá "${displayName}"? ${strings.records.noRecordingsDesc}`,
+                    confirmLabel: 'Xoá',
+                    cancelLabel: 'Huỷ',
+                }).then((ok) => { if (ok) onDelete() })
+            },
+        },
     ]
 
     return (
@@ -310,23 +304,21 @@ function AssetRow({ asset, isPlaying, isActionLoading, onPlay, onDownload, onDel
                         {isPlaying ? <Pause size={12} /> : <Play size={12} />}
                     </button>
                     {canProcess && (
-                        <button type="button" className="rl2-action-btn" onClick={onProcess} disabled={isActionLoading} title="Process with AI">
+                        <button type="button" className="rl2-action-btn" onClick={onProcess} disabled={isActionLoading} title={strings.records.menu.processAI}>
                             <Zap size={12} />
                         </button>
                     )}
                     {/* Knowledge button — shown when asset has been processed */}
                     {hasKnowledge && onViewKnowledge && (
-                        <button
-                            type="button"
-                            className="rl2-action-btn rl2-action-btn--knowledge"
+                        <button type="button" className="rl2-action-btn rl2-action-btn--knowledge"
                             onClick={onViewKnowledge}
                             disabled={isActionLoading}
-                            title="View Knowledge Summary"
+                            title="Xem tóm tắt tri thức"
                         >
                             <Brain size={12} />
                         </button>
                     )}
-                    <button type="button" className="rl2-action-btn" onClick={onDownload} disabled={isActionLoading} title="Download">
+                    <button type="button" className="rl2-action-btn" onClick={onDownload} disabled={isActionLoading} title={strings.records.menu.download}>
                         <Download size={12} />
                     </button>
                     <div className="rl2-menu-wrap">
@@ -338,13 +330,7 @@ function AssetRow({ asset, isPlaying, isActionLoading, onPlay, onDownload, onDel
                 </div>
             </div>
 
-            {confirmDelete && (
-                <ConfirmDelete
-                    name={displayName}
-                    onConfirm={() => { setConfirmDelete(false); onDelete() }}
-                    onCancel={() => setConfirmDelete(false)}
-                />
-            )}
+            {confirmDialog}
         </>
     )
 }
@@ -393,7 +379,7 @@ export function RecordingsList({
             list.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
             setAssets(list)
         } catch (err) {
-            setAssetError(err instanceof Error ? err.message : 'Cannot load recordings from server')
+            setAssetError(err instanceof Error ? err.message : strings.records.error.cannotLoad)
         } finally {
             setIsLoadingAssets(false)
         }
@@ -447,7 +433,7 @@ export function RecordingsList({
             if (isAudio) onPlayServerAudio({ id: asset.id, name, url })
             else onPlayServerVideo({ id: asset.id, name, url })
         } catch (err) {
-            setAssetError(err instanceof Error ? err.message : 'Cannot play media')
+            setAssetError(err instanceof Error ? err.message : strings.records.error.cannotPlay)
         } finally {
             setActionLoadingId(null)
         }
@@ -462,7 +448,7 @@ export function RecordingsList({
             const a = document.createElement('a')
             a.href = url; a.download = name; a.target = '_blank'; a.rel = 'noreferrer noopener'; a.click()
         } catch (err) {
-            setAssetError(err instanceof Error ? err.message : 'Cannot download media')
+            setAssetError(err instanceof Error ? err.message : strings.records.error.cannotDownload)
         } finally {
             setActionLoadingId(null)
         }
@@ -475,7 +461,7 @@ export function RecordingsList({
             setAssets(prev => prev.filter(a => a.id !== asset.id))
             onAssetChange?.()
         } catch (err) {
-            setAssetError(err instanceof Error ? err.message : 'Cannot delete recording')
+            setAssetError(err instanceof Error ? err.message : strings.records.error.cannotDelete)
         }
     }, [requestWithAuth, onAssetChange])
 
@@ -490,7 +476,7 @@ export function RecordingsList({
             setAssets(prev => prev.map(a => a.id === asset.id ? updated : a))
             onAssetChange?.()
         } catch (err) {
-            setAssetError(err instanceof Error ? err.message : 'Cannot rename recording')
+            setAssetError(err instanceof Error ? err.message : strings.records.error.cannotRename)
         }
     }, [requestWithAuth, onAssetChange])
 
@@ -509,7 +495,7 @@ export function RecordingsList({
                 onAssetChange?.()
             }, 1000)
         } catch (err) {
-            setAssetError(err instanceof Error ? err.message : 'Cannot start processing')
+            setAssetError(err instanceof Error ? err.message : strings.records.error.cannotProcess)
         } finally {
             setIsProcessing(false)
         }
@@ -526,8 +512,8 @@ export function RecordingsList({
         return (
             <div className="rl2-empty">
                 <div className="rl2-empty-icon"><Monitor size={28} /></div>
-                <div className="rl2-empty-title">No recordings yet</div>
-                <div className="rl2-empty-sub">Start screen recording or audio capture above</div>
+                <div className="rl2-empty-title">{strings.records.noRecordings}</div>
+                <div className="rl2-empty-sub">{strings.records.noRecordingsDesc}</div>
             </div>
         )
     }
@@ -545,12 +531,12 @@ export function RecordingsList({
             <div className="rl2-section">
                 <div className="rl2-header">
                     <span className="rl2-header-title">
-                        Recordings
+                        {strings.records.headerTitle}
                         <span className="rl2-header-count">{totalCount}</span>
                     </span>
                     <button type="button" className="rl2-refresh-btn"
                         onClick={() => void loadAssets()}
-                        disabled={isLoadingAssets} title="Refresh">
+                        disabled={isLoadingAssets} title={strings.records.refreshTitle}>
                         <RefreshCw size={12} className={isLoadingAssets ? 'rl2-spin' : ''} />
                     </button>
                 </div>
@@ -571,7 +557,7 @@ export function RecordingsList({
                         <div className="rl2-list">
                             {isLoadingAssets && (
                                 <div className="rl2-loading">
-                                    <RefreshCw size={13} className="rl2-spin" />Loading…
+                                    <RefreshCw size={13} className="rl2-spin" />{strings.records.loading}
                                 </div>
                             )}
                             {assets.map(asset => (

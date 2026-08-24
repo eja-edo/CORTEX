@@ -248,6 +248,41 @@
     flex-shrink: 0;
 }
 
+/* Tablet: the fixed 420px panel was crowding the note content once the
+   viewport itself got tight — shrink instead of letting it dominate. */
+@media (max-width: 1024px) {
+    .ask-ai-sidebar {
+        width: min(360px, 42vw);
+    }
+}
+
+/* Mobile: sharing the row between note content and a 420px panel leaves no
+   usable width for either below this point (same threshold the primary nav
+   drawer uses in sidebar.css). The panel becomes a full-screen overlay
+   instead of a flex sibling. */
+@media (max-width: 700px) {
+    .ask-ai-sidebar {
+        position: fixed;
+        inset: var(--topbar-height) 0 0 0;
+        width: 100%;
+        z-index: 950;
+        border-left: none;
+        box-shadow: var(--shadow-lg);
+        animation: askAiSlideIn 0.2s ease;
+    }
+}
+
+@media (max-width: 700px) and (prefers-reduced-motion: reduce) {
+    .ask-ai-sidebar {
+        animation: none;
+    }
+}
+
+@keyframes askAiSlideIn {
+    from { transform: translateX(100%); }
+    to { transform: translateX(0); }
+}
+
 .ask-ai-header {
     display: flex;
     align-items: center;
@@ -273,7 +308,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #fff;
+    color: var(--accent-fg);
     flex-shrink: 0;
     box-shadow: 0 1px 3px rgba(0,0,0,0.12);
 }
@@ -641,7 +676,7 @@
 
 .ask-ai-msg--user .ask-ai-msg-content {
     background: var(--accent);
-    color: #fff;
+    color: var(--accent-fg);
     border-radius: 14px 14px 4px 14px;
     box-shadow: 0 1px 3px rgba(0,0,0,0.08);
 }
@@ -1222,7 +1257,7 @@
 
 .ask-ai-send-btn.active {
     background: var(--accent);
-    color: #fff;
+    color: var(--accent-fg);
 }
 
 .ask-ai-send-btn:hover.active {
@@ -1316,11 +1351,11 @@
 
 .ask-ai-changes-bulk-btn.accept-all {
     color: #0f7b6c;
-    border-color: rgba(15,123,108,0.25);
+    border-color: color-mix(in srgb, var(--green) 25%, transparent);
 }
 
 .ask-ai-changes-bulk-btn.accept-all:hover {
-    background: rgba(15,123,108,0.08);
+    background: color-mix(in srgb, var(--green) 8%, transparent);
 }
 
 .ask-ai-changes-bulk-btn.undo-all {
@@ -1384,11 +1419,11 @@
 
 .ask-ai-changes-item-btn.accept {
     color: #0f7b6c;
-    border-color: rgba(15,123,108,0.25);
+    border-color: color-mix(in srgb, var(--green) 25%, transparent);
 }
 
 .ask-ai-changes-item-btn.accept:hover {
-    background: rgba(15,123,108,0.08);
+    background: color-mix(in srgb, var(--green) 8%, transparent);
 }
 
 .ask-ai-changes-item-btn.undo {
@@ -1611,11 +1646,11 @@
 
 .plan-proposal-approve-btn {
     color: #0f7b6c;
-    border-color: rgba(15,123,108,0.25);
+    border-color: color-mix(in srgb, var(--green) 25%, transparent);
 }
 
 .plan-proposal-approve-btn:hover:not(:disabled) {
-    background: rgba(15,123,108,0.08);
+    background: color-mix(in srgb, var(--green) 8%, transparent);
 }
 
 .plan-proposal-reject-btn {
@@ -1787,7 +1822,7 @@
 .ask-choice-submit-btn {
     flex: 1;
     padding: 6px 8px;
-    border: 1px solid rgba(15,123,108,0.25);
+    border: 1px solid color-mix(in srgb, var(--green) 25%, transparent);
     border-radius: 6px;
     font-size: 11.5px;
     font-weight: 600;
@@ -1798,7 +1833,7 @@
 }
 
 .ask-choice-submit-btn:hover:not(:disabled) {
-    background: rgba(15,123,108,0.08);
+    background: color-mix(in srgb, var(--green) 8%, transparent);
 }
 
 .ask-choice-submit-btn:disabled {

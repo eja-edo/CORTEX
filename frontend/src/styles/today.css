@@ -216,15 +216,41 @@
 .today-checklist-box {
     display: inline-grid;
     place-items: center;
+    /* Stays 17px visually — the row rhythm and the tree guide lines are
+       drawn against this size. The tappable area is widened separately
+       below, which is what WCAG 2.5.8 actually measures. */
     width: 17px;
     height: 17px;
     flex-shrink: 0;
+    position: relative;
     background: var(--bg);
     border: 1.5px solid var(--border-strong);
     border-radius: var(--radius-sm);
-    color: #fff;
+    color: var(--accent-fg);
     cursor: pointer;
     padding: 0;
+}
+
+/* Ticking a task off is the single most-used action in the product, and the
+   control was 17x17 — under the 24px WCAG 2.2 AA minimum, and far under the
+   44px that a finger needs. The hit area grows via an absolutely positioned
+   pseudo-element, so it is invisible and shifts nothing in the row. */
+.today-checklist-box::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    translate: -50% -50%;
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-sm);
+}
+
+@media (pointer: coarse) {
+    .today-checklist-box::after {
+        width: 44px;
+        height: 44px;
+    }
 }
 
 .today-checklist-row.is-done .today-checklist-box {
@@ -455,4 +481,27 @@
         padding: 16px 14px 40px;
         gap: 22px;
     }
+}
+
+/* A task with no deadline should not shout. The control stays in the layout
+   (so rows do not jump when it appears) but is invisible until the row is
+   hovered or the button itself is focused — the same reveal-on-intent pattern
+   the row's other secondary actions use. */
+.today-checklist-date.is-unset {
+    opacity: 0;
+    transition: opacity 0.12s ease;
+}
+
+.today-checklist-row:hover .today-checklist-date.is-unset,
+.today-checklist-date.is-unset:focus-visible {
+    opacity: 1;
+}
+
+/* Keyboard users never hover, so focus alone has to be enough to reveal it. */
+.today-checklist-date.is-unset:focus-visible {
+    opacity: 1;
+}
+
+.today-checklist-date-hint {
+    font-size: inherit;
 }

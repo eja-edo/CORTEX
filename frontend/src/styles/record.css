@@ -20,7 +20,7 @@
 .record-error {
     padding: 10px 14px;
     background: var(--red-light);
-    border: 1px solid rgba(235, 87, 87, 0.2);
+    border: 1px solid color-mix(in srgb, var(--red) 20%, transparent);
     border-radius: var(--radius-lg);
     font-size: 13px;
     color: var(--red);
@@ -66,7 +66,7 @@
 }
 
 .record-capture-card.recording {
-    border-color: rgba(235, 87, 87, 0.4);
+    border-color: color-mix(in srgb, var(--red) 40%, transparent);
     background: #fff8f8;
 }
 
@@ -89,8 +89,8 @@
 }
 
 .record-capture-card.recording .record-capture-icon {
-    background: rgba(235, 87, 87, 0.1);
-    border-color: rgba(235, 87, 87, 0.2);
+    background: color-mix(in srgb, var(--red) 10%, transparent);
+    border-color: color-mix(in srgb, var(--red) 20%, transparent);
     color: var(--red);
 }
 
@@ -171,13 +171,13 @@
 }
 
 .record-btn--stop {
-    border-color: rgba(235, 87, 87, 0.45);
+    border-color: color-mix(in srgb, var(--red) 45%, transparent);
     background: var(--red-light);
     color: var(--red);
 }
 
 .record-btn--stop:hover {
-    background: rgba(235, 87, 87, 0.15);
+    background: color-mix(in srgb, var(--red) 15%, transparent);
 }
 
 /* ========== VIDEO / AUDIO PREVIEW ========== */
@@ -333,7 +333,7 @@
     background: var(--red-light);
     font-size: 12.5px;
     color: var(--red);
-    border-bottom: 1px solid rgba(235, 87, 87, 0.15);
+    border-bottom: 1px solid color-mix(in srgb, var(--red) 15%, transparent);
 }
 
 .rl2-server-error button {
@@ -464,7 +464,7 @@
 .rl2-play-btn--active {
     background: var(--accent-light) !important;
     color: var(--accent) !important;
-    border-color: rgba(35, 131, 226, 0.3) !important;
+    border-color: color-mix(in srgb, var(--accent) 30%, transparent) !important;
 }
 
 /* Info block */
@@ -587,7 +587,7 @@
 .rl2-action-btn.active {
     background: var(--accent-light);
     color: var(--accent);
-    border-color: rgba(35, 131, 226, 0.3);
+    border-color: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 .rl2-action-btn:disabled {
@@ -690,7 +690,7 @@
     font-family: var(--font);
     color: var(--text-primary);
     outline: none;
-    box-shadow: 0 0 0 2px rgba(35, 131, 226, 0.15);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 15%, transparent);
 }
 
 .rl2-icon-btn {
@@ -814,7 +814,7 @@
 .rl2-confirm-btn--delete {
     background: var(--red);
     border: 1.5px solid var(--red);
-    color: white;
+    color: var(--red-fg);
 }
 
 .rl2-confirm-btn--delete:hover {
@@ -966,7 +966,7 @@
 .pad-btn--primary {
     background: var(--accent);
     border: 1.5px solid var(--accent);
-    color: white;
+    color: var(--accent-fg);
     display: flex;
     align-items: center;
     justify-content: center;

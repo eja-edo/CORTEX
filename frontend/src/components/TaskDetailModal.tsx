@@ -12,6 +12,7 @@ import { TaskChecklistRow } from './TaskChecklistRow'
 import { SubtaskCreatePanel } from './SubtaskCreatePanel'
 import { useTaskChecklist } from '../hooks/useTaskChecklist'
 import { useConfirmDialog } from '../hooks/useConfirmDialog'
+import { useEscapeToClose } from '../hooks/useEscapeToClose'
 import { toggleTaskWithCascade } from '../utils/taskCascade'
 
 const STATUS_META: Record<TaskStatus, { label: string; icon: typeof Circle; color: string }> = {
@@ -59,6 +60,7 @@ export function TaskDetailModal({
         updateTask,
     } = useTaskChecklist(task.id)
     const { confirm, dialog } = useConfirmDialog()
+    useEscapeToClose(onClose)
 
     useEffect(() => {
         setDraft(task)

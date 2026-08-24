@@ -9,23 +9,43 @@
   --border: #e9e9e7;
   --border-strong: #d3d1cb;
 
+  /* Text ramp. Every step is verified >= 4.5:1 against BOTH --bg and
+     --bg-secondary, so a token stays readable on a card as well as on the
+     page. --text-disabled is exempt (WCAG 1.4.3 excludes inactive
+     controls) and is the only one allowed below that bar. */
   --text-primary: #37352f;
-  --text-secondary: #787774;
-  --text-tertiary: #9b9a97;
+  --text-secondary: #5f5d59;
+  --text-tertiary: #706e68;
   --text-disabled: #c4c3bf;
 
-  --accent: #2383e2;
+  --accent: #1668c4;
   --accent-light: #e7f3ff;
-  --accent-hover: #1a6cca;
+  --accent-hover: #0f5fb8;
+  /* Text/icon colour to use ON a --accent background. Never hardcode
+     `color: white` next to `background: var(--accent)` — that is what broke
+     every dark theme. */
+  --accent-fg: #ffffff;
 
-  --red: #eb5757;
+  --red: #c9372c;
   --red-light: #fff0f0;
-  --yellow: #dfab01;
+  --red-fg: #ffffff;
+  --yellow: #8a6800;
   --yellow-light: #fefae0;
   --green: #0f7b6c;
   --green-light: #edfaf7;
-  --purple: #9065b0;
+  --green-fg: #ffffff;
+  --purple: #7a4d9c;
   --purple-light: #f6f3f9;
+  --purple-fg: #ffffff;
+
+  /* High-contrast "solid" button (the inverted chip used for primary
+     submits). Derived per theme instead of borrowing --text-primary as a
+     background, which produced white-on-white everywhere but light/sepia. */
+  --btn-solid-bg: #37352f;
+  --btn-solid-fg: #ffffff;
+
+  /* Keyboard focus ring. >= 3:1 against --bg and --bg-secondary. */
+  --focus-ring: #1668c4;
 
   --sidebar-width: 300px;
   --topbar-height: 64px;
@@ -41,6 +61,25 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
   --shadow: 0 2px 8px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.04);
   --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.06);
+
+  /* Spacing scale — 4/8px rhythm. Prefer these over ad-hoc padding/margin
+     values in new or touched CSS so vertical/horizontal rhythm stays
+     consistent; not retrofitted across existing rules in one pass. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+
+  /* Canonical breakpoints for new responsive work. 700px is this app's
+     established mobile threshold (see sidebar.css's overlay drawer) —
+     reuse it rather than picking a new number. Older files still using
+     560/600/640/800/900px are historical and left as-is; only touch them
+     if you're already editing that file for another reason. */
+  /* mobile: max-width: 700px | tablet: max-width: 1024px | desktop: 1025px+ */
 }
 
 [data-theme='dark'] {
@@ -51,20 +90,27 @@
   --border: #2f2f2f;
   --border-strong: #444444;
   --text-primary: #e9e9e7;
-  --text-secondary: #9b9a97;
-  --text-tertiary: #787774;
+  --text-secondary: #a9a8a4;
+  --text-tertiary: #8d8c88;
   --text-disabled: #555555;
-  --accent: #529cca;
+  --accent: #6cb2e0;
   --accent-light: #1e3a52;
-  --accent-hover: #6db3e2;
-  --red: #ff6b6b;
+  --accent-hover: #8cc6ea;
+  --accent-fg: #191919;
+  --red: #ff8a80;
   --red-light: #3d1f1f;
+  --red-fg: #191919;
   --yellow: #e6c229;
   --yellow-light: #3d3520;
-  --green: #1a9b8a;
+  --green: #3dbba8;
   --green-light: #1a3d38;
-  --purple: #b07fd8;
+  --green-fg: #191919;
+  --purple: #c49ae0;
   --purple-light: #2d2438;
+  --purple-fg: #191919;
+  --btn-solid-bg: #e9e9e7;
+  --btn-solid-fg: #191919;
+  --focus-ring: #6cb2e0;
 }
 
 [data-theme='ocean'] {
@@ -75,20 +121,27 @@
   --border: #334155;
   --border-strong: #475569;
   --text-primary: #f1f5f9;
-  --text-secondary: #94a3b8;
-  --text-tertiary: #64748b;
+  --text-secondary: #a9bad0;
+  --text-tertiary: #8b9bb4;
   --text-disabled: #475569;
   --accent: #38bdf8;
   --accent-light: #0c4a6e;
   --accent-hover: #7dd3fc;
-  --red: #f87171;
+  --accent-fg: #0f172a;
+  --red: #fb8f8f;
   --red-light: #451a1a;
+  --red-fg: #0f172a;
   --yellow: #fbbf24;
   --yellow-light: #422006;
   --green: #34d399;
   --green-light: #064e3b;
-  --purple: #a78bfa;
+  --green-fg: #0f172a;
+  --purple: #b6a3fb;
   --purple-light: #2e1065;
+  --purple-fg: #0f172a;
+  --btn-solid-bg: #f1f5f9;
+  --btn-solid-fg: #0f172a;
+  --focus-ring: #38bdf8;
 }
 
 [data-theme='forest'] {
@@ -98,10 +151,14 @@
   --bg-active: #3d5c3d;
   --border: #2d4a2d;
   --border-strong: #3d5c3d;
+  /* The text ramp is deliberately desaturated here: it used to be saturated
+     green, which made --text-tertiary the exact same hex as --accent, so
+     links were indistinguishable from body copy. --text-disabled was also
+     brighter than --text-tertiary, inverting the hierarchy. */
   --text-primary: #e8f5e8;
-  --text-secondary: #86efac;
-  --text-tertiary: #4ade80;
-  --text-disabled: #22c55e;
+  --text-secondary: #b3c9b6;
+  --text-tertiary: #93ab97;
+  --text-disabled: #66806a;
   --accent: #4ade80;
   --accent-light: #14532d;
   --accent-hover: #86efac;
@@ -113,6 +170,13 @@
   --green-light: #14532d;
   --purple: #a78bfa;
   --purple-light: #2e1065;
+  --accent-fg: #0a1f0a;
+  --red-fg: #0a1f0a;
+  --green-fg: #0a1f0a;
+  --purple-fg: #0a1f0a;
+  --btn-solid-bg: #e8f5e8;
+  --btn-solid-fg: #0a1f0a;
+  --focus-ring: #4ade80;
 }
 
 [data-theme='lavender'] {
@@ -122,10 +186,12 @@
   --bg-active: #4c2d6e;
   --border: #3b2554;
   --border-strong: #5a3d7d;
+  /* Desaturated for the same reason as forest: --text-secondary was the
+     exact same hex as --accent. */
   --text-primary: #f3e8ff;
-  --text-secondary: #c084fc;
-  --text-tertiary: #a855f7;
-  --text-disabled: #9333ea;
+  --text-secondary: #cbbdd8;
+  --text-tertiary: #a99bb8;
+  --text-disabled: #75688a;
   --accent: #c084fc;
   --accent-light: #3b0764;
   --accent-hover: #e9d5ff;
@@ -137,6 +203,13 @@
   --green-light: #064e3b;
   --purple: #c084fc;
   --purple-light: #3b0764;
+  --accent-fg: #1a1025;
+  --red-fg: #1a1025;
+  --green-fg: #1a1025;
+  --purple-fg: #1a1025;
+  --btn-solid-bg: #f3e8ff;
+  --btn-solid-fg: #1a1025;
+  --focus-ring: #c084fc;
 }
 
 [data-theme='sepia'] {
@@ -147,20 +220,27 @@
   --border: #d4c5a9;
   --border-strong: #c4b594;
   --text-primary: #5c4b37;
-  --text-secondary: #8b7355;
-  --text-tertiary: #a89279;
+  --text-secondary: #68543b;
+  --text-tertiary: #715d45;
   --text-disabled: #c4b594;
-  --accent: #b8860b;
+  --accent: #7a4f00;
   --accent-light: #f5e6c8;
-  --accent-hover: #d4a017;
-  --red: #c0392b;
+  --accent-hover: #6e4700;
+  --accent-fg: #ffffff;
+  --red: #a32b1f;
   --red-light: #f9e4e4;
-  --yellow: #d4a017;
+  --red-fg: #ffffff;
+  --yellow: #7d5e00;
   --yellow-light: #faf3e0;
-  --green: #27ae60;
+  --green: #1a6b3c;
   --green-light: #e8f8f0;
-  --purple: #8e44ad;
+  --green-fg: #ffffff;
+  --purple: #6b3d84;
   --purple-light: #f5eef8;
+  --purple-fg: #ffffff;
+  --btn-solid-bg: #5c4b37;
+  --btn-solid-fg: #f4ecd8;
+  --focus-ring: #7a4f00;
 }
 
 *,

@@ -40,7 +40,7 @@
   justify-content: space-between;
   padding: 8px 16px;
   background: var(--green);
-  color: #fff;
+  color: var(--green-fg);
   font-size: 13px;
   gap: 12px;
 }
@@ -1596,7 +1596,7 @@
   border-radius: var(--radius-lg);
   border: none;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-fg);
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
@@ -1777,7 +1777,7 @@
 }
 
 .react-flow__selection {
-  background: rgba(35, 131, 226, 0.08) !important;
+  background: color-mix(in srgb, var(--accent) 8%, transparent) !important;
   border: 1px solid var(--accent) !important;
 }
 

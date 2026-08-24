@@ -1,4 +1,5 @@
 import { Trash2, X } from 'lucide-react'
+import { useEscapeToClose } from '../hooks/useEscapeToClose'
 import { BlockRenderer } from './BlockRenderer'
 import type { NotificationBlock, NotificationActionDef } from '../types'
 
@@ -27,6 +28,7 @@ export function NotificationDetailModal({
     onNavigate,
     onDelete,
 }: NotificationDetailModalProps) {
+    useEscapeToClose(onClose)
     return (
         <div className="modal-backdrop" onClick={onClose}>
             <div className="modal notifications-detail-modal" onClick={(e) => e.stopPropagation()}>

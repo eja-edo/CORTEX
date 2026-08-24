@@ -316,7 +316,7 @@
 
 .ws-settings-input.danger:focus {
     border-color: var(--red);
-    box-shadow: 0 0 0 2px rgba(235, 87, 87, 0.1);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--red) 10%, transparent);
 }
 
 .ws-settings-select {
@@ -354,18 +354,22 @@
 }
 
 .ws-settings-save-btn.active {
-    background: var(--text-primary);
-    border-color: var(--text-primary);
-    color: var(--bg);
+    background: var(--btn-solid-bg);
+    border-color: var(--btn-solid-bg);
+    color: var(--btn-solid-fg);
 }
 
+/* Was a hardcoded #1a1a16. Paired with `color: var(--bg)` above, the dark
+   theme rendered #191919 text on a #1a1a16 background — hovering the Save
+   button made its label disappear. */
 .ws-settings-save-btn.active:hover {
-    background: #1a1a16;
+    background: var(--btn-solid-bg);
+    opacity: 0.88;
 }
 
 .ws-settings-save-btn.saved {
     background: var(--green-light);
-    border-color: rgba(15, 123, 108, 0.2);
+    border-color: color-mix(in srgb, var(--green) 20%, transparent);
     color: var(--green);
 }
 
@@ -845,13 +849,13 @@
 
 .ws-connect-btn.connected {
     background: var(--green-light);
-    border-color: rgba(15, 123, 108, 0.2);
+    border-color: color-mix(in srgb, var(--green) 20%, transparent);
     color: var(--green);
 }
 
 /* ── Danger Zone ── */
 .danger-card {
-    border-color: rgba(235, 87, 87, 0.25);
+    border-color: color-mix(in srgb, var(--red) 25%, transparent);
     background: rgba(255, 240, 240, 0.4);
 }
 
@@ -888,7 +892,7 @@
     flex-direction: column;
     gap: 8px;
     padding-top: 4px;
-    border-top: 1px solid rgba(235, 87, 87, 0.15);
+    border-top: 1px solid color-mix(in srgb, var(--red) 15%, transparent);
     margin-top: 2px;
 }
 
@@ -905,7 +909,7 @@
     border-radius: 7px;
     border: 1px solid var(--red);
     background: var(--red);
-    color: white;
+    color: var(--red-fg);
     font-size: 13px;
     font-weight: 500;
     cursor: pointer;

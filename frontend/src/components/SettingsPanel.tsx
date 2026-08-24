@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Sun, Moon, Waves, Trees, Flower2, BookOpen } from 'lucide-react'
 import type { ChannelLinkCode, GoogleCalendarStatus, ReasonPreference, UserChannel, UserPreferencesResponse } from '../types'
+import { strings } from '../i18n/strings'
 import { ChannelsCard } from './ChannelsCard'
 import type { AppTheme } from '../utils/theme'
 import { THEME_OPTIONS } from '../utils/theme'
@@ -105,14 +106,14 @@ export function SettingsPanel({
   return (
     <section className="settings-workspace">
       <div className="settings-workspace-header">
-        <h1 className="page-title">Settings</h1>
+        <h1 className="page-title">{strings.settings.title}</h1>
       </div>
       
       {/* Appearance Card with Theme Swatches */}
       <div className="settings-card">
-        <div className="settings-card-title">Appearance</div>
+        <div className="settings-card-title">{strings.settings.appearance.title}</div>
         <div className="settings-card-subtitle">
-          Choose your preferred theme for the interface.
+          {strings.settings.appearance.desc}
         </div>
         <div className="theme-swatches-grid">
           {THEME_OPTIONS.map((option) => {
@@ -140,16 +141,15 @@ export function SettingsPanel({
 
       {/* Notes Card */}
       <div className="settings-card">
-        <div className="settings-card-title">Notes</div>
+        <div className="settings-card-title">{strings.settings.notes.title}</div>
         <div className="settings-card-subtitle">
-          Configure how notes are displayed and edited.
+          {strings.settings.notes.desc}
         </div>
         <label className="settings-toggle-row">
           <div className="settings-toggle-info">
-            <span className="settings-toggle-label">Edit blocks</span>
-            <span className="settings-toggle-desc">
-              Allow editing note content directly from the block editor (Split / Blocks view).
-              When disabled, editing is only available from the raw Markdown side.
+             <span className="settings-toggle-label">{strings.settings.notes.editBlocks.label}</span>
+             <span className="settings-toggle-desc">
+               {strings.settings.notes.editBlocks.desc}
             </span>
           </div>
           <input
@@ -163,13 +163,13 @@ export function SettingsPanel({
       
       {/* Notifications Card — Milestone 6.2 (quiet hours) + redesigned 4.5 (reason toggles) */}
       <div className="settings-card">
-        <div className="settings-card-title">Notifications</div>
+        <div className="settings-card-title">{strings.settings.notifications.title}</div>
         <div className="settings-card-subtitle">
-          Quiet hours pause non-urgent nudges; the list below lets you turn off individual kinds entirely.
+          {strings.settings.notifications.desc}
         </div>
         <div className="settings-quiet-hours-row">
           <label className="settings-quiet-hours-field">
-            <span>Quiet hours start (UTC)</span>
+             <span>{strings.settings.notifications.quietHoursStart}</span>
             <input
               type="time"
               value={quietStart}
@@ -177,7 +177,7 @@ export function SettingsPanel({
             />
           </label>
           <label className="settings-quiet-hours-field">
-            <span>Quiet hours end (UTC)</span>
+             <span>{strings.settings.notifications.quietHoursEnd}</span>
             <input
               type="time"
               value={quietEnd}
@@ -191,7 +191,7 @@ export function SettingsPanel({
               disabled={savingQuietHours || !quietStart || !quietEnd}
               onClick={() => void handleSaveQuietHours()}
             >
-              Save
+               {strings.settings.notifications.save}
             </button>
             <button
               type="button"
@@ -199,7 +199,7 @@ export function SettingsPanel({
               disabled={savingQuietHours || (!quietHours?.quiet_hours_start && !quietStart)}
               onClick={() => void handleClearQuietHours()}
             >
-              Clear
+               {strings.settings.notifications.clear}
             </button>
           </div>
         </div>
@@ -241,37 +241,37 @@ export function SettingsPanel({
 
       {/* Google Calendar Card */}
       <div className="settings-card">
-        <div className="settings-card-title">Google Calendar</div>
+        <div className="settings-card-title">{strings.settings.googleCalendar.title}</div>
         <div className="settings-card-subtitle">
-          Manage connection and manual sync for your calendar integration.
+          {strings.settings.googleCalendar.desc}
         </div>
         <div className="settings-actions-row">
           {!googleCalendarStatus?.connected ? (
             <button type="button" className="btn btn-primary" onClick={onConnectGoogleCalendar}>
-              Connect Google
+              {strings.settings.googleCalendar.connectBtn}
             </button>
           ) : googleCalendarStatus?.needs_reauth ? (
             <>
               <button type="button" className="btn btn-primary" onClick={onConnectGoogleCalendar}>
-                Reconnect Google
+                {strings.settings.googleCalendar.reconnectBtn}
               </button>
               <button type="button" className="btn btn-danger" onClick={onDisconnectGoogleCalendar}>
-                Disconnect Google
+                {strings.settings.googleCalendar.disconnectBtn}
               </button>
             </>
           ) : (
             <>
               <button type="button" className="btn btn-ghost" onClick={onSyncGoogleCalendarNow}>
-                Sync Google
+                {strings.settings.googleCalendar.syncBtn}
               </button>
               <button type="button" className="btn btn-ghost" onClick={onStartGoogleCalendarWatch}>
-                Start Watch
+                {strings.settings.googleCalendar.startWatchBtn}
               </button>
               <button type="button" className="btn btn-ghost" onClick={onRenewGoogleCalendarWatch}>
-                Renew Watch
+                {strings.settings.googleCalendar.renewWatchBtn}
               </button>
               <button type="button" className="btn btn-danger" onClick={onDisconnectGoogleCalendar}>
-                Disconnect Google
+                {strings.settings.googleCalendar.disconnectBtn}
               </button>
             </>
           )}
@@ -279,16 +279,16 @@ export function SettingsPanel({
         <div className="settings-meta-list">
           <div>
             Status:{' '}
-            {!googleCalendarStatus?.connected
-              ? 'Not connected'
-              : googleCalendarStatus?.needs_reauth
-                ? 'Needs reconnect'
-                : 'Connected'}
+             {!googleCalendarStatus?.connected
+               ? strings.settings.googleCalendar.status.notConnected
+               : googleCalendarStatus?.needs_reauth
+                 ? strings.settings.googleCalendar.status.needsReconnect
+                 : strings.settings.googleCalendar.status.connected}
           </div>
-          <div>Last sync: {formatDateTimeVi(googleCalendarStatus?.last_synced_at ?? null)}</div>
-          <div>Channel expires: {formatDateTimeVi(googleCalendarStatus?.channel_expiration ?? null)}</div>
-          {googleCalendarStatus?.last_sync_error && (
-            <div className="settings-meta-error">Last error: {googleCalendarStatus.last_sync_error}</div>
+           <div>{strings.settings.googleCalendar.lastSync}: {formatDateTimeVi(googleCalendarStatus?.last_synced_at ?? null)}</div>
+           <div>{strings.settings.googleCalendar.channelExpires}: {formatDateTimeVi(googleCalendarStatus?.channel_expiration ?? null)}</div>
+           {googleCalendarStatus?.last_sync_error && (
+             <div className="settings-meta-error">{strings.settings.googleCalendar.lastError}: {googleCalendarStatus.last_sync_error}</div>
           )}
         </div>
       </div>
