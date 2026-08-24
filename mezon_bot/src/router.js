@@ -22,11 +22,19 @@ const { renderModelSaved, MODEL_FIELD_ID } = require("./mezon/modelCard");
 const {
   renderTaskCompleted,
   renderTaskCreated,
+  renderTaskSnoozed,
   TASK_FIELD_ID,
   TITLE_FIELD_ID,
   DUE_FIELD_ID,
   PRIORITY_FIELD_ID,
 } = require("./mezon/taskCards");
+const {
+  renderOccurrencePicker,
+  renderOccurrenceDone,
+  OCCURRENCE_FIELD_ID,
+} = require("./mezon/occurrenceCard");
+const { INTENT, prepareTaskWrite, applyTaskWrite } = require("./taskActions");
+const { DEFAULT_TIMEZONE } = require("./mezon/clock");
 const { renderMuted, renderInboxCleared, REASON_FIELD_ID } = require("./mezon/inboxCards");
 const {
   renderPlanProposal,
@@ -53,12 +61,24 @@ const SERVED_SCOPES = new Set(["dm"]);
 const AGENT_STREAM_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
 
 class MessageRouter {
-  constructor({ gateway, registry, cortex, storage, prefix, keepThinking = true }) {
+  constructor({
+    gateway,
+    registry,
+    cortex,
+    storage,
+    prefix,
+    keepThinking = true,
+    timezone = DEFAULT_TIMEZONE,
+  }) {
     this.gateway = gateway;
     this.registry = registry;
     this.cortex = cortex;
     this.storage = storage;
     this.prefix = prefix;
+    // Which wall clock times are shown in and "tomorrow" is measured
+    // against — see `mezon/clock.js`. A shared default, not a per-user
+    // setting, because the schema has nowhere to put one yet.
+    this.timezone = timezone;
     // See `config.bot.keepThinking` — leave the thinking block under the
     // finished answer instead of clearing it. Default-on here too, so a
     // router built without the flag behaves like a deployed one.
@@ -491,6 +511,18 @@ class MessageRouter {
         await this._handleMuteSubmit({ action, parsed, identity, reply });
       } else if (action.kind === "inbox_read_all") {
         await this._handleInboxReadAll({ action, parsed, identity, reply });
+      } else if (action.kind === "notif_task_done") {
+        await this._handleNotificationTaskWrite({
+          action, parsed, identity, reply, intent: INTENT.COMPLETE,
+        });
+      } else if (action.kind === "notif_task_snooze") {
+        await this._handleNotificationTaskWrite({
+          action, parsed, identity, reply, intent: INTENT.SNOOZE,
+        });
+      } else if (action.kind === "notif_mute") {
+        await this._handleNotificationMute({ action, parsed, identity, reply });
+      } else if (action.kind === "occurrence_this" || action.kind === "occurrence_all") {
+        await this._handleOccurrenceDecision({ action, parsed, identity, reply });
       }
     } catch (err) {
       logger.warn("button action failed", { kind: action.kind, error: err?.message });
@@ -590,15 +622,178 @@ class MessageRouter {
       return;
     }
 
+    const known = pending.tasks.find((t) => String(t.id) === taskId) ?? null;
+    const written = await this._writeTask({
+      taskId,
+      task: known,
+      intent: INTENT.COMPLETE,
+      identity,
+      parsed,
+      reply,
+    });
+    // Not written yet — the user is being asked which occurrence, and the
+    // list card stays where it is until that second question is answered.
+    if (!written) return;
+
+    this.pendingForms.delete(action.targetId);
+    await this._replaceCard(parsed, renderTaskCompleted(written.task ?? known ?? { title: taskId }), reply);
+    logger.info("task completed from Mezon", { taskId, actor: parsed.actorId });
+  }
+
+  /**
+   * ✅ Xong / ⏰ Dời sang mai on a notification DM.
+   *
+   * The task id comes from the button itself, not from memory: this nudge
+   * may have been sent days and one restart ago (see `actions.js`). The
+   * card is replaced rather than answered, so a notification that has been
+   * dealt with stops offering to deal with it again.
+   */
+  async _handleNotificationTaskWrite({ action, parsed, identity, reply, intent }) {
+    const written = await this._writeTask({
+      taskId: action.targetId,
+      intent,
+      identity,
+      parsed,
+      reply,
+    });
+    if (!written) return;
+
+    const task = written.task ?? { title: action.targetId };
+    const card =
+      intent === INTENT.SNOOZE
+        ? renderTaskSnoozed(task, written.dueDate)
+        : renderTaskCompleted(task);
+    await this._replaceCard(parsed, card, reply);
+    logger.info("notification acted on from Mezon", {
+      intent,
+      taskId: action.targetId,
+      actor: parsed.actorId,
+    });
+  }
+
+  /**
+   * 🔕 Tắt nhắc này on a notification DM.
+   *
+   * Turning one reason off, not all of them — the same single-key write
+   * `*mute` performs, reachable without leaving the message that prompted
+   * it. Switching back on stays on the web, where the audit list shows
+   * dismiss counts and effective levels this card has no room for.
+   */
+  async _handleNotificationMute({ action, parsed, identity, reply }) {
+    const reasonKey = action.targetId;
+    await this.cortex.setReasonEnabled(reasonKey, false, identity.userId);
+    await this._replaceCard(parsed, renderMuted({ reason_key: reasonKey }), reply);
+    logger.info("reason muted from a notification", { reasonKey, actor: parsed.actorId });
+  }
+
+  /**
+   * Perform a task write, or ask which occurrence first.
+   *
+   * Returns the write's result, or `null` when it asked instead — the one
+   * place that distinction is made, so no caller has to remember that a
+   * checklist task on a recurring event answers 422 to a bare write (see
+   * `taskActions.js`).
+   */
+  async _writeTask({ taskId, task = null, intent, identity, parsed, reply }) {
+    const prepared = await prepareTaskWrite({
+      cortex: this.cortex,
+      userId: identity.userId,
+      taskId,
+      task,
+    });
+
+    if (prepared.missing) {
+      await reply("Không tìm thấy việc này nữa — có thể nó đã bị xoá.");
+      return null;
+    }
+
+    if (!prepared.ready) {
+      const formId = this.pendingForms.put({
+        taskId,
+        intent,
+        task: prepared.task,
+        event: prepared.event,
+        occurrences: prepared.occurrences,
+      });
+      await reply(
+        renderOccurrencePicker({
+          task: prepared.task,
+          event: prepared.event,
+          occurrences: prepared.occurrences,
+          formId,
+          intent,
+          timezone: this.timezone,
+        })
+      );
+      return null;
+    }
+
     // The transition itself is the backend's: `TASK_STATUS_TRANSITIONS`
     // rejects anything illegal, so a stale card cannot complete a task
     // twice by being clicked twice — the second call fails and says so.
-    await this.cortex.completeTask(taskId, identity.userId);
+    const result = await applyTaskWrite({
+      cortex: this.cortex,
+      userId: identity.userId,
+      taskId,
+      intent,
+      timezone: this.timezone,
+    });
+    // Name the task from what we already know when the write's own
+    // response doesn't carry one. The card exists to tell the user *which*
+    // thing just happened, and "Đã xong" with no title says less than
+    // nothing.
+    return { ...result, task: result.task?.title ? result.task : prepared.task };
+  }
+
+  /** Chỉ buổi này / Tất cả các buổi on the occurrence picker. */
+  async _handleOccurrenceDecision({ action, parsed, identity, reply }) {
+    const pending = this.pendingForms.get(action.targetId);
+    if (!pending) return this._expiredForm(reply, "tasks");
+
+    const scope = action.kind === "occurrence_all" ? "all" : "this_only";
+    // `all` targets the template and `_resolve_occurrence_target` never
+    // reads the timestamp on that branch — but the endpoint still requires
+    // the pair, so one is sent. The first session offered when there is
+    // one, the current instant when the event has none in range: neither
+    // claims anything, because neither is looked at.
+    const startTime =
+      scope === "all"
+        ? pending.occurrences[0] ?? new Date().toISOString()
+        : getText(parsed.extra.values, OCCURRENCE_FIELD_ID) ?? pending.occurrences[0] ?? null;
+
+    if (!startTime) {
+      await reply("Chưa chọn buổi nào — chọn một buổi rồi bấm lại, hoặc chọn *Tất cả các buổi*.");
+      return;
+    }
+
+    const written = await applyTaskWrite({
+      cortex: this.cortex,
+      userId: identity.userId,
+      taskId: pending.taskId,
+      intent: pending.intent,
+      occurrence: { startTime, scope },
+      timezone: this.timezone,
+    });
     this.pendingForms.delete(action.targetId);
 
-    const task = pending.tasks.find((t) => String(t.id) === taskId) ?? { title: taskId };
-    await this._replaceCard(parsed, renderTaskCompleted(task), reply);
-    logger.info("task completed from Mezon", { taskId, actor: parsed.actorId });
+    await this._replaceCard(
+      parsed,
+      renderOccurrenceDone({
+        task: written.task ?? pending.task,
+        intent: pending.intent,
+        scope,
+        startTime,
+        dueDate: written.dueDate,
+        timezone: this.timezone,
+      }),
+      reply
+    );
+    logger.info("occurrence-scoped write from Mezon", {
+      intent: pending.intent,
+      scope,
+      taskId: pending.taskId,
+      actor: parsed.actorId,
+    });
   }
 
   /**

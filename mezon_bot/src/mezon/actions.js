@@ -30,6 +30,20 @@ const PREFIXES = {
   "tn:": "task_create",
   "mu:": "mute_submit",
   "ir:": "inbox_read_all",
+  // Buttons on a *notification*, not on a card the bot sent in reply to a
+  // command. Their target is the thing itself — a task id, a reason key —
+  // never an entry in `pendingForms`: a nudge sits in someone's DM list
+  // for days and is acted on long after the process that sent it has been
+  // restarted. Anything these buttons need has to be in the id.
+  "nd:": "notif_task_done",
+  "ns:": "notif_task_snooze",
+  "nm:": "notif_mute",
+  // The two answers to "which occurrence?" — see `occurrenceCard.js`.
+  // These *are* pendingForms-backed: they are the second step of an
+  // exchange the user is in the middle of, and a scope question that
+  // outlives the answer to it is a question about nothing.
+  "oc:": "occurrence_this",
+  "oa:": "occurrence_all",
 };
 
 const KINDS = Object.fromEntries(Object.entries(PREFIXES).map(([p, k]) => [k, p]));

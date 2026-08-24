@@ -667,3 +667,61 @@ Dùng Cortex từ Mezon mà không phải chat với AI. Sáu lệnh, tất cả
 - **`*quiet`** — dính đúng cái đó (cột quiet hours là UTC).
 - **`*find` note** — giá trị thấp nhất; chat là editor tồi cho văn bản dài.
 - **`*task`/`*event` qua `GET /commands/catalog`** — M5. Catalog chỉ giúp phần *form tạo dữ liệu*; lệnh đọc render bespoke nên catalog không giúp gì. `*new` hiện viết tay, khi M5 xong thì chuyển sang catalog-driven.
+
+---
+
+# XVI. Hành Động Ngay Trên Thông Báo (2026-08-24)
+
+Lý do bot tồn tại, viết trong `planning-v3.md` §F2, là *"biến nhắc thành nhắc + xong rồi / dời sang mai"*. Cho tới hôm nay thông báo qua Mezon vẫn một chiều: `server.js` render embed rồi vứt `actions` và `payload` mà adapter đã gửi kèm. Phần này đóng vòng lặp đó, cộng một lỗi phải sửa trước khi làm được.
+
+## 16.1 ⚠️ Lỗi phải sửa trước: nút "Đánh dấu xong" đã hỏng từ trước
+
+Từ khi có per-occurrence completion (`a1b2c3d4e5f6`), `POST /tasks/{id}/complete` và `PATCH /tasks/{id}` **trả 422** nếu task là checklist của một event lặp mà thiếu `occurrence_start_time` + `edit_scope`. `GET /api/tasks` vẫn trả những task đó (nó chỉ lọc *exception row*, không lọc template), nên chúng nằm sẵn trong card `*tasks` — và `cortex.completeTask` gọi trần. Bất kỳ ai bấm xong một việc thuộc lịch lặp đều nhận thông báo lỗi.
+
+Đây là lý do phần này bắt đầu từ đó chứ không từ nút mới: **mọi nút "Xong" sau này đều đi qua đúng đường ấy**.
+
+## 16.2 Cách xử lý: hỏi, không đoán
+
+Backend từ chối đoán buổi nào là có chủ đích. Bot đoán hộ thì chỉ chuyển câu trả lời sai sang chỗ có ít thông tin hơn. Nên luồng là **hai bước**:
+
+| Bước | Chỗ | Việc |
+|---|---|---|
+| 1 | `taskActions.js` | `prepareTaskWrite` hỏi backend: task này có `related_event_id` không, event đó có `is_recurring` không |
+| 2 | `mezon/occurrenceCard.js` | Nếu có: card "Buổi nào?" — radio các buổi quanh hiện tại (±7/+30 ngày, tối đa 5) + **Chỉ buổi này** / **Tất cả các buổi** |
+| 3 | `taskActions.js` | `applyTaskWrite` gửi kèm `occurrence_start_time` + `edit_scope` |
+
+`is_recurring` lấy từ `GET /api/schedules/{id}` chứ không suy từ task: đó là dữ kiện về *lịch*, và `TaskResponse` không mang nó. Cùng đúng trường web đọc.
+
+Ba chi tiết đáng ghi:
+
+- **`all` bỏ qua timestamp.** `_resolve_occurrence_target` chỉ đọc `occurrence_start_time` ở nhánh `this_only`; nhánh `all` trả thẳng template. Nhưng endpoint vẫn đòi đủ cặp, nên bot gửi buổi đầu tiên trong danh sách (hoặc thời điểm hiện tại nếu không có buổi nào) — một giá trị **không khẳng định điều gì, vì không ai đọc nó**.
+- **Buổi được chọn theo độ gần hiện tại, hiển thị theo thứ tự thời gian.** Nhắc thường nói về buổi *đã qua* ("quá hạn"), nên picker chỉ liệt kê tương lai là picker không diễn đạt được việc người ta định làm. Nhưng danh sách sắp theo "gần hiện tại nhất" thì nhảy tới nhảy lui và đọc như chưa sắp.
+- **Event không có buổi nào trong khoảng** ⇒ bỏ hẳn radio, chỉ còn "Tất cả các buổi". Một picker rỗng mời người ta bấm một cái không chạy được.
+
+## 16.3 Nút trên chính notification
+
+`payload.task_id` đã nằm trên wire từ trước (`notification_subscribers.py` gắn cho mọi reason dạng task), `mezon.py` đã chuyển tiếp. Giờ `embed.js::notification` dựng nút từ đó:
+
+| Nút | Điều kiện | Việc |
+|---|---|---|
+| ✅ Xong | có `payload.task_id` | `POST /tasks/{id}/complete` (qua 16.2) |
+| ⏰ Dời sang mai | có `payload.task_id` | `PATCH /tasks/{id}` `due_date` = mai (qua 16.2) |
+| 🔕 Tắt nhắc này | có `reason_key` | `PUT /preferences/reasons/{key}` `enabled=false` |
+
+**`button_id` mang thẳng task id / reason key, không qua `pendingForms`.** Đây là khác biệt có chủ đích so với card của lệnh: một thông báo nằm trong danh sách chat nhiều ngày và được bấm sau khi bot đã restart vài lần. State in-memory ở đó là state chắc chắn mất. Card lệnh thì ngược lại — nó là bước hai của một trao đổi đang diễn ra, hết hạn là đúng.
+
+Digest (`day.plan`, `day.review`) không có chủ thể đơn lẻ nên chỉ có nút tắt nhắc — đúng như dữ liệu mô tả, không cần luật riêng. `actions` vẫn không render: mọi mục trong đó hiện là `navigate` tới một route web, mà trong DM thì đó là link tới chỗ người ta đang cố tình không ở.
+
+## 16.4 Giờ địa phương — `mezon/clock.js`
+
+Backend đã chốt `DISPLAY_TIMEZONE` (mặc định `Asia/Ho_Chi_Minh`) cho phần chữ nó tự render. Bot in ra chữ số của chuỗi ISO, tức UTC: một buổi 14:00 hiện thành "07:00". Với picker buổi thì đó là sai nghiêm trọng — người ta chọn theo giờ.
+
+`clock.js` đọc **cùng biến môi trường** `DISPLAY_TIMEZONE` để hai service không lệch nhau bằng cấu hình, và dùng `Intl.formatToParts` chứ không cộng offset (offset đúng hôm nay sai vào ngày một zone áp dụng DST). Nó cũng quyết định "mai" là ngày nào: lúc 00:30 giờ Việt Nam thì UTC vẫn là hôm qua, và đó đúng là lúc người ta dọn nhắc trên điện thoại.
+
+Các renderer khác vẫn in chữ số ISO — chúng in *ngày*, nơi offset không đổi được con số đáng kể. Chuyển hết sang `clock.js` là việc của `*event` (P2), không gộp vào đây.
+
+## 16.5 Chưa làm
+
+- **Đánh dấu notification đã đọc khi bấm nút.** Cần `notification_id` trong `button_id`, mà id đã dài; để lại cho lúc gộp một dạng id có cấu trúc hơn.
+- **Sửa từng mục / dời sang ngày khác ngày mai.** "Dời sang mai" là một nút, không phải một form — muốn ngày khác thì `*new` hoặc web.
+- Phần còn lại của thứ tự ưu tiên: `*event` (P2), `*agenda` (P3), `*undo` (P4, cần mở `POST /api/agent/actions/{id}/revert` cho internal auth), `*unlink` (P5), `*quiet` (P6).

@@ -68,6 +68,7 @@ async function main() {
     storage,
     prefix: config.bot.commandPrefix,
     keepThinking: config.bot.keepThinking,
+    timezone: config.bot.displayTimezone,
   });
 
   gateway

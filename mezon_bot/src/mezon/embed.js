@@ -22,6 +22,8 @@ const {
   EButtonMessageStyle,
 } = require("mezon-sdk");
 
+const { actionId } = require("./actions");
+
 const STYLE = EButtonMessageStyle;
 
 /** Cortex brand-ish accent so bot messages are recognisable at a glance. */
@@ -196,15 +198,38 @@ function contentLines(content, body) {
 }
 
 /**
- * Render a notification pushed from Cortex.
+ * Render a notification pushed from Cortex, with the buttons that make it
+ * worth interrupting someone for.
  *
- * `reason_key` goes in the footer rather than being hidden: it is the
- * exact string the user can switch off in Settings, so showing it turns
- * "stop telling me this" from a search into a lookup. `actions`/`payload`
- * are still deliberately not rendered — acting on a notification from chat
- * is M4, and a button that does nothing is worse than no button.
+ * A nudge nobody can answer is a one-way announcement, and the reason this
+ * bot exists is that the Attention Gate already has levels (`ASK`, `ACT`)
+ * that presuppose a reply and had nowhere to be answered. So: a task the
+ * notification is *about* gets ✅ Xong and ⏰ Dời sang mai, and anything
+ * carrying a `reason_key` gets 🔕 Tắt nhắc này.
+ *
+ * Everything these buttons need is in their ids (see `actions.js`): a DM
+ * sits in a chat list for days and will be clicked long after the process
+ * that sent it restarted. Nothing here is looked up in memory.
+ *
+ * `payload.task_id` is what the backend already puts on every task-shaped
+ * reason (`notification_subscribers.py`) — the digests (`day.plan`,
+ * `day.review`) have no single subject and correctly get only the mute
+ * button. `actions` stays unrendered: every entry in it today is a
+ * `navigate` to a web route, which in a DM is a link to somewhere the
+ * person deliberately isn't.
+ *
+ * `reason_key` also stays in the body, not just on a button, because it is
+ * the exact string `*mute task.overdue` takes and Settings lists — naming
+ * it turns "stop telling me this" from a search into a lookup.
  */
-function notification({ title, body, content, attention_level: level, reason_key: reasonKey }) {
+function notification({
+  title,
+  body,
+  content,
+  attention_level: level,
+  reason_key: reasonKey,
+  payload,
+}) {
   const style = LEVEL_STYLE[level] ?? LEVEL_STYLE.inform;
   const form = new FormBuilder(`${style.icon} ${title}`);
   const description = [body, ...contentLines(content, body)].filter(Boolean).join("\n");
@@ -212,6 +237,15 @@ function notification({ title, body, content, attention_level: level, reason_key
   form.color = style.color;
   if (reasonKey) {
     form.field("Loại nhắc", `\`${reasonKey}\` — tắt được trong Cortex → Settings`);
+  }
+
+  const taskId = payload?.task_id;
+  if (taskId) {
+    form.button(actionId("notif_task_done", taskId), "✅ Xong", STYLE.SUCCESS);
+    form.button(actionId("notif_task_snooze", taskId), "⏰ Dời sang mai", STYLE.SECONDARY);
+  }
+  if (reasonKey) {
+    form.button(actionId("notif_mute", reasonKey), "🔕 Tắt nhắc này", STYLE.SECONDARY);
   }
   return form.build();
 }

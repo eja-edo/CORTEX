@@ -37,6 +37,20 @@ class CortexError extends Error {
   }
 }
 
+/** `?occurrence_start_time=…&edit_scope=…`, or "" when the write is on an
+ *  ordinary task. Both parameters go together or not at all — the API
+ *  rejects half of the pair, which is the right shape: "this occurrence"
+ *  without saying which, and "which" without saying whether it applies to
+ *  the rest, are both incomplete answers. */
+function occurrenceQuery(occurrence) {
+  if (!occurrence?.startTime || !occurrence?.scope) return "";
+  const query = new URLSearchParams({
+    occurrence_start_time: occurrence.startTime,
+    edit_scope: occurrence.scope,
+  });
+  return `?${query}`;
+}
+
 class CortexClient {
   constructor({ baseUrl, internalApiKey, timeoutMs } = {}) {
     this.baseUrl = baseUrl ?? config.cortex.baseUrl;
@@ -263,12 +277,53 @@ class CortexClient {
     return this._request("GET", `/api/tasks${suffix}`, { userId });
   }
 
-  completeTask(taskId, userId) {
-    return this._request("POST", `/api/tasks/${encodeURIComponent(taskId)}/complete`, { userId });
+  getTask(taskId, userId) {
+    return this._request("GET", `/api/tasks/${encodeURIComponent(taskId)}`, { userId });
+  }
+
+  /**
+   * `occurrence` is `{ startTime, scope }` or null.
+   *
+   * Required — not optional — when the task is a checklist item on a
+   * recurring event: `PATCH /tasks/{id}` and `.../complete` answer 422
+   * without it rather than guessing which session was meant (see
+   * `TaskService.is_linked_to_recurring_event`). Deciding *which* it is
+   * belongs to `taskActions.js`; this only carries the answer.
+   */
+  completeTask(taskId, userId, occurrence = null) {
+    return this._request(
+      "POST",
+      `/api/tasks/${encodeURIComponent(taskId)}/complete${occurrenceQuery(occurrence)}`,
+      { userId }
+    );
+  }
+
+  updateTask(taskId, body, userId, occurrence = null) {
+    return this._request(
+      "PATCH",
+      `/api/tasks/${encodeURIComponent(taskId)}${occurrenceQuery(occurrence)}`,
+      { body, userId }
+    );
   }
 
   createTask(body, userId) {
     return this._request("POST", "/api/tasks", { body, userId });
+  }
+
+  getSchedule(scheduleId, userId) {
+    return this._request("GET", `/api/schedules/${encodeURIComponent(scheduleId)}`, { userId });
+  }
+
+  /** `{ instances, total }` for one recurring event inside a window. The
+   *  endpoint refuses (400) for a non-recurring schedule, so callers check
+   *  `is_recurring` first rather than using the error as a test. */
+  listScheduleInstances(scheduleId, userId, { rangeStart, rangeEnd }) {
+    const query = new URLSearchParams({ range_start: rangeStart, range_end: rangeEnd });
+    return this._request(
+      "GET",
+      `/api/schedules/${encodeURIComponent(scheduleId)}/instances?${query}`,
+      { userId }
+    );
   }
 
   /** Every registered reason_key with its level and on/off state — the

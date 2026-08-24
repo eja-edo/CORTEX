@@ -75,6 +75,14 @@ const config = {
     // has neither. `BOT_KEEP_THINKING=false` restores web parity: the
     // transcript message is deleted, leaving only the answer.
     keepThinking: boolean("BOT_KEEP_THINKING", true),
+    // Which wall clock the bot prints times in, and measures "tomorrow"
+    // against. Same variable name and same default as the backend's
+    // `Settings.DISPLAY_TIMEZONE`, on purpose: the two services render
+    // the same instants, and a deployment that sets one and forgets the
+    // other would have a notification and the card answering it disagree
+    // about what time an event starts. Not a per-user setting — the
+    // schema has nowhere to keep one yet.
+    displayTimezone: optional("DISPLAY_TIMEZONE", "Asia/Ho_Chi_Minh"),
   },
 
   // `*test svg` only — not required to start the bot, since nothing else

@@ -11,7 +11,7 @@
     "probe": "node probe.js",
     "dry-run": "node dry-run.js",
     "start": "node src/index.js",
-    "test": "node --test test/"
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "@resvg/resvg-js": "^2.6.2",

@@ -69,6 +69,16 @@ function renderTaskCompleted(task) {
   return notice("✅ Đã xong", `**${task.title}**`, { color: "#2ea043" });
 }
 
+/** The other half of acting on a nudge. Prints the new deadline rather
+ *  than just "đã dời": "tomorrow" is only unambiguous while you are
+ *  reading the message it was sent in. */
+function renderTaskSnoozed(task, dueDate) {
+  const day = formatDay(dueDate);
+  return notice("⏰ Đã dời sang mai", `**${task.title}**${day ? ` — hạn mới ${day}` : ""}`, {
+    color: "#f0a020",
+  });
+}
+
 /**
  * The create form. `title` is pre-filled from the command's arguments
  * (`*task viết đề cương`) — and pre-filling is not just convenience here:
@@ -103,6 +113,7 @@ module.exports = {
   renderTaskList,
   renderNoTasks,
   renderTaskCompleted,
+  renderTaskSnoozed,
   renderTaskForm,
   renderTaskCreated,
   taskOption,
