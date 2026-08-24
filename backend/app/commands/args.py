@@ -12,6 +12,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models import (
+    EditScope,
     ScheduleType,
     TaskPriority,
     TaskStatus,
@@ -105,7 +106,13 @@ class ScheduleCreateArgs(BaseModel):
 
 
 class ScheduleUpdateArgs(BaseModel):
-    """Arguments for schedule.update command."""
+    """Arguments for schedule.update command.
+
+    `original_start_time`/`edit_scope` are required when the target
+    schedule turns out to be recurring — the handler rejects an ambiguous
+    update rather than silently mutating the whole series. See
+    `app.commands.handlers.schedule_commands.schedule_update_handler`.
+    """
     schedule_id: UUID
     title: Optional[str] = Field(None, min_length=1, max_length=255)
     start_time: Optional[datetime] = None
@@ -113,6 +120,8 @@ class ScheduleUpdateArgs(BaseModel):
     location: Optional[str] = Field(None, max_length=255)
     description: Optional[str] = Field(None, max_length=1000)
     is_completed: Optional[bool] = None
+    original_start_time: Optional[datetime] = None
+    edit_scope: Optional[EditScope] = None
 
 
 class ScheduleDeleteArgs(BaseModel):
@@ -156,6 +165,12 @@ class TaskUpdateArgs(BaseModel):
 
     An illegal `status` transition is rejected by TaskService, so the AI
     can't move a cancelled task straight to done by calling this.
+
+    `occurrence_start_time`/`edit_scope` are required only when this task
+    is a checklist item (`related_event_id` set) whose event turns out to
+    be recurring — same "reject an ambiguous write" rule as
+    `ScheduleUpdateArgs`. A task has no `this_and_after`: it doesn't own a
+    recurrence rule (the event does), so only `this_only`/`all` apply.
     """
     task_id: UUID
     title: Optional[str] = Field(None, min_length=1, max_length=255)
@@ -164,6 +179,8 @@ class TaskUpdateArgs(BaseModel):
     priority: Optional[TaskPriority] = None
     description: Optional[str] = Field(None, max_length=10000)
     related_event_id: Optional[UUID] = None
+    occurrence_start_time: Optional[datetime] = None
+    edit_scope: Optional[Literal["this_only", "all"]] = None
 
     @field_validator("title")
     @classmethod
@@ -175,8 +192,11 @@ class TaskUpdateArgs(BaseModel):
 
 class TaskCompleteArgs(BaseModel):
     """Arguments for task.complete command — ticking the box needs nothing
-    but the id."""
+    but the id, unless this task is a checklist item on a recurring event
+    (see `TaskUpdateArgs` docstring — same occurrence rule applies)."""
     task_id: UUID
+    occurrence_start_time: Optional[datetime] = None
+    edit_scope: Optional[Literal["this_only", "all"]] = None
 
 
 class TaskDeleteArgs(BaseModel):

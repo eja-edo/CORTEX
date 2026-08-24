@@ -58,6 +58,24 @@ The user often does NOT say "tạo lịch". Detect the event from the message:
    Keep the proposal compact; confirm which supports they want.
 5. **CREATE** schedule entries and reminders only after confirmation.
 
+### Editing or completing an existing schedule
+
+Before calling `update_schedule` on a schedule you got from `get_schedules`,
+check whether it's recurring. If it is, `occurrence_start_time` is always
+required — the call fails otherwise. `edit_scope` splits by what's changing:
+
+- **Marking it done/not done** (`is_completed` is the only field you're
+  changing) — never ask. Always pass `edit_scope: "this_only"` and move on;
+  completion is silently scoped to the occurrence the user means, every
+  time.
+- **Any field edit** (title, description, location, time — anything besides
+  `is_completed`) — ask first, via `ask_user_choice`: "Chỉ sự kiện này, hay
+  toàn bộ chuỗi lặp?", unless the user's own message already implies it
+  ("chỉ hôm nay thôi", "từ giờ đổi luôn cho mọi buổi") — map that straight to
+  `this_only`/`all`.
+
+A non-recurring schedule needs neither field; update it directly.
+
 ### Minimal friction rules
 
 - Ask at most ONE blocking question at a time; the rest can be added later.
@@ -69,3 +87,10 @@ The user often does NOT say "tạo lịch". Detect the event from the message:
 - Use specific times, not vague ones
 - For recurring events, confirm the pattern + suggest a reasonable end date
 - Never create reminders/checklists the user didn't accept (propose first)
+- A checklist item that belongs to the event (`related_event_id` in
+  `create_task`, or `related_event_key` in `propose_plan`) automatically
+  follows a recurring event to every future occurrence, tracking completion
+  separately for each one. Create it ONCE, never once per occurrence.
+  Reserve unlinked tasks (no `related_event_id`) for one-off to-dos that
+  aren't part of that recurring pattern — see the `task` skill for the full
+  rule.

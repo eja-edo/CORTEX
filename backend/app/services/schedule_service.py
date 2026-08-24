@@ -687,7 +687,14 @@ class ScheduleService:
                 recurrence_id=root.id,
                 original_start_time=original_start_time,
                 is_exception=True,
+                is_completed=False,
+                is_cancelled=False,
                 recurrence_rule=None,
+                # A never-flushed object doesn't carry its column default —
+                # `version` would read back `None` below, and `+= 1` on that
+                # raises. Setting it explicitly here is what an intervening
+                # flush would have produced anyway.
+                version=1,
             )
             self.db.add(exception)
 

@@ -34,7 +34,16 @@ class CreateTaskInput(BaseModel):
         None, description="Extra detail beyond the title, if the user gave any"
     )
     related_event_id: Optional[str] = Field(
-        None, description="UUID of an event this task belongs to (checklist item)"
+        None,
+        description=(
+            "UUID of an event this task is a checklist item of. Set this ONLY "
+            "when the task's existence depends on that event — if the event "
+            "repeats, every occurrence tracks this checklist item's completion "
+            "independently, automatically; create it once here and never call "
+            "create_task again per occurrence. Leave unset for anything the "
+            "user needs done once — today or on a future date — that isn't "
+            "tied to a recurring event."
+        ),
     )
     parent_task_id: Optional[str] = Field(
         None, description="UUID of a parent task, if this is a sub-task/checklist item under another task"
@@ -122,7 +131,15 @@ CREATE_TASK_SCHEMA = {
         },
         "related_event_id": {
             "type": "string",
-            "description": "UUID of the event this is a checklist item of",
+            "description": (
+                "UUID of the event this is a checklist item of. Set this ONLY when "
+                "the task belongs to that event specifically — if the event is "
+                "recurring, each occurrence tracks this item's completion "
+                "independently and automatically, so create it once here and do NOT "
+                "call create_task again for each future occurrence. Omit "
+                "related_event_id for a plain one-off task the user needs done once, "
+                "whether today or on some future date — that case never repeats."
+            ),
         },
         "parent_task_id": {
             "type": "string",
@@ -143,6 +160,12 @@ CREATE_TASK_DEFINITION = {
         "proposal cho John', 'remind me to review the PR'). A task CONSUMES "
         "time; use create_schedule instead for anything that OCCUPIES a span "
         "of time, like a meeting. "
+        "Two kinds of task, decided by related_event_id: leave it unset for a "
+        "one-off task the user does once (today or on a future date, never repeats); "
+        "set it only when the task is a checklist item that belongs to a specific "
+        "event — if that event recurs, every occurrence tracks this item's "
+        "completion independently and automatically, so call create_task once, "
+        "not once per occurrence. "
         "Do NOT use this for a milestone/checklist item that's part of a multi-phase "
         "plan you just proposed for a goal (\"tôi muốn học tiếng Anh\", \"tôi muốn giảm "
         "cân\", or anything broken into phases/milestones/checklist) — that whole plan "

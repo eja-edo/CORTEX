@@ -109,6 +109,37 @@ def _expand_recurring_schedules_sync(
         db.close()
 
 
+def _as_occurrence_view(template: Task, exception: Task) -> Task:
+    """`exception`'s fields, under `template`'s id — a transient object,
+    never added to the session. See `get_event_checklist`'s docstring for
+    why the id must stay the template's, not the exception row's own.
+
+    `is_exception` (and every other column not set below) must be passed
+    explicitly: a bare `Task(...)` never flushed through the session skips
+    the column-level Python defaults SQLAlchemy normally applies at INSERT,
+    so an omitted attribute reads back as `None` — not "unset, use the
+    default" — which fails `TaskResponse.is_exception: bool`'s (non-Optional)
+    validation on serialization.
+    """
+    return Task(
+        id=template.id,
+        user_id=exception.user_id,
+        title=exception.title,
+        status=exception.status,
+        due_date=exception.due_date,
+        priority=exception.priority,
+        description=exception.description,
+        related_event_id=exception.related_event_id,
+        parent_task_id=exception.parent_task_id,
+        source_conversation_id=exception.source_conversation_id,
+        source_message_id=exception.source_message_id,
+        completed_at=exception.completed_at,
+        is_exception=False,
+        created_at=exception.created_at,
+        updated_at=exception.updated_at,
+    )
+
+
 def task_to_item(task: Task) -> CalendarItem:
     return CalendarItem(
         id=task.id,
@@ -211,12 +242,22 @@ class CalendarItemService:
                 Task.due_date.is_not(None),
                 Task.due_date >= day_start,
                 Task.due_date <= day_end,
+                # Occurrence-exception rows (per-occurrence completion on a
+                # recurring event's checklist task — see `Task.recurrence_id`)
+                # are resolved by `get_event_checklist`, never drawn directly
+                # on the calendar grid.
+                Task.recurrence_id.is_(None),
             )
             .order_by(Task.due_date.asc())
         )
         return list((await self.session.execute(stmt)).scalars().all())
 
-    async def get_event_checklist(self, user_id: UUID, event_id: UUID) -> list[Task]:
+    async def get_event_checklist(
+        self,
+        user_id: UUID,
+        event_id: UUID,
+        occurrence_start_time: datetime | None = None,
+    ) -> list[Task]:
         """The tasks attached to one event — the checklist widget's query.
 
         Read straight from `tasks`; the event's `description` is never parsed
@@ -224,10 +265,58 @@ class CalendarItemService:
         checklist is one-way on purpose: the reverse (parsing lines back into
         tasks) needs a diff on every keystroke, and one missed line leaves an
         orphan task that the Attention Gate will then nag about.
+
+        `occurrence_start_time` matters only when the linked event is
+        recurring: every template task (`related_event_id == event_id`,
+        `recurrence_id IS NULL`) is swapped for its per-occurrence exception
+        row if one exists for this occurrence (created lazily by
+        `TaskService.complete_task_occurrence`/`update_task_occurrence`),
+        exactly mirroring how `RecurrenceService.generate_instances` resolves
+        a `Schedule` exception for one occurrence. No exception yet ->
+        the template itself is returned unchanged, same as an
+        un-overridden `Schedule` occurrence still reads the root's
+        `is_completed` — so an `all`-scope edit (which writes the template)
+        keeps showing on every occurrence that hasn't diverged.
+
+        The id an exception is substituted under is always the *template's*
+        — never the exception row's own id — so a caller writing back
+        (`PATCH/POST /tasks/{id}?occurrence_start_time=...`) always addresses
+        the same stable id regardless of whether this occurrence has
+        diverged yet. Same convention `generate_instances` uses for Schedule
+        (every virtual instance reports the root's id). The substitute is a
+        transient, session-detached `Task` — never `session.add()`ed, so it
+        can't be flushed and can't collide with the exception's real row.
         """
-        stmt = (
-            select(Task)
-            .where(Task.user_id == user_id, Task.related_event_id == event_id)
-            .order_by(Task.created_at.asc())
+        templates = list(
+            (
+                await self.session.execute(
+                    select(Task)
+                    .where(
+                        Task.user_id == user_id,
+                        Task.related_event_id == event_id,
+                        Task.recurrence_id.is_(None),
+                    )
+                    .order_by(Task.created_at.asc())
+                )
+            )
+            .scalars()
+            .all()
         )
-        return list((await self.session.execute(stmt)).scalars().all())
+        if occurrence_start_time is None or not templates:
+            return templates
+
+        exceptions_stmt = select(Task).where(
+            Task.user_id == user_id,
+            Task.recurrence_id.in_([t.id for t in templates]),
+            Task.original_start_time == occurrence_start_time,
+        )
+        exceptions_by_template = {
+            e.recurrence_id: e
+            for e in (await self.session.execute(exceptions_stmt)).scalars().all()
+        }
+        return [
+            _as_occurrence_view(t, exceptions_by_template[t.id])
+            if t.id in exceptions_by_template
+            else t
+            for t in templates
+        ]

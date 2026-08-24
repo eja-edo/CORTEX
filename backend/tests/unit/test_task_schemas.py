@@ -153,7 +153,9 @@ def test_tasks_table_has_exactly_the_agreed_columns():
     `source_message_id` took its place — Commitment's provenance fields,
     moved here when Commitment was folded into Task. `parent_task_id` is a
     task's own checklist — self-referential, same shape as
-    `related_event_id`."""
+    `related_event_id`. `recurrence_id`/`original_start_time`/`is_exception`
+    are the per-occurrence completion mechanism for a checklist task tied to
+    a recurring event — mirrors `Schedule`'s own exception-row columns."""
     assert {c.name for c in Task.__table__.columns} == {
         "id",
         "user_id",
@@ -167,6 +169,9 @@ def test_tasks_table_has_exactly_the_agreed_columns():
         "source_conversation_id",
         "source_message_id",
         "completed_at",
+        "recurrence_id",
+        "original_start_time",
+        "is_exception",
         "created_at",
         "updated_at",
     }
@@ -233,9 +238,15 @@ def test_task_update_rejects_unknown_status():
 
 
 def test_task_complete_args_needs_only_the_id():
+    """`occurrence_start_time`/`edit_scope` are optional here — they're only
+    required (checked at the handler, not the schema, since it depends on
+    the task's own `related_event_id`) when this task is a checklist item on
+    a recurring event."""
     args = TaskCompleteArgs(task_id=uuid4())
-    assert set(TaskCompleteArgs.model_fields) == {"task_id"}
+    assert set(TaskCompleteArgs.model_fields) == {"task_id", "occurrence_start_time", "edit_scope"}
     assert args.task_id is not None
+    assert args.occurrence_start_time is None
+    assert args.edit_scope is None
 
 
 def test_task_create_args_has_no_workspace_id():

@@ -128,9 +128,18 @@ class TodayService:
     # ------------------------------------------------------------------
 
     async def _open_tasks(self, user_id: UUID) -> list[Task]:
+        # `recurrence_id.is_(None)` excludes occurrence-exception rows (a
+        # recurring event's checklist task, overridden for one occurrence —
+        # see `Task.recurrence_id`): those are resolved per-occurrence by
+        # `CalendarItemService.get_event_checklist`, not ranked here as if
+        # they were independent top-level tasks.
         stmt = (
             select(Task)
-            .where(Task.user_id == user_id, Task.status.in_(OPEN_STATUSES))
+            .where(
+                Task.user_id == user_id,
+                Task.status.in_(OPEN_STATUSES),
+                Task.recurrence_id.is_(None),
+            )
             .order_by(Task.due_date.asc().nullslast(), Task.created_at.asc())
         )
         return list((await self.session.execute(stmt)).scalars().all())
@@ -142,7 +151,11 @@ class TodayService:
         guess hasn't earned a place among validated, ranked work."""
         stmt = (
             select(Task)
-            .where(Task.user_id == user_id, Task.status == TaskStatus.PENDING_CONFIRM)
+            .where(
+                Task.user_id == user_id,
+                Task.status == TaskStatus.PENDING_CONFIRM,
+                Task.recurrence_id.is_(None),
+            )
             .order_by(Task.due_date.asc().nullslast(), Task.created_at.asc())
         )
         return list((await self.session.execute(stmt)).scalars().all())

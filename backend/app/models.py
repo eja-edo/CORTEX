@@ -873,6 +873,21 @@ class Task(Base):
         ForeignKey("agent_messages.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # Per-occurrence completion for a checklist task on a *recurring* event
+    # (`related_event_id` pointing at a Schedule with a recurrence rule).
+    # Every occurrence of that event shares one root id (see
+    # `RecurrenceService.generate_instances`), so without this a task's
+    # `status` would be identical no matter which occurrence's checklist you
+    # opened. Mirrors `Schedule`'s own exception-row mechanism exactly: the
+    # task most callers see is the template (these three columns null); an
+    # "exception" row is created lazily, on first write to one occurrence,
+    # with its own status/title/description and these three columns set —
+    # see `TaskService.complete_task_occurrence`/`update_task_occurrence`.
+    recurrence_id = Column(
+        UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    original_start_time = Column(DateTime(timezone=True), nullable=True)
+    is_exception = Column(Boolean, nullable=False, default=False, server_default=text("false"))
     created_at = Column(DateTime, default=_utcnow, nullable=False, server_default=text("NOW()"))
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False, server_default=text("NOW()"))
 

@@ -674,6 +674,13 @@ class TaskResponse(BaseModel):
     source_conversation_id: UUID | None
     source_message_id: UUID | None
     completed_at: datetime | None
+    # Per-occurrence completion on a recurring event's checklist task — see
+    # `models.Task.recurrence_id`. `recurrence_id` set means this task IS an
+    # exception row (its own status, distinct from the template it
+    # overrides); unset on every ordinary task.
+    recurrence_id: UUID | None = None
+    original_start_time: datetime | None = None
+    is_exception: bool = False
     created_at: datetime
     updated_at: datetime
 

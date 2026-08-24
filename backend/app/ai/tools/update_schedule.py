@@ -1,7 +1,7 @@
 """Update schedule tool — thin wrapper around the schedule.update command."""
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 from pydantic import BaseModel, Field
 
@@ -18,6 +18,23 @@ class UpdateScheduleInput(BaseModel):
     end_time: Optional[str] = Field(None, description="ISO 8601")
     description: Optional[str] = Field(None, max_length=1000)
     is_completed: Optional[bool] = None
+    occurrence_start_time: Optional[str] = Field(
+        None,
+        description=(
+            "Required if this schedule is recurring (check via get_schedules "
+            "first): the specific occurrence's start_time, ISO 8601."
+        ),
+    )
+    edit_scope: Optional[Literal["this_only", "this_and_after", "all"]] = Field(
+        None,
+        description=(
+            "Required if this schedule is recurring AND you're changing anything "
+            "besides is_completed. Marking it done/not done never needs this — "
+            "omit it and the call defaults to this_only automatically, no "
+            "question needed. For any other field, ask via ask_user_choice if the "
+            "user's message didn't make the scope clear."
+        ),
+    )
 
 
 async def update_schedule_handler(args: dict, ctx: ToolContext) -> dict:
@@ -47,6 +64,12 @@ async def update_schedule_handler(args: dict, ctx: ToolContext) -> dict:
         except ValueError:
             raise ValueError(f"Invalid end_time: {args['end_time']}")
 
+    if args.get("occurrence_start_time"):
+        try:
+            datetime.fromisoformat(args["occurrence_start_time"])
+        except ValueError:
+            raise ValueError(f"Invalid occurrence_start_time: {args['occurrence_start_time']}")
+
     command = Command(
         command_name="schedule.update",
         args={
@@ -56,6 +79,8 @@ async def update_schedule_handler(args: dict, ctx: ToolContext) -> dict:
             "end_time": args.get("end_time"),
             "description": args.get("description"),
             "is_completed": args.get("is_completed"),
+            "original_start_time": args.get("occurrence_start_time"),
+            "edit_scope": args.get("edit_scope"),
         },
         requested_by=ctx.user_id,
         conversation_id=ctx.conversation_id,
@@ -85,6 +110,25 @@ UPDATE_SCHEDULE_SCHEMA = {
         "end_time": {"type": "string", "description": "ISO 8601 (optional)"},
         "description": {"type": "string", "description": "New notes (optional)"},
         "is_completed": {"type": "boolean", "description": "Mark as completed (optional)"},
+        "occurrence_start_time": {
+            "type": "string",
+            "description": (
+                "Required if the schedule is recurring (check get_schedules first): "
+                "the specific occurrence's start_time, ISO 8601. Omitting this on a "
+                "recurring schedule fails the call rather than guessing."
+            ),
+        },
+        "edit_scope": {
+            "type": "string",
+            "enum": ["this_only", "this_and_after", "all"],
+            "description": (
+                "Required if the schedule is recurring AND you're changing anything "
+                "besides is_completed — marking it done/not done never needs this, "
+                "it always defaults to this_only automatically. For any other field, "
+                "ask the user via ask_user_choice first if their message didn't say — "
+                "don't guess which scope they meant."
+            ),
+        },
     },
     "required": ["schedule_id"],
 }
@@ -94,5 +138,13 @@ UPDATE_SCHEDULE_DEFINITION = {
     "handler": update_schedule_handler,
     "input_model": UpdateScheduleInput,
     "schema": UPDATE_SCHEDULE_SCHEMA,
-    "description": "Update an existing schedule. User must own the schedule.",
+    "description": (
+        "Update an existing schedule, including marking it completed. User must own "
+        "the schedule. If it's recurring, occurrence_start_time is always required — "
+        "this call fails otherwise rather than silently changing every occurrence. "
+        "Marking it done/not done (is_completed the only field you're changing) never "
+        "needs edit_scope or a question — it's always just that occurrence. Any other "
+        "field also needs edit_scope; ask the user which scope they mean (via "
+        "ask_user_choice) when it isn't already clear from what they said."
+    ),
 }

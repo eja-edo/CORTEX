@@ -119,11 +119,34 @@ async def task_update_handler(command: Command, ctx: ToolContext) -> dict:
                 "prev_state": prev_state,
             }
 
-        updated = await service.update_task(
-            task_id=args.task_id,
-            user_id=ctx.user_id,
-            payload=TaskUpdate(**changes),
-        )
+        if await service.is_linked_to_recurring_event(current):
+            # Toggling done/todo (status the only field changing) is always
+            # scoped to the one occurrence being acted on — never a choice,
+            # so it never needs edit_scope from the caller. Any other field
+            # still requires it explicitly.
+            is_pure_completion_toggle = set(changes) == {"status"}
+            if is_pure_completion_toggle and args.occurrence_start_time and not args.edit_scope:
+                args.edit_scope = "this_only"
+
+            if not args.occurrence_start_time or not args.edit_scope:
+                raise ValueError(
+                    "This task is a checklist item on a recurring event — "
+                    "specify occurrence_start_time and edit_scope (this_only "
+                    "or all) so the update targets the right occurrence."
+                )
+            updated = await service.update_task_occurrence(
+                task_id=args.task_id,
+                user_id=ctx.user_id,
+                occurrence_start_time=args.occurrence_start_time,
+                edit_scope=args.edit_scope,
+                payload=TaskUpdate(**changes),
+            )
+        else:
+            updated = await service.update_task(
+                task_id=args.task_id,
+                user_id=ctx.user_id,
+                payload=TaskUpdate(**changes),
+            )
         if updated is None:
             raise ValueError(f"Task not found: {args.task_id}")
 
@@ -159,7 +182,27 @@ async def task_complete_handler(command: Command, ctx: ToolContext) -> dict:
         prev_state = _task_snapshot(current)
         already_done = current.status is TaskStatus.DONE
 
-        completed = await service.complete_task(task_id=args.task_id, user_id=ctx.user_id)
+        if await service.is_linked_to_recurring_event(current):
+            # This endpoint only ever completes — it's always scoped to the
+            # one occurrence being acted on, never a series-wide choice, so
+            # it never needs edit_scope from the caller.
+            if args.occurrence_start_time and not args.edit_scope:
+                args.edit_scope = "this_only"
+
+            if not args.occurrence_start_time or not args.edit_scope:
+                raise ValueError(
+                    "This task is a checklist item on a recurring event — "
+                    "specify occurrence_start_time so completing it targets "
+                    "the right occurrence."
+                )
+            completed = await service.complete_task_occurrence(
+                task_id=args.task_id,
+                user_id=ctx.user_id,
+                occurrence_start_time=args.occurrence_start_time,
+                edit_scope=args.edit_scope,
+            )
+        else:
+            completed = await service.complete_task(task_id=args.task_id, user_id=ctx.user_id)
         if completed is None:
             raise ValueError(f"Task not found: {args.task_id}")
 

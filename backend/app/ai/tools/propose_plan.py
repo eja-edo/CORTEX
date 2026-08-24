@@ -104,8 +104,13 @@ PROPOSE_PLAN_SCHEMA = {
                         "type": "string",
                         "description": (
                             "key of an event item in this same call — use this when a task IS the "
-                            "checklist for a specific recurring session (e.g. \"10 từ mới\" belongs to "
-                            "the daily practice event), instead of parent_key. Task items only."
+                            "checklist for a specific event (e.g. \"10 từ mới\" belongs to the daily "
+                            "practice event), instead of parent_key. If that event carries a "
+                            "recurrence rule, ONE task with related_event_key already tracks its "
+                            "completion separately for every future occurrence, automatically — never "
+                            "emit one task item per occurrence. Leave both related_event_key and "
+                            "parent_key unset for a plain one-off task the user does once (today or on "
+                            "some future date), not tied to any recurring event. Task items only."
                         ),
                     },
                     "start_time": {"type": "string", "description": "ISO datetime — event items only"},

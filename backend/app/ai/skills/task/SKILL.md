@@ -68,9 +68,24 @@ from a deadline alone; a task due tomorrow isn't automatically urgent. Set
 `description` when they give detail beyond the title, not by padding a
 one-line task with invented context.
 
-A task can also be created directly under an event via `related_event_id`
-— the event's checklist/subtask list — when the user is clearly working
-within that event's context (e.g. adding a to-do under a meeting or trip).
+### related_event_id: linked vs. standalone tasks
+
+A task is one of two kinds, and the difference matters for recurring events:
+
+- **Standalone** (`related_event_id` unset) — a one-off thing the user needs
+  done, whether today or on some future date. It never repeats. This is the
+  default for almost everything `create_task` handles.
+- **Linked** (`related_event_id` set) — a checklist item that belongs to a
+  specific event (e.g. a to-do under a meeting or trip). If that event
+  recurs, every occurrence tracks this item's completion independently and
+  automatically — completing it for one occurrence never marks it done for
+  another. Create it once when you set up (or attach to) the event; never
+  call `create_task` again for each future occurrence, and never leave a
+  checklist item unlinked just because the event repeats.
+
+Rule of thumb: if the task only makes sense in the context of one event and
+should reappear every time that event happens, link it. If it's a single
+thing to do — even if its deadline is weeks away — leave it unlinked.
 
 ### Never do this
 

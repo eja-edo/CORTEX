@@ -1,4 +1,5 @@
-from datetime import date
+from datetime import date, datetime
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -9,6 +10,17 @@ from app.dependencies import get_current_user_or_internal
 from app.models import TaskStatus
 from app.schemas import TaskCreate, TaskRejectionCheck, TaskResponse, TaskUpdate
 from app.services.tasks import InvalidTaskTransition, TaskService
+
+_OCCURRENCE_START_TIME_DESC = (
+    "The specific occurrence being edited. Required, together with "
+    "edit_scope, when this task is a checklist item on a recurring event — "
+    "see TaskService.is_linked_to_recurring_event."
+)
+_EDIT_SCOPE_DESC = (
+    "this_only: create/update just this occurrence's own row. all: update "
+    "the shared template every un-overridden occurrence reads. Required "
+    "together with occurrence_start_time on a recurring-event checklist task."
+)
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -83,12 +95,35 @@ async def get_task(
 async def update_task(
     task_id: UUID,
     payload: TaskUpdate,
+    occurrence_start_time: datetime | None = Query(None, description=_OCCURRENCE_START_TIME_DESC),
+    edit_scope: Literal["this_only", "all"] | None = Query(None, description=_EDIT_SCOPE_DESC),
     current_user = Depends(get_current_user_or_internal),
     db: AsyncSession = Depends(get_async_db),
 ):
     service = TaskService(db)
     try:
-        updated = await service.update_task(task_id=task_id, user_id=current_user.id, payload=payload)
+        current = await service.get_task(task_id=task_id, user_id=current_user.id)
+        if current is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+
+        if await service.is_linked_to_recurring_event(current):
+            if occurrence_start_time is None or edit_scope is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        "This task is a checklist item on a recurring event — "
+                        "occurrence_start_time and edit_scope are required."
+                    ),
+                )
+            updated = await service.update_task_occurrence(
+                task_id=task_id,
+                user_id=current_user.id,
+                occurrence_start_time=occurrence_start_time,
+                edit_scope=edit_scope,
+                payload=payload,
+            )
+        else:
+            updated = await service.update_task(task_id=task_id, user_id=current_user.id, payload=payload)
     except InvalidTaskTransition as exc:
         # 409, not 422: the body is well-formed, it's the task's current state
         # that makes the change impossible.
@@ -101,6 +136,8 @@ async def update_task(
 @router.post("/{task_id}/complete", response_model=TaskResponse)
 async def complete_task(
     task_id: UUID,
+    occurrence_start_time: datetime | None = Query(None, description=_OCCURRENCE_START_TIME_DESC),
+    edit_scope: Literal["this_only", "all"] | None = Query(None, description=_EDIT_SCOPE_DESC),
     current_user = Depends(get_current_user_or_internal),
     db: AsyncSession = Depends(get_async_db),
 ):
@@ -108,7 +145,27 @@ async def complete_task(
     write (checklist in an event, 2.6) and shouldn't require a body."""
     service = TaskService(db)
     try:
-        completed = await service.complete_task(task_id=task_id, user_id=current_user.id)
+        current = await service.get_task(task_id=task_id, user_id=current_user.id)
+        if current is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+
+        if await service.is_linked_to_recurring_event(current):
+            if occurrence_start_time is None or edit_scope is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        "This task is a checklist item on a recurring event — "
+                        "occurrence_start_time and edit_scope are required."
+                    ),
+                )
+            completed = await service.complete_task_occurrence(
+                task_id=task_id,
+                user_id=current_user.id,
+                occurrence_start_time=occurrence_start_time,
+                edit_scope=edit_scope,
+            )
+        else:
+            completed = await service.complete_task(task_id=task_id, user_id=current_user.id)
     except InvalidTaskTransition as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     if completed is None:

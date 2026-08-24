@@ -46,6 +46,13 @@ async def get_calendar_items(
 @router.get("/events/{event_id}/checklist", response_model=list[TaskResponse])
 async def get_event_checklist(
     event_id: UUID,
+    occurrence_start_time: datetime | None = Query(
+        None,
+        description=(
+            "The specific occurrence being viewed. Only matters when the event "
+            "is recurring — see CalendarItemService.get_event_checklist."
+        ),
+    ),
     current_user = Depends(get_current_user_or_internal),
     db: AsyncSession = Depends(get_async_db),
 ):
@@ -58,6 +65,8 @@ async def get_event_checklist(
     """
     service = TaskService(db)
     tasks = await CalendarItemService(db).get_event_checklist(
-        user_id=current_user.id, event_id=event_id
+        user_id=current_user.id,
+        event_id=event_id,
+        occurrence_start_time=occurrence_start_time,
     )
     return [service.to_response(task) for task in tasks]

@@ -10,8 +10,14 @@ from uuid import UUID
 from app.commands.args import ScheduleCreateArgs, ScheduleDeleteArgs, ScheduleUpdateArgs
 from app.commands.schemas import Command, PermissionScope
 from app.ai.agents.tool_context import ToolContext
-from app.models import SyncOperation
-from app.schemas import RecurrenceRuleInput, ReminderConfig, ScheduleCreate
+from app.models import EditScope, SyncOperation
+from app.schemas import (
+    RecurrenceRuleInput,
+    ReminderConfig,
+    ScheduleCreate,
+    ScheduleInstanceUpdate,
+    ScheduleUpdate,
+)
 from app.services.schedule_service import ScheduleService
 from app.utils.logger import get_logger
 
@@ -69,11 +75,21 @@ async def schedule_update_handler(command: Command, ctx: ToolContext) -> dict:
     """
     Update schedule command handler.
 
-    `location` is accepted by ScheduleUpdateArgs but not applied: the real
-    ScheduleService.update_schedule_fields() has no location parameter and
-    the existing update_schedule AI tool never exposed it either — same gap
-    as before migration, not introduced here.
+    `location` is accepted by ScheduleUpdateArgs but only applied on the
+    recurring-instance path below (`ScheduleService.update_schedule_fields()`
+    has no location parameter for the plain path — same pre-existing gap as
+    before migration, not addressed here).
+
+    A recurring schedule rejects an ambiguous update: without
+    `original_start_time`/`edit_scope` there is no way to know whether the
+    caller meant just one occurrence or the whole series, so this raises
+    rather than silently mutating every occurrence via the shared root row
+    (see `app.services.recurrence.generate_instances` — every occurrence
+    without its own exception reports the root's id). Callers (the AI tool,
+    the frontend) are expected to ask the user first.
     """
+    from app.api.schedules import _enqueue_google_sync
+
     args = ScheduleUpdateArgs(**command.args)
 
     with ctx:
@@ -93,17 +109,81 @@ async def schedule_update_handler(command: Command, ctx: ToolContext) -> dict:
             "is_completed": current.is_completed,
         }
 
-        updated = service.update_schedule_fields(
-            schedule_id=args.schedule_id,
-            user_id=ctx.user_id,
-            title=args.title,
-            start_time=args.start_time,
-            end_time=args.end_time,
-            description=args.description,
-            is_completed=args.is_completed,
+        is_recurring = service._recurrence_svc.is_recurring(current.recurrence_rule)
+
+        # Completing/un-completing (is_completed the only field set) is
+        # always scoped to the one occurrence being acted on — never a
+        # choice, so it never needs edit_scope from the caller. Any other
+        # field still requires it explicitly (see the ValueError below).
+        is_pure_completion_toggle = (
+            args.is_completed is not None
+            and args.title is None
+            and args.start_time is None
+            and args.end_time is None
+            and args.location is None
+            and args.description is None
         )
 
+        if is_recurring:
+            if is_pure_completion_toggle and args.original_start_time and not args.edit_scope:
+                args.edit_scope = EditScope.THIS_ONLY
+
+            if not args.original_start_time or not args.edit_scope:
+                raise ValueError(
+                    "This schedule is recurring — specify original_start_time "
+                    "and edit_scope (this_only, this_and_after, or all) so the "
+                    "update targets the right occurrence(s)."
+                )
+
+            # `_update_instance_this_only`/`_update_instance_all` apply only
+            # the fields `ScheduleUpdate.model_dump(exclude_unset=True)`
+            # reports as set — which tracks "was this kwarg passed to the
+            # constructor", not "is it non-None". Passing every field
+            # through unconditionally (even the ones the caller left
+            # unset/None) would mark all of them as set, nulling out
+            # whatever the caller didn't actually ask to change.
+            changes = {
+                field: value
+                for field, value in (
+                    ("title", args.title),
+                    ("start_time", args.start_time),
+                    ("end_time", args.end_time),
+                    ("location", args.location),
+                    ("description", args.description),
+                    ("is_completed", args.is_completed),
+                )
+                if value is not None
+            }
+            instance_data = ScheduleInstanceUpdate(
+                edit_scope=args.edit_scope,
+                updates=ScheduleUpdate(**changes),
+            )
+            updated = service.update_instance(
+                schedule_id=args.schedule_id,
+                user_id=ctx.user_id,
+                original_start_time=args.original_start_time,
+                instance_data=instance_data,
+            )
+            if instance_data.edit_scope.value in ("this_and_after", "all"):
+                await _enqueue_google_sync(updated, SyncOperation.UPSERT)
+        else:
+            updated = service.update_schedule_fields(
+                schedule_id=args.schedule_id,
+                user_id=ctx.user_id,
+                title=args.title,
+                start_time=args.start_time,
+                end_time=args.end_time,
+                description=args.description,
+                is_completed=args.is_completed,
+            )
+
         logger.info(f"Schedule updated: {updated.id}")
+
+        # `updated.id` can differ from the root `args.schedule_id` here — a
+        # `this_only` edit mutates (or creates) a standalone exception row.
+        # Point the undo snapshot at whatever row actually changed, so a
+        # revert targets that row directly rather than re-touching the root.
+        prev_fields["schedule_id"] = str(updated.id)
 
         return {
             "id": str(updated.id),

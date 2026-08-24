@@ -40,7 +40,15 @@ class TaskRepository:
         parent_task_id: UUID | None = None,
         due_before: date | None = None,
     ) -> Sequence[Task]:
-        stmt = select(Task).where(Task.user_id == user_id)
+        # Occurrence-exception rows (per-occurrence completion on a
+        # checklist task tied to a recurring event — see
+        # `Task.recurrence_id`) are resolved by
+        # `CalendarItemService.get_event_checklist`, never surfaced here.
+        # Without this they'd show up as stray duplicate-looking tasks in
+        # the plain list, the Today screen, and the completion cascade.
+        # Mirrors `Schedule.recurrence_id.is_(None)` in
+        # `calendar_items.py`'s own schedule listing.
+        stmt = select(Task).where(Task.user_id == user_id, Task.recurrence_id.is_(None))
         if status is not None:
             stmt = stmt.where(Task.status == status)
         if related_event_id is not None:
@@ -59,6 +67,21 @@ class TaskRepository:
 
     async def get_by_id_and_user(self, task_id: UUID, user_id: UUID) -> Task | None:
         stmt = select(Task).where(Task.id == task_id, Task.user_id == user_id)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_exception(
+        self, template_task_id: UUID, user_id: UUID, occurrence_start_time: datetime
+    ) -> Task | None:
+        """The per-occurrence override row for one occurrence of a checklist
+        task tied to a recurring event, if one has been created yet — see
+        `Task.recurrence_id`. Mirrors the exception lookup
+        `ScheduleService.update_instance` does for `Schedule`."""
+        stmt = select(Task).where(
+            Task.user_id == user_id,
+            Task.recurrence_id == template_task_id,
+            Task.original_start_time == occurrence_start_time,
+        )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 

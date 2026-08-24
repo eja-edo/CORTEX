@@ -32,10 +32,13 @@ from app.events.payloads import (
     TaskDeletedPayload,
     TaskUpdatedPayload,
 )
+from sqlalchemy import select
+
 from app.events.schemas import EventEnvelope
-from app.models import Task, TaskStatus
+from app.models import Schedule, Task, TaskStatus
 from app.repositories.tasks import TaskRepository
 from app.schemas import TaskCreate, TaskRejectionCheck, TaskResponse, TaskUpdate
+from app.services.recurrence import RecurrenceService
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -258,6 +261,110 @@ class TaskService:
         completing an already-`done` one is a no-op.
         """
         return await self.update_task(task_id, user_id, TaskUpdate(status=TaskStatus.DONE))
+
+    async def is_linked_to_recurring_event(self, task: Task) -> bool:
+        """Whether `task.related_event_id` points at a recurring `Schedule`
+        — the condition that makes `occurrence_start_time`/`edit_scope`
+        required on a write to this task (both `PATCH /tasks/{id}` and the
+        `task.update`/`task.complete` commands check this before deciding
+        whether to route through `update_task`/`complete_task` directly or
+        through the occurrence-scoped variants below)."""
+        if task.related_event_id is None:
+            return False
+        result = await self.session.execute(
+            select(Schedule).where(Schedule.id == task.related_event_id)
+        )
+        event = result.scalar_one_or_none()
+        if event is None:
+            return False
+        return RecurrenceService().is_recurring(event.recurrence_rule)
+
+    async def _resolve_occurrence_target(
+        self,
+        task_id: UUID,
+        user_id: UUID,
+        occurrence_start_time: datetime,
+        edit_scope: str,
+    ) -> UUID | None:
+        """Which row a `this_only`/`all` write on one occurrence should
+        actually land on. Mirrors `ScheduleService.update_instance`'s
+        `this_only`/`all` handling, minus `this_and_after` — a task doesn't
+        own a recurrence rule (the event does), so there's no `until` to
+        split on.
+
+        `all`: the template itself — every occurrence without its own
+        exception keeps reading this row (same as
+        `_instance_dict_to_item` reading `root.is_completed` directly).
+
+        `this_only`: find-or-create the occurrence's exception row (a
+        normal `tasks` row, copied from the template, with `recurrence_id`/
+        `original_start_time`/`is_exception` set), then target that. Created
+        lazily, on first write — exactly `ScheduleService
+        ._update_instance_this_only`'s pattern.
+        """
+        template = await self.repository.get_by_id_and_user(task_id, user_id)
+        if template is None:
+            return None
+        if edit_scope == "all":
+            return template.id
+
+        exception = await self.repository.get_exception(template.id, user_id, occurrence_start_time)
+        if exception is not None:
+            return exception.id
+
+        exception = Task(
+            user_id=user_id,
+            title=template.title,
+            status=template.status,
+            due_date=template.due_date,
+            priority=template.priority,
+            description=template.description,
+            related_event_id=template.related_event_id,
+            parent_task_id=template.parent_task_id,
+            recurrence_id=template.id,
+            original_start_time=occurrence_start_time,
+            is_exception=True,
+        )
+        try:
+            created = await self.repository.create(exception)
+            await self.session.commit()
+        except Exception:
+            await self.session.rollback()
+            raise
+        return created.id
+
+    async def complete_task_occurrence(
+        self,
+        task_id: UUID,
+        user_id: UUID,
+        occurrence_start_time: datetime,
+        edit_scope: str,
+    ) -> Task | None:
+        """`complete_task`, scoped to one occurrence of a checklist task tied
+        to a recurring event — see `_resolve_occurrence_target`."""
+        target_id = await self._resolve_occurrence_target(
+            task_id, user_id, occurrence_start_time, edit_scope
+        )
+        if target_id is None:
+            return None
+        return await self.complete_task(target_id, user_id)
+
+    async def update_task_occurrence(
+        self,
+        task_id: UUID,
+        user_id: UUID,
+        occurrence_start_time: datetime,
+        edit_scope: str,
+        payload: TaskUpdate,
+    ) -> Task | None:
+        """`update_task`, scoped to one occurrence — see
+        `_resolve_occurrence_target`."""
+        target_id = await self._resolve_occurrence_target(
+            task_id, user_id, occurrence_start_time, edit_scope
+        )
+        if target_id is None:
+            return None
+        return await self.update_task(target_id, user_id, payload)
 
     async def complete_task_cascade(self, task_id: UUID, user_id: UUID) -> list[Task] | None:
         """Complete a task and every sub-task beneath it, however deep.
