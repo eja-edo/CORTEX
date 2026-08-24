@@ -72,6 +72,37 @@ class ConversationStore:
         await self.db.flush()
         return new_conv
 
+    async def get_or_create_mezon_conversation(self, user_id: UUID) -> AgentConversation:
+        """The one long-running Mezon-DM conversation for this user (R5:
+        "một conversation Mezon dài hạn cho mỗi user, không phải mỗi chủ đề
+        một cái").
+
+        `get_or_create_conversation` above always creates — there is no
+        lookup despite the name — so it cannot be reused here. This finds
+        the most recently updated conversation that has at least one
+        `source="mezon"` message, and only creates a fresh one if none
+        exists yet. Keyed off a message rather than a column on
+        `AgentConversation` itself: it needs no new column, and "has this
+        conversation ever carried a Mezon turn" is exactly the question
+        that answers "is this the Mezon conversation" — the same predicate
+        M2's system-note writer and M3's chat routing both need.
+        """
+        stmt = (
+            select(AgentConversation)
+            .join(AgentMessage, AgentMessage.conversation_id == AgentConversation.id)
+            .where(
+                AgentConversation.user_id == user_id,
+                AgentMessage.source == "mezon",
+            )
+            .order_by(desc(AgentConversation.updated_at))
+            .limit(1)
+        )
+        result = await self.db.execute(stmt)
+        conv = result.scalars().first()
+        if conv is not None:
+            return conv
+        return await self.get_or_create_conversation(user_id=user_id, workspace_id=None)
+
     async def get_recent_messages(
         self,
         conversation_id: UUID,
@@ -180,6 +211,7 @@ class ConversationStore:
         turn_id: UUID | None = None,
         token_count: int | None = None,
         context: dict | None = None,
+        source: str | None = None,
     ) -> AgentMessage | None:
         """Save a message to the conversation.
 
@@ -187,6 +219,14 @@ class ConversationStore:
         weighted token policy (full weight for user/assistant, weighted+capped
         for tool). The summary counters (tokens_since_last_summary,
         messages_since_last_summary) are incremented atomically after saving.
+
+        `source` tags which surface produced the row ("web"/"mezon"/
+        "system") — see `AgentMessage.source`'s docstring. `role="system"`
+        is a notification the Attention Gate delivered, not a conversational
+        turn: it skips the same-role collapse below (that only applies to
+        user/assistant) and `conversation_service._build_history_contents`
+        folds it into the next real turn instead of feeding it to the LLM
+        as its own message.
         """
 
         normalized_role = role.strip().lower() if role else role
@@ -241,6 +281,16 @@ class ConversationStore:
                     f"output_present={tool_output is not None}"
                 )
                 return None
+        elif normalized_role == "system":
+            if not normalized_content:
+                logger.info(
+                    f"⏭️ Skipping empty system message for conversation {conversation_id}"
+                )
+                return None
+            # No collapse-on-repeat here: two system notes in a row (two
+            # notifications before the user replies to either) are two real
+            # events, not a duplicate render of the same one — unlike
+            # user/assistant, where a repeat means "same turn saved twice".
         else:
             logger.warning(
                 f"Unknown role '{role}' when saving message for conversation {conversation_id}"
@@ -257,6 +307,7 @@ class ConversationStore:
             tool_call_id=tool_call_id,
             turn_id=turn_id,
             token_count=token_count,
+            source=source,
             created_at=datetime.utcnow(),
         )
         self.db.add(message)

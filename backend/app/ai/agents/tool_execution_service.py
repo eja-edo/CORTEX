@@ -13,14 +13,6 @@ from app.ids import uuid7
 from app.events.event_bus import get_event_bus
 from app.events.payloads import ToolExecutedPayload
 from app.events.schemas import EventEnvelope
-from app.ai.agents.model_client import (
-    ModelClient,
-    AllModelsExhaustedError,
-    is_fatal_error,
-    is_quota_error,
-    is_model_incompatible_error,
-    get_default_model,
-)
 from app.ai.agents.provider_types import (
     Message,
     GenerationConfig,
@@ -462,6 +454,7 @@ class ToolExecutionService:
         ctx: ToolContext,
         current_turn_id,
         source_id_counter: int,
+        source: str | None = None,
     ):
         """Execute one tool for streaming mode. Returns (result, tool_message, source_id_counter)."""
         result = await self.execute_single_tool(tool_name, tool_args, ctx)
@@ -476,6 +469,7 @@ class ToolExecutionService:
             tool_output=result,
             tool_call_id=tc.id,
             turn_id=current_turn_id,
+            source=source,
         )
 
         tool_message = Message(

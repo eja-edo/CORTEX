@@ -5,23 +5,25 @@ deploy anyway (matching provider/base_url config), so a reviewable list
 here is simpler than an admin UI. The `tier` field is a placeholder gate
 for future account-plan-based access (free/pro/premium) — there is no
 subscription system yet, so it is currently unused by any access check.
+
+**The first entry is the default**: `ModelClient` runs a request on the
+model it was asked for, or on this one when it was asked for nothing (or
+for something not listed). Order therefore matters here in a way it did
+not while the client rotated through the list.
+
+Per-model rate limits used to live here too, feeding a local budget that
+skipped a model before calling it. That went with the rotation it
+existed to serve — the numbers were a guess about someone else's quota,
+and enforcing a guess meant refusing requests the provider would have
+served. Rate limiting is the LLM service's to report, and a 429 from it
+is surfaced rather than predicted.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from app.config import settings
-
-
-@dataclass(frozen=True)
-class ModelLimits:
-    rpm: int
-    tpm: int | None
-    rpd: int
-
-
-DEFAULT_LIMITS = ModelLimits(rpm=15, tpm=None, rpd=1_500)
 
 
 @dataclass(frozen=True)
@@ -29,7 +31,6 @@ class ModelSpec:
     id: str
     label: str
     tier: str = "free"  # "free" | "pro" | "premium" — reserved, not enforced yet
-    limits: ModelLimits = field(default=DEFAULT_LIMITS)
     enabled: bool = True
 
 

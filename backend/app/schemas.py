@@ -790,12 +790,15 @@ class AttentionItemHistory(BaseModel):
 
 
 class UserPreferencesResponse(BaseModel):
-    """Both fields null means no quiet hours configured — see
-    UserPreferences' docstring in app.models."""
-    model_config = ConfigDict(from_attributes=True)
+    """Quiet hours null means none configured — see UserPreferences'
+    docstring in app.models."""
+    model_config = ConfigDict(from_attributes=True, protected_namespaces=())
 
     quiet_hours_start: time | None
     quiet_hours_end: time | None
+    # None = no choice recorded → the catalogue default. Set from the
+    # Mezon bot's `*model` command; see UserPreferences.chat_model.
+    chat_model: str | None = None
 
 
 class UserPreferencesUpdate(BaseModel):
@@ -810,6 +813,23 @@ class UserPreferencesUpdate(BaseModel):
         if (self.quiet_hours_start is None) != (self.quiet_hours_end is None):
             raise ValueError("quiet_hours_start and quiet_hours_end must be set together, or both null")
         return self
+
+
+class ChatModelUpdate(BaseModel):
+    """Body for PUT /api/preferences/chat-model.
+
+    Its own endpoint rather than a field on `UserPreferencesUpdate`,
+    because that one requires both quiet-hours fields together — a caller
+    changing the model would have to send quiet hours it has no business
+    knowing about, and would clear them by omission.
+
+    `null` clears the choice, which is not the same as picking the default
+    model explicitly only in that it keeps following the default if the
+    default ever changes.
+    """
+    model_config = ConfigDict(protected_namespaces=())
+
+    chat_model: str | None
 
 
 class ReasonPreference(BaseModel):
@@ -1129,8 +1149,14 @@ class AgentChatRequest(BaseModel):
     conversation_id: UUID | None = Field(default=None, description="Existing conversation ID, or null to start new")
     workspace_id: UUID | None = Field(default=None, description="Optional workspace context")
     context: dict | None = Field(default=None, description="Structured context (pills, runtime info) to include for LLM but not display as user text")
-    model: str | None = Field(default=None, description="Preferred model id, or 'auto' for round-robin")
+    model: str | None = Field(default=None, description="Model id to run this turn on. Omitted, 'auto', or an unknown id all mean the default model — see ModelClient._resolve")
     temperature: float | None = Field(default=None, ge=0.0, le=2.0, description="Sampling temperature override")
+    # 'mezon' when the Mezon bot calls this on a user's behalf (F2/M3) — the
+    # conversation then resolves to that user's one long-running Mezon DM
+    # conversation instead of always creating a new one. None (the default,
+    # and the only value the web frontend ever sends) is completely
+    # unaffected — see `AgentService.handle_streaming_generator`.
+    surface: str | None = Field(default=None, description="'mezon' when called by the bot on a user's behalf; omit for web (default)")
 
 
 class AgentChatResponse(BaseModel):

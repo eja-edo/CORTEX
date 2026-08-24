@@ -770,7 +770,7 @@ class AgentMessage(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     conversation_id = Column(UUID(as_uuid=True), ForeignKey("agent_conversations.id", ondelete="CASCADE"), nullable=False, index=True)
-    role = Column(String(20), nullable=False)  # "user" | "assistant" | "tool"
+    role = Column(String(20), nullable=False)  # "user" | "assistant" | "tool" | "system"
     content = Column(Text, nullable=True)
     context = Column(JSONB, nullable=True)
     tool_name = Column(String(100), nullable=True)
@@ -779,6 +779,11 @@ class AgentMessage(Base):
     tool_call_id = Column(String(100), nullable=True)
     turn_id = Column(UUID(as_uuid=True), nullable=True, index=True)
     token_count = Column(Integer, nullable=True)
+    # Which surface produced this row: "web" | "mezon" | "system". NULL means
+    # "web" (every row before F2 existed). "system" marks a row the Attention
+    # Gate delivered, not something either party said — see M2/R5 in
+    # docs/mezon-bot-plan.md and migration p1234567890q.
+    source = Column(String(20), nullable=True)
     created_at = Column(DateTime, default=_utcnow, nullable=False, server_default=text("NOW()"))
 
     __table_args__ = (
@@ -1085,6 +1090,22 @@ class UserPreferences(Base):
     disabled_reason_keys = Column(
         JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
     )
+    # Which model this user's chat turns run on when the caller doesn't
+    # name one — set from the Mezon bot's `*model` command, since a chat
+    # surface with no settings screen needs somewhere to put the choice
+    # that survives a bot restart.
+    #
+    # Deliberately **not** read by the web: the web has its own picker
+    # (localStorage) whose "Auto" would otherwise silently mean "the model
+    # I once chose in Mezon", making the dropdown lie about what is
+    # running. `AgentService.handle_streaming_generator` applies this only
+    # for surface="mezon".
+    #
+    # NULL means "no choice recorded" → the catalogue default. An id that
+    # has since left the catalogue resolves the same way (see
+    # `ModelClient._resolve`), so retiring a model cannot strand a user on
+    # something the provider no longer serves.
+    chat_model = Column(String(120), nullable=True)
     created_at = Column(DateTime, default=_utcnow, nullable=False, server_default=text("NOW()"))
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False, server_default=text("NOW()"))
 

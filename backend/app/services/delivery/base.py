@@ -75,17 +75,30 @@ class DeliveryPayload:
 class DeliveryOutcome(str, Enum):
     """What happened, and what should happen next.
 
-    The distinction that matters is RETRY vs DEAD_ADDRESS. A push service
-    returning 503 is worth trying again in a minute; a push service saying
-    the subscription is gone will say so forever, and retrying it is how a
-    delivery table fills with garbage and a user's settings page shows a
-    device that will never work again. DEAD_ADDRESS disables the
-    `user_channels` row, so the noise stops and the settings list tells the
-    truth.
+    Three distinctions, each of which changes what happens next:
+
+    **RETRY vs DEAD_ADDRESS.** A push service returning 503 is worth trying
+    again in a minute; a push service saying the subscription is gone will
+    say so forever, and retrying it is how a delivery table fills with
+    garbage and a user's settings page shows a device that will never work
+    again. DEAD_ADDRESS disables the `user_channels` row.
+
+    **RETRY vs UNAVAILABLE.** RETRY means the channel was reached and
+    something about *this* delivery went wrong, so it burns an attempt and
+    eventually gives up. UNAVAILABLE means the channel could not be reached
+    at all — the bot process is restarting, the service is being deployed —
+    which says nothing about this delivery and must not consume its budget.
+    Without the distinction, a bot down for longer than the retry window
+    (~15 minutes at the defaults) silently loses every notification created
+    while it was gone, and a routine deploy becomes data loss. UNAVAILABLE
+    retries indefinitely; `DELIVERY_MAX_AGE_HOURS` is what eventually stops
+    it, on the honest ground that a day-old nudge is no longer worth
+    delivering rather than that we ran out of tries.
     """
 
     SENT = "sent"
     RETRY = "retry"
+    UNAVAILABLE = "unavailable"
     PERMANENT = "permanent"
     DEAD_ADDRESS = "dead_address"
 
@@ -102,6 +115,12 @@ class DeliveryResult:
     @classmethod
     def retry(cls, error: str) -> "DeliveryResult":
         return cls(DeliveryOutcome.RETRY, error)
+
+    @classmethod
+    def unavailable(cls, error: str) -> "DeliveryResult":
+        """The channel's transport is down. Costs no attempt — see the
+        outcome docstring."""
+        return cls(DeliveryOutcome.UNAVAILABLE, error)
 
     @classmethod
     def permanent(cls, error: str) -> "DeliveryResult":

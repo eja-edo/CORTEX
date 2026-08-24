@@ -885,9 +885,9 @@ Legacy module-level function that wraps the same provider call. Returns a flat l
 
 | Property | Value |
 |---|---|
-| **Responsibility** | Unified LLM client with round-robin model selection, rate-limit tracking, retry, fallback |
+| **Responsibility** | Unified LLM client: one request runs on one model (the requested one, or the default), plus retry on transient errors. Rotation, cross-model fallback and the local rate-limit budget were removed 2026-08-20 — failover is the LLM service's job |
 | **Provider** | `OpenAIProvider` (OpenAI-compatible API) |
-| **Key methods** | `generate()`, `stream_with_fallback()` |
+| **Key methods** | `generate()`, `stream()` |
 | **Usage in memory** | Called by `extract_and_store()` for extraction, and by `_generate_conversation_title()` |
 
 ### 12.14 `extract_memory` tool (`extract_memory.py`)

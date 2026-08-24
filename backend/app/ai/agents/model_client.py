@@ -4,10 +4,10 @@ Unified LLM client supporting OpenAI-compatible providers.
 Design
 ------
 - Provider-agnostic: works with internal Message / GenerationConfig types.
-- Round-robin model selection with rate-limit budget tracking.
-- Per-model retry for transient errors.
-- Ordered fallback across all models.
-- Streaming with buffered fallback.
+- One request runs on exactly one model: the one asked for, or the
+  default. No rotation, no cross-model fallback — see `ModelClient`.
+- Retry for transient errors (500/503) on that same model.
+- Streaming buffers the turn before yielding it.
 
 Usage
 -----
@@ -15,25 +15,21 @@ Usage
     from app.ai.agents.provider_types import Message, GenerationConfig
 
     client = ModelClient()
-    response = await client.generate(messages, config, tools=tools)
+    model_used, response = await client.generate(messages, config, tools=tools)
 
-    async for chunk in client.stream_with_fallback(messages, config, tools=tools):
+    async for chunk in client.stream(messages, config, tools=tools):
         ...
 """
 
 from __future__ import annotations
 
 import asyncio
-import threading
-import time
-from collections import deque
-from datetime import datetime, timezone
-from typing import Deque, AsyncIterator
+from typing import AsyncIterator
 
 from app.config import settings
 from app.ai.agents.base_provider import LLMProvider
 from app.ai.agents.openai_provider import OpenAIProvider
-from app.ai.agents.model_catalog import ModelLimits, DEFAULT_LIMITS, enabled_model_ids, get_model_spec
+from app.ai.agents.model_catalog import enabled_model_ids
 from app.ai.agents.provider_types import (
     Message,
     GenerationConfig,
@@ -62,11 +58,8 @@ def get_default_models() -> list[str]:
     return enabled_model_ids()
 
 
-EST_TOKENS_PER_REQUEST: int = 1_500
 RETRY_MAX_ATTEMPTS: int = 2
 RETRY_DELAY_SECONDS: float = 2.0
-STREAM_ROTATION_RETRIES: int = 2
-BUDGET_SAFETY_MARGIN: float = 0.05
 
 
 # ---------------------------------------------------------------------------
@@ -99,117 +92,37 @@ def is_retryable_error(exc: Exception) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Custom exceptions
-# ---------------------------------------------------------------------------
-
-class AllModelsExhaustedError(Exception):
-    """All models are over their rate-limit budget or otherwise unavailable."""
-
-
-# ---------------------------------------------------------------------------
-# Per-model rate-limit budget tracker
-# ---------------------------------------------------------------------------
-
-class RateLimitBudget:
-    _WINDOW: float = 60.0
-
-    def __init__(self, limits: ModelLimits) -> None:
-        self._limits = limits
-        self._lock = threading.Lock()
-        self._rpm_window: Deque[float] = deque()
-        self._tpm_window: Deque[tuple[float, int]] = deque()
-        self._rpd_date: str = ""
-        self._rpd_count: int = 0
-        self._blocked_until: float = 0.0
-
-    def can_use(self, estimated_tokens: int = EST_TOKENS_PER_REQUEST) -> bool:
-        with self._lock:
-            now = time.monotonic()
-            today = _utc_date()
-            if now < self._blocked_until:
-                return False
-            self._evict(now)
-            self._reset_rpd_if_needed(today)
-            lim = self._limits
-            margin = 1.0 - BUDGET_SAFETY_MARGIN
-            if len(self._rpm_window) >= lim.rpm * margin:
-                return False
-            if lim.tpm is not None:
-                used_tpm = sum(t for _, t in self._tpm_window)
-                if used_tpm + estimated_tokens >= lim.tpm * margin:
-                    return False
-            if self._rpd_count >= lim.rpd * margin:
-                return False
-            return True
-
-    def record_request(self, estimated_tokens: int = EST_TOKENS_PER_REQUEST) -> None:
-        with self._lock:
-            now = time.monotonic()
-            today = _utc_date()
-            self._evict(now)
-            self._reset_rpd_if_needed(today)
-            self._rpm_window.append(now)
-            if self._limits.tpm is not None:
-                self._tpm_window.append((now, estimated_tokens))
-            self._rpd_count += 1
-
-    def update_tokens(self, actual_tokens: int) -> None:
-        if self._limits.tpm is None:
-            return
-        with self._lock:
-            if not self._tpm_window:
-                return
-            ts, _ = self._tpm_window[-1]
-            self._tpm_window[-1] = (ts, actual_tokens)
-
-    def penalise(self) -> None:
-        with self._lock:
-            self._blocked_until = time.monotonic() + self._WINDOW
-
-    def status(self) -> dict:
-        with self._lock:
-            now = time.monotonic()
-            today = _utc_date()
-            self._evict(now)
-            self._reset_rpd_if_needed(today)
-            lim = self._limits
-            tpm_used = sum(t for _, t in self._tpm_window) if lim.tpm else None
-            return {
-                "rpm_used": len(self._rpm_window),
-                "rpm_limit": lim.rpm,
-                "tpm_used": tpm_used,
-                "tpm_limit": lim.tpm,
-                "rpd_used": self._rpd_count,
-                "rpd_limit": lim.rpd,
-                "hard_blocked": now < self._blocked_until,
-                "blocked_secs_remaining": max(0.0, self._blocked_until - now),
-            }
-
-    def _evict(self, now: float) -> None:
-        cutoff = now - self._WINDOW
-        while self._rpm_window and self._rpm_window[0] < cutoff:
-            self._rpm_window.popleft()
-        while self._tpm_window and self._tpm_window[0][0] < cutoff:
-            self._tpm_window.popleft()
-
-    def _reset_rpd_if_needed(self, today: str) -> None:
-        if today != self._rpd_date:
-            self._rpd_date = today
-            self._rpd_count = 0
-
-
-def _utc_date() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-
-# ---------------------------------------------------------------------------
 # ModelClient
 # ---------------------------------------------------------------------------
 
 class ModelClient:
     """
-    Provider-agnostic LLM client with round-robin, rate-limit tracking,
-    per-model retry, and ordered fallback across models.
+    Provider-agnostic LLM client: one request, one model, plus a retry for
+    transient errors.
+
+    **There is deliberately no rotation and no cross-model fallback.**
+    There used to be: a process-wide cursor walked the catalogue, each
+    request started where the last success left off, and a failure slid
+    down to the next model. It worked, and it was the wrong layer. Two
+    reasons it had to go:
+
+    - *It made the answer's author unpredictable.* Consecutive turns in
+      one conversation were served by different models, so tone, format
+      and capability shifted for no reason the user could see or control
+      — and picking a model in the UI only expressed a preference, since
+      a single hiccup silently moved the turn elsewhere.
+    - *It duplicated the provider.* Everything reachable through
+      `OPENAI_BASE_URL` is a proxy that already does its own routing and
+      failover across upstreams, with a real view of their health. This
+      client only ever had a guess: a hardcoded local rate-limit budget
+      (15 rpm / 1500 rpd for every model, whatever the provider's actual
+      quota) that skipped models *before calling them* — so a wrong guess
+      became a refusal to make a request the provider would have served.
+
+    What replaces it is the plain reading of the request: the chosen
+    model, or the default when none was chosen. Failover is the LLM
+    service's job now, and an error from it is reported rather than
+    worked around.
     """
 
     def __init__(
@@ -224,14 +137,20 @@ class ModelClient:
         self._retry_attempts = retry_attempts
         self._retry_delay = retry_delay
 
-        self._cursor: int = 0
-        self._lock = threading.Lock()
+    def _resolve(self, preferred: str | None) -> str:
+        """Which model this request runs on, and the only place that is
+        decided.
 
-        self._budgets: dict[str, RateLimitBudget] = {}
-        for m in self._models:
-            spec = get_model_spec(m)
-            limits = spec.limits if spec else DEFAULT_LIMITS
-            self._budgets[m] = RateLimitBudget(limits)
+        An unrecognised name falls back to the default rather than being
+        passed through: the catalogue is what the UI offers, and sending
+        the provider something outside it turns a stale client — or a
+        typo — into a 404 mid-conversation. `"auto"` lands here too, and
+        that is the point: it means "the default", not "whichever one is
+        the provider's turn".
+        """
+        if preferred and preferred in self._models:
+            return preferred
+        return self._models[0] if self._models else get_default_model(self._provider)
 
     # ------------------------------------------------------------------
     # Public API — non-streaming
@@ -242,227 +161,77 @@ class ModelClient:
         messages: list[Message],
         config: GenerationConfig,
         tools: list[ToolDefinition] | None = None,
-        estimated_tokens: int = EST_TOKENS_PER_REQUEST,
         preferred_model: str | None = None,
     ) -> tuple[str, ProviderResponse]:
-        return await self._run_with_rotation(
-            call_fn=self._call_generate,
-            messages=messages,
-            config=config,
-            tools=tools,
-            estimated_tokens=estimated_tokens,
-            preferred_model=preferred_model,
+        model = self._resolve(preferred_model)
+        response = await self._call_with_retry(
+            self._call_generate, model, messages, config, tools
         )
+        return model, response
 
     # ------------------------------------------------------------------
-    # Public API — streaming with fallback (v2, buffered)
+    # Public API — streaming
     # ------------------------------------------------------------------
 
-    async def stream_with_fallback(
+    async def stream(
         self,
         messages: list[Message],
         config: GenerationConfig,
         tools: list[ToolDefinition] | None = None,
-        estimated_tokens: int = EST_TOKENS_PER_REQUEST,
         preferred_model: str | None = None,
     ) -> AsyncIterator[ProviderStreamChunk]:
+        """
+        Stream one turn from the chosen model.
+
+        Chunks are buffered and only yielded once the stream completes.
+        That was originally what made mid-stream fallback possible — half
+        an answer from one model followed by half from another is worse
+        than either — and it stays for the retry below, which has the
+        same problem in miniature: a stream that dies after twenty tokens
+        must be able to start over cleanly.
+
+        The cost is real and worth stating: nothing reaches the caller
+        until the model has finished, so "streaming" here is about the
+        caller not having to wait for a full request/response round trip,
+        not about tokens appearing as the model writes them.
+        """
+        model = self._resolve(preferred_model)
         last_exc: Exception | None = None
-        budget_skipped_all: list[str] = []
 
-        for rotation_attempt in range(STREAM_ROTATION_RETRIES + 1):
-            if rotation_attempt > 0:
-                delay = self._retry_delay * (2 ** (rotation_attempt - 1))
-                logger.warning(
-                    f"stream_with_fallback: rotation attempt {rotation_attempt + 1}/"
-                    f"{STREAM_ROTATION_RETRIES + 1} — waiting {delay:.1f}s before retry"
-                )
-                await asyncio.sleep(delay)
-
-            ordered = self._ordered(preferred_model)
-            models_tried: dict[str, str] = {}
-            budget_skipped: list[str] = []
-
-            for model in ordered:
-                budget = self._budgets.get(model)
-
-                if budget and not budget.can_use(estimated_tokens):
-                    budget_skipped.append(model)
-                    logger.debug(f"stream_with_fallback: skip {model} (budget exhausted)")
-                    continue
-
-                if budget:
-                    budget.record_request(estimated_tokens)
-
-                buffered_chunks: list[ProviderStreamChunk] = []
-                try:
-                    stream = self._provider.generate_stream(
-                        model=model,
-                        messages=messages,
-                        config=config,
-                        tools=tools,
-                    )
-                    async for chunk in stream:
-                        buffered_chunks.append(chunk)
-
-                    self._advance_cursor_to(model)
-                    logger.info(
-                        f"stream_with_fallback: {model} OK "
-                        f"({len(buffered_chunks)} chunks, "
-                        f"rotation_attempt={rotation_attempt})"
-                    )
-                    for chunk in buffered_chunks:
-                        yield chunk
-                    return
-
-                except Exception as error:
-                    last_exc = error
-                    err_str = str(error)[:200]
-
-                    if is_fatal_error(error):
-                        logger.error(f"stream_with_fallback: FATAL on {model} → {err_str}")
-                        raise
-
-                    if is_quota_error(error):
-                        if budget:
-                            budget.penalise()
-                        models_tried[model] = f"QUOTA: {err_str}"
-                        logger.warning(
-                            f"stream_with_fallback: quota on {model}, penalised. "
-                            f"buffered_chunks={len(buffered_chunks)} (discarded). "
-                            f"{err_str}"
-                        )
-                        continue
-
-                    models_tried[model] = err_str
-                    logger.warning(
-                        f"stream_with_fallback: recoverable error on {model} "
-                        f"after {len(buffered_chunks)} buffered chunks (discarded). "
-                        f"{err_str}"
-                    )
-                    continue
-
-            budget_skipped_all.extend(budget_skipped)
-
-            if models_tried:
-                logger.warning(
-                    f"stream_with_fallback: all models failed on rotation attempt "
-                    f"{rotation_attempt + 1}/{STREAM_ROTATION_RETRIES + 1}. "
-                    f"tried={list(models_tried.keys())} skipped={budget_skipped} "
-                    f"errors={models_tried}"
-                )
-            else:
-                logger.warning(
-                    f"stream_with_fallback: all models budget-skipped on rotation "
-                    f"{rotation_attempt + 1}, skipping further retries."
-                )
-                break
-
-        if budget_skipped_all and last_exc is None:
-            raise AllModelsExhaustedError(
-                f"All models over rate-limit budget. "
-                f"Skipped: {budget_skipped_all}. "
-                f"Status: {self.budget_status()}"
-            )
-
-        if last_exc is None:
-            raise AllModelsExhaustedError(
-                "All models exhausted — no specific error recorded."
-            )
-
-        logger.error(
-            f"stream_with_fallback: giving up after "
-            f"{STREAM_ROTATION_RETRIES + 1} rotation attempts. "
-            f"last_error={str(last_exc)[:300]}"
-        )
-        raise last_exc
-
-    def record_stream_tokens(self, model: str, actual_tokens: int) -> None:
-        budget = self._budgets.get(model)
-        if budget:
-            budget.update_tokens(actual_tokens)
-
-    def budget_status(self) -> dict[str, dict]:
-        return {m: b.status() for m, b in self._budgets.items()}
-
-    # ------------------------------------------------------------------
-    # Core rotation loop (non-streaming)
-    # ------------------------------------------------------------------
-
-    async def _run_with_rotation(
-        self,
-        call_fn,
-        messages: list[Message],
-        config: GenerationConfig,
-        tools: list[ToolDefinition] | None,
-        estimated_tokens: int,
-        preferred_model: str | None = None,
-    ) -> tuple[str, ProviderResponse]:
-        ordered = self._ordered(preferred_model)
-        last_exc: Exception | None = None
-        budget_skipped: list[str] = []
-
-        for idx, model in enumerate(ordered):
-            budget = self._budgets.get(model)
-
-            if budget and not budget.can_use(estimated_tokens):
-                budget_skipped.append(model)
-                logger.info(f"ModelClient: skip {model} (budget) | {budget.status()}")
-                continue
-
-            if budget:
-                budget.record_request(estimated_tokens)
-
+        for attempt in range(1, self._retry_attempts + 1):
+            buffered: list[ProviderStreamChunk] = []
             try:
-                result = await self._call_with_retry(
-                    call_fn, model, messages, config, tools
+                stream = self._provider.generate_stream(
+                    model=model, messages=messages, config=config, tools=tools
                 )
-                self._advance_cursor_to(model)
-
-                if idx > 0 or budget_skipped:
-                    logger.info(
-                        f"ModelClient: model={model} succeeded "
-                        f"(rotation_idx={idx}, budget_skipped={budget_skipped})"
-                    )
-                return model, result
-
+                async for chunk in stream:
+                    buffered.append(chunk)
             except Exception as exc:
                 last_exc = exc
-
-                if is_fatal_error(exc):
-                    logger.error(f"ModelClient: fatal error on {model}, aborting. {str(exc)[:200]}")
+                if is_fatal_error(exc) or is_quota_error(exc):
+                    logger.error(f"stream: {model} failed, not retryable → {str(exc)[:200]}")
                     raise
-
-                if is_quota_error(exc):
-                    if budget:
-                        budget.penalise()
-                    logger.warning(f"ModelClient: 429 on {model} — penalised. {str(exc)[:120]}")
+                if is_retryable_error(exc) and attempt < self._retry_attempts:
+                    logger.warning(
+                        f"stream: transient error on {model} attempt "
+                        f"{attempt}/{self._retry_attempts} after {len(buffered)} "
+                        f"buffered chunks (discarded), waiting {self._retry_delay}s. "
+                        f"{str(exc)[:120]}"
+                    )
+                    await asyncio.sleep(self._retry_delay)
                     continue
-
-                if is_retryable_error(exc):
-                    logger.warning(f"ModelClient: transient error exhausted on {model}. {str(exc)[:120]}")
-                    continue
-
-                logger.error(f"ModelClient: unknown error on {model}. {str(exc)[:200]}", exc_info=True)
+                logger.error(f"stream: {model} failed → {str(exc)[:200]}", exc_info=True)
                 raise
 
-        if budget_skipped and last_exc is None:
-            raise AllModelsExhaustedError(
-                f"All models over rate-limit budget. "
-                f"Skipped: {budget_skipped}. "
-                f"Status: {self.budget_status()}"
-            )
+            logger.info(f"stream: {model} OK ({len(buffered)} chunks)")
+            for chunk in buffered:
+                yield chunk
+            return
 
-        if last_exc is None:
-            raise AllModelsExhaustedError("All models exhausted — no specific error recorded.")
-
-        logger.error(
-            f"ModelClient: all models exhausted | "
-            f"budget_skipped={budget_skipped} | last_error={str(last_exc)[:300]}"
-        )
-        raise last_exc
+        raise last_exc  # unreachable: the loop either returns or raises
 
     # ------------------------------------------------------------------
-    # Per-model retry for transient errors
+    # Retry for transient errors
     # ------------------------------------------------------------------
 
     async def _call_with_retry(
@@ -471,6 +240,9 @@ class ModelClient:
         config: GenerationConfig,
         tools: list[ToolDefinition] | None,
     ) -> ProviderResponse:
+        """Retries 500/503 only. A 429 is not retried here — the provider
+        is telling us to back off, and an immediate second attempt is the
+        one response guaranteed not to help."""
         last_exc: Exception | None = None
 
         for attempt in range(1, self._retry_attempts + 1):
@@ -496,30 +268,6 @@ class ModelClient:
                 raise
 
         raise last_exc
-
-    # ------------------------------------------------------------------
-    # Cursor helpers
-    # ------------------------------------------------------------------
-
-    def _model_order(self) -> list[str]:
-        with self._lock:
-            start = self._cursor
-        n = len(self._models)
-        return [self._models[(start + i) % n] for i in range(n)]
-
-    def _ordered(self, preferred: str | None) -> list[str]:
-        base = self._model_order()
-        if not preferred or preferred not in self._models:
-            return base
-        return [preferred] + [m for m in base if m != preferred]
-
-    def _advance_cursor_to(self, model: str) -> None:
-        try:
-            idx = self._models.index(model)
-        except ValueError:
-            return
-        with self._lock:
-            self._cursor = (idx + 1) % len(self._models)
 
     # ------------------------------------------------------------------
     # Low-level SDK wrappers (delegate to provider)

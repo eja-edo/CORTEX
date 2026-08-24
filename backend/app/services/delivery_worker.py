@@ -99,10 +99,48 @@ async def _claim_batch(session, limit: int) -> list[UUID]:
     return ids
 
 
+def _is_expired(delivery: NotificationDelivery, now: datetime) -> bool:
+    """Too old to be worth delivering.
+
+    The stop condition for UNAVAILABLE retries, which are otherwise
+    unbounded. It is deliberately about *age*, not attempts: "this nudge is
+    stale news" is a true statement about the user's experience, whereas
+    "we tried five times" is a statement about our infrastructure that the
+    user never asked about. It also prevents the failure mode that makes
+    unbounded retry dangerous — a bot down overnight coming back and
+    flooding someone with yesterday's reminders.
+    """
+    created = delivery.created_at
+    if created is None:  # pragma: no cover — column is NOT NULL
+        return False
+    return created < now - timedelta(hours=settings.DELIVERY_MAX_AGE_HOURS)
+
+
 def _apply_result(
     delivery: NotificationDelivery, user_channel: UserChannel | None, result: DeliveryResult
 ) -> None:
     now = _naive_utcnow()
+
+    if result.outcome is DeliveryOutcome.UNAVAILABLE:
+        delivery.last_error = result.error
+        if _is_expired(delivery, now):
+            delivery.status = DeliveryStatus.FAILED
+            delivery.next_attempt_at = None
+            return
+        # Give back the attempt `_claim_batch` spent. The channel was never
+        # reached, so this delivery has not actually been tried — charging
+        # it would let an outage exhaust the budget of every queued
+        # notification without a single one having been attempted.
+        delivery.attempts = max((delivery.attempts or 1) - 1, 0)
+        delivery.status = DeliveryStatus.PENDING
+        # Fixed short interval rather than exponential: the wait is for a
+        # process to come back, not for congestion to clear, and backing off
+        # to eight minutes would leave a bot that restarted in two seconds
+        # idle for the rest of it.
+        delivery.next_attempt_at = now + timedelta(
+            seconds=settings.DELIVERY_UNAVAILABLE_RETRY_SECONDS
+        )
+        return
 
     if result.outcome is DeliveryOutcome.SENT:
         delivery.status = DeliveryStatus.SENT

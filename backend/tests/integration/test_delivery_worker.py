@@ -317,3 +317,96 @@ def test_backoff_grows_and_is_capped():
     assert _backoff_seconds(2) == base * 2
     assert _backoff_seconds(3) == base * 4
     assert _backoff_seconds(50) == 3600
+
+
+class _UnavailableAdapter(_RecordingAdapter):
+    """Stands in for a bot process that is simply not running."""
+
+    def __init__(self):
+        super().__init__(DeliveryResult.unavailable("bot unreachable: connection refused"))
+
+
+@pytest.mark.asyncio
+async def test_unreachable_transport_does_not_burn_attempts(async_db, user_id, telegram_adapter):
+    """A bot that is down says nothing about this notification.
+
+    Without this, a deploy lasting longer than the retry window silently
+    loses every notification created during it — the failure mode that
+    makes "the bot restarted" turn into data loss.
+    """
+    telegram_adapter.result = DeliveryResult.unavailable("bot unreachable")
+    await register_channel_async(
+        async_db, user_id, channel=AttentionChannel.TELEGRAM, address="chat-unavail",
+        min_level=AttentionLevel.INFORM,
+    )
+    notification = await _notify(async_db, user_id, suffix="unavail")
+
+    # Far more sweeps than DELIVERY_MAX_ATTEMPTS. If the outage counted as
+    # attempts, the row would be FAILED well before this loop ends.
+    for _ in range(settings.DELIVERY_MAX_ATTEMPTS + 3):
+        rows = await _deliveries(async_db, notification.id)
+        row = next(r for r in rows if r.channel is AttentionChannel.TELEGRAM)
+        row.next_attempt_at = None  # make it immediately due again
+        await async_db.commit()
+        await run_sweep(async_db)
+
+    rows = {r.channel: r for r in await _deliveries(async_db, notification.id)}
+    telegram = rows[AttentionChannel.TELEGRAM]
+    assert telegram.status is DeliveryStatus.PENDING, "must stay queued through an outage"
+    assert telegram.attempts == 0, "an unreached channel must not consume the budget"
+
+
+@pytest.mark.asyncio
+async def test_delivery_resumes_once_the_transport_returns(async_db, user_id, telegram_adapter):
+    """The point of not failing: the queued nudge still arrives."""
+    telegram_adapter.result = DeliveryResult.unavailable("bot unreachable")
+    await register_channel_async(
+        async_db, user_id, channel=AttentionChannel.TELEGRAM, address="chat-back",
+        min_level=AttentionLevel.INFORM,
+    )
+    notification = await _notify(async_db, user_id, suffix="comeback")
+
+    await run_sweep(async_db)
+    rows = await _deliveries(async_db, notification.id)
+    row = next(r for r in rows if r.channel is AttentionChannel.TELEGRAM)
+    assert row.status is DeliveryStatus.PENDING
+
+    # Bot comes back.
+    telegram_adapter.result = DeliveryResult.sent()
+    row.next_attempt_at = None
+    await async_db.commit()
+    await run_sweep(async_db)
+
+    await async_db.refresh(row)
+    assert row.status is DeliveryStatus.SENT
+    assert len(telegram_adapter.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_stale_delivery_expires_instead_of_retrying_forever(
+    async_db, user_id, telegram_adapter
+):
+    """Age, not attempts, is what finally stops an outage retry.
+
+    Otherwise a bot down overnight comes back and floods the user with
+    yesterday's reminders — the reason unbounded retry needs a stop
+    condition at all.
+    """
+    telegram_adapter.result = DeliveryResult.unavailable("bot unreachable")
+    await register_channel_async(
+        async_db, user_id, channel=AttentionChannel.TELEGRAM, address="chat-stale",
+        min_level=AttentionLevel.INFORM,
+    )
+    notification = await _notify(async_db, user_id, suffix="stale-age")
+
+    rows = await _deliveries(async_db, notification.id)
+    row = next(r for r in rows if r.channel is AttentionChannel.TELEGRAM)
+    row.created_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+        hours=settings.DELIVERY_MAX_AGE_HOURS + 1
+    )
+    await async_db.commit()
+
+    await run_sweep(async_db)
+
+    await async_db.refresh(row)
+    assert row.status is DeliveryStatus.FAILED

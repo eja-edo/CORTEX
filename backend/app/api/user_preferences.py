@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +13,7 @@ from app.dependencies import (
 )
 from app.models import AttentionChannel, UserChannel
 from app.schemas import (
+    ChatModelUpdate,
     ChannelLinkCodeRequest,
     ChannelLinkCodeResponse,
     ChannelRedeemRequest,
@@ -37,7 +38,14 @@ from app.services.user_channels import (
     register_channel_async,
     update_channel_async,
 )
-from app.services.user_preferences import get_preferences_async, is_reason_disabled, set_reason_enabled_async, upsert_quiet_hours_async
+from app.ai.agents.model_catalog import enabled_model_ids
+from app.services.user_preferences import (
+    get_preferences_async,
+    is_reason_disabled,
+    set_chat_model_async,
+    set_reason_enabled_async,
+    upsert_quiet_hours_async,
+)
 
 router = APIRouter(prefix="/preferences", tags=["preferences"])
 
@@ -65,7 +73,7 @@ async def get_preferences(
     quiet hours aren't configured, same as an explicit null/null row."""
     prefs = await get_preferences_async(db, current_user.id)
     if prefs is None:
-        return UserPreferencesResponse(quiet_hours_start=None, quiet_hours_end=None)
+        return UserPreferencesResponse(quiet_hours_start=None, quiet_hours_end=None, chat_model=None)
     return prefs
 
 
@@ -81,6 +89,30 @@ async def update_preferences(
         quiet_hours_start=payload.quiet_hours_start,
         quiet_hours_end=payload.quiet_hours_end,
     )
+
+
+@router.put("/chat-model", response_model=UserPreferencesResponse)
+async def update_chat_model(
+    payload: ChatModelUpdate,
+    current_user=Depends(get_current_user_or_internal),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Set which model this user's chat turns run on (Mezon `*model`).
+
+    Validated against the catalogue rather than passed through: an id from
+    a stale client would otherwise be stored and then silently ignored at
+    request time by `ModelClient._resolve`, leaving the user looking at a
+    choice that never takes effect. Rejecting it here is the only place
+    that difference is visible.
+    """
+    if payload.chat_model is not None and payload.chat_model not in enabled_model_ids():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown model: {payload.chat_model}",
+        )
+
+    prefs = await set_chat_model_async(db, current_user.id, chat_model=payload.chat_model)
+    return prefs
 
 
 @router.get("/reasons", response_model=list[ReasonPreference])

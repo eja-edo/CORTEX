@@ -207,6 +207,21 @@ class Settings:
     # Hard ceiling on one adapter's send. Without it, one unresponsive
     # third-party endpoint stalls the whole sweep behind it.
     DELIVERY_SEND_TIMEOUT_SECONDS: int = int(os.getenv("DELIVERY_SEND_TIMEOUT_SECONDS", "30"))
+    # Wait between retries when the channel's transport is unreachable
+    # (DeliveryOutcome.UNAVAILABLE) — a bot restarting, a service being
+    # deployed. Flat and short, because what we are waiting for is a
+    # process to come back, not congestion to clear.
+    DELIVERY_UNAVAILABLE_RETRY_SECONDS: int = int(
+        os.getenv("DELIVERY_UNAVAILABLE_RETRY_SECONDS", "20")
+    )
+    # When a queued delivery stops being worth sending. This is the stop
+    # condition for UNAVAILABLE, which does not burn attempts and would
+    # otherwise retry forever. Framed as age rather than attempts on
+    # purpose: a day-old reminder is stale news to the user, whereas "we
+    # ran out of tries" is a fact about our infrastructure they never asked
+    # about. Also stops a bot that was down overnight from returning and
+    # flooding someone with yesterday's nudges.
+    DELIVERY_MAX_AGE_HOURS: int = int(os.getenv("DELIVERY_MAX_AGE_HOURS", "24"))
     # A row left in `sending` longer than this is assumed to belong to a
     # worker that died mid-send and is reclaimed. Must comfortably exceed the
     # slowest adapter's own timeout, or a slow send gets sent twice.

@@ -25,13 +25,32 @@ matching boundary #2.
 from __future__ import annotations
 
 import httpx
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.config import settings
+from app.database_async import make_async_sessionmaker
 from app.models import AttentionChannel, AttentionLevel, UserChannel
 from app.services.delivery.base import DeliveryPayload, DeliveryResult
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# Lazily created, then reused for the life of the process. `send()` always
+# runs on `DeliveryWorker`'s dedicated thread/event loop (Mezon's
+# `inline = False`), never the FastAPI request loop, so this cannot be the
+# app's shared engine (see `database_async.make_async_sessionmaker`'s
+# docstring) — but recreating a whole engine+pool on every single
+# notification would be wasteful, so it is cached here instead of made
+# fresh per call.
+_engine: AsyncEngine | None = None
+_session_maker: async_sessionmaker[AsyncSession] | None = None
+
+
+def _get_session_maker() -> async_sessionmaker[AsyncSession]:
+    global _engine, _session_maker
+    if _session_maker is None:
+        _engine, _session_maker = make_async_sessionmaker()
+    return _session_maker
 
 
 class MezonAdapter:
@@ -52,16 +71,24 @@ class MezonAdapter:
             return DeliveryResult.permanent("Mezon delivery requires a registered user_channel")
 
         if not settings.MEZON_BOT_INTERNAL_URL:
-            # Deployment gap, not a bad address: retry so deliveries queue
-            # up and drain once the bot URL is configured, instead of being
-            # marked failed and lost.
-            return DeliveryResult.retry("MEZON_BOT_INTERNAL_URL is not configured")
+            # Deployment gap, not a bad address. `unavailable` rather than
+            # `retry` so it costs no attempt: an unconfigured URL stays
+            # unconfigured for as long as it takes someone to notice, and
+            # burning the budget would lose every queued nudge in the
+            # meantime.
+            return DeliveryResult.unavailable("MEZON_BOT_INTERNAL_URL is not configured")
 
         body = {
             "mezon_user_id": user_channel.address,
             "notification_id": str(payload.notification_id),
             "title": payload.title,
             "body": payload.body,
+            # The digest reasons (`day.plan`, `day.review`, `task.at_risk`,
+            # `task.blocked_cascade`) put their itemised detail in `content`
+            # and keep `body` as the one-line summary. Sending only `body`
+            # meant a DM said "3 việc đến hạn hôm nay" and never named one,
+            # while the in-app card listed all three.
+            "content": payload.content,
             "reason_key": payload.reason_key,
             "attention_level": payload.effective_level.value,
             "actions": payload.actions,
@@ -76,13 +103,20 @@ class MezonAdapter:
                     headers={"X-Internal-API-Key": settings.INTERNAL_API_KEY},
                 )
         except httpx.TimeoutException as exc:
+            # The bot answered slowly or not at all. It is up but wedged, so
+            # this counts as an attempt — unlike a refused connection, a
+            # timeout may mean the bot is stuck on *this* delivery.
             return DeliveryResult.retry(f"timeout talking to bot: {exc}")
         except httpx.HTTPError as exc:
-            # The bot being down is the common case here (restart, deploy).
-            # Retryable by definition.
-            return DeliveryResult.retry(f"transport error talking to bot: {exc}")
+            # Connection refused / DNS / reset: the bot is not there at all.
+            # Restarts and deploys are routine, and this says nothing about
+            # the notification, so it must not consume the retry budget —
+            # otherwise a deploy longer than the retry window silently loses
+            # every notification created during it. See DeliveryOutcome.
+            return DeliveryResult.unavailable(f"bot unreachable: {exc}")
 
         if response.status_code < 300:
+            await self._record_system_note(user_channel.user_id, payload)
             return DeliveryResult.sent()
 
         detail = response.text[:300]
@@ -98,3 +132,38 @@ class MezonAdapter:
         # Any other 4xx is us sending something the bot rejects — a
         # malformed payload will be just as malformed next time.
         return DeliveryResult.permanent(f"bot returned {response.status_code}: {detail}")
+
+    async def _record_system_note(self, user_id, payload: DeliveryPayload) -> None:
+        """R5 (docs/mezon-bot-plan.md §V): everything sent through Mezon
+        goes into that user's conversation history too, as `role="system"`
+        — so a later chat turn can see "I already told you this" instead of
+        repeating itself or being unable to answer "why didn't you say so
+        earlier".
+
+        Imported locally, not at module scope: `ConversationStore` sits in
+        `app.ai.agents`, a layer above `app.services.delivery` that has no
+        reason to import back down here, and a top-level import would be
+        the only thing creating that edge.
+
+        Never allowed to fail the delivery it's attached to — the DM is
+        already sent by the time this runs, and a already-committed
+        HTTP 2xx from the bot must not turn into a `retry()` because this
+        side-write hit a transient DB error.
+        """
+        from app.ai.agents.conversation_store import ConversationStore
+
+        try:
+            session_maker = _get_session_maker()
+            async with session_maker() as db:
+                store = ConversationStore(db)
+                conv = await store.get_or_create_mezon_conversation(user_id)
+                note = f'Đã nhắc: "{payload.title}"' + (f" — {payload.body}" if payload.body else "")
+                await store.save_message(
+                    conversation_id=conv.id, role="system", content=note, source="mezon",
+                )
+                await db.commit()
+        except Exception:
+            logger.exception(
+                "Could not record system note for delivered Mezon notification %s (non-fatal)",
+                payload.notification_id,
+            )

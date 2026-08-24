@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database_async import get_async_db
-from app.dependencies import get_current_active_user
+from app.dependencies import get_current_active_user, get_current_user_or_internal
 from app.models import User
 from app.schemas import (
     AgentChatRequest, 
@@ -51,13 +51,18 @@ class AvailableModel(BaseModel):
 
 @router.get("/models", response_model=list[AvailableModel], status_code=status.HTTP_200_OK)
 async def list_models(
-    current_user: User = Depends(get_current_active_user),
+    current_user=Depends(get_current_user_or_internal),
 ) -> list[AvailableModel]:
-    """List the models the chat UI may switch between.
+    """List the models a chat surface may switch between.
 
     Backed by the static catalogue in model_catalog.py, not the LLM
     provider's live /v1/models — that keeps the switchable set reviewable
     and, later, filterable by the requesting user's account tier.
+
+    Internal auth is accepted because the Mezon bot builds its `*model`
+    form from this list rather than hard-coding one. That is the 4.2
+    Trigger Catalog lesson applied a second time: a hard-coded list in a
+    client is a list that goes stale the first time the catalogue moves.
     """
     return [AvailableModel(id=m.id, label=m.label) for m in enabled_models()]
 
@@ -110,33 +115,39 @@ async def chat(
 @router.post("/stream/chat")
 async def stream_chat(
     payload: AgentChatRequest,
-    current_user: User = Depends(get_current_active_user),
+    current_user=Depends(get_current_user_or_internal),
     db: AsyncSession = Depends(get_async_db),
 ):
     """
     Send a message to the AI agent and stream response as SSE.
-    
+
     Streams events in SSE format:
     - data: {"event": "token", "text": "..."} - Text token from response
     - data: {"event": "done", "conversation_id": "..."} - Stream complete
     - data: {"event": "error", "message": "..."} - Error occurred
-    
+
+    Auth accepts either a user's JWT (web) or internal service auth —
+    `X-Internal-API-Key` + `X-User-ID` (the Mezon bot, F2/M3, acting on a
+    linked user's behalf; see `get_current_user_or_internal`). `AgentService`
+    only ever reads `current_user.id`, which both `User` and `InternalUser`
+    provide, so nothing downstream needs to know which one it got.
+
     Args:
         payload: Chat request with message and optional conversation_id
-        current_user: Authenticated user
+        current_user: Authenticated user (web) or internal-service caller (bot)
         db: Async database session
-        
+
     Returns:
         StreamingResponse with SSE formatted events
     """
     async def stream_events():
         try:
             service = AgentService(user=current_user, db=db)
-            
+
             # Process with streaming
             reply_text = ""
             result_conversation_id = None
-            
+
             async for chunk in service.handle_streaming_generator(
                 message=payload.message,
                 conversation_id=payload.conversation_id,
@@ -144,6 +155,7 @@ async def stream_chat(
                 context=payload.context,
                 model=payload.model,
                 temperature=payload.temperature,
+                surface=payload.surface,
             ):
                 if chunk.get("event") == "token" and chunk.get("text"):
                     reply_text += chunk["text"]

@@ -4,11 +4,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.dependencies import get_current_active_user
-from app.models import User
+from app.dependencies import get_current_user_or_internal
 from app.schemas import MessageResponse, NotificationListResponse, NotificationResponse
 from app.services.notifications import NotificationService
 
+# Internal auth alongside JWT throughout: the Mezon bot's `*inbox` reads
+# and clears this list on a linked user's behalf, the same way it already
+# reads tasks and today. A notification the user was DM'd but can only
+# mark read on the web is a to-do the bot created for them.
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
 
@@ -16,7 +19,7 @@ router = APIRouter(prefix="/notifications", tags=["notifications"])
 def list_notifications(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    current_user: User = Depends(get_current_active_user),
+    current_user=Depends(get_current_user_or_internal),
     db: Session = Depends(get_db),
 ):
     service = NotificationService(db)
@@ -27,7 +30,7 @@ def list_notifications(
 @router.patch("/{notification_id}/read", response_model=NotificationResponse)
 def mark_notification_read(
     notification_id: UUID,
-    current_user: User = Depends(get_current_active_user),
+    current_user=Depends(get_current_user_or_internal),
     db: Session = Depends(get_db),
 ):
     service = NotificationService(db)
@@ -39,7 +42,7 @@ def mark_notification_read(
 
 @router.post("/read-all", response_model=MessageResponse)
 def mark_all_notifications_read(
-    current_user: User = Depends(get_current_active_user),
+    current_user=Depends(get_current_user_or_internal),
     db: Session = Depends(get_db),
 ):
     service = NotificationService(db)
@@ -50,7 +53,7 @@ def mark_all_notifications_read(
 @router.delete("/{notification_id}", response_model=MessageResponse)
 def delete_notification(
     notification_id: UUID,
-    current_user: User = Depends(get_current_active_user),
+    current_user=Depends(get_current_user_or_internal),
     db: Session = Depends(get_db),
 ):
     service = NotificationService(db)

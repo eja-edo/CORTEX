@@ -1,33 +1,47 @@
-"""Unit tests for ModelClient's model-catalogue wiring and selection.
+"""Unit tests for ModelClient's model selection.
 
-Covers the regression this catalogue was introduced to fix: ModelClient
-used to be constructed from a single-model default (settings.OPENAI_DEFAULT_MODEL),
-so a user-selected `preferred_model` was silently dropped whenever it wasn't
-that one model — `preferred_model not in self._models` was always true for
-any catalogue entry other than the default.
+Two regressions are pinned here, from opposite directions.
+
+The catalogue was introduced because a user-selected `preferred_model`
+used to be dropped whenever it wasn't the one default model, so choosing
+a model in the UI did nothing.
+
+Rotation was then removed because the opposite was true: a process-wide
+cursor walked the catalogue, so consecutive turns in one conversation
+were answered by different models and a chosen one was only a
+preference. Every test below asserts the same property from a different
+angle — **one request runs on exactly one model, and which one is
+predictable from the request alone.**
 """
 
 import pytest
 
 from app.ai.agents.base_provider import LLMProvider
-from app.ai.agents.model_catalog import ModelSpec, ModelLimits
 from app.ai.agents.model_client import ModelClient, get_default_models
 from app.ai.agents.provider_types import GenerationConfig, Message, ProviderResponse, ProviderStreamChunk
 
 
 class FakeProvider(LLMProvider):
-    """Records which model each call was made with; never raises."""
+    """Records which model each call was made with. Raises whatever
+    `fail_with` holds, for the retry tests."""
 
-    def __init__(self):
+    def __init__(self, fail_with: list[Exception] | None = None):
         self.generate_calls: list[str] = []
         self.stream_calls: list[str] = []
+        self._fail_with = list(fail_with or [])
+
+    def _maybe_fail(self):
+        if self._fail_with:
+            raise self._fail_with.pop(0)
 
     async def generate(self, model, messages, config, tools=None) -> ProviderResponse:
         self.generate_calls.append(model)
+        self._maybe_fail()
         return ProviderResponse(content=f"reply-from-{model}")
 
     async def generate_stream(self, model, messages, config, tools=None):
         self.stream_calls.append(model)
+        self._maybe_fail()
         yield ProviderStreamChunk(content=f"reply-from-{model}", finish_reason="stop")
 
     def get_model_key(self, model: str) -> str:
@@ -78,18 +92,18 @@ async def test_generate_ignores_preferred_model_not_in_catalogue():
         preferred_model="not-a-real-model",
     )
 
-    assert model_used in CATALOG
-    assert provider.generate_calls == [model_used]
+    assert model_used == CATALOG[0], "an unknown name falls back to the default, not to whatever is next in line"
+    assert provider.generate_calls == [CATALOG[0]]
 
 
 @pytest.mark.asyncio
-async def test_stream_with_fallback_uses_preferred_model_when_in_catalogue():
+async def test_stream_uses_preferred_model_when_in_catalogue():
     provider = FakeProvider()
     client = _client(provider)
 
     chunks = [
         chunk
-        async for chunk in client.stream_with_fallback(
+        async for chunk in client.stream(
             [Message(role="user", content="hi")],
             GenerationConfig(),
             preferred_model="model-c",
@@ -101,11 +115,11 @@ async def test_stream_with_fallback_uses_preferred_model_when_in_catalogue():
 
 
 @pytest.mark.asyncio
-async def test_stream_with_fallback_ignores_unknown_preferred_model():
+async def test_stream_ignores_unknown_preferred_model():
     provider = FakeProvider()
     client = _client(provider)
 
-    async for _ in client.stream_with_fallback(
+    async for _ in client.stream(
         [Message(role="user", content="hi")],
         GenerationConfig(),
         preferred_model="unknown-model",
@@ -115,18 +129,82 @@ async def test_stream_with_fallback_ignores_unknown_preferred_model():
     assert provider.stream_calls == [CATALOG[0]]
 
 
-def test_budgets_pull_limits_from_catalog_spec(monkeypatch):
-    import app.ai.agents.model_client as model_client_module
+@pytest.mark.asyncio
+async def test_repeated_requests_all_run_on_the_same_model():
+    """The reason rotation was removed: consecutive turns in one
+    conversation used to be answered by different models, so tone, format
+    and capability shifted with nothing in the request explaining it."""
+    provider = FakeProvider()
+    client = _client(provider)
 
-    custom_spec = ModelSpec(id="model-a", label="A", limits=ModelLimits(rpm=1, tpm=None, rpd=1))
-    monkeypatch.setattr(
-        model_client_module, "get_model_spec",
-        lambda model_id: custom_spec if model_id == "model-a" else None,
+    for _ in range(5):
+        await client.generate([Message(role="user", content="hi")], GenerationConfig())
+
+    assert provider.generate_calls == [CATALOG[0]] * 5
+
+
+@pytest.mark.asyncio
+async def test_a_failing_model_is_not_swapped_for_another_one():
+    """Failover belongs to the LLM service now. A model that errors is
+    reported as an error, not quietly replaced — a quiet replacement is
+    what made the answer's author unpredictable."""
+    provider = FakeProvider(fail_with=[RuntimeError("500 upstream boom")] * 2)
+    client = _client(provider)
+
+    with pytest.raises(RuntimeError):
+        await client.generate(
+            [Message(role="user", content="hi")],
+            GenerationConfig(),
+            preferred_model="model-b",
+        )
+
+    assert set(provider.generate_calls) == {"model-b"}, "retried on itself, never on a sibling"
+
+
+@pytest.mark.asyncio
+async def test_a_transient_error_is_retried_on_the_same_model():
+    provider = FakeProvider(fail_with=[RuntimeError("503 temporarily unavailable")])
+    client = ModelClient(models=list(CATALOG), provider=provider, retry_delay=0)
+
+    model_used, response = await client.generate(
+        [Message(role="user", content="hi")],
+        GenerationConfig(),
+        preferred_model="model-b",
     )
 
-    client = ModelClient(models=["model-a"], provider=FakeProvider())
-    budget = client._budgets["model-a"]
+    assert provider.generate_calls == ["model-b", "model-b"]
+    assert model_used == "model-b"
+    assert response.content == "reply-from-model-b"
 
-    assert budget.can_use() is True
-    budget.record_request()
-    assert budget.can_use() is False  # rpm=1 exhausted after one request
+
+@pytest.mark.asyncio
+async def test_a_quota_error_is_not_retried():
+    """A 429 says back off; an immediate second attempt is the one
+    response guaranteed not to help."""
+    provider = FakeProvider(fail_with=[RuntimeError("429 rate_limit exceeded")])
+    client = ModelClient(models=list(CATALOG), provider=provider, retry_delay=0)
+
+    with pytest.raises(RuntimeError):
+        await client.generate([Message(role="user", content="hi")], GenerationConfig())
+
+    assert provider.generate_calls == [CATALOG[0]]
+
+
+@pytest.mark.asyncio
+async def test_stream_retries_the_same_model_and_discards_the_partial_turn():
+    """Buffering is what makes a retry safe: half an answer followed by a
+    fresh start would otherwise reach the caller as one turn."""
+    provider = FakeProvider(fail_with=[RuntimeError("500 upstream boom")])
+    client = ModelClient(models=list(CATALOG), provider=provider, retry_delay=0)
+
+    chunks = [
+        chunk
+        async for chunk in client.stream(
+            [Message(role="user", content="hi")],
+            GenerationConfig(),
+            preferred_model="model-c",
+        )
+    ]
+
+    assert provider.stream_calls == ["model-c", "model-c"]
+    assert [c.content for c in chunks] == ["reply-from-model-c"]

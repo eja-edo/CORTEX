@@ -88,7 +88,11 @@ def _trim_incomplete_tail(messages: list[Message], label: str) -> None:
 
 def _build_history_contents(records: list) -> list[Message]:
     records = list(records)
-    while records and records[0].role != "user":
+    # "system" is exempt from the leading trim below — it never enters the
+    # user/assistant alternation state machine (see the `role == "system"`
+    # branch), so it must not be discarded alongside genuinely orphaned
+    # assistant/tool records at the front of history.
+    while records and records[0].role not in ("user", "system"):
         records.pop(0)
     if not records:
         return []
@@ -97,13 +101,26 @@ def _build_history_contents(records: list) -> list[Message]:
     expected_role = "user"
     i = 0
     n = len(records)
+    # Notifications the Attention Gate delivered via Mezon, buffered until
+    # the next real turn so the AI sees them without them counting as a
+    # turn of their own (R5, docs/mezon-bot-plan.md §V). If nothing follows
+    # in this batch, they're dropped for *this* call only — the row is
+    # still in the DB and will attach to the next real message once one
+    # arrives in a later call.
+    pending_system_notes: list[str] = []
 
     while i < n:
         record = records[i]
         role = getattr(record, "role", None)
         ts = _get_message_created_at(record)
 
-        if role == "user":
+        if role == "system":
+            note_text = _message_full_text(record)
+            if note_text:
+                pending_system_notes.append(note_text)
+            i += 1
+
+        elif role == "user":
             user_text = _message_full_text(record)
             if not user_text:
                 i += 1
@@ -112,6 +129,9 @@ def _build_history_contents(records: list) -> list[Message]:
                 logger.info(f"Skipping out-of-order user message (expected {expected_role})")
                 i += 1
                 continue
+            if pending_system_notes:
+                user_text = "[Hệ thống đã nhắc] " + "\n[Hệ thống đã nhắc] ".join(pending_system_notes) + "\n" + user_text
+                pending_system_notes = []
             messages.append(Message(role="user", content=user_text, created_at=ts))
             expected_role = "assistant"
             i += 1
@@ -126,7 +146,11 @@ def _build_history_contents(records: list) -> list[Message]:
                 logger.info(f"Skipping empty assistant message (content is {raw_content!r})")
                 i += 1
                 continue
-            messages.append(Message(role="assistant", content=_format_timestamp(ts) + raw_content, created_at=ts))
+            assistant_text = _format_timestamp(ts) + raw_content
+            if pending_system_notes:
+                assistant_text = "[Hệ thống đã nhắc] " + "\n[Hệ thống đã nhắc] ".join(pending_system_notes) + "\n" + assistant_text
+                pending_system_notes = []
+            messages.append(Message(role="assistant", content=assistant_text, created_at=ts))
             expected_role = "user"
             i += 1
 
@@ -302,12 +326,13 @@ class ConversationService:
         logger.info(f"Loaded {len(recent_messages)} historical messages (no cursor, conversation {conv_id})")
         return recent_messages
 
-    async def save_user_message(self, conv_id: UUID, message: str, context: dict | None) -> None:
+    async def save_user_message(self, conv_id: UUID, message: str, context: dict | None, source: str | None = None) -> None:
         await self.store.save_message(
             conversation_id=conv_id,
             role="user",
             content=message,
             context=context,
+            source=source,
         )
 
     async def increment_message_count(self, conv_id: UUID) -> None:
@@ -366,11 +391,7 @@ Return ONLY the title, no quotes or explanation."""
 
             logger.info(f"Generating title for new conversation...")
             title_client = ModelClient()
-            model_used, response = await title_client.generate(
-                msgs,
-                gen_config,
-                estimated_tokens=100,
-            )
+            model_used, response = await title_client.generate(msgs, gen_config)
 
             title = response.content.strip() if response and response.content else ""
 

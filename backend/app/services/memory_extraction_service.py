@@ -131,7 +131,6 @@ async def extract_and_store(
         model_used, response = await _model_client.generate(
             messages=msgs,
             config=gen_config,
-            estimated_tokens=3000,
         )
 
         if not response or not response.content:

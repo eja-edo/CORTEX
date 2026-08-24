@@ -136,7 +136,7 @@ The product vision describes a **proactive personal AI assistant / personal oper
 | Component | Path | Purpose |
 |-----------|------|---------|
 | AgentService | `agents/agent_service.py` | Main agent loop (1000+ lines) |
-| ModelClient | `agents/model_client.py` | Multi-model round-robin + fallback |
+| ModelClient | `agents/model_client.py` | One model per request + retry (rotation removed 2026-08-20) |
 | OpenAIProvider | `agents/openai_provider.py` | OpenAI-compatible API client |
 | BaseProvider | `agents/base_provider.py` | Abstract provider interface |
 | ProviderTypes | `agents/provider_types.py` | Dataclasses for messages, tools, config |
@@ -504,7 +504,7 @@ Temporal CortexWorkflow:
 |--------|-------|----------|----------|-------|
 | **Memory** | 3 | Episodic summary (PG) + Semantic (Zep cloud). Incremental extraction. Dedup. Advisory lock. | Partially implemented | Zep dependency; no self-hosted fallback; no cross-conversation memory retrieval from AI automatically |
 | **Conversation** | 4 | Full CRUD, sliding window, token-budget loading, title generation, streaming, summaries | Functional | Window is only 10 messages by default; no conversation branching |
-| **AI Runtime** | 4 | Multi-model round-robin, fallback, streaming, tool-calling, skill injection | Functional | Monolithic AgentService; no cost optimization; no intent layer |
+| **AI Runtime** | 4 | Model selection, streaming, tool-calling, skill injection | Functional | Monolithic AgentService; no cost optimization; no intent layer |
 | **Tool System** | 4 | Registry with validation, undo snapshots, parallel execution, SSE events for tool progress | Functional | Global mutable singleton; no capability-based permission; no tool versioning |
 | **Command System** | 1 | No intent/command layer exists. AI calls tools directly. No command registry. | Concept only | High risk: direct AI-to-DB coupling |
 | **Event Bus** | 1 | Redis streams for transcription, Redis pub/sub for sync, but no unified event schema or routing | Concept only | High risk: proactive features depend on events |
@@ -665,12 +665,17 @@ Temporal CortexWorkflow:
 
 ```
 Every AI call:
-  → ModelClient.generate() or stream_with_fallback()
-    → Tries models in round-robin order
-    → If 429/rate-limited → next model
-    → If fatal error → return error
-    → If transient error → retry same model (internal)
+  → ModelClient.generate() or stream()
+    → Runs on the requested model, or the default when none was requested
+    → If fatal error (401/403/404) → return error
+    → If 429/rate-limited → return error (the LLM service's to manage)
+    → If transient error (500/503) → retry the same model
 ```
+
+> Updated 2026-08-20. As audited, this rotated across the catalogue and
+> fell back model-to-model on failure, gated by a local rate-limit
+> budget. That was removed: it made the answer's author unpredictable
+> turn to turn, and duplicated routing the provider proxy already does.
 
 ### 8.2 AI Cost Analysis
 

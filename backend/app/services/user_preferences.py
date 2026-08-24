@@ -42,6 +42,34 @@ async def upsert_quiet_hours_async(
     return prefs
 
 
+async def set_chat_model_async(
+    session: AsyncSession, user_id: UUID, *, chat_model: str | None
+) -> UserPreferences:
+    """Record which model this user's chat turns run on.
+
+    Writes a row even when clearing, unlike `set_reason_enabled_async`'s
+    no-op-on-default shortcut: "I explicitly went back to the default" and
+    "I never chose" are the same state here, so there is no wrong write —
+    and the row almost always exists already by the time anyone is picking
+    models.
+    """
+    prefs = await session.get(UserPreferences, user_id)
+    if prefs is None:
+        prefs = UserPreferences(user_id=user_id)
+        session.add(prefs)
+    prefs.chat_model = chat_model
+    await session.commit()
+    await session.refresh(prefs)
+    return prefs
+
+
+async def get_chat_model_async(session: AsyncSession, user_id: UUID) -> str | None:
+    """The user's chosen model, or None for "use the default". Never
+    raises on a missing row — not having chosen is the ordinary state."""
+    prefs = await session.get(UserPreferences, user_id)
+    return prefs.chat_model if prefs else None
+
+
 def is_reason_disabled(prefs: UserPreferences | None, reason_key: str) -> bool:
     if prefs is None:
         return False

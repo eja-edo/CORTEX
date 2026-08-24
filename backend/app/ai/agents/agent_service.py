@@ -16,14 +16,13 @@ from app.ai.agents.memory_trigger_service import MemoryTriggerService
 from app.ai.agents.conversation_store import ConversationStore
 from app.ai.agents.model_client import (
     ModelClient,
-    AllModelsExhaustedError,
     is_fatal_error,
     is_quota_error,
     is_model_incompatible_error,
-    get_default_model,
 )
 from app.ai.agents.provider_types import Message, GenerationConfig, ToolCall, ToolResult
 from app.ai.agents.tool_context import ToolContext
+from app.services.user_preferences import get_chat_model_async
 from app.ai.agents.tool_registry import get_tool_registry
 from app.config import settings
 from app.utils.logger import get_logger
@@ -176,15 +175,14 @@ class AgentService:
                     for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
                         total_usage[k] = total_usage.get(k, 0) + (response.usage.get(k) or 0)
                     _last_assistant_completion = response.usage.get("completion_tokens", 0)
-            except AllModelsExhaustedError as api_error:
-                logger.warning(f"All models rate-limited: {str(api_error)[:200]}")
-                reply_text = "All AI models are currently rate-limited. Please wait a moment and try again."
-                break
             except Exception as api_error:
                 error_str = str(api_error)
                 if is_fatal_error(api_error):
                     logger.error(f"Fatal API error: {error_str[:300]}", exc_info=True)
                     reply_text = "There was a configuration error. Please contact support if this persists."
+                elif is_quota_error(api_error):
+                    logger.warning(f"Model rate-limited: {error_str[:200]}")
+                    reply_text = "The AI service is currently rate-limited. Please wait a moment and try again."
                 else:
                     logger.error(f"API error after retries: {error_str[:300]}", exc_info=True)
                     reply_text = "I encountered an error processing your request. Please try again."
@@ -260,11 +258,58 @@ class AgentService:
             result["title"] = title
         return result
 
-    async def handle_streaming_generator(self, message: str, conversation_id: UUID | None = None, workspace_id: UUID | None = None, context: dict | None = None, model: str | None = None, temperature: float | None = None):
+    async def _resolve_preferred_model(self, model: str | None, surface: str | None, user_id) -> str | None:
+        """Which model this turn should run on, or None for the default.
+
+        The Mezon surface has no model dropdown — `*model` writes the
+        choice to `user_preferences.chat_model` instead, and this is where
+        it takes effect. Scoped to that surface deliberately: the web has
+        its own picker, and letting a choice made in a DM override it
+        would leave that dropdown describing a model that isn't running.
+        A stored id that has since left the catalogue needs no special
+        case — `ModelClient._resolve` falls back to the default for any
+        unknown id.
+
+        **The savepoint is the load-bearing part.** This session holds a
+        transaction full of flushed-but-uncommitted rows (the user's
+        message, assistant turns, tool results — `AgentService` commits
+        once at the end), and a failed statement poisons the whole
+        transaction: Postgres refuses every command after it with
+        "current transaction is aborted". Catching the error is not
+        enough, and a plain `rollback()` would throw the turn's own
+        writes away. `begin_nested()` confines the damage to this read.
+
+        That is not hypothetical — it is exactly how this failed the first
+        time it ran: the column was missing on a database that had not
+        been migrated, this read raised, the `except` below logged it as
+        non-fatal, and the turn then died several statements later in
+        `update_conversation_timestamp` with an error naming a table that
+        had nothing to do with it.
+        """
+        if model and model != "auto":
+            return model
+        if surface != "mezon":
+            return None
+
+        try:
+            async with self.db.begin_nested():
+                return await get_chat_model_async(self.db, user_id)
+        except Exception as pref_err:
+            logger.warning(f"Could not read chat model preference (non-fatal): {pref_err}")
+            return None
+
+    async def handle_streaming_generator(self, message: str, conversation_id: UUID | None = None, workspace_id: UUID | None = None, context: dict | None = None, model: str | None = None, temperature: float | None = None, surface: str | None = None):
         user_id = self.user.id
         conv = None
         ctx = None
         conversation_id_str = None
+        # None keeps every existing (web) call site byte-for-byte unchanged:
+        # still create-a-new-conversation-every-time when no conversation_id
+        # is given, and every saved row keeps source=NULL ("web" — see
+        # `AgentMessage.source`'s docstring). Only surface="mezon" (the bot,
+        # M3) resolves to a single long-running conversation instead — see
+        # `get_or_create_mezon_conversation`'s docstring for why.
+        message_source = "mezon" if surface == "mezon" else None
 
         try:
             if conversation_id:
@@ -273,6 +318,8 @@ class AgentService:
                     logger.warning(f"Conversation not found for user {user_id}: {conversation_id}")
                     yield {"event": "error", "message": "Conversation not found. Please start a new chat."}
                     return
+            elif surface == "mezon":
+                conv = await self.conversation_service.store.get_or_create_mezon_conversation(user_id)
             else:
                 conv = await self.conversation_service.store.get_or_create_conversation(user_id=user_id, workspace_id=workspace_id)
                 try:
@@ -295,7 +342,7 @@ class AgentService:
             recent_messages = await self.conversation_service.load_history(conv.id, conv.last_summary_message_id)
             self.conversation_service.log_raw_messages(recent_messages, "streaming")
 
-            await self.conversation_service.save_user_message(conv.id, message, context)
+            await self.conversation_service.save_user_message(conv.id, message, context, source=message_source)
             await self.conversation_service.increment_message_count(conv.id)
 
             context_string = await self._build_context_string(workspace_id, conv.id, context, message)
@@ -322,7 +369,7 @@ class AgentService:
                 return
             _log_contents_structure(messages, "Valid streaming messages for turn 1")
 
-            preferred_model = model if model and model != "auto" else None
+            preferred_model = await self._resolve_preferred_model(model, surface, user_id)
             turn = 0
             reply_text = ""
             tool_call_counts = {}
@@ -350,7 +397,7 @@ class AgentService:
                 _turn_completion = 0
 
                 try:
-                    async for chunk in _model_client.stream_with_fallback(messages, gen_config, tools=tools, preferred_model=preferred_model):
+                    async for chunk in _model_client.stream(messages, gen_config, tools=tools, preferred_model=preferred_model):
                         if chunk.content:
                             turn_text += chunk.content
                             yield {"event": "token", "text": chunk.content}
@@ -367,11 +414,6 @@ class AgentService:
                     reply_text += turn_text
                     logger.info(f"Stream turn {turn + 1} complete | text_len={len(turn_text)} tool_calls={len(tool_calls)}")
 
-                except AllModelsExhaustedError as exhausted_err:
-                    logger.error(f"AllModelsExhaustedError at turn {turn + 1}: {str(exhausted_err)[:200]}")
-                    yield {"event": "error", "message": "All AI models are currently busy. Please wait a moment and try again."}
-                    hard_error_occurred = True
-                    break
                 except Exception as stream_err:
                     err_str = str(stream_err)
                     logger.error(f"Streaming error at turn {turn + 1} after all retries: {err_str[:300]}", exc_info=True)
@@ -389,7 +431,7 @@ class AgentService:
 
                 if turn_text:
                     try:
-                        saved_msg = await self.conversation_service.store.save_message(conversation_id=conv.id, role="assistant", content=turn_text, token_count=_turn_completion or None)
+                        saved_msg = await self.conversation_service.store.save_message(conversation_id=conv.id, role="assistant", content=turn_text, token_count=_turn_completion or None, source=message_source)
                         if saved_msg is not None:
                             saved_assistant_count += 1
                     except Exception as save_err:
@@ -472,7 +514,7 @@ class AgentService:
                         await self.store.save_message(
                             conversation_id=conv.id, role="tool", tool_name=tool_name,
                             tool_input=tool_args, tool_output=result, tool_call_id=tc.id,
-                            turn_id=current_turn_id,
+                            turn_id=current_turn_id, source=message_source,
                         )
 
                         tool_result_msgs.append(Message(
@@ -486,6 +528,7 @@ class AgentService:
 
                         result, tool_msg, source_id_counter = await self.tool_service.execute_single_tool_streaming(
                             tc, tool_name, tool_args, conv, ctx, current_turn_id, source_id_counter,
+                            source=message_source,
                         )
                         tool_result_msgs.append(tool_msg)
 
@@ -527,7 +570,7 @@ class AgentService:
                     synthesis_config = GenerationConfig(system_instruction=gen_config.system_instruction, temperature=gen_config.temperature)
                     synthesis_text = ""
                     _synth_completion_before = total_usage.get("completion_tokens", 0)
-                    async for chunk in _model_client.stream_with_fallback(messages, synthesis_config, tools=None, preferred_model=preferred_model):
+                    async for chunk in _model_client.stream(messages, synthesis_config, tools=None, preferred_model=preferred_model):
                         if chunk.content:
                             synthesis_text += chunk.content
                             yield {"event": "token", "text": chunk.content}
@@ -545,7 +588,7 @@ class AgentService:
 
             if reply_text and saved_assistant_count == 0:
                 try:
-                    await self.conversation_service.store.save_message(conversation_id=conv.id, role="assistant", content=reply_text, token_count=_synth_completion or None)
+                    await self.conversation_service.store.save_message(conversation_id=conv.id, role="assistant", content=reply_text, token_count=_synth_completion or None, source=message_source)
                 except Exception as save_err:
                     logger.warning(f"Could not save final reply (non-fatal): {save_err}")
 
@@ -557,10 +600,6 @@ class AgentService:
                     await self.conversation_service.increment_token_count(conv.id, total_usage["total_tokens"])
                 except Exception as tok_err:
                     logger.warning(f"Could not record token count (non-fatal): {tok_err}")
-                try:
-                    _model_client.record_stream_tokens(preferred_model or get_default_model(_model_client._provider), total_usage["total_tokens"])
-                except Exception:
-                    pass
 
             await self.memory_service.maybe_trigger(summarizer, conv)
             await self.db.commit()
