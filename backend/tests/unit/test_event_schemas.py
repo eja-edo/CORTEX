@@ -1,6 +1,6 @@
 """Unit tests for Milestone 1.1 — Event Schema Design."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from uuid import uuid4
 
 import pytest
@@ -134,16 +134,25 @@ def test_schedule_completed_payload():
 
 
 def test_reminder_due_payload():
+    """`scheduled_at` and `start_time` are distinct instants: the reminder
+    fires 15 minutes *before* the event starts. Conflating them is what made
+    a 14:00 meeting announce itself as starting at 13:45."""
+    start_time = datetime.now(timezone.utc) + timedelta(minutes=15)
     payload = ReminderDuePayload(
         reminder_id=uuid4(),
         schedule_id=uuid4(),
         schedule_title="Meeting",
-        scheduled_at=datetime.now(timezone.utc),
+        scheduled_at=start_time - timedelta(minutes=15),
+        start_time=start_time,
+        location="Phòng họp A",
         reminder_offset_minutes=15,
     )
 
     assert payload.schedule_title == "Meeting"
     assert payload.reminder_offset_minutes == 15
+    assert payload.start_time == start_time
+    assert payload.scheduled_at < payload.start_time
+    assert payload.location == "Phòng họp A"
 
 
 def test_conversation_message_created_payload():

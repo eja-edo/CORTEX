@@ -76,6 +76,7 @@ EVENT_VOCABULARY: dict[str, EventVocabularyEntry] = {
         _entry("task.at_risk", "An overdue task's compute_risk score (priority x overdue_days x cascade) crossed the risk threshold (polled)", "app.services.state_evaluator.StateEvaluator", "Việc có nguy cơ trễ cao"),
         _entry("schedule.starts_soon", "A schedule entered its starts-soon lookahead window (polled)", "app.services.state_evaluator.StateEvaluator", "Lịch sắp bắt đầu"),
         _entry("day.review", "A user still has open tasks as the day reaches its review hour (polled)", "app.services.state_evaluator.StateEvaluator", "Cuối ngày còn việc chưa xong"),
+        _entry("day.plan", "A user has work scheduled or due as the day reaches its start-of-work hour (polled)", "app.services.state_evaluator.StateEvaluator", "Đầu ngày — việc cần làm hôm nay"),
         _entry("conversation.message.created", "A chat message was saved", "app.ai.agents.conversation_store.ConversationStore", "Có tin nhắn mới trong hội thoại"),
         _entry("tool.executed", "An AI tool call finished", "app.ai.agents.tool_execution_service.ToolExecutionService", "AI vừa thực hiện xong một thao tác"),
         _entry("google_calendar.synced", "A Google Calendar sync batch finished", "app.services.google_sync_worker.GoogleSyncWorker", "Đồng bộ Google Calendar xong"),

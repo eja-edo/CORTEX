@@ -199,6 +199,8 @@ class ReminderWorker:
                     schedule_id=reminder.schedule_id,
                     schedule_title=schedule.title,
                     scheduled_at=reminder.scheduled_at,
+                    start_time=schedule.start_time,
+                    location=schedule.location,
                     reminder_offset_minutes=reminder.minutes_before,
                     method=reminder.method,
                 ).model_dump(),

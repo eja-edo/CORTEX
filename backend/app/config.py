@@ -161,6 +161,16 @@ class Settings:
     # table, so it has to be tunable without a deploy.
     ATTENTION_DEDUP_WINDOW_HOURS: int = int(os.getenv("ATTENTION_DEDUP_WINDOW_HOURS", "24"))
 
+    # Wall-clock timezone for times printed *inside notification text*.
+    # Not a per-user preference — none exists in this schema yet (see
+    # UserPreferences' docstring). Every timestamp is stored as a real
+    # instant (TIMESTAMPTZ), so rendering one needs *some* zone, and
+    # printing raw UTC told a Vietnamese user their 14:00 meeting started
+    # at 07:00. `Asia/Ho_Chi_Minh` matches the default `tzid` the rest of
+    # the app already assumes (schemas.RecurrenceRule, create_schedule).
+    # When real per-user timezones land, this becomes the fallback.
+    DISPLAY_TIMEZONE: str = os.getenv("DISPLAY_TIMEZONE", "Asia/Ho_Chi_Minh")
+
     # ── State Evaluator (Milestone 4.6, predicates added in A1) ──────────────
     # All tunable without a deploy for the same reason as the dedup window
     # above: the right thresholds are an empirical question, not a law.
@@ -176,6 +186,11 @@ class Settings:
     # UserPreferences' docstring) — "end of day" is a fixed UTC hour, the
     # same convention-with-a-known-limitation as quiet hours.
     STATE_EVALUATOR_DAY_REVIEW_HOUR_UTC: int = int(os.getenv("STATE_EVALUATOR_DAY_REVIEW_HOUR_UTC", "14"))
+    # The morning counterpart. 1 UTC is 08:00 in DISPLAY_TIMEZONE
+    # (Asia/Ho_Chi_Minh) — the start of a work day, which is the point of
+    # the reason: it is the only predicate that speaks before anything has
+    # gone wrong. Same fixed-UTC-hour limitation as the review hour above.
+    STATE_EVALUATOR_DAY_PLAN_HOUR_UTC: int = int(os.getenv("STATE_EVALUATOR_DAY_PLAN_HOUR_UTC", "1"))
     # Floor for `task.at_risk` (6.8/4.4) — below this, `compute_risk`'s score
     # isn't worth a separate escalation on top of the plain `task.overdue`
     # nudge. 6.0 is a HIGH-priority task (weight 3) two days overdue with no

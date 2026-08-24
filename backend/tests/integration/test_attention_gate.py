@@ -312,3 +312,151 @@ def test_sync_busy_check_silences_non_critical_and_queues_it(user_id):
         db.query(Schedule).filter(Schedule.user_id == user_id).delete()
         db.query(Task).filter(Task.user_id == user_id).delete()
         db.commit()
+
+
+# ============================================================================
+# Step 2b — supersession (nested reasons about the same item)
+# ============================================================================
+#
+# `task.overdue`, `task.blocked_cascade` and `task.at_risk` are nested
+# predicates: every at-risk task is also blocked-cascade-eligible and also
+# overdue. Plain dedup can't collapse them because it keys on
+# (item_id, reason_key) by design. See attention_reason_catalog.SUPERSEDES.
+
+
+@pytest.mark.asyncio
+async def test_at_risk_suppresses_the_overdue_nudge_for_the_same_task(async_db, user_id):
+    """The user-visible bug: one urgent, late task with open subtasks
+    produced three near-identical notifications in a single evaluator tick,
+    two of which were also DM'd. Only the strongest should speak."""
+    task = await _make_task(
+        async_db, user_id, suffix="triple", priority=TaskPriority.URGENT, due_date=YESTERDAY
+    )
+
+    at_risk = await request_attention_async(
+        async_db, user_id=user_id, title="Rủi ro cao",
+        item_type=AttentionItemType.TASK, item_id=task.id, reason_key="task.at_risk",
+    )
+    cascade = await request_attention_async(
+        async_db, user_id=user_id, title="Đang bị chặn",
+        item_type=AttentionItemType.TASK, item_id=task.id, reason_key="task.blocked_cascade",
+    )
+    overdue = await request_attention_async(
+        async_db, user_id=user_id, title="Quá hạn",
+        item_type=AttentionItemType.TASK, item_id=task.id, reason_key="task.overdue",
+    )
+
+    assert at_risk is not None
+    assert cascade is None
+    assert overdue is None
+
+    notifications = (
+        await async_db.execute(select(Notification).where(Notification.user_id == user_id))
+    ).scalars().all()
+    assert len(notifications) == 1
+    assert notifications[0].reason_key == "task.at_risk"
+
+    # Silence is still a recorded decision — "why didn't Cortex say anything
+    # about this being overdue?" has to stay answerable.
+    logs = await _attention_log_for(async_db, task.id)
+    by_reason = {log.reason_key: log.level for log in logs}
+    assert by_reason["task.at_risk"] is not AttentionLevel.SILENT
+    assert by_reason["task.blocked_cascade"] is AttentionLevel.SILENT
+    assert by_reason["task.overdue"] is AttentionLevel.SILENT
+
+
+@pytest.mark.asyncio
+async def test_escalation_still_speaks_after_a_weaker_reason_already_did(async_db, user_id):
+    """Supersession is one-directional on purpose. A task that was merely
+    overdue and has since crossed the risk threshold has genuinely got
+    worse, and that is news — suppressing it would make the Gate quieter
+    than the situation warrants."""
+    task = await _make_task(
+        async_db, user_id, suffix="escalating", priority=TaskPriority.HIGH, due_date=YESTERDAY
+    )
+
+    overdue = await request_attention_async(
+        async_db, user_id=user_id, title="Quá hạn",
+        item_type=AttentionItemType.TASK, item_id=task.id, reason_key="task.overdue",
+    )
+    at_risk = await request_attention_async(
+        async_db, user_id=user_id, title="Rủi ro cao",
+        item_type=AttentionItemType.TASK, item_id=task.id, reason_key="task.at_risk",
+    )
+
+    assert overdue is not None
+    assert at_risk is not None
+
+
+@pytest.mark.asyncio
+async def test_supersession_is_scoped_to_one_item(async_db, user_id):
+    """An at-risk task must not silence a *different* task's overdue nudge."""
+    risky = await _make_task(
+        async_db, user_id, suffix="risky", priority=TaskPriority.URGENT, due_date=YESTERDAY
+    )
+    other = await _make_task(
+        async_db, user_id, suffix="other", priority=TaskPriority.LOW, due_date=YESTERDAY
+    )
+
+    await request_attention_async(
+        async_db, user_id=user_id, title="Rủi ro cao",
+        item_type=AttentionItemType.TASK, item_id=risky.id, reason_key="task.at_risk",
+    )
+    overdue = await request_attention_async(
+        async_db, user_id=user_id, title="Quá hạn",
+        item_type=AttentionItemType.TASK, item_id=other.id, reason_key="task.overdue",
+    )
+
+    assert overdue is not None
+
+
+@pytest.mark.asyncio
+async def test_unrelated_reasons_are_not_superseded(async_db, user_id):
+    """`task.due_soon` and `task.stale` stand alone — the nesting rule must
+    not leak into reasons that aren't part of the overdue family."""
+    task = await _make_task(
+        async_db, user_id, suffix="unrelated", priority=TaskPriority.URGENT, due_date=YESTERDAY
+    )
+
+    await request_attention_async(
+        async_db, user_id=user_id, title="Rủi ro cao",
+        item_type=AttentionItemType.TASK, item_id=task.id, reason_key="task.at_risk",
+    )
+    stale = await request_attention_async(
+        async_db, user_id=user_id, title="Bị bỏ quên",
+        item_type=AttentionItemType.TASK, item_id=task.id, reason_key="task.stale",
+    )
+
+    assert stale is not None
+
+
+def test_sync_path_applies_supersession_too(user_id):
+    """The sync twin re-implements steps 1-3; this catches it drifting."""
+    task_id = uuid4()
+    with sync_session() as db:
+        task = Task(
+            id=task_id, user_id=user_id, title=f"{TITLE_PREFIX}sync-supersede",
+            status=TaskStatus.TODO, due_date=YESTERDAY, priority=TaskPriority.URGENT,
+        )
+        db.add(task)
+        db.commit()
+
+    try:
+        with sync_session() as db:
+            at_risk = request_attention_sync(
+                db, user_id=user_id, title="Rủi ro cao",
+                item_type=AttentionItemType.TASK, item_id=task_id, reason_key="task.at_risk",
+            )
+            overdue = request_attention_sync(
+                db, user_id=user_id, title="Quá hạn",
+                item_type=AttentionItemType.TASK, item_id=task_id, reason_key="task.overdue",
+            )
+
+        assert at_risk is not None
+        assert overdue is None
+    finally:
+        with sync_session() as db:
+            db.execute(delete(Notification).where(Notification.user_id == user_id))
+            db.execute(delete(AttentionLog).where(AttentionLog.item_id == task_id))
+            db.execute(delete(Task).where(Task.id == task_id))
+            db.commit()

@@ -94,6 +94,7 @@ ALL_EVENT_TYPES = (
     "task.at_risk",
     "schedule.starts_soon",
     "day.review",
+    "day.plan",
 )
 
 
@@ -156,6 +157,18 @@ async def _make_schedule(db, *, title_suffix: str, start_time, end_time, is_canc
     await db.commit()
     await db.refresh(schedule)
     return schedule
+
+
+async def _clear_user_flags(db, flag_key: str) -> None:
+    """Forcing the hour thresholds to 0 flags every dev user with open
+    work, not just TEST_USER_ID — so teardown clears the whole key."""
+    await db.execute(
+        delete(StateEvaluatorFlag).where(
+            StateEvaluatorFlag.item_type == AttentionItemType.USER,
+            StateEvaluatorFlag.flag_key == flag_key,
+        )
+    )
+    await db.commit()
 
 
 async def _flag(db, item_id, *, item_type=AttentionItemType.TASK, flag_key="overdue") -> StateEvaluatorFlag | None:
@@ -543,3 +556,222 @@ async def test_day_review_lifecycle_publishes_once_per_transition(async_db, eval
             )
         )
         await async_db.commit()
+
+
+# ============================================================================
+# day.plan — start-of-day briefing
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_day_plan_separates_due_today_from_carried_over(async_db, evaluator, event_subscriber, monkeypatch):
+    """Work that slipped from an earlier day is the part a plan has to
+    confront first, so it travels in its own list rather than being summed
+    into one "you have 4 things" count."""
+    today = date.today()
+    due_today = await _make_task(
+        async_db, title_suffix="plan_today", status=TaskStatus.TODO,
+        due_date=datetime.combine(today, time(17, 0)), priority=TaskPriority.URGENT,
+    )
+    carried = await _make_task(
+        async_db, title_suffix="plan_carried", status=TaskStatus.TODO,
+        due_date=datetime.combine(today - timedelta(days=3), time(9, 0)), priority=TaskPriority.HIGH,
+    )
+
+    try:
+        monkeypatch.setattr(settings, "STATE_EVALUATOR_DAY_PLAN_HOUR_UTC", 0)
+        await evaluator._evaluate_day_plan()
+
+        events = [e for e in _events_of_type(event_subscriber, "day.plan") if e.user_id == TEST_USER_ID]
+        assert len(events) == 1
+        payload = events[0].payload
+
+        titles_today = {i["title"] for i in payload["due_today"]}
+        titles_carried = {i["title"] for i in payload["carried_over"]}
+        assert due_today.title in titles_today
+        assert due_today.title not in titles_carried
+        assert carried.title in titles_carried
+        assert carried.title not in titles_today
+
+        # The items must carry what the notification prints — a bare
+        # task_id would force the subscriber back to the database, which it
+        # cannot do for workflow_service across a process boundary.
+        item = next(i for i in payload["due_today"] if i["title"] == due_today.title)
+        assert item["priority"] == "urgent"
+        assert item["due_date"] is not None
+    finally:
+        await _clear_user_flags(async_db, "day_plan")
+
+
+@pytest.mark.asyncio
+async def test_day_plan_includes_todays_schedules(async_db, evaluator, event_subscriber, monkeypatch):
+    """A day with only meetings still deserves a plan, so a schedule can
+    put a user on the list with no task involved at all."""
+    today = date.today()
+    start = datetime.combine(today, time(10, 0), tzinfo=timezone.utc)
+    schedule = await _make_schedule(
+        async_db, title_suffix="plan_meeting", start_time=start, end_time=start + timedelta(hours=1),
+    )
+
+    try:
+        monkeypatch.setattr(settings, "STATE_EVALUATOR_DAY_PLAN_HOUR_UTC", 0)
+        await evaluator._evaluate_day_plan()
+
+        events = [e for e in _events_of_type(event_subscriber, "day.plan") if e.user_id == TEST_USER_ID]
+        assert len(events) == 1
+        titles = {s["title"] for s in events[0].payload["schedules"]}
+        assert schedule.title in titles
+    finally:
+        await _clear_user_flags(async_db, "day_plan")
+
+
+@pytest.mark.asyncio
+async def test_day_plan_publishes_once_per_day(async_db, evaluator, event_subscriber, monkeypatch):
+    today = date.today()
+    await _make_task(
+        async_db, title_suffix="plan_once", status=TaskStatus.TODO,
+        due_date=datetime.combine(today, time(12, 0)),
+    )
+
+    try:
+        monkeypatch.setattr(settings, "STATE_EVALUATOR_DAY_PLAN_HOUR_UTC", 0)
+        await evaluator._evaluate_day_plan()
+        await evaluator._evaluate_day_plan()
+
+        events = [e for e in _events_of_type(event_subscriber, "day.plan") if e.user_id == TEST_USER_ID]
+        assert len(events) == 1
+    finally:
+        await _clear_user_flags(async_db, "day_plan")
+
+
+@pytest.mark.asyncio
+async def test_day_plan_republishes_after_a_stale_flag_from_yesterday(async_db, evaluator, event_subscriber, monkeypatch):
+    """The reset that does not depend on uptime.
+
+    `day.plan` fires at 01:00 UTC, so the window where its condition is
+    false — and the flag would clear the old way — is a single hour. An
+    evaluator restarted across it would leave yesterday's flag set and the
+    user would silently never get a plan again. `_clear_stale_daily_flags`
+    resets by calendar day instead.
+    """
+    today = date.today()
+    await _make_task(
+        async_db, title_suffix="plan_stale_flag", status=TaskStatus.TODO,
+        due_date=datetime.combine(today, time(12, 0)),
+    )
+
+    try:
+        monkeypatch.setattr(settings, "STATE_EVALUATOR_DAY_PLAN_HOUR_UTC", 0)
+        await evaluator._evaluate_day_plan()
+        assert len([e for e in _events_of_type(event_subscriber, "day.plan") if e.user_id == TEST_USER_ID]) == 1
+
+        # Backdate the flag as if it were set yesterday and the evaluator
+        # never ran during the hour that would have cleared it.
+        flag = await _flag(async_db, TEST_USER_ID, item_type=AttentionItemType.USER, flag_key="day_plan")
+        assert flag is not None
+        flag.first_detected_at = datetime.combine(today - timedelta(days=1), time(1, 0))
+        await async_db.commit()
+
+        await evaluator._evaluate_day_plan()
+        events = [e for e in _events_of_type(event_subscriber, "day.plan") if e.user_id == TEST_USER_ID]
+        assert len(events) == 2
+    finally:
+        await _clear_user_flags(async_db, "day_plan")
+
+
+@pytest.mark.asyncio
+async def test_day_plan_silent_before_the_start_hour(async_db, evaluator, event_subscriber, monkeypatch):
+    today = date.today()
+    await _make_task(
+        async_db, title_suffix="plan_too_early", status=TaskStatus.TODO,
+        due_date=datetime.combine(today, time(12, 0)),
+    )
+
+    try:
+        monkeypatch.setattr(settings, "STATE_EVALUATOR_DAY_PLAN_HOUR_UTC", 24)
+        await evaluator._evaluate_day_plan()
+        assert not [e for e in _events_of_type(event_subscriber, "day.plan") if e.user_id == TEST_USER_ID]
+    finally:
+        await _clear_user_flags(async_db, "day_plan")
+
+
+# ============================================================================
+# day.review — what the day came to
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_day_review_reports_what_was_finished_today(async_db, evaluator, event_subscriber, monkeypatch):
+    """Two counts made a productive day and a wasted one read identically.
+    `completed_at` is the column that tells them apart — deliberately not
+    `updated_at`, which also moves when a done task is merely renamed."""
+    today = date.today()
+    done = await _make_task(
+        async_db, title_suffix="review_done", status=TaskStatus.DONE, due_date=None,
+    )
+    done.completed_at = datetime.combine(today, time(9, 0))
+    still_open = await _make_task(
+        async_db, title_suffix="review_open", status=TaskStatus.TODO, due_date=None,
+    )
+    await async_db.commit()
+
+    try:
+        monkeypatch.setattr(settings, "STATE_EVALUATOR_DAY_REVIEW_HOUR_UTC", 0)
+        await evaluator._evaluate_day_review()
+
+        events = [e for e in _events_of_type(event_subscriber, "day.review") if e.user_id == TEST_USER_ID]
+        assert len(events) == 1
+        payload = events[0].payload
+
+        assert payload["completed_today_count"] >= 1
+        assert done.title in {i["title"] for i in payload["completed_today"]}
+        assert still_open.title in {i["title"] for i in payload["still_open"]}
+        # A finished task must not also show up as carrying over.
+        assert done.title not in {i["title"] for i in payload["still_open"]}
+    finally:
+        await _clear_user_flags(async_db, "day_review")
+
+
+# ============================================================================
+# Predicate ordering
+# ============================================================================
+
+
+def test_run_loop_evaluates_strongest_overdue_predicate_first():
+    """Load-bearing ordering, not cosmetics.
+
+    `task.at_risk` and `task.blocked_cascade` are strict subsets of
+    `task.overdue`, so a late, risky task with open subtasks trips all
+    three on one tick. The Attention Gate collapses them
+    (attention_reason_catalog.SUPERSEDES), but it can only look *backwards*
+    at what already reached the user — so the strongest reason has to be
+    published first. Run them the other way round and the user gets "Quá
+    hạn" before "Rủi ro cao" has had any chance to suppress it, which is
+    the three-notifications-for-one-task bug this pins shut.
+
+    `EventBus.publish` awaits `route_event`, which awaits every in-process
+    handler, and the loop below awaits each evaluator in turn — so source
+    order really is delivery order here.
+    """
+    import inspect
+
+    source = inspect.getsource(StateEvaluator._run_loop)
+    order = [
+        name for name in (
+            "_evaluate_task_at_risk",
+            "_evaluate_task_blocked_cascade",
+            "_evaluate_task_overdue",
+        )
+        if name in source
+    ]
+    positions = [source.index(name) for name in order]
+
+    assert order == [
+        "_evaluate_task_at_risk",
+        "_evaluate_task_blocked_cascade",
+        "_evaluate_task_overdue",
+    ]
+    assert positions == sorted(positions), (
+        "at_risk must be evaluated before blocked_cascade before overdue — "
+        "see attention_reason_catalog.SUPERSEDES"
+    )

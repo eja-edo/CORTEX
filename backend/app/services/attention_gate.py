@@ -60,10 +60,11 @@ from app.models import (
     Task,
     TaskPriority,
 )
+from app.repositories.attention_log import AttentionLogRepository
 from app.services.attention_bundle import enqueue_async, enqueue_sync
 from app.services.attention_levels import LEVEL_RANK as _LEVEL_RANK
 from app.services.attention_log import AttentionLogService
-from app.services.attention_reason_catalog import base_level_for
+from app.services.attention_reason_catalog import base_level_for, superseded_by
 from app.services.availability import should_stay_quiet_async, should_stay_quiet_sync
 from app.services.feedback_loop import apply_downgrade, dismiss_count_async, dismiss_count_sync
 from app.services.notifications import NotificationService, create_notification_async
@@ -129,6 +130,14 @@ def _is_gated_candidate(
     return False
 
 
+def _supersession_window_start() -> datetime:
+    """`surfaced_at` is a naive UTC column — compare in the same shape, the
+    same convention attention_log.py's `_naive_utcnow` uses."""
+    return datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+        hours=settings.ATTENTION_DEDUP_WINDOW_HOURS
+    )
+
+
 # ---------------------------------------------------------------------------
 # Async path
 # ---------------------------------------------------------------------------
@@ -154,6 +163,23 @@ async def _decide_level_async(
     prefs = await get_preferences_async(session, user_id)
     if is_reason_disabled(prefs, reason_key):
         return AttentionLevel.SILENT, False
+
+    stronger = superseded_by(reason_key)
+    if stronger:
+        already = await AttentionLogRepository(session).find_last_spoken_any(
+            user_id=user_id, item_id=item_id, reason_keys=stronger,
+            since=_supersession_window_start(),
+        )
+        if already is not None:
+            logger.info(
+                "Attention superseded: %r for item %s already covered by %r",
+                reason_key, item_id, already.reason_key,
+            )
+            # `silenced_by_busy=False`: there is no "later" worth queueing
+            # for. The user has already been told about this item, in
+            # stronger terms — replaying this one when they free up would
+            # just be the duplicate arriving late.
+            return AttentionLevel.SILENT, False
 
     level = base_level_for(reason_key)
     if item_type is AttentionItemType.TASK:
@@ -247,6 +273,28 @@ def _find_last_spoken_sync(
     return session.execute(stmt).scalars().first()
 
 
+def _find_last_spoken_any_sync(
+    session: Session, user_id: UUID, item_id: UUID, reason_keys: frozenset[str], since: datetime
+) -> AttentionLog | None:
+    """Sync twin of `AttentionLogRepository.find_last_spoken_any` — see
+    module docstring for why this isn't just a call to the async service."""
+    if not reason_keys:
+        return None
+    stmt = (
+        select(AttentionLog)
+        .where(
+            AttentionLog.user_id == user_id,
+            AttentionLog.item_id == item_id,
+            AttentionLog.reason_key.in_(list(reason_keys)),
+            AttentionLog.surfaced_at >= since,
+            AttentionLog.level != AttentionLevel.SILENT,
+        )
+        .order_by(AttentionLog.surfaced_at.desc())
+        .limit(1)
+    )
+    return session.execute(stmt).scalars().first()
+
+
 def _record_surface_sync(
     session: Session,
     *,
@@ -289,6 +337,12 @@ def _decide_level_sync(
     `silenced_by_busy` contract and the disabled-reason short-circuit."""
     prefs = get_preferences_sync(session, user_id)
     if is_reason_disabled(prefs, reason_key):
+        return AttentionLevel.SILENT, False
+
+    stronger = superseded_by(reason_key)
+    if stronger and _find_last_spoken_any_sync(
+        session, user_id, item_id, stronger, _supersession_window_start()
+    ) is not None:
         return AttentionLevel.SILENT, False
 
     level = base_level_for(reason_key)

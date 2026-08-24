@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from datetime import datetime
 from uuid import UUID
 
@@ -53,6 +53,33 @@ class AttentionLogRepository:
             .limit(1)
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def find_last_spoken_any(
+        self, user_id: UUID, item_id: UUID, reason_keys: Collection[str], since: datetime
+    ) -> AttentionLog | None:
+        """`find_last_spoken` widened to a set of reason keys — "did we
+        already tell this user about this item for *any* of these reasons?"
+
+        Used by the Gate's supersession check (see
+        attention_reason_catalog.SUPERSEDES), which asks about the stronger
+        siblings of the reason currently firing. Same index, same exclusion
+        of `silent` rows, for the same reasons as `find_last_spoken`.
+        """
+        if not reason_keys:
+            return None
+        stmt = (
+            select(AttentionLog)
+            .where(
+                AttentionLog.user_id == user_id,
+                AttentionLog.item_id == item_id,
+                AttentionLog.reason_key.in_(list(reason_keys)),
+                AttentionLog.surfaced_at >= since,
+                AttentionLog.level != AttentionLevel.SILENT,
+            )
+            .order_by(AttentionLog.surfaced_at.desc())
+            .limit(1)
+        )
+        return (await self.session.execute(stmt)).scalars().first()
 
     async def list_for_item(self, user_id: UUID, item_id: UUID) -> Sequence[AttentionLog]:
         """Everything ever recorded for one item, oldest first — silent rows

@@ -66,11 +66,22 @@ class ScheduleCompletedPayload(BaseModel):
 
 
 class ReminderDuePayload(BaseModel):
-    """Payload for schedule.reminder.due event."""
+    """Payload for schedule.reminder.due event.
+
+    `scheduled_at` and `start_time` are two different instants and were
+    conflated for a long time: `reminder_service` sets a reminder's
+    `scheduled_at` to `start_time - minutes_before`, so it is *when the
+    nudge fires*, not when the event begins. The subscriber rendered it as
+    "Starts at {scheduled_at}", which told the user a meeting at 14:00
+    started at 13:45. `start_time` is now carried explicitly so nothing has
+    to infer one from the other.
+    """
     reminder_id: UUID
     schedule_id: UUID
     schedule_title: str
-    scheduled_at: datetime
+    scheduled_at: datetime = Field(..., description="When the reminder fires (start_time - offset)")
+    start_time: datetime = Field(..., description="When the schedule itself begins")
+    location: Optional[str] = None
     reminder_offset_minutes: Optional[int] = None
     method: str = "push"
 
@@ -120,6 +131,31 @@ class TaskDeletedPayload(BaseModel):
     status: str
 
 
+class TaskDigestItem(BaseModel):
+    """One task as it appears inside a digest event's list.
+
+    A snapshot, not a reference: a subscriber that only got `task_id` would
+    have to go back to the database to say anything useful, and events are
+    also read by workflow_service across a process boundary where that
+    lookup isn't available at all. Kept to what notification text actually
+    prints — see `app.services.notification_format.task_line`.
+    """
+    task_id: UUID
+    title: str
+    due_date: Optional[datetime] = None
+    priority: Optional[str] = Field(None, description="low, medium, high, or urgent")
+
+
+class ScheduleDigestItem(BaseModel):
+    """One calendar event inside a digest event's list. `start_time` is a
+    real instant here, unlike `TaskDigestItem.due_date` — see
+    `notification_format`'s module docstring."""
+    schedule_id: UUID
+    title: str
+    start_time: datetime
+    location: Optional[str] = None
+
+
 class TaskOverduePayload(BaseModel):
     """Payload for task.overdue event (Milestone 4.6). Published once per
     transition into overdue, not once per poll — see StateEvaluator."""
@@ -147,6 +183,7 @@ class TaskStalePayload(BaseModel):
     title: str
     created_at: datetime
     days_since_update: int
+    priority: Optional[str] = Field(None, description="low, medium, high, or urgent")
 
 
 class TaskBlockedCascadePayload(BaseModel):
@@ -157,6 +194,11 @@ class TaskBlockedCascadePayload(BaseModel):
     title: str
     overdue_days: int
     open_subtask_count: int
+    due_date: Optional[datetime] = None
+    priority: Optional[str] = Field(None, description="low, medium, high, or urgent")
+    # The whole point of this reason is *which* work is stuck behind the
+    # parent. A bare count named nothing the user could go act on.
+    open_subtasks: list[TaskDigestItem] = Field(default_factory=list)
 
 
 class ScheduleStartsSoonPayload(BaseModel):
@@ -165,6 +207,7 @@ class ScheduleStartsSoonPayload(BaseModel):
     title: str
     start_time: datetime
     minutes_until_start: int
+    location: Optional[str] = None
 
 
 class TaskAtRiskPayload(BaseModel):
@@ -179,13 +222,49 @@ class TaskAtRiskPayload(BaseModel):
     overdue_days: int
     open_subtask_count: int
     priority: Optional[str] = Field(None, description="low, medium, high, or urgent")
+    # `risk_score` alone is an uninterpretable number — 12.0 means nothing
+    # without the deadline it missed and the work stuck behind it. These
+    # are the inputs `risk_detection.compute_risk` multiplied together, so
+    # the notification can show its working instead of asserting a verdict.
+    due_date: Optional[datetime] = None
+    open_subtasks: list[TaskDigestItem] = Field(default_factory=list)
 
 
 class DayReviewPayload(BaseModel):
     """Payload for day.review event (Milestone 4.6 / A1) — a per-user, not
-    per-item, digest anchor: still work open as the day winds down."""
+    per-item, digest anchor: what the day actually came to.
+
+    Originally two counts, which made the end of a productive day and the
+    end of a wasted one read identically ("Còn 5 việc chưa xong"). A review
+    has to close the loop on both halves: what got finished, and what is
+    carrying over.
+    """
     open_task_count: int
     overdue_task_count: int
+    completed_today_count: int = 0
+    completed_today: list[TaskDigestItem] = Field(default_factory=list)
+    still_open: list[TaskDigestItem] = Field(default_factory=list)
+
+
+class DayPlanPayload(BaseModel):
+    """Payload for day.plan event — the morning counterpart to
+    `day.review`.
+
+    Detection had no start-of-day predicate at all: every task reason fires
+    off a deadline that is already close or already missed, so the first
+    thing Cortex said about a day's work was a warning about it. This is
+    the one reason that arrives before anything has gone wrong.
+
+    `carried_over` is deliberately separate from `due_today`: work that
+    slipped from an earlier day is the part a plan has to confront first,
+    and folding it into one list would hide it.
+    """
+    due_today_count: int
+    carried_over_count: int
+    schedule_count: int = 0
+    due_today: list[TaskDigestItem] = Field(default_factory=list)
+    carried_over: list[TaskDigestItem] = Field(default_factory=list)
+    schedules: list[ScheduleDigestItem] = Field(default_factory=list)
 
 
 # ============================================================================
@@ -249,7 +328,9 @@ EVENT_PAYLOAD_REGISTRY: dict[str, type[BaseModel]] = {
     "task.stale": TaskStalePayload,
     "task.blocked_cascade": TaskBlockedCascadePayload,
     "schedule.starts_soon": ScheduleStartsSoonPayload,
+    "task.at_risk": TaskAtRiskPayload,
     "day.review": DayReviewPayload,
+    "day.plan": DayPlanPayload,
     "conversation.message.created": ConversationMessageCreatedPayload,
     "tool.executed": ToolExecutedPayload,
     "google_calendar.synced": GoogleCalendarSyncedPayload,

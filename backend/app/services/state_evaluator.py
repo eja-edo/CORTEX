@@ -51,16 +51,19 @@ from app.config import settings
 from app.database_async import make_async_sessionmaker
 from app.events.event_bus import get_event_bus
 from app.events.payloads import (
+    DayPlanPayload,
     DayReviewPayload,
+    ScheduleDigestItem,
     ScheduleStartsSoonPayload,
     TaskAtRiskPayload,
     TaskBlockedCascadePayload,
+    TaskDigestItem,
     TaskDueSoonPayload,
     TaskOverduePayload,
     TaskStalePayload,
 )
 from app.events.schemas import EventEnvelope
-from app.models import AttentionItemType, Schedule, StateEvaluatorFlag, Task, TaskStatus
+from app.models import AttentionItemType, Schedule, StateEvaluatorFlag, Task, TaskPriority, TaskStatus
 from app.services.risk_detection import compute_risk
 from app.services.today import OPEN_STATUSES, _due_day, _today
 from app.utils.logger import get_logger
@@ -73,11 +76,60 @@ STALE_FLAG_KEY = "stale"
 BLOCKED_CASCADE_FLAG_KEY = "blocked_cascade"
 STARTS_SOON_FLAG_KEY = "starts_soon"
 DAY_REVIEW_FLAG_KEY = "day_review"
+DAY_PLAN_FLAG_KEY = "day_plan"
 AT_RISK_FLAG_KEY = "at_risk"
+
+# The two per-user daily digests reset by calendar day rather than by their
+# condition going false — see `_clear_stale_daily_flags`.
+DAILY_FLAG_KEYS = (DAY_REVIEW_FLAG_KEY, DAY_PLAN_FLAG_KEY)
+
+# How many items a digest event carries. The notification only prints
+# `notification_format.MAX_LISTED_ITEMS` of them, but the event is also read
+# by workflow_service, so it carries a little more than one renderer needs.
+MAX_DIGEST_ITEMS = 10
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _rank_key(task: Task, today) -> tuple:
+    """Ordering for digest lists: soonest deadline first, then higher
+    priority. Matches how `today.py` ranks the "Hôm nay" screen — a digest
+    that ordered by primary key would bury the thing that matters."""
+    due_day = _due_day(task)
+    return (
+        due_day if due_day is not None else today + timedelta(days=3650),
+        -_PRIORITY_RANK.get(task.priority, -1),
+        task.title or "",
+    )
+
+
+_PRIORITY_RANK: dict = {
+    TaskPriority.URGENT: 3,
+    TaskPriority.HIGH: 2,
+    TaskPriority.MEDIUM: 1,
+    TaskPriority.LOW: 0,
+    None: -1,
+}
+
+
+def _task_item(task: Task) -> TaskDigestItem:
+    return TaskDigestItem(
+        task_id=task.id,
+        title=task.title,
+        due_date=task.due_date,
+        priority=task.priority.value if task.priority else None,
+    )
+
+
+def _schedule_item(schedule: Schedule) -> ScheduleDigestItem:
+    return ScheduleDigestItem(
+        schedule_id=schedule.id,
+        title=schedule.title,
+        start_time=schedule.start_time,
+        location=schedule.location,
+    )
 
 
 class StateEvaluator:
@@ -139,13 +191,24 @@ class StateEvaluator:
         # Each predicate runs independently — one raising must not stop the
         # others from being evaluated this tick, and must not stall the
         # tick forever.
+        #
+        # **Order is load-bearing for the first three.** `task.at_risk` and
+        # `task.blocked_cascade` are strict subsets of `task.overdue`, so a
+        # late, risky task with open subtasks satisfies all three on the
+        # same tick. The Gate collapses them via
+        # `attention_reason_catalog.SUPERSEDES`, but it can only do that by
+        # looking *backwards* at what already reached the user — so the
+        # strongest reason has to go first, or the user gets the weak
+        # version before the strong one has had a chance to suppress it.
+        # `test_state_evaluator.py` pins this ordering.
         evaluators = (
+            self._evaluate_task_at_risk,
+            self._evaluate_task_blocked_cascade,
             self._evaluate_task_overdue,
             self._evaluate_task_due_soon,
             self._evaluate_task_stale,
-            self._evaluate_task_blocked_cascade,
-            self._evaluate_task_at_risk,
             self._evaluate_schedule_starts_soon,
+            self._evaluate_day_plan,
             self._evaluate_day_review,
         )
         try:
@@ -203,6 +266,35 @@ class StateEvaluator:
 
         await db.commit()
         return to_publish, to_clear
+
+    async def _clear_stale_daily_flags(self, db: AsyncSession, flag_key: str, today_start: datetime) -> None:
+        """Drop yesterday's flag rows for a once-a-day digest.
+
+        `day.review` relied purely on its condition going false to reset:
+        the hour drops back below the threshold after midnight UTC, the
+        flag clears, and the next crossing publishes again. That works, but
+        only if the evaluator happens to be running during the window where
+        the condition is false — for `day.review` (hour 14) that window is
+        fourteen hours, for `day.plan` (hour 1) it is one. A restart across
+        that hour would leave the flag set and the user would silently get
+        no plan the next day, or any day after.
+
+        Clearing by calendar day instead makes the reset independent of
+        uptime: a flag first detected before today is stale by definition,
+        because these conditions are evaluated once per day.
+        """
+        stale = await db.execute(
+            select(StateEvaluatorFlag).where(
+                StateEvaluatorFlag.flag_key == flag_key,
+                StateEvaluatorFlag.first_detected_at < today_start,
+            )
+        )
+        rows = list(stale.scalars().all())
+        for row in rows:
+            await db.delete(row)
+        if rows:
+            await db.commit()
+            logger.info("Cleared %d stale %r flag(s) from a previous day", len(rows), flag_key)
 
     # ------------------------------------------------------------------
     # task.overdue
@@ -344,10 +436,39 @@ class StateEvaluator:
                     title=task.title,
                     created_at=task.created_at,
                     days_since_update=(now - task.updated_at).days,
+                    priority=task.priority.value if task.priority else None,
                 ).model_dump(),
             ))
         except Exception as exc:
             logger.warning(f"Failed to publish task.stale event for task {task.id}: {exc}")
+
+    # ------------------------------------------------------------------
+    # Shared: which work is stuck under which overdue parent
+    # ------------------------------------------------------------------
+
+    async def _open_subtasks_by_parent(
+        self, db: AsyncSession, parent_ids
+    ) -> dict[UUID, list[Task]]:
+        """Open subtasks grouped by parent, for the two reasons that are
+        *about* the cascade (`task.blocked_cascade`, `task.at_risk`).
+
+        Both used to `count(*)` instead, which is all the risk formula
+        needs but not what a notification needs: "còn 2 việc con chưa xong"
+        names nothing the user can go do. Fetching the rows once here keeps
+        the two predicates reading the same list.
+        """
+        if not parent_ids:
+            return {}
+        result = await db.execute(
+            select(Task).where(
+                Task.parent_task_id.in_(parent_ids),
+                Task.status.in_(OPEN_STATUSES),
+            )
+        )
+        grouped: dict[UUID, list[Task]] = {}
+        for subtask in result.scalars().all():
+            grouped.setdefault(subtask.parent_task_id, []).append(subtask)
+        return grouped
 
     # ------------------------------------------------------------------
     # task.blocked_cascade — task cha trễ, còn ≥1 subtask chưa xong
@@ -366,18 +487,7 @@ class StateEvaluator:
                 )
             )
             overdue_parents = {t.id: t for t in overdue_parents_result.scalars().all()}
-            if not overdue_parents:
-                blocked_parents: dict[UUID, int] = {}
-            else:
-                open_subtask_counts_result = await db.execute(
-                    select(Task.parent_task_id, func.count(Task.id))
-                    .where(
-                        Task.parent_task_id.in_(overdue_parents),
-                        Task.status.in_(OPEN_STATUSES),
-                    )
-                    .group_by(Task.parent_task_id)
-                )
-                blocked_parents = dict(open_subtask_counts_result.all())
+            blocked_parents = await self._open_subtasks_by_parent(db, set(overdue_parents))
 
             to_publish, _ = await self._diff_flags(
                 db,
@@ -392,9 +502,10 @@ class StateEvaluator:
                     overdue_parents[parent_id], today, blocked_parents[parent_id]
                 )
 
-    async def _publish_task_blocked_cascade(self, parent: Task, today, open_subtask_count: int) -> None:
+    async def _publish_task_blocked_cascade(self, parent: Task, today, open_subtasks: list[Task]) -> None:
         try:
             due_day = _due_day(parent)
+            ordered = sorted(open_subtasks, key=lambda t: _rank_key(t, today))
             event_bus = await self._get_event_bus()
             await event_bus.publish(EventEnvelope(
                 type="task.blocked_cascade",
@@ -404,7 +515,10 @@ class StateEvaluator:
                     task_id=parent.id,
                     title=parent.title,
                     overdue_days=(today - due_day).days,
-                    open_subtask_count=open_subtask_count,
+                    open_subtask_count=len(open_subtasks),
+                    due_date=parent.due_date,
+                    priority=parent.priority.value if parent.priority else None,
+                    open_subtasks=[_task_item(t) for t in ordered[:MAX_DIGEST_ITEMS]],
                 ).model_dump(),
             ))
         except Exception as exc:
@@ -436,24 +550,16 @@ class StateEvaluator:
             )
             overdue_tasks = {t.id: t for t in overdue_result.scalars().all()}
 
-            at_risk: dict[UUID, tuple[float, int]] = {}
+            at_risk: dict[UUID, tuple[float, list[Task]]] = {}
             if overdue_tasks:
-                subtask_counts_result = await db.execute(
-                    select(Task.parent_task_id, func.count(Task.id))
-                    .where(
-                        Task.parent_task_id.in_(overdue_tasks),
-                        Task.status.in_(OPEN_STATUSES),
-                    )
-                    .group_by(Task.parent_task_id)
-                )
-                subtask_counts = dict(subtask_counts_result.all())
+                subtasks_by_parent = await self._open_subtasks_by_parent(db, set(overdue_tasks))
 
                 for task_id, task in overdue_tasks.items():
                     overdue_days = (today - _due_day(task)).days
-                    open_subtask_count = subtask_counts.get(task_id, 0)
-                    risk = compute_risk(task.priority, overdue_days, open_subtask_count)
+                    open_subtasks = subtasks_by_parent.get(task_id, [])
+                    risk = compute_risk(task.priority, overdue_days, len(open_subtasks))
                     if risk >= settings.STATE_EVALUATOR_RISK_THRESHOLD:
-                        at_risk[task_id] = (risk, open_subtask_count)
+                        at_risk[task_id] = (risk, open_subtasks)
 
             to_publish, _ = await self._diff_flags(
                 db,
@@ -464,16 +570,17 @@ class StateEvaluator:
             )
 
             for task_id in to_publish:
-                risk_score, open_subtask_count = at_risk[task_id]
+                risk_score, open_subtasks = at_risk[task_id]
                 await self._publish_task_at_risk(
-                    overdue_tasks[task_id], today, risk_score, open_subtask_count
+                    overdue_tasks[task_id], today, risk_score, open_subtasks
                 )
 
     async def _publish_task_at_risk(
-        self, task: Task, today, risk_score: float, open_subtask_count: int
+        self, task: Task, today, risk_score: float, open_subtasks: list[Task]
     ) -> None:
         try:
             due_day = _due_day(task)
+            ordered = sorted(open_subtasks, key=lambda t: _rank_key(t, today))
             event_bus = await self._get_event_bus()
             await event_bus.publish(EventEnvelope(
                 type="task.at_risk",
@@ -484,8 +591,10 @@ class StateEvaluator:
                     title=task.title,
                     risk_score=risk_score,
                     overdue_days=(today - due_day).days,
-                    open_subtask_count=open_subtask_count,
+                    open_subtask_count=len(open_subtasks),
                     priority=task.priority.value if task.priority else None,
+                    due_date=task.due_date,
+                    open_subtasks=[_task_item(t) for t in ordered[:MAX_DIGEST_ITEMS]],
                 ).model_dump(),
             ))
         except Exception as exc:
@@ -534,6 +643,7 @@ class StateEvaluator:
                     title=schedule.title,
                     start_time=schedule.start_time,
                     minutes_until_start=minutes_until_start,
+                    location=schedule.location,
                 ).model_dump(),
             ))
         except Exception as exc:
@@ -567,6 +677,9 @@ class StateEvaluator:
                 users_with_open_work = dict(counts_result.all())
 
         async with self._session_maker() as db:
+            await self._clear_stale_daily_flags(
+                db, DAY_REVIEW_FLAG_KEY, datetime.combine(_today(), time.min)
+            )
             to_publish, _ = await self._diff_flags(
                 db,
                 item_type=AttentionItemType.USER,
@@ -582,15 +695,36 @@ class StateEvaluator:
         try:
             today = _today()
             today_start = datetime.combine(today, time.min)
-            overdue_count_result = await db.execute(
-                select(func.count(Task.id)).where(
+
+            open_result = await db.execute(
+                select(Task).where(
                     Task.user_id == user_id,
                     Task.status.in_(OPEN_STATUSES),
-                    Task.due_date.isnot(None),
-                    Task.due_date < today_start,
                 )
             )
-            overdue_task_count = overdue_count_result.scalar_one()
+            open_tasks = list(open_result.scalars().all())
+            overdue_task_count = sum(
+                1 for t in open_tasks if t.due_date is not None and t.due_date < today_start
+            )
+
+            # `completed_at`, not `updated_at`: the column exists precisely
+            # to tell "finished today" from "renamed today" (see its comment
+            # in models.py). Without this half, a day where the user cleared
+            # nine tasks read exactly like one where they cleared none.
+            completed_result = await db.execute(
+                select(Task).where(
+                    Task.user_id == user_id,
+                    Task.status == TaskStatus.DONE,
+                    Task.completed_at.isnot(None),
+                    Task.completed_at >= today_start,
+                )
+            )
+            completed_tasks = list(completed_result.scalars().all())
+
+            ordered_open = sorted(open_tasks, key=lambda t: _rank_key(t, today))
+            ordered_done = sorted(
+                completed_tasks, key=lambda t: t.completed_at or today_start, reverse=True
+            )
 
             event_bus = await self._get_event_bus()
             await event_bus.publish(EventEnvelope(
@@ -600,7 +734,103 @@ class StateEvaluator:
                 payload=DayReviewPayload(
                     open_task_count=open_task_count,
                     overdue_task_count=overdue_task_count,
+                    completed_today_count=len(completed_tasks),
+                    completed_today=[_task_item(t) for t in ordered_done[:MAX_DIGEST_ITEMS]],
+                    still_open=[_task_item(t) for t in ordered_open[:MAX_DIGEST_ITEMS]],
                 ).model_dump(),
             ))
         except Exception as exc:
             logger.warning(f"Failed to publish day.review event for user {user_id}: {exc}")
+
+    # ------------------------------------------------------------------
+    # day.plan — đầu ngày làm việc, việc cần làm hôm nay
+    # ------------------------------------------------------------------
+
+    async def _evaluate_day_plan(self):
+        """The morning counterpart to `day.review`, and the only predicate
+        here that fires before anything has gone wrong.
+
+        Every other task reason is triggered by a deadline that is already
+        close (`task.due_soon`) or already missed (`task.overdue`,
+        `task.blocked_cascade`, `task.at_risk`) — so until this existed the
+        first thing Cortex said about a day's work was a warning about it.
+
+        Same per-user shape as `day.review` (`item_type=USER`), same fixed
+        UTC hour with the same known timezone limitation, and the same flag
+        idempotency — with the daily reset made explicit rather than relying
+        on the hour dropping back below the threshold; see
+        `_clear_stale_daily_flags`.
+        """
+        now = _utcnow()
+        today = _today()
+        today_start = datetime.combine(today, time.min)
+        tomorrow_start = today_start + timedelta(days=1)
+
+        users: dict[UUID, tuple[list[Task], list[Task], list[Schedule]]] = {}
+        if now.hour >= settings.STATE_EVALUATOR_DAY_PLAN_HOUR_UTC:
+            async with self._session_maker() as db:
+                task_result = await db.execute(
+                    select(Task).where(
+                        Task.status.in_(OPEN_STATUSES),
+                        Task.due_date.isnot(None),
+                        Task.due_date < tomorrow_start,
+                    )
+                )
+                for task in task_result.scalars().all():
+                    due_today, carried, events = users.setdefault(task.user_id, ([], [], []))
+                    (carried if task.due_date < today_start else due_today).append(task)
+
+                schedule_result = await db.execute(
+                    select(Schedule).where(
+                        Schedule.is_cancelled.is_(False),
+                        Schedule.start_time >= today_start.replace(tzinfo=timezone.utc),
+                        Schedule.start_time < tomorrow_start.replace(tzinfo=timezone.utc),
+                    )
+                )
+                for schedule in schedule_result.scalars().all():
+                    # A day with only meetings still deserves a plan, so a
+                    # schedule can put a user on this list by itself.
+                    users.setdefault(schedule.user_id, ([], [], []))[2].append(schedule)
+
+        async with self._session_maker() as db:
+            await self._clear_stale_daily_flags(db, DAY_PLAN_FLAG_KEY, today_start)
+            to_publish, _ = await self._diff_flags(
+                db,
+                item_type=AttentionItemType.USER,
+                flag_key=DAY_PLAN_FLAG_KEY,
+                current_ids=set(users),
+                user_id_by_item={uid: uid for uid in users},
+            )
+
+            for user_id in to_publish:
+                await self._publish_day_plan(user_id, today, *users[user_id])
+
+    async def _publish_day_plan(
+        self,
+        user_id: UUID,
+        today,
+        due_today: list[Task],
+        carried_over: list[Task],
+        schedules: list[Schedule],
+    ) -> None:
+        try:
+            ordered_today = sorted(due_today, key=lambda t: _rank_key(t, today))
+            ordered_carried = sorted(carried_over, key=lambda t: _rank_key(t, today))
+            ordered_schedules = sorted(schedules, key=lambda s: s.start_time)
+
+            event_bus = await self._get_event_bus()
+            await event_bus.publish(EventEnvelope(
+                type="day.plan",
+                source="StateEvaluator",
+                user_id=user_id,
+                payload=DayPlanPayload(
+                    due_today_count=len(due_today),
+                    carried_over_count=len(carried_over),
+                    schedule_count=len(schedules),
+                    due_today=[_task_item(t) for t in ordered_today[:MAX_DIGEST_ITEMS]],
+                    carried_over=[_task_item(t) for t in ordered_carried[:MAX_DIGEST_ITEMS]],
+                    schedules=[_schedule_item(s) for s in ordered_schedules[:MAX_DIGEST_ITEMS]],
+                ).model_dump(),
+            ))
+        except Exception as exc:
+            logger.warning(f"Failed to publish day.plan event for user {user_id}: {exc}")

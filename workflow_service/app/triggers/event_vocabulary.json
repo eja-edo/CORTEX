@@ -24,6 +24,13 @@
       "label_vi": "C\u00f3 tin nh\u1eafn m\u1edbi trong h\u1ed9i tho\u1ea1i"
     },
     {
+      "event_type": "day.plan",
+      "description": "A user has work scheduled or due as the day reaches its start-of-work hour (polled)",
+      "has_payload_schema": true,
+      "has_direct_backend_delivery": true,
+      "label_vi": "\u0110\u1ea7u ng\u00e0y \u2014 vi\u1ec7c c\u1ea7n l\u00e0m h\u00f4m nay"
+    },
+    {
       "event_type": "day.review",
       "description": "A user still has open tasks as the day reaches its review hour (polled)",
       "has_payload_schema": true,
@@ -96,7 +103,7 @@
     {
       "event_type": "task.at_risk",
       "description": "An overdue task's compute_risk score (priority x overdue_days x cascade) crossed the risk threshold (polled)",
-      "has_payload_schema": false,
+      "has_payload_schema": true,
       "has_direct_backend_delivery": true,
       "label_vi": "Vi\u1ec7c c\u00f3 nguy c\u01a1 tr\u1ec5 cao"
     },

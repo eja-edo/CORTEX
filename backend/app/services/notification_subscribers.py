@@ -7,16 +7,43 @@ directly would be exactly the "N producers = N sources of spam" pattern the
 planning doc's boundary #1 rules out.
 """
 
-from datetime import datetime
 from uuid import UUID
 
 from app.database_async import AsyncSessionLocal
 from app.events.schemas import EventEnvelope
 from app.models import AttentionItemType
 from app.services.attention_gate import request_attention_async
+from app.services.notification_format import (
+    MAX_LISTED_ITEMS,
+    join_facts,
+    local_clock,
+    overflow_line,
+    priority_label,
+    schedule_line,
+    task_due_stamp,
+    task_line,
+    text_blocks,
+)
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _listed(items: list[dict], total: int, *, heading: str, formatter=task_line, noun: str = "việc") -> list[str]:
+    """A heading, up to MAX_LISTED_ITEMS lines, then an honest remainder.
+
+    The counts these digests used to lead with aren't wrong, they were just
+    the *only* thing there — so they stay, as the tail of a list the user
+    can actually read, instead of standing in for it.
+    """
+    if not items:
+        return []
+    lines = [heading]
+    lines.extend(formatter(item) for item in items[:MAX_LISTED_ITEMS])
+    tail = overflow_line(min(len(items), MAX_LISTED_ITEMS), total, noun=noun)
+    if tail:
+        lines.append(tail)
+    return lines
 
 
 async def handle_schedule_reminder_due(event: EventEnvelope) -> None:
@@ -32,11 +59,16 @@ async def handle_schedule_reminder_due(event: EventEnvelope) -> None:
         return
 
     schedule_title = event.payload.get("schedule_title", "")
-    scheduled_at = event.payload.get("scheduled_at", "")
-    try:
-        body = f"Starts at {datetime.fromisoformat(scheduled_at).strftime('%H:%M')}"
-    except (TypeError, ValueError):
-        body = "Starts soon"
+    # `start_time`, never `scheduled_at`: the latter is when this reminder
+    # fires (start minus the offset), so rendering it as the start time
+    # announced a 14:00 meeting as starting at 13:45. Older events on a
+    # replayed queue may predate the field — fall back rather than lie.
+    start_time = event.payload.get("start_time")
+    clock = local_clock(start_time)
+    body = f"Bắt đầu lúc {clock}" if clock else "Sắp bắt đầu"
+    location = event.payload.get("location")
+    if location:
+        body += f" — {location}"
 
     schedule_id = event.payload.get("schedule_id")
 
@@ -45,12 +77,12 @@ async def handle_schedule_reminder_due(event: EventEnvelope) -> None:
             db,
             user_id=event.user_id,
             type="reminder",
-            title=f"Reminder: {schedule_title}",
+            title=f"Nhắc lịch: {schedule_title}",
             body=body,
-            actions=[{"label": "View", "action": "navigate", "url": "/schedule"}],
+            actions=[{"label": "Xem", "action": "navigate", "url": "/schedule"}],
             payload={
                 "schedule_id": schedule_id,
-                "start_time": scheduled_at,
+                "start_time": start_time,
             },
             item_type=AttentionItemType.SCHEDULE,
             item_id=UUID(schedule_id) if schedule_id else None,
@@ -75,6 +107,14 @@ async def handle_task_overdue(event: EventEnvelope) -> None:
 
     title = event.payload.get("title", "")
     overdue_days = event.payload.get("overdue_days", 0)
+    # The deadline it actually missed, and how much the miss costs. "Trễ 3
+    # ngày" alone left the user to go look up both.
+    due_stamp = task_due_stamp(event.payload.get("due_date"))
+    body = join_facts(
+        f"Trễ {overdue_days} ngày",
+        f"hạn {due_stamp}" if due_stamp else None,
+        priority_label(event.payload.get("priority")),
+    )
 
     async with AsyncSessionLocal() as db:
         await request_attention_async(
@@ -82,9 +122,14 @@ async def handle_task_overdue(event: EventEnvelope) -> None:
             user_id=event.user_id,
             type="task_overdue",
             title=f"Quá hạn: {title}",
-            body=f"Trễ {overdue_days} ngày.",
+            body=body,
             actions=[{"label": "Xem", "action": "navigate", "url": "/tasks"}],
-            payload={"task_id": task_id, "overdue_days": overdue_days},
+            payload={
+                "task_id": task_id,
+                "overdue_days": overdue_days,
+                "due_date": event.payload.get("due_date"),
+                "priority": event.payload.get("priority"),
+            },
             item_type=AttentionItemType.TASK,
             item_id=UUID(task_id),
             reason_key="task.overdue",
@@ -106,6 +151,15 @@ async def handle_task_due_soon(event: EventEnvelope) -> None:
 
     title = event.payload.get("title", "")
     hours_until_due = event.payload.get("hours_until_due", 0)
+    # `hours_until_due` is a floor, so anything under an hour arrives as 0 —
+    # "Còn 0 giờ" reads as already expired, the opposite of this nudge.
+    remaining = "Còn dưới 1 giờ" if hours_until_due < 1 else f"Còn {hours_until_due} giờ"
+    due_stamp = task_due_stamp(event.payload.get("due_date"))
+    body = join_facts(
+        remaining,
+        f"hạn {due_stamp}" if due_stamp else None,
+        priority_label(event.payload.get("priority")),
+    )
 
     async with AsyncSessionLocal() as db:
         await request_attention_async(
@@ -113,9 +167,14 @@ async def handle_task_due_soon(event: EventEnvelope) -> None:
             user_id=event.user_id,
             type="task_due_soon",
             title=f"Sắp đến hạn: {title}",
-            body=f"Còn {hours_until_due} giờ.",
+            body=body,
             actions=[{"label": "Xem", "action": "navigate", "url": "/tasks"}],
-            payload={"task_id": task_id, "hours_until_due": hours_until_due},
+            payload={
+                "task_id": task_id,
+                "hours_until_due": hours_until_due,
+                "due_date": event.payload.get("due_date"),
+                "priority": event.payload.get("priority"),
+            },
             item_type=AttentionItemType.TASK,
             item_id=UUID(task_id),
             reason_key="task.due_soon",
@@ -137,6 +196,11 @@ async def handle_task_stale(event: EventEnvelope) -> None:
 
     title = event.payload.get("title", "")
     days_since_update = event.payload.get("days_since_update", 0)
+    body = join_facts(
+        f"Chưa động tới trong {days_since_update} ngày",
+        "chưa đặt hạn",
+        priority_label(event.payload.get("priority")),
+    )
 
     async with AsyncSessionLocal() as db:
         await request_attention_async(
@@ -144,9 +208,13 @@ async def handle_task_stale(event: EventEnvelope) -> None:
             user_id=event.user_id,
             type="task_stale",
             title=f"Việc bị bỏ quên: {title}",
-            body=f"Chưa động tới trong {days_since_update} ngày.",
+            body=body,
             actions=[{"label": "Xem", "action": "navigate", "url": "/tasks"}],
-            payload={"task_id": task_id, "days_since_update": days_since_update},
+            payload={
+                "task_id": task_id,
+                "days_since_update": days_since_update,
+                "priority": event.payload.get("priority"),
+            },
             item_type=AttentionItemType.TASK,
             item_id=UUID(task_id),
             reason_key="task.stale",
@@ -169,19 +237,38 @@ async def handle_task_blocked_cascade(event: EventEnvelope) -> None:
     title = event.payload.get("title", "")
     overdue_days = event.payload.get("overdue_days", 0)
     open_subtask_count = event.payload.get("open_subtask_count", 0)
+    open_subtasks = event.payload.get("open_subtasks") or []
+    due_stamp = task_due_stamp(event.payload.get("due_date"))
+
+    body = join_facts(
+        f"Trễ {overdue_days} ngày",
+        f"còn {open_subtask_count} việc con chưa xong",
+        f"hạn {due_stamp}" if due_stamp else None,
+        priority_label(event.payload.get("priority")),
+    )
+    content = text_blocks(
+        [body] + _listed(open_subtasks, open_subtask_count, heading="Việc con chưa xong:")
+    )
 
     async with AsyncSessionLocal() as db:
         await request_attention_async(
             db,
             user_id=event.user_id,
+            # "Đang bị chặn" said the opposite of what this reason detects:
+            # nothing is blocking the parent, the parent is what other work
+            # is stuck behind.
             type="task_blocked_cascade",
-            title=f"Đang bị chặn: {title}",
-            body=f"Trễ {overdue_days} ngày, còn {open_subtask_count} việc con chưa xong.",
+            title=f"Còn việc con chưa xong: {title}",
+            body=body,
+            content=content,
             actions=[{"label": "Xem", "action": "navigate", "url": "/tasks"}],
             payload={
                 "task_id": task_id,
                 "overdue_days": overdue_days,
                 "open_subtask_count": open_subtask_count,
+                "open_subtasks": open_subtasks,
+                "due_date": event.payload.get("due_date"),
+                "priority": event.payload.get("priority"),
             },
             item_type=AttentionItemType.TASK,
             item_id=UUID(task_id),
@@ -208,11 +295,22 @@ async def handle_task_at_risk(event: EventEnvelope) -> None:
     risk_score = event.payload.get("risk_score", 0)
     overdue_days = event.payload.get("overdue_days", 0)
     open_subtask_count = event.payload.get("open_subtask_count", 0)
+    open_subtasks = event.payload.get("open_subtasks") or []
+    due_stamp = task_due_stamp(event.payload.get("due_date"))
 
-    body = f"Trễ {overdue_days} ngày"
-    if open_subtask_count:
-        body += f", còn {open_subtask_count} việc con chưa xong"
-    body += " — nguy cơ trễ tiếp tục tăng."
+    # This reason exists to say *why* one late task is worse than another,
+    # so it has to show its working. `compute_risk` multiplies exactly these
+    # three, and the body used to name only one of them.
+    body = join_facts(
+        f"Trễ {overdue_days} ngày",
+        f"hạn {due_stamp}" if due_stamp else None,
+        priority_label(event.payload.get("priority")),
+        f"còn {open_subtask_count} việc con chưa xong" if open_subtask_count else None,
+    )
+    lines = [body]
+    if open_subtasks:
+        lines.extend(_listed(open_subtasks, open_subtask_count, heading="Đang kẹt lại phía sau:"))
+    lines.append("Nguy cơ trễ tiếp tục tăng nếu chưa xử lý.")
 
     async with AsyncSessionLocal() as db:
         await request_attention_async(
@@ -221,12 +319,16 @@ async def handle_task_at_risk(event: EventEnvelope) -> None:
             type="task_at_risk",
             title=f"Rủi ro cao: {title}",
             body=body,
+            content=text_blocks(lines),
             actions=[{"label": "Xem", "action": "navigate", "url": "/tasks"}],
             payload={
                 "task_id": task_id,
                 "risk_score": risk_score,
                 "overdue_days": overdue_days,
                 "open_subtask_count": open_subtask_count,
+                "open_subtasks": open_subtasks,
+                "due_date": event.payload.get("due_date"),
+                "priority": event.payload.get("priority"),
             },
             item_type=AttentionItemType.TASK,
             item_id=UUID(task_id),
@@ -251,6 +353,12 @@ async def handle_schedule_starts_soon(event: EventEnvelope) -> None:
 
     title = event.payload.get("title", "")
     minutes_until_start = event.payload.get("minutes_until_start", 0)
+    clock = local_clock(event.payload.get("start_time"))
+    body = join_facts(
+        f"Còn {minutes_until_start} phút",
+        f"bắt đầu {clock}" if clock else None,
+        event.payload.get("location") or None,
+    )
 
     async with AsyncSessionLocal() as db:
         await request_attention_async(
@@ -258,9 +366,14 @@ async def handle_schedule_starts_soon(event: EventEnvelope) -> None:
             user_id=event.user_id,
             type="schedule_starts_soon",
             title=f"Sắp bắt đầu: {title}",
-            body=f"Còn {minutes_until_start} phút.",
+            body=body,
             actions=[{"label": "Xem", "action": "navigate", "url": "/schedule"}],
-            payload={"schedule_id": schedule_id, "minutes_until_start": minutes_until_start},
+            payload={
+                "schedule_id": schedule_id,
+                "minutes_until_start": minutes_until_start,
+                "start_time": event.payload.get("start_time"),
+                "location": event.payload.get("location"),
+            },
             item_type=AttentionItemType.SCHEDULE,
             item_id=UUID(schedule_id),
             reason_key="schedule.starts_soon",
@@ -279,6 +392,18 @@ async def handle_day_review(event: EventEnvelope) -> None:
 
     open_task_count = event.payload.get("open_task_count", 0)
     overdue_task_count = event.payload.get("overdue_task_count", 0)
+    completed_count = event.payload.get("completed_today_count", 0)
+    completed_today = event.payload.get("completed_today") or []
+    still_open = event.payload.get("still_open") or []
+
+    body = join_facts(
+        f"Xong {completed_count} việc hôm nay",
+        f"còn {open_task_count} việc chưa xong",
+        f"{overdue_task_count} việc quá hạn" if overdue_task_count else None,
+    )
+    lines = [body]
+    lines.extend(_listed(completed_today, completed_count, heading="Đã hoàn thành hôm nay:"))
+    lines.extend(_listed(still_open, open_task_count, heading="Còn đọng lại:"))
 
     async with AsyncSessionLocal() as db:
         await request_attention_async(
@@ -286,9 +411,16 @@ async def handle_day_review(event: EventEnvelope) -> None:
             user_id=event.user_id,
             type="day_review",
             title="Tổng kết cuối ngày",
-            body=f"Còn {open_task_count} việc chưa xong, {overdue_task_count} việc quá hạn.",
+            body=body,
+            content=text_blocks(lines),
             actions=[{"label": "Xem", "action": "navigate", "url": "/today"}],
-            payload={"open_task_count": open_task_count, "overdue_task_count": overdue_task_count},
+            payload={
+                "open_task_count": open_task_count,
+                "overdue_task_count": overdue_task_count,
+                "completed_today_count": completed_count,
+                "completed_today": completed_today,
+                "still_open": still_open,
+            },
             item_type=AttentionItemType.USER,
             item_id=event.user_id,
             reason_key="day.review",
@@ -309,6 +441,64 @@ async def handle_day_review(event: EventEnvelope) -> None:
 # `action.request_attention` node would fire a second notification for the
 # same condition — this is exactly the bug A3 exists to catch (see
 # `docs/planning-v3.md`'s A3 section for the real incident).
+async def handle_day_plan(event: EventEnvelope) -> None:
+    """Detection→delivery for `day.plan` — the start-of-day briefing.
+
+    The only reason here that isn't a warning. Every task predicate fires
+    off a deadline that is already close or already missed, so before this
+    existed the first thing Cortex said about a day's work was that some of
+    it had gone wrong. This is the one that arrives while the day can still
+    be planned, which is also why it leads with what is *due today* and
+    keeps carried-over work as a second, separately-labelled list rather
+    than blending the two into one count.
+    """
+    if event.user_id is None:
+        logger.warning("day.plan event missing user_id, skipping: %s", event.event_id)
+        return
+
+    due_today_count = event.payload.get("due_today_count", 0)
+    carried_over_count = event.payload.get("carried_over_count", 0)
+    schedule_count = event.payload.get("schedule_count", 0)
+    due_today = event.payload.get("due_today") or []
+    carried_over = event.payload.get("carried_over") or []
+    schedules = event.payload.get("schedules") or []
+
+    body = join_facts(
+        f"{due_today_count} việc đến hạn hôm nay" if due_today_count else "Hôm nay chưa có việc đến hạn",
+        f"{carried_over_count} việc trễ từ trước" if carried_over_count else None,
+        f"{schedule_count} lịch" if schedule_count else None,
+    )
+    lines = [body]
+    lines.extend(_listed(due_today, due_today_count, heading="Đến hạn hôm nay:"))
+    lines.extend(_listed(carried_over, carried_over_count, heading="Trễ từ trước, cần xử lý:"))
+    lines.extend(
+        _listed(schedules, schedule_count, heading="Lịch hôm nay:", formatter=schedule_line, noun="lịch")
+    )
+
+    async with AsyncSessionLocal() as db:
+        await request_attention_async(
+            db,
+            user_id=event.user_id,
+            type="day_plan",
+            title="Kế hoạch hôm nay",
+            body=body,
+            content=text_blocks(lines),
+            actions=[{"label": "Xem", "action": "navigate", "url": "/today"}],
+            payload={
+                "due_today_count": due_today_count,
+                "carried_over_count": carried_over_count,
+                "schedule_count": schedule_count,
+                "due_today": due_today,
+                "carried_over": carried_over,
+                "schedules": schedules,
+            },
+            # Per-user, not per-item — same reasoning as `day.review`.
+            item_type=AttentionItemType.USER,
+            item_id=event.user_id,
+            reason_key="day.plan",
+        )
+
+
 DIRECT_DELIVERY_HANDLERS = {
     "schedule.reminder.due": handle_schedule_reminder_due,
     "task.overdue": handle_task_overdue,
@@ -318,4 +508,5 @@ DIRECT_DELIVERY_HANDLERS = {
     "task.at_risk": handle_task_at_risk,
     "schedule.starts_soon": handle_schedule_starts_soon,
     "day.review": handle_day_review,
+    "day.plan": handle_day_plan,
 }

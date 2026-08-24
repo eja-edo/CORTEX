@@ -64,3 +64,19 @@ def test_workflow_vocabulary_is_in_sync():
     on_disk = json.loads(OUTPUT_PATH.read_text())
     fresh = build_vocabulary_json()
     assert on_disk == fresh
+
+
+def test_every_directly_delivered_event_has_a_payload_schema():
+    """`task.at_risk` shipped without one: `TaskAtRiskPayload` existed but
+    was never added to EVENT_PAYLOAD_REGISTRY, so the generated
+    `event_vocabulary.json` advertised `has_payload_schema: false` to
+    workflow_service and the payload went unvalidated.
+
+    Anything the backend delivers itself is, by definition, an event the
+    backend really publishes — so it must have a registered schema. This
+    catches the next one automatically.
+    """
+    from app.services.notification_subscribers import DIRECT_DELIVERY_HANDLERS
+
+    missing = sorted(set(DIRECT_DELIVERY_HANDLERS) - set(EVENT_PAYLOAD_REGISTRY))
+    assert not missing, f"directly-delivered events with no payload schema: {missing}"

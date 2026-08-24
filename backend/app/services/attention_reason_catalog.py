@@ -71,7 +71,59 @@ REASON_CATALOG: dict[str, ReasonMeta] = {
         base_level=AttentionLevel.INFORM,
         description="The day is winding down and work is still open.",
     ),
+    "day.plan": ReasonMeta(
+        base_level=AttentionLevel.INFORM,
+        description="The work day is starting and there is work due or scheduled for today.",
+    ),
 }
+
+
+# ---------------------------------------------------------------------------
+# Supersession
+# ---------------------------------------------------------------------------
+#
+# Three of the task reasons above are nested predicates, not independent
+# ones. `task.blocked_cascade` only fires for a task that is *already*
+# overdue; `task.at_risk` only fires for one that is already overdue and
+# whose risk score crossed the threshold. So a single urgent, late task
+# with open subtasks satisfies all three at once.
+#
+# Dedup can't collapse them: it keys on `(item_id, reason_key)` on purpose
+# (see attention_log.py — one item legitimately surfacing for two *different*
+# reasons is the case that rule protects). But these are not different
+# reasons, they are three descriptions of one situation at increasing
+# severity, and the strongest one's text already contains everything the
+# weaker ones would have said. Sending all three is the "N producers = N
+# sources of spam" outcome the Gate exists to prevent, arriving from one
+# producer instead of many.
+#
+# So: when a reason fires and something that outranks it already reached
+# the user about the *same item* inside the dedup window, the weaker one
+# stays silent. The reverse is deliberately not true — a task that was
+# merely overdue yesterday and is at risk today has genuinely escalated,
+# and that is news worth speaking.
+#
+# This only works if the strongest predicate is evaluated first, which is
+# why `StateEvaluator._run_loop` runs at_risk → blocked_cascade → overdue
+# rather than the other way round. That ordering is load-bearing; there is
+# a test pinning it.
+SUPERSEDES: dict[str, frozenset[str]] = {
+    "task.at_risk": frozenset({"task.blocked_cascade", "task.overdue"}),
+    "task.blocked_cascade": frozenset({"task.overdue"}),
+}
+
+# Inverted once at import: `reason -> the reasons whose arrival should
+# silence it`. Built from SUPERSEDES so the two can't drift.
+SUPERSEDED_BY: dict[str, frozenset[str]] = {}
+for _stronger, _weaker_set in SUPERSEDES.items():
+    for _weaker in _weaker_set:
+        SUPERSEDED_BY[_weaker] = SUPERSEDED_BY.get(_weaker, frozenset()) | {_stronger}
+
+
+def superseded_by(reason_key: str) -> frozenset[str]:
+    """Reasons that, if already surfaced for the same item, make
+    `reason_key` redundant. Empty for reasons that stand alone."""
+    return SUPERSEDED_BY.get(reason_key, frozenset())
 
 
 def base_level_for(reason_key: str) -> AttentionLevel:
