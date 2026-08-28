@@ -2,6 +2,8 @@
 
 Cortex is a monorepo with multiple services. Always identify which service a task touches before running commands.
 
+> **Đọc [`docs/DESIGN.md`](docs/DESIGN.md) trước mọi task.** Đó là nguồn sự thật duy nhất về sản phẩm là gì, nguyên tắc ràng buộc, mô hình dữ liệu và kế hoạch. Tài liệu này chỉ mô tả *cách chạy code*, không mô tả *nên xây gì*.
+
 ## Codebase discovery
 
 Project đã được index trong `codebase-memory-mcp` dưới tên **`home-duyanh-project-Cortex`** — luôn truyền `project="home-duyanh-project-Cortex"` khi gọi MCP. Ưu tiên graph tools (`search_graph` → `trace_path` → `get_code_snippet` → `query_graph`) hơn grep/glob. Chi tiết cách dùng từng tool (mode, paging, Cypher queries hay dùng, khi nào fallback) xem `.opencode/MCP_USAGE.md`.
@@ -18,7 +20,7 @@ Project đã được index trong `codebase-memory-mcp` dưới tên **`home-duy
 | `sync-server/` | Node/Yjs (sources empty here; see `sync-server/tests/`) | Yjs CRDT sync endpoint | 1235 |
 | `infrastructure/` | docker-compose | Postgres+pgvector (5434), Mongo (27016), Redis (6377), MinIO (9002/9003), Temporal (7233, UI 8088), workflow_service | — |
 | `lab/` | Python | Throwaway OCR pipeline experiments — do not import from here in any service | — |
-| `docs/`, `workflow_feature/` | Markdown | Product spec + workflow runtime design docs (read before implementing workflow features) | — |
+| `docs/` | Markdown | **`docs/DESIGN.md` là nguồn sự thật duy nhất** về sản phẩm, kiến trúc và kế hoạch. Đọc trước mọi task. `docs/archive/` là kế hoạch cũ, không làm theo | — |
 
 ## Run order (local dev)
 
@@ -31,9 +33,35 @@ Project đã được index trong `codebase-memory-mcp` dưới tên **`home-duy
 
 Health checks: `http://localhost:8000/health`, `http://localhost:8001/health`, `http://localhost:8088` (Temporal UI), `http://localhost:9002` (MinIO console `:9003`).
 
+## Phép thử A/B (DESIGN mục 12)
+
+Cổng nghiệm thu duy nhất của sản phẩm. Nhóm chia bằng `user_preferences.gate_bypass`:
+
+```bash
+# gán một người vào nhóm A (nhắc ngây thơ, bỏ qua Attention Gate)
+curl -X PATCH localhost:8000/internal/users/<user_id>/gate-bypass \
+  -H "X-Internal-API-Key: $INTERNAL_API_KEY" \
+  -H 'Content-Type: application/json' -d '{"enabled": true}'
+
+# đọc hai con số của 12.3
+cd backend && python -m scripts.ab_test_numbers
+```
+
+Cờ cố ý **không** có trong trang cài đặt: nó là biến điều khiển của một thí nghiệm, không phải tuỳ chọn sản phẩm — người dùng thấy nó là mời họ tự đổi nhóm giữa chừng.
+
+## Mezon bot
+
+- Chạy: `cd mezon_bot && npm start` — HTTP `:8100` (`/health`, `POST /internal/deliver` với `X-Internal-API-Key`). Test: `npm test` (222 test, node:test).
+- ⚠️ **Phải chạy trên Node 22, không phải 24.** `mezon-sdk` kéo theo `better-sqlite3@11.10`, bản này không tương thích Node 24: biên dịch được nhưng crash trong `Statement::~Statement()` với `Assertion failed: (env) != nullptr`, kèm core dump ngay lúc khởi động. `nvm use 22` rồi `npm rebuild better-sqlite3`.
+- Nếu `npm rebuild` báo `ENOENT ... build/node_gyp_bins`: đó là bug node-gyp, tạo tay thư mục đó rồi chạy lại (`mkdir -p node_modules/better-sqlite3/build/node_gyp_bins`).
+
+## Webhook bot họp
+
+`POST /api/internal/tasks` (`X-Internal-API-Key`) — nhận action item, gom theo dự án. Luôn trả 200; item không vào được nằm trong `items[].skipped_reason`. Gửi `external_id` cho mỗi item, nếu không mỗi lần retry sẽ đẻ một bản sao. Chi tiết: `backend/app/services/task_ingest.py`.
+
 ## Environment / secrets
 
-- `backend/.env` is committed with non-prod keys (Google OAuth, Gemini, OpenAI-compatible local endpoint, Zep, MinIO, internal API key `cortex-internal-key-2024`). Treat as dev only — never reuse these in prod.
+- `backend/.env` is **not** tracked in git (verified 2026-08-24). It holds non-prod keys (Google OAuth, Gemini, OpenAI-compatible local endpoint, Zep, MinIO, internal API key `cortex-internal-key-2024`). Treat as dev only — never reuse these in prod.
 - `backend/.env` points to non-default ports (`5434` Postgres, `27016` Mongo, `6377` Redis, `9002` MinIO) to match `infrastructure/docker-compose.yml`. Don't change to defaults without updating compose.
 - The same `INTERNAL_API_KEY` value (`cortex-internal-key-2024`) is used by `workflow_service/config.py` default and by the Yjs sync-server tests (`X-Internal-Token: cortex-internal-secret` in `sync-server/tests/test-headless-apply.mjs` — note the value differs; sync-server uses `cortex-internal-secret`).
 - JWT secret default is the literal string `change-this-in-production-super-secret-key` (see `backend/.env`, `workflow_service/app/config.py:resolved_jwt_secret`). Required for both backend and workflow_service to validate the same tokens.
@@ -59,9 +87,9 @@ Health checks: `http://localhost:8000/health`, `http://localhost:8001/health`, `
 - Entry: `workflow_service/app/main.py` — lifespan starts the internal-event Redis listener and a Temporal worker in the background.
 - Depends on: Temporal at `temporal:7233` (compose service name), backend at `http://localhost:8000` (or `host.docker.internal:8000` from inside compose), Redis at `redis:6377`.
 - Talks to backend over `X-Internal-Token: $CORTEX_INTERNAL_API_KEY` (default `cortex-internal-key-2024`); see `backend/app/api/internal.py` for the receiving side.
-- Triggering: backend publishes events on Redis channel `cortex:workflow:events` (see `workflow_feature/10_INTEGRATION_GUIDE.md`). Webhooks use `trigger_type=webhook` and a per-workflow `webhook_url` + `webhook_secret`; secret is required only if set.
+- Triggering: backend publishes events on Redis channel `cortex:workflow:events` (see `docs/archive/workflow_feature/10_INTEGRATION_GUIDE.md`). Webhooks use `trigger_type=webhook` and a per-workflow `webhook_url` + `webhook_secret`; secret is required only if set.
 - Tests: `workflow_service/pytest.ini` (asyncio_mode=auto, session scope). Pytest suite: `python -m pytest` from `workflow_service/`. End-to-end integration script: `bash workflow_service/tests/run_integration_tests.sh` (requires a running service at `$HOST`, default `http://localhost:8001`).
-- Design docs in `workflow_feature/01_…` through `11_…` are authoritative for API contracts, schemas, and architecture decisions — read before changing the service.
+- ⚠️ `workflow_service` đã **đóng băng** (`docs/DESIGN.md` mục 11): 0 workflow trong DB, gỡ khỏi compose mặc định. Không thêm tính năng vào đây. Design docs cũ nằm ở `docs/archive/workflow_feature/`, chỉ để tra cứu.
 
 ## Frontend
 
@@ -70,6 +98,7 @@ Health checks: `http://localhost:8000/health`, `http://localhost:8001/health`, `
 - Order matters when validating: `lint → build (typecheck via tsc) → test`.
 - Main app shell: `frontend/src/App.tsx`; workflow UI lives in `frontend/src/components/workflow/` plus `WorkflowBuilder.tsx`.
 - Don't forget to also run `npm run build` after TypeScript changes — `tsc -b` is the project's typecheck.
+- ⚠️ **`npx tsc --noEmit` checks nothing and exits 0.** The root `tsconfig.json` is `"files": []` + project references, so a bare invocation has no input files. It looks like a clean typecheck and is not one — a deliberate `const x: number = 'str'` passes. Always `npx tsc -b` (or `-p tsconfig.app.json`).
 
 ## OCR / STT / Sync notes
 
@@ -86,6 +115,8 @@ Health checks: `http://localhost:8000/health`, `http://localhost:8001/health`, `
 - `lab/` and `logs/` are gitignored; safe to ignore unless the task explicitly references them.
 - Several `.bak` files exist under `backend/tests/` (`test_search.py.bak`) — leave them alone unless asked.
 - The codebase mixes English and Vietnamese comments/docs; preserve existing language in surrounding context when editing comments.
+- **The last line of an LLM prompt decides the JSON shape.** The gateway does not support `response_format` schemas, so the only lever is the prompt — and the closing instruction of the *user* turn beats the system prompt. Naming keys ("a JSON object containing episodic_summary, semantic_memories, title") gets you arrays of bare strings; the shape has to be drawn out. Use `response_shape()` in `backend/app/services/memory_extraction_prompt.py` rather than writing a new closing line.
+- The Cortex backend runs as `./venv/bin/python main.py` (not `uvicorn app.main:app` — that command line belongs to an unrelated container also bound to :8000). Prompts under `backend/app/ai/prompts/` are loaded at import, so editing one needs a restart.
 
 ## When the task touches more than one service
 
