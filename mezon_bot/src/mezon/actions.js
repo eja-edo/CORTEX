@@ -37,7 +37,11 @@ const PREFIXES = {
   // restarted. Anything these buttons need has to be in the id.
   "nd:": "notif_task_done",
   "ns:": "notif_task_snooze",
-  "nm:": "notif_mute",
+  // Xác nhận trên thẻ tổng kết cuối ngày. Đích là id thông báo, chỉ để log
+  // nối được về nguồn: những việc được tick quay về trong `values`, nên
+  // nút này không cần `pendingForms` và sống sót qua restart như hai cái
+  // trên.
+  "rs:": "review_submit",
   // The two answers to "which occurrence?" — see `occurrenceCard.js`.
   // These *are* pendingForms-backed: they are the second step of an
   // exchange the user is in the middle of, and a scope question that

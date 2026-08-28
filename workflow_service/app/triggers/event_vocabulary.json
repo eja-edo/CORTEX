@@ -66,6 +66,20 @@
       "label_vi": "Ghi ch\u00fa \u0111\u01b0\u1ee3c c\u1eadp nh\u1eadt"
     },
     {
+      "event_type": "project.slipping",
+      "description": "A project's open task count grew since the last daily evaluation while its deadline is within 14 days (polled)",
+      "has_payload_schema": true,
+      "has_direct_backend_delivery": true,
+      "label_vi": "D\u1ef1 \u00e1n \u0111ang ch\u1eadm l\u1ea1i"
+    },
+    {
+      "event_type": "project.will_miss",
+      "description": "At the last 14 days' completion rate, a project finishes after its deadline (polled)",
+      "has_payload_schema": true,
+      "has_direct_backend_delivery": true,
+      "label_vi": "D\u1ef1 \u00e1n nhi\u1ec1u kh\u1ea3 n\u0103ng tr\u1ec5 h\u1ea1n"
+    },
+    {
       "event_type": "schedule.completed",
       "description": "A schedule transitioned to completed",
       "has_payload_schema": true,

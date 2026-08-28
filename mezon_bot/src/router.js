@@ -341,6 +341,8 @@ class MessageRouter {
       }
     };
 
+    let streamError = null;
+
     try {
       await this.cortex.streamChat({
         userId: identity.userId,
@@ -368,13 +370,27 @@ class MessageRouter {
           } else if (event.event === "plan_proposal" && event.proposal_id) {
             cards.plans.push(event.proposal_id);
           } else if (event.event === "error") {
+            // Kept, not just logged. This event ends the stream *normally*
+            // — `done` follows it — so the catch block below never runs and
+            // for a long time the message died right here in the log. The
+            // Mezon user watched the placeholder resolve to "…" while the
+            // backend had written them a perfectly good sentence saying
+            // what went wrong.
             logger.warn("agent stream reported an error event", { message: event.message });
+            streamError = event.message || null;
           }
         },
       });
       // Thinking first: it settles the message above before the answer
       // below it finishes, which is the order they are read in.
       await endTimeline();
+      // Appended rather than substituted, for the same reason the catch
+      // block does it: whatever streamed before the failure is a real
+      // partial answer, and replacing it would throw away the one part
+      // the user can already read.
+      if (streamError) {
+        throttle.push(throttle.buffer ? `\n\n⚠️ ${streamError}` : `⚠️ ${streamError}`);
+      }
       await throttle.flush();
       // Nothing anywhere — no answer, and no transcript to stand in for
       // one. The placeholder is still sitting there saying the bot is
@@ -519,8 +535,8 @@ class MessageRouter {
         await this._handleNotificationTaskWrite({
           action, parsed, identity, reply, intent: INTENT.SNOOZE,
         });
-      } else if (action.kind === "notif_mute") {
-        await this._handleNotificationMute({ action, parsed, identity, reply });
+      } else if (action.kind === "review_submit") {
+        await this._handleReviewSubmit({ action, parsed, identity, reply });
       } else if (action.kind === "occurrence_this" || action.kind === "occurrence_all") {
         await this._handleOccurrenceDecision({ action, parsed, identity, reply });
       }
@@ -672,18 +688,54 @@ class MessageRouter {
   }
 
   /**
-   * 🔕 Tắt nhắc này on a notification DM.
+   * ✓ Xác nhận trên thẻ tổng kết cuối ngày.
    *
-   * Turning one reason off, not all of them — the same single-key write
-   * `*mute` performs, reachable without leaving the message that prompted
-   * it. Switching back on stays on the web, where the audit list shows
-   * dismiss counts and effective levels this card has no room for.
+   * Việc được tick là việc người dùng nói *"cái này tôi làm rồi"*, nên mỗi
+   * cái là một lệnh hoàn thành riêng. Ghi tuần tự chứ không song song: một
+   * DM cuối ngày không gấp, còn bắn mười lệnh ghi cùng lúc vào cùng một
+   * người thì đổi một thao tác bình thường thành một đợt tải nhọn.
+   *
+   * **Một việc hỏng không làm hỏng phần còn lại.** Việc lặp theo sự kiện
+   * trả 422 cho một lệnh ghi trần vì nó cần biết lần lặp nào (xem
+   * `taskActions.prepareTaskWrite`) — mà câu hỏi đó không hỏi được trong
+   * một thao tác gộp. Nên nó được gom vào danh sách "chưa cập nhật được"
+   * kèm đường đi tiếp, thay vì nuốt im lặng hoặc đánh sập cả lượt.
    */
-  async _handleNotificationMute({ action, parsed, identity, reply }) {
-    const reasonKey = action.targetId;
-    await this.cortex.setReasonEnabled(reasonKey, false, identity.userId);
-    await this._replaceCard(parsed, renderMuted({ reason_key: reasonKey }), reply);
-    logger.info("reason muted from a notification", { reasonKey, actor: parsed.actorId });
+  async _handleReviewSubmit({ action, parsed, identity, reply }) {
+    const { getList } = require("./mezon/interactions");
+    const { OPEN_FIELD_ID, renderReviewApplied } = require("./mezon/reviewCard");
+
+    const taskIds = getList(parsed.extra?.values, OPEN_FIELD_ID);
+    const updated = [];
+    const failed = [];
+
+    for (const taskId of taskIds) {
+      try {
+        const task = await this.cortex.completeTask(taskId, identity.userId, null);
+        updated.push(task?.title ?? taskId);
+      } catch (err) {
+        logger.warn("review confirm could not complete a task", {
+          taskId,
+          error: err?.message,
+        });
+        failed.push(taskId);
+      }
+    }
+
+    // **Cố ý không in lại tỷ lệ ở đây.** `GET /api/today` trả bảng xếp hạng
+    // của màn Hôm nay, không trả `completed_today_count`/`open_task_count`
+    // — hai con số đó do `StateEvaluator` tính khi dựng `day.review`. Tự
+    // đếm lại trong bot thì phải chép luật "xong trong hôm nay theo múi giờ
+    // người dùng" sang đây, đúng thứ quy tắc bot-mỏng cấm (xem đầu
+    // `cortex.js`: bot chọn endpoint và hiển thị, không bao giờ tự tính).
+    // Nên thẻ kết quả nói *đã đổi những gì*, và con số có thẩm quyền để lần
+    // tổng kết sau mang tới.
+    await this._replaceCard(parsed, renderReviewApplied({ updated, failed }), reply);
+    logger.info("day review confirmed from Mezon", {
+      updated: updated.length,
+      failed: failed.length,
+      actor: parsed.actorId,
+    });
   }
 
   /**

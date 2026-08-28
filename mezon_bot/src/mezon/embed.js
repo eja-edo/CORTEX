@@ -204,17 +204,25 @@ function contentLines(content, body) {
  * A nudge nobody can answer is a one-way announcement, and the reason this
  * bot exists is that the Attention Gate already has levels (`ASK`, `ACT`)
  * that presuppose a reply and had nowhere to be answered. So: a task the
- * notification is *about* gets ✅ Xong and ⏰ Dời sang mai, and anything
- * carrying a `reason_key` gets 🔕 Tắt nhắc này.
+ * notification is *about* gets ✅ Xong and ⏰ Dời sang mai.
+ *
+ * **Không có nút tắt nhắc.** Nó từng ở đây và đã bị gỡ: đặt "đừng nói nữa"
+ * cạnh "xong" là để hai thao tác rất khác nhau cách nhau một lần bấm nhầm,
+ * trên một thẻ đọc lướt lúc đang bận — và cái giá của lần nhầm đó là một
+ * loại nhắc tắt vĩnh viễn mà người dùng không biết mình đã tắt. Tắt nhắc
+ * vẫn làm được, chỉ là phải nói ra: `*mute` trong DM, hoặc Cortex →
+ * Settings. `reason_key` vẫn in trong thân thẻ, nên nó vẫn là một tra cứu
+ * chứ không phải một cuộc tìm kiếm.
  *
  * Everything these buttons need is in their ids (see `actions.js`): a DM
  * sits in a chat list for days and will be clicked long after the process
  * that sent it restarted. Nothing here is looked up in memory.
  *
  * `payload.task_id` is what the backend already puts on every task-shaped
- * reason (`notification_subscribers.py`) — the digests (`day.plan`,
- * `day.review`) have no single subject and correctly get only the mute
- * button. `actions` stays unrendered: every entry in it today is a
+ * reason (`notification_subscribers.py`). Các digest không có một chủ thể
+ * duy nhất nên không có hai nút đó; riêng `day.review` có thẻ của chính nó
+ * (`reviewCard.js`) vì cuối ngày là lúc người ta muốn *chốt sổ*, không
+ * phải lúc đọc thêm một danh sách. `actions` stays unrendered: every entry in it today is a
  * `navigate` to a web route, which in a DM is a link to somewhere the
  * person deliberately isn't.
  *
@@ -229,7 +237,15 @@ function notification({
   attention_level: level,
   reason_key: reasonKey,
   payload,
+  notification_id: notificationId,
 }) {
+  if (reasonKey === "day.review") {
+    // Yêu cầu lười: `reviewCard` require ngược `embed` để dùng FormBuilder,
+    // nên import ở đầu tệp sẽ là một vòng tròn.
+    const { renderDayReview } = require("./reviewCard");
+    return renderDayReview({ title, body, payload, notificationId });
+  }
+
   const style = LEVEL_STYLE[level] ?? LEVEL_STYLE.inform;
   const form = new FormBuilder(`${style.icon} ${title}`);
   const description = [body, ...contentLines(content, body)].filter(Boolean).join("\n");
@@ -243,9 +259,6 @@ function notification({
   if (taskId) {
     form.button(actionId("notif_task_done", taskId), "✅ Xong", STYLE.SUCCESS);
     form.button(actionId("notif_task_snooze", taskId), "⏰ Dời sang mai", STYLE.SECONDARY);
-  }
-  if (reasonKey) {
-    form.button(actionId("notif_mute", reasonKey), "🔕 Tắt nhắc này", STYLE.SECONDARY);
   }
   return form.build();
 }

@@ -1,3 +1,21 @@
+# Cortex — hạ tầng dev.
+#
+# **Mặc định chỉ dựng `db` + `redis`.** Mọi service khác nằm sau một
+# `profiles:` và không khởi động nếu không được gọi tên. Đây là cơ chế đóng
+# băng ở `docs/DESIGN.md` mục 11.2, và mục tiêu vận hành ở 11.3 là ≤ 5
+# container trên đường chính (`db`, `redis`, `backend`, `mezon_bot`, proxy).
+#
+# Đóng băng không phải xoá: không dòng nào mất đi, và bật lại là một lệnh.
+#
+#   docker compose up -d                        # đường chính
+#   docker compose --profile workflow up -d     # + Temporal + workflow_service
+#   docker compose --profile assets   up -d     # + MinIO + Mongo (OCR/STT)
+#   docker compose --profile search   up -d     # + searxng + unsearch
+#   docker compose --profile all      up -d     # tất cả, như trước đây
+#
+# Điều kiện hồi sinh của từng profile nằm ở DESIGN 11.3 — mỗi mục có một
+# điều kiện quan sát được, không phải "khi nào cần".
+
 services:
   db:
     image: pgvector/pgvector:pg16
@@ -23,6 +41,7 @@ services:
       - cortex
 
   mongo:
+    profiles: ["assets", "all"]
     image: mongo:7
     container_name: cortex-mongo
     restart: unless-stopped
@@ -63,6 +82,7 @@ services:
       - cortex
 
   minio-cortex:
+    profiles: ["assets", "all"]
     image: minio/minio:latest
     container_name: minio-cortex
     restart: unless-stopped
@@ -86,6 +106,7 @@ services:
       retries: 3
 
   minio-cortex-init:
+    profiles: ["assets", "all"]
     image: minio/mc:latest
     container_name: minio-cortex-init
     depends_on:
@@ -105,6 +126,7 @@ services:
       - cortex
 
   unsearch-api:
+    profiles: ["search", "all"]
     build:
       context: ./unsearch
     container_name: unsearch-api
@@ -146,6 +168,7 @@ services:
       retries: 3
 
   searxng:
+    profiles: ["search", "all"]
     image: searxng/searxng:latest
     container_name: cortex-searxng
 
@@ -173,6 +196,7 @@ services:
 
   # --- TEMPORAL STACK ---
   temporal-postgresql:
+    profiles: ["workflow", "all"]
     image: postgres:13
     container_name: temporal-postgresql
     restart: unless-stopped
@@ -195,6 +219,7 @@ services:
       - cortex
 
   temporal:
+    profiles: ["workflow", "all"]
     image: temporalio/auto-setup:1.29.7
     container_name: temporal
     restart: unless-stopped
@@ -218,6 +243,7 @@ services:
       - cortex
 
   temporal-ui:
+    profiles: ["workflow", "all"]
     image: temporalio/ui:2.51.0
     container_name: temporal-ui
     restart: unless-stopped
@@ -235,6 +261,7 @@ services:
 
   # --- WORKFLOW SERVICE ---
   workflow_service:
+    profiles: ["workflow", "all"]
     build:
       context: ../workflow_service
       dockerfile: Dockerfile

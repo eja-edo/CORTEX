@@ -75,7 +75,7 @@ const dump = (m) => JSON.stringify(m.content);
 
 // ── What a delivered notification looks like ─────────────────────────────
 
-test("a task nudge offers the two answers to it, plus the way to stop being asked", () => {
+test("a task nudge offers exactly the two answers to it, and no off switch", () => {
   const built = notification({
     title: "Quá hạn: Viết đề cương",
     body: "Trễ 3 ngày · hạn 21/08",
@@ -85,14 +85,17 @@ test("a task nudge offers the two answers to it, plus the way to stop being aske
   });
 
   const ids = buttonsOf(built).map((b) => b.id);
+  // Nút tắt nhắc đã bị gỡ có chủ ý: đặt "đừng nói nữa" cạnh "xong" là để
+  // hai thao tác rất khác nhau cách nhau một lần bấm nhầm, trên một thẻ
+  // đọc lướt lúc đang bận — và cái giá là một loại nhắc tắt vĩnh viễn mà
+  // người dùng không biết mình đã tắt. `*mute` và Settings vẫn còn.
   assert.deepEqual(ids.map((id) => parseActionId(id)), [
     { kind: "notif_task_done", targetId: "task-1" },
     { kind: "notif_task_snooze", targetId: "task-1" },
-    { kind: "notif_mute", targetId: "task.overdue" },
   ]);
 });
 
-test("a digest has no single subject, so it gets no task buttons — only the off switch", () => {
+test("a digest has no single subject, so it gets no buttons at all", () => {
   const built = notification({
     title: "Đầu ngày — 3 việc",
     body: "3 việc đến hạn hôm nay",
@@ -101,10 +104,7 @@ test("a digest has no single subject, so it gets no task buttons — only the of
     payload: {},
   });
 
-  assert.deepEqual(
-    buttonsOf(built).map((b) => parseActionId(b.id).kind),
-    ["notif_mute"]
-  );
+  assert.equal(built.components, undefined);
 });
 
 test("a notification with nothing to act on shows no empty button row", () => {
@@ -165,18 +165,19 @@ test("⏰ Dời sang mai moves the deadline instead of closing the task", async 
   assert.match(JSON.stringify(edits[0].content), /Đã dời/);
 });
 
-test("🔕 turns off exactly the one reason, not notifications as a whole", async () => {
-  const muted = [];
-  const cortex = {
-    ...linked,
-    setReasonEnabled: async (key, enabled, userId) => { muted.push({ key, enabled, userId }); },
-  };
-  const { router, edits } = makeRouter(cortex);
+test("a button id from an older card whose kind no longer exists is ignored, not crashed on", async () => {
+  // `nm:` (tắt nhắc) đã bị gỡ khỏi bảng prefix. Một DM gửi trước đó vẫn
+  // nằm trong danh sách chat và vẫn bấm được — nó phải rơi vào im lặng như
+  // mọi id lạ, không được ném lỗi ra mặt người dùng.
+  let wrote = false;
+  const cortex = { ...linked, setReasonEnabled: async () => { wrote = true; } };
+  const { router, edits, sent } = makeRouter(cortex);
 
   await router.handleButton(buttonEvent("nm:task.overdue"));
 
-  assert.deepEqual(muted, [{ key: "task.overdue", enabled: false, userId: "cortex-u1" }]);
-  assert.match(JSON.stringify(edits[0].content), /task\.overdue/);
+  assert.equal(wrote, false);
+  assert.equal(edits.length, 0);
+  assert.equal(sent.length, 0);
 });
 
 test("a task that has since been deleted is reported, and nothing is written", async () => {

@@ -89,6 +89,27 @@ function toolSemanticDescription(toolName, toolArgs) {
       return title ? `ds notes • ${title}` : "ds notes";
     case "search_notes":
       return query ? `tìm "${query}"` : "tìm notes";
+    // Việc và dự án — bề mặt sản phẩm. Thiếu chúng ở đây thì dòng suy nghĩ
+    // hiện tên tool trần (`move_task`) giữa những dòng đã thành câu, và
+    // người đọc thấy một chỗ rõ ràng chưa làm xong.
+    case "create_task":
+      return title ? `việc "${title}"` : "việc mới";
+    case "list_pending_tasks":
+      return "việc chờ xác nhận";
+    case "confirm_task":
+      return "xác nhận việc";
+    case "get_today":
+      return "hôm nay";
+    case "list_projects":
+      return "danh sách dự án";
+    case "get_project_tasks":
+      return toolArgs.project_ref ? `việc trong "${toolArgs.project_ref}"` : "việc trong dự án";
+    case "move_task":
+      return toolArgs.project_ref ? `chuyển sang "${toolArgs.project_ref}"` : "chuyển dự án";
+    case "create_project":
+      return toolArgs.name ? `dự án mới "${toolArgs.name}"` : "dự án mới";
+    case "ask_user_choice":
+      return "hỏi lại";
     case "create_schedule":
       return title ? `lịch "${title}"` : "lịch mới";
     case "update_schedule":
@@ -139,6 +160,18 @@ function toolResultSummary(toolName, result, success) {
       const id = typeof r?.id === "string" ? r.id.slice(0, 8) : "";
       return id ? `id ${id}` : "ok";
     }
+    case "list_projects":
+      return `${Array.isArray(r?.projects) ? r.projects.length : 0} dự án`;
+    case "get_project_tasks":
+      return `${Array.isArray(r?.tasks) ? r.tasks.length : 0} việc`;
+    case "list_pending_tasks":
+      return `${Array.isArray(r?.tasks) ? r.tasks.length : 0} việc chờ`;
+    case "move_task":
+      // `moved: false` nghĩa là việc đã ở đúng dự án đó rồi — nói ra thay
+      // vì báo "xong", để người dùng không tưởng vừa có gì thay đổi.
+      return r?.moved === false ? "đã ở đúng dự án" : `→ ${r?.project?.name ?? "dự án"}`;
+    case "create_project":
+      return r?.created === false ? "dự án đã có" : `"${r?.project?.name ?? ""}"`;
     default:
       return "xong";
   }

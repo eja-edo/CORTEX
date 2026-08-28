@@ -124,7 +124,14 @@ function createServer({ gateway }) {
       return send(res, status, { detail: `bad request: ${err?.message}` });
     }
 
-    const { mezon_user_id: mezonUserId, notification_id: notificationId } = payload ?? {};
+    const {
+      mezon_user_id: mezonUserId,
+      notification_id: notificationId,
+      // Có mặt khi lời nhắc thuộc phạm vi dự án (DESIGN 8.1). Backend đã
+      // quyết định phạm vi; bot chỉ chọn đường gửi theo trường này và
+      // không tự suy luận gì thêm.
+      mezon_channel_id: mezonChannelId,
+    } = payload ?? {};
     if (!mezonUserId || !payload?.title) {
       // Malformed and will stay malformed — permanent, so the backend
       // stops retrying it.
@@ -132,10 +139,16 @@ function createServer({ gateway }) {
     }
 
     try {
-      const sent = await gateway.sendDirectMessage(mezonUserId, notificationEmbed(payload));
+      // Dự án đăng vào channel chung; việc cá nhân vào DM. Đây là chỗ duy
+      // nhất trong bot phân biệt hai loại, và nó phân biệt bằng dữ liệu
+      // backend gửi xuống, không bằng nội dung lời nhắc.
+      const sent = mezonChannelId
+        ? await gateway.sendToChannel(mezonChannelId, notificationEmbed(payload))
+        : await gateway.sendDirectMessage(mezonUserId, notificationEmbed(payload));
       logger.info("notification delivered", {
         notification_id: notificationId,
         mezon_user_id: mezonUserId,
+        mezon_channel_id: mezonChannelId ?? null,
         level: payload.attention_level,
         reason_key: payload.reason_key,
         message_id: sent?.id ?? null,

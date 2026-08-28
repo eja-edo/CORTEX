@@ -386,7 +386,7 @@ test("streamChat throwing after tokens already arrived keeps the partial answer 
   assert.match(lastEdit.content.t, /ngắt giữa chừng/, "must note that it was cut off");
 });
 
-test("an error event mid-stream does not stop already-buffered text from being flushed", async () => {
+test("an error event mid-stream keeps the buffered text and shows the reason", async () => {
   const cortex = {
     resolveChannel: async () => ({ linked: true, user_id: "cortex-u1" }),
     streamChat: async ({ onEvent }) => {
@@ -399,7 +399,12 @@ test("an error event mid-stream does not stop already-buffered text from being f
   await router.handleMessage(baseMessage());
 
   const lastEdit = edits[edits.length - 1];
-  assert.equal(lastEdit.content.t, "Đang");
+  // Both halves matter. The partial answer is real and must survive; the
+  // reason must reach the user rather than only the log, which is where it
+  // used to stop — an `error` event ends the stream normally, so the
+  // router's catch block never sees it.
+  assert.match(lastEdit.content.t, /^Đang/, "must keep the partial text");
+  assert.match(lastEdit.content.t, /model exhausted/, "must show why it stopped");
 });
 
 test("an empty token stream still edits the placeholder into something, not left hanging", async () => {
