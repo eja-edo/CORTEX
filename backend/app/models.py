@@ -1196,6 +1196,18 @@ class AttentionBundleQueue(Base):
         nullable=False,
     )
     item_id = Column(UUID(as_uuid=True), nullable=False)
+    # Khoá gộp thứ hai, cạnh `user_id` (DESIGN 7.2). Chốt **lúc xếp hàng**,
+    # cùng lý do với `title`/`payload` ở trên: nhãn gộp là một phần của
+    # điều được nói ra, nên nó phải là điều đã đúng lúc Cortex quyết định
+    # im. Đọc lại lúc flush thì một task bị xoá giữa chừng sẽ lặng lẽ rơi
+    # khỏi nhóm dự án của nó.
+    #
+    # `NULL` là giá trị hợp lệ và thường gặp, không phải dữ liệu thiếu:
+    # nhắc cấp người dùng (`day.review`, `day.plan`) không thuộc dự án nào,
+    # và phần lớn sự kiện lịch sẽ không bao giờ được gắn dự án (DESIGN 4.2).
+    project_id = Column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True
+    )
     reason_key = Column(String(100), nullable=False)
     title = Column(String(255), nullable=False)
     body = Column(Text, nullable=True)
@@ -1212,6 +1224,12 @@ class AttentionBundleQueue(Base):
 
     __table_args__ = (
         Index("ix_attention_bundle_queue_user_flushed", "user_id", "flushed_at"),
+        Index(
+            "ix_attention_bundle_queue_user_project",
+            "user_id",
+            "project_id",
+            postgresql_where=text("flushed_at IS NULL"),
+        ),
     )
 
     def __repr__(self):

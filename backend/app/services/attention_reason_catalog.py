@@ -117,6 +117,25 @@ REASON_CATALOG: dict[str, ReasonMeta] = {
         ),
         scope=ReasonScope.PROJECT,
     ),
+    "attention.bundle": ReasonMeta(
+        base_level=AttentionLevel.INFORM,
+        description=(
+            "Everything the Gate held back while the user was busy, released as one "
+            "notification per project once they are free."
+        ),
+        # `PERSONAL` là quyết định, không phải giá trị mặc định rơi vào.
+        # Từ DESIGN 7.2, cụm này được gộp **theo** dự án và mang tên dự án
+        # trong tiêu đề — nên nó trông rất giống một lời nhắc cấp dự án, và
+        # `scope` là thứ duy nhất ngăn nó đi về channel chung. Một cụm nhắc
+        # việc riêng của một người phát vào channel cả nhóm chính là lỗi
+        # cấu trúc đã giết hướng "bot nghe channel" (DESIGN 1.4).
+        #
+        # Trước đây `attention.bundle` không có trong catalog và chỉ *tình
+        # cờ* về DM nhờ giá trị mặc định của `scope_for`. Ghi hẳn ra đây để
+        # nó là một bất biến có chủ đích, và để `base_level_for` thôi log
+        # cảnh báo "unregistered reason_key" mỗi lần flush.
+        scope=ReasonScope.PERSONAL,
+    ),
 }
 
 
