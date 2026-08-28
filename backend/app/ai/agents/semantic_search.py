@@ -24,7 +24,7 @@ async def semantic_search_notes(
     query: str,
     user_id: UUID,
     db: AsyncSession,
-    workspace_id: Optional[UUID] = None,
+    project_id: Optional[UUID] = None,
     limit: int = 10,
 ) -> dict:
     """
@@ -37,7 +37,7 @@ async def semantic_search_notes(
         query: Search query string
         user_id: User ID to scope search
         db: AsyncSession for database access
-        workspace_id: Optional workspace to scope search
+        project_id: Optional project to scope search
         limit: Maximum results to return (capped at 20)
     
     Returns:
@@ -60,7 +60,7 @@ async def semantic_search_notes(
     if query_embedding is None:
         logger.warning("semantic_search_notes_no_query_embedding")
         # Fallback to keyword search
-        return await _keyword_search_notes(query, user_id, db, workspace_id, limit)
+        return await _keyword_search_notes(query, user_id, db, project_id, limit)
     
     # Build semantic search query using pgvector
     try:
@@ -79,8 +79,8 @@ async def semantic_search_notes(
                 AND n.embedding IS NOT NULL
         """
         
-        if workspace_id:
-            sql += " AND n.workspace_id = :workspace_id"
+        if project_id:
+            sql += " AND n.project_id = :project_id"
         
         sql += """
             ORDER BY distance ASC
@@ -96,8 +96,8 @@ async def semantic_search_notes(
             "limit": limit,
         }
         
-        if workspace_id:
-            params["workspace_id"] = str(workspace_id)
+        if project_id:
+            params["project_id"] = str(project_id)
         
         result = await db.execute(text(sql), params)
         rows = result.fetchall()
@@ -117,7 +117,7 @@ async def semantic_search_notes(
             extra={
                 "results_count": len(notes),
                 "latency_ms": latency_ms,
-                "workspace_id": workspace_id,
+                "project_id": project_id,
             }
         )
         
@@ -135,14 +135,14 @@ async def semantic_search_notes(
             exc_info=True,
         )
         # Fallback to keyword search
-        return await _keyword_search_notes(query, user_id, db, workspace_id, limit)
+        return await _keyword_search_notes(query, user_id, db, project_id, limit)
 
 
 async def _keyword_search_notes(
     query: str,
     user_id: UUID,
     db: AsyncSession,
-    workspace_id: Optional[UUID] = None,
+    project_id: Optional[UUID] = None,
     limit: int = 10,
 ) -> dict:
     """
@@ -163,8 +163,8 @@ async def _keyword_search_notes(
             .limit(limit)
         )
         
-        if workspace_id:
-            stmt = stmt.where(Note.workspace_id == workspace_id)
+        if project_id:
+            stmt = stmt.where(Note.project_id == project_id)
         
         result = await db.execute(stmt)
         rows = result.fetchall()
@@ -182,7 +182,7 @@ async def _keyword_search_notes(
             "keyword_search_notes_fallback",
             extra={
                 "results_count": len(notes),
-                "workspace_id": workspace_id,
+                "project_id": project_id,
             }
         )
         

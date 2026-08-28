@@ -14,7 +14,7 @@ from app.models import Asset, AssetStatus, AssetType, User
 from app.schemas import AssetCreate, AssetResponse, AssetUpdate
 from app.services.redis.stt_producer import enqueue_transcription_job
 from app.services.redis.ocr_processor_task import enqueue_video_processing
-from app.services.workspace_permission import WorkspacePermission
+from app.services.project_permission import ProjectPermission
 from app.utils.logger import get_logger
 
 router = APIRouter(prefix="/assets", tags=["assets"])
@@ -132,21 +132,25 @@ def list_assets(
     return assets
 
 
-@router.get("/workspaces/{workspace_id}", response_model=list[AssetResponse])
-def list_workspace_assets(
-    workspace_id: UUID,
+@router.get("/projects/{project_id}", response_model=list[AssetResponse])
+def list_project_assets(
+    project_id: UUID,
     status_filter: AssetStatus | None = Query(default=None, alias="status"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
-    """List all assets in a workspace. User must be a member."""
-    # Check workspace membership
-    WorkspacePermission.require_member(workspace_id, current_user.id, db)
+    """Bản ghi của người đang đăng nhập trong một dự án.
+
+    Lọc theo `user_id` **và** dự án: dự án là thực thể dùng chung (QĐ-1),
+    nên "bản ghi trong dự án này" không đồng nghĩa với "bản ghi của tôi".
+    """
+    ProjectPermission.require_member(project_id, current_user.id, db)
 
     query = db.query(Asset).filter(
-        Asset.workspace_id == workspace_id,
+        Asset.project_id == project_id,
+        Asset.user_id == current_user.id,
         Asset.deleted_at.is_(None),
     )
     if status_filter is not None:

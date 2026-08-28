@@ -31,6 +31,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
+    Project,
     Task,
     TaskPriority,
     TaskStatus,
@@ -97,7 +98,8 @@ class TodayService:
         open_tasks = await self._open_tasks(user_id)
         pending_tasks = await self._pending_confirmation_tasks(user_id)
 
-        actions = self._rank_actions(open_tasks)
+        project_risks = await self._project_risks(open_tasks)
+        actions = self._rank_actions(open_tasks, project_risks)
         now_actions = actions[:MAX_NOW_ACTIONS]
 
         needs_confirmation = self._build_needs_confirmation(pending_tasks)
@@ -144,6 +146,61 @@ class TodayService:
         )
         return list((await self.session.execute(stmt)).scalars().all())
 
+    async def _project_risks(self, open_tasks: list[Task]) -> dict[UUID, float]:
+        """Điểm rủi ro của từng dự án đang có việc mở — DESIGN 7.1.
+
+        Một truy vấn cho toàn bộ dự án liên quan, rồi tính bằng hàm thuần.
+        Không có N+1: số dự án của một người luôn nhỏ hơn số việc của họ,
+        nên nạp cả nhóm rẻ hơn nạp lười từng cái.
+
+        Dự án không có deadline — kể cả dự án cá nhân, luôn luôn — nhận 0.0
+        và không cần nạp. Vẫn nạp hết cho đơn giản; `project_risk` trả 0.0
+        cho chúng, và đó là điều giữ cho việc lẻ xếp đúng như trước.
+        """
+        # Import bên trong hàm, không ở đầu tệp: `risk_detection` import
+        # `OPEN_STATUSES`/`_due_day`/`_today` từ module này, nên import ngược
+        # ở mức module là một vòng tròn.
+        from app.services.risk_detection import project_risk
+
+        project_ids = {t.project_id for t in open_tasks if t.project_id}
+        if not project_ids:
+            return {}
+
+        projects = list(
+            (
+                await self.session.execute(
+                    select(Project).where(Project.id.in_(project_ids))
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        # Đếm subtask mở ngay trên tập đã nạp, không hỏi DB lần nữa: mọi
+        # subtask mở của một việc mở đều nằm trong `open_tasks`.
+        open_subtask_counts: dict[UUID, int] = {}
+        for task in open_tasks:
+            if task.parent_task_id:
+                open_subtask_counts[task.parent_task_id] = (
+                    open_subtask_counts.get(task.parent_task_id, 0) + 1
+                )
+
+        tasks_by_project: dict[UUID, list[Task]] = {}
+        for task in open_tasks:
+            if task.project_id:
+                tasks_by_project.setdefault(task.project_id, []).append(task)
+
+        today = _today()
+        return {
+            project.id: project_risk(
+                project.deadline,
+                tasks_by_project.get(project.id, []),
+                open_subtask_counts,
+                today,
+            )
+            for project in projects
+        }
+
     async def _pending_confirmation_tasks(self, user_id: UUID) -> list[Task]:
         """`pending_confirm` only — a suggestion the extraction pipeline
         made that the user hasn't answered yet. Kept off `now_actions`
@@ -164,13 +221,29 @@ class TodayService:
     # Ranking + reasons
     # ------------------------------------------------------------------
 
-    def _rank_actions(self, tasks: list[Task]) -> list[TodayNowAction]:
+    def _rank_actions(
+        self,
+        tasks: list[Task],
+        project_risks: dict[UUID, float] | None = None,
+    ) -> list[TodayNowAction]:
         """Order by how much it costs to not do the thing today.
+
+        Hai tầng kể từ DESIGN 7.1:
+
+            (rủi_ro_dự_án desc, khoá_task_hiện_tại)
+
+        Tầng một là thứ Todoist không có: nó biết một việc quá hạn ba ngày,
+        nhưng không biết việc đó thuộc một dự án còn năm ngày và đang trượt.
+        Tầng hai giữ nguyên trật tự cũ, nên với người chưa có dự án nào —
+        mọi việc rơi vào dự án cá nhân, `deadline IS NULL`, rủi ro 0.0 —
+        màn hình xếp đúng như hôm qua. Đó là ràng buộc của 7.1, không phải
+        tác dụng phụ may mắn.
 
         Deterministic and explainable by construction: the sort key is the
         same fact the reason sentence quotes, so the order can always be
         justified by what the card already says.
         """
+        risks = project_risks or {}
         scored: list[tuple[tuple, TodayNowAction]] = []
         today = _today()
 
@@ -185,8 +258,14 @@ class TodayService:
             overdue_days = (today - due_day).days if due_day and due_day < today else 0
             days_to_due = (due_day - today).days if due_day else 9_999
 
-            # Most overdue first, then higher priority, then soonest due.
-            sort_key = (-overdue_days, -_PRIORITY_WEIGHT[task.priority], days_to_due)
+            # Dự án nguy nhất trước; trong cùng một mức, giữ nguyên thứ tự
+            # cũ: quá hạn nhiều nhất, rồi ưu tiên cao hơn, rồi hạn gần hơn.
+            sort_key = (
+                -risks.get(task.project_id, 0.0),
+                -overdue_days,
+                -_PRIORITY_WEIGHT[task.priority],
+                days_to_due,
+            )
             scored.append((sort_key, self._to_action(task, reason)))
 
         scored.sort(key=lambda pair: pair[0])

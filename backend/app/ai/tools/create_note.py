@@ -23,8 +23,8 @@ async def create_note_handler(args: dict, ctx: ToolContext) -> dict:
     Create a new note for the user.
 
     Security:
-    - Workspace editor check + user_id are enforced by CommandRegistry
-      (WRITE scope + Command.workspace_id → WorkspacePermission), not
+    - Project membership + user_id are enforced by CommandRegistry
+      (WRITE scope + Command.project_id → ProjectPermission), not
       manually here — see app/commands/registry.py::_check_permission.
     - user_id comes from ctx (never from args)
     """
@@ -34,19 +34,20 @@ async def create_note_handler(args: dict, ctx: ToolContext) -> dict:
     content = args["content"]
     style_color = args.get("style_color", "yellow")
 
-    workspace_id = ctx.workspace_id
-    if workspace_id is None:
-        raise ValueError("workspace_id is required but not available in context")
-
+    # Không còn bắt buộc một container ở tầng tool. Trước đây thiếu
+    # một container là ném lỗi ngay, nghĩa là agent không ghi được ghi chú
+    # nào trong ngữ cảnh không có dự án đang mở — kể cả DM Mezon.
+    # Giờ thiếu cả hai là hợp lệ: service rơi về dự án cá nhân (DESIGN 3.5
+    # bước 3), cùng cách `create_task` đã làm.
     command = Command(
         command_name="note.create",
         args={
-            "workspace_id": str(workspace_id),
+            "project_id": str(ctx.project_id) if ctx.project_id else None,
             "content": content,
             "style": {"color": style_color},
         },
         requested_by=ctx.user_id,
-        workspace_id=workspace_id,
+        project_id=ctx.project_id,
         conversation_id=ctx.conversation_id,
         source="AI",
     )
@@ -60,7 +61,7 @@ async def create_note_handler(args: dict, ctx: ToolContext) -> dict:
 
     return {
         "id": result.data["id"],
-        "workspace_id": result.data["workspace_id"],
+        "project_id": result.data["project_id"],
         "created_at": result.data["created_at"],
         "action_id": result.action_id,
         "revert_hint": "Bạn có thể yêu cầu hoàn tác hành động này bằng action_id trên.",
@@ -90,5 +91,5 @@ CREATE_NOTE_DEFINITION = {
     "handler": create_note_handler,
     "input_model": CreateNoteInput,
     "schema": CREATE_NOTE_SCHEMA,
-    "description": "Create a new note in the current workspace.",
+    "description": "Create a new note in the user's current project.",
 }

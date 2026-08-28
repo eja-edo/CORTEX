@@ -15,6 +15,7 @@ from sqlalchemy import delete
 
 from app.config import settings
 from app.database_async import make_async_sessionmaker
+from tests.project_helper import personal_project_id, personal_project_id_sync
 from app.models import (
     AttentionBundleQueue,
     AttentionItemType,
@@ -59,6 +60,7 @@ async def async_db(user_id):
 
 async def _make_task(db, user_id, *, suffix: str, priority, due_date) -> Task:
     task = Task(
+        project_id=await personal_project_id(db, user_id),
         user_id=user_id, title=f"{TITLE_PREFIX}{suffix}", status=TaskStatus.TODO,
         due_date=due_date, priority=priority,
     )

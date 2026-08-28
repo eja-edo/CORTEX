@@ -68,7 +68,12 @@ from app.services.attention_reason_catalog import base_level_for, superseded_by
 from app.services.availability import should_stay_quiet_async, should_stay_quiet_sync
 from app.services.feedback_loop import apply_downgrade, dismiss_count_async, dismiss_count_sync
 from app.services.notifications import NotificationService, create_notification_async
-from app.services.user_preferences import get_preferences_async, get_preferences_sync, is_reason_disabled
+from app.services.user_preferences import (
+    get_preferences_async,
+    get_preferences_sync,
+    is_gate_bypassed,
+    is_reason_disabled,
+)
 from app.schemas import AttentionSurfaceCreate
 from app.utils.logger import get_logger
 
@@ -197,6 +202,37 @@ async def _decide_level_async(
     return level, False
 
 
+# ---------------------------------------------------------------------------
+# Nhóm A của phép thử A/B — DESIGN 12.2
+# ---------------------------------------------------------------------------
+
+
+def _ungated_log_row(
+    *, user_id: UUID, item_type: AttentionItemType, item_id: UUID, reason_key: str
+) -> AttentionLog:
+    """Hàng `attention_log` cho một lần nhắc **không qua Gate**.
+
+    Ghi thẳng thay vì đi qua `record_surface`, và đó là điểm mấu chốt của
+    phép thử: `record_surface` **có dedup**, mà dedup là một trong năm bước
+    của Gate (12.2 liệt kê: dedup · im khi bận · quiet hours · gộp · chọn
+    thời điểm). Cho nhóm A đi qua nó nghĩa là nhóm A vẫn được hưởng một
+    phần năm giá trị đang đo, và hai con số ở 12.3 sẽ nói dối theo hướng
+    làm Gate trông kém giá trị hơn thực tế.
+
+    Vẫn ghi một hàng — không phải bỏ ghi — vì cả hai nhóm phải đọc số từ
+    **cùng một bảng**. Nhóm A không có hàng thì nhóm A không có gì để so.
+    """
+    return AttentionLog(
+        user_id=user_id,
+        item_type=item_type,
+        item_id=item_id,
+        reason_key=reason_key,
+        level=AttentionLevel.INFORM,
+        channel=AttentionChannel.IN_APP,
+        response=AttentionResponse.NO_RESPONSE,
+    )
+
+
 async def request_attention_async(
     db: AsyncSession,
     *,
@@ -219,6 +255,30 @@ async def request_attention_async(
         return await create_notification_async(
             db, user_id=user_id, type=type, title=title, body=body,
             content=content, actions=actions, payload=payload,
+        )
+
+    # Nhóm A của phép thử A/B (DESIGN 12.2): "đến hạn → ping một lần".
+    #
+    # Đặt **trước** mọi bước của Gate, không phải bên trong: điều đang đo là
+    # giá trị của cả năm bước cộng lại (dedup · im khi bận · quiet hours ·
+    # gộp · chọn thời điểm), nên bỏ qua một phần rồi giữ phần còn lại sẽ
+    # cho ra một con số không trả lời được câu hỏi nào.
+    #
+    # Vẫn ghi `attention_log` với `level=inform`: phép thử cần **cùng một
+    # nguồn số liệu** cho cả hai nhóm — tỷ lệ dismiss và tỷ lệ làm trong
+    # 24h (12.3) đều đọc từ bảng này. Bỏ ghi cho nhóm A nghĩa là nhóm A
+    # không có số để so.
+    if is_gate_bypassed(await get_preferences_async(db, user_id)):
+        entry = _ungated_log_row(
+            user_id=user_id, item_type=item_type, item_id=item_id, reason_key=reason_key
+        )
+        db.add(entry)
+        await db.flush()
+        return await create_notification_async(
+            db, user_id=user_id, type=type, title=title, body=body,
+            content=content, actions=actions, payload=payload,
+            reason_key=reason_key, attention_level=AttentionLevel.INFORM,
+            attention_log_id=entry.id,
         )
 
     level, silenced_by_busy = await _decide_level_async(db, item_type, item_id, reason_key, user_id)
@@ -381,6 +441,24 @@ def request_attention_sync(
         return NotificationService(db).create(
             user_id=user_id, type=type, title=title, body=body,
             content=content, actions=actions, payload=payload,
+        )
+
+    # Nhóm A của phép thử A/B — bản sync. Phải có ở **cả hai** đường vào,
+    # nếu không cùng một người dùng đi qua Gate hay không tuỳ vào predicate
+    # nào phát ra lời nhắc (ReminderWorker chạy sync, StateEvaluator chạy
+    # async), và phép thử đo một thứ trộn lẫn thay vì đo Gate.
+    if is_gate_bypassed(get_preferences_sync(db, user_id)):
+        entry = _ungated_log_row(
+            user_id=user_id, item_type=item_type, item_id=item_id, reason_key=reason_key
+        )
+        db.add(entry)
+        db.commit()
+        db.refresh(entry)
+        return NotificationService(db).create(
+            user_id=user_id, type=type, title=title, body=body,
+            content=content, actions=actions, payload=payload,
+            reason_key=reason_key, attention_level=AttentionLevel.INFORM,
+            attention_log_id=entry.id,
         )
 
     level, silenced_by_busy = _decide_level_sync(db, item_type, item_id, reason_key, user_id)

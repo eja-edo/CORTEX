@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 
 from app.ai.agents.tool_context import ToolContext
 from app.ai.agents.semantic_search import semantic_search_notes
-from app.services.workspace_permission import WorkspacePermission
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +24,7 @@ async def search_notes_handler(args: dict, ctx: ToolContext) -> dict:
     
     Security:
     - Always filtered by ctx.user_id (from authenticated session)
-    - Workspace filtering optional but user always enforced
+    - Always scoped to the asking user
     - Returns previews only, not full content
     
     Features:
@@ -36,13 +35,11 @@ async def search_notes_handler(args: dict, ctx: ToolContext) -> dict:
     query = args["query"]
     limit = args.get("limit", 10)
 
-    workspace_id = ctx.workspace_id
-    if workspace_id is None:
-        raise ValueError("workspace_id is required but not available in context")
-
-    # Check workspace membership
-    with ctx.get_sync_db() as sync_db:
-        WorkspacePermission.require_member(workspace_id, ctx.user_id, sync_db)
+    # Tìm trong ghi chú **của người đang hỏi** — `semantic_search_notes`
+    # đã lọc theo `user_id` bên dưới. Không còn cổng workspace ở đây: nó
+    # từng làm mọi ngữ cảnh không mang workspace (DM Mezon là một) không
+    # tìm được gì, và thông báo lỗi thì nói về một khái niệm người dùng
+    # không nhìn thấy.
 
     try:
         start_time = time.time()
@@ -53,7 +50,6 @@ async def search_notes_handler(args: dict, ctx: ToolContext) -> dict:
                 query=query,
                 user_id=ctx.user_id,
                 db=db,
-                workspace_id=workspace_id,
                 limit=limit,
             )
         
@@ -104,5 +100,5 @@ SEARCH_NOTES_DEFINITION = {
     "handler": search_notes_handler,
     "input_model": SearchNotesInput,
     "schema": SEARCH_NOTES_SCHEMA,
-    "description": "Search notes in the current workspace by keyword. Returns matching notes with content preview.",
+    "description": "Search the user's notes by keyword. Returns matching notes with content preview.",
 }

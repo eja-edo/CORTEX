@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.dependencies import get_current_active_user
-from app.models import User, RefreshToken, AuthorizationCode, Workspace, WorkspaceMember, WorkspaceRole
+from app.models import User, RefreshToken, AuthorizationCode
 from app.schemas import (
     UserCreate,
     UserResponse,
@@ -130,21 +130,17 @@ def register_user(user_input: UserCreate, db: Session = Depends(get_db)):
     db.add(user)
     db.flush()
 
-    workspace = Workspace(
-        owner_id=user.id,
-        name=f"{user.email}'s Workspace",
-        is_personal=True,
-    )
-    db.add(workspace)
-    db.flush()
-
-    member = WorkspaceMember(
-        workspace_id=workspace.id,
-        user_id=user.id,
-        role=WorkspaceRole.OWNER,
-    )
-    db.add(member)
-
+    # **Đăng ký không tạo container nào nữa.**
+    #
+    # Trước đây mỗi tài khoản mới đẻ một workspace "cá nhân". Kết quả đo
+    # được ngày 2026-08-24: 95 tài khoản, 94 trong đó do integration test
+    # sinh ra, mỗi cái kèm một workspace rỗng không ai mở. Đó chính là lỗi
+    # P4 mà DESIGN 3.4 lấy làm ví dụ, và là lý do dự án cá nhân được **tạo
+    # lười** — lần đầu người dùng thật sự cần một chỗ để đặt việc, không
+    # phải lúc họ điền xong form đăng ký.
+    #
+    # `ProjectService.get_or_create_personal` lo phần còn lại, ở đúng thời
+    # điểm có ngữ cảnh.
     db.commit()
     db.refresh(user)
     return user

@@ -29,7 +29,8 @@ Gate acts on is 4.4 ("chuyển công thức thành action"), a separate step —
 see planning-v3.md's Khối D.
 """
 
-from datetime import datetime, time
+from collections.abc import Mapping, Sequence
+from datetime import date, datetime, time
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -111,3 +112,61 @@ async def list_at_risk_tasks(
 
     scored.sort(key=lambda pair: pair[1], reverse=True)
     return scored
+
+
+# ============================================================================
+# Project-level risk — DESIGN 7.1
+# ============================================================================
+
+
+def project_risk(
+    deadline: datetime | None,
+    tasks: Sequence[Task],
+    open_subtask_counts: Mapping[UUID, int] | None = None,
+    today: date | None = None,
+) -> float:
+    """How much trouble a whole project is in, on the same scale as a task.
+
+    Reuses `compute_risk` rather than inventing a second formula: the worst
+    task in a project *is* the project's floor, and multiplying by how close
+    the deadline is expresses the one thing a per-task score can never
+    say — that the same slippage costs more with five days left than with
+    fifty.
+
+        urgency = 1 + 2 / (1 + days_left)     # 1.0 khi còn xa, 3.0 khi tới hạn
+
+    **`deadline is None` returns 0.0, and that is load-bearing.** Dự án cá
+    nhân không bao giờ có deadline (DESIGN 3.4), nên mọi việc lẻ nhận điểm
+    0 ở tầng một và giữ nguyên thứ tự cũ ở tầng hai. Không có nhánh này thì
+    việc lẻ và việc dự án trộn vào nhau, và hành vi hiện tại của màn Hôm nay
+    đổi cho những người chưa có dự án nào — chính là điều 7.1 cấm.
+
+    Thuần và không chạm DB, cùng lý do `compute_risk` là: thứ đáng test
+    trực tiếp là công thức, không phải cách lấy dữ liệu cho nó.
+    """
+    if deadline is None:
+        return 0.0
+
+    day = today or _today()
+    counts = open_subtask_counts or {}
+
+    base = max(
+        (
+            compute_risk(
+                task.priority,
+                (day - _due_day(task)).days if _due_day(task) else 0,
+                counts.get(task.id, 0),
+            )
+            for task in tasks
+        ),
+        default=0.0,
+    )
+    if base == 0.0:
+        # Chưa có việc nào trượt thì dự án chưa trượt — nhân với urgency ở
+        # đây chỉ biến 0 thành 0, nhưng viết rõ ra để không ai đọc nhầm
+        # rằng deadline gần tự nó là rủi ro.
+        return 0.0
+
+    days_left = max((deadline.date() - day).days, 0)
+    urgency = 1.0 + 2.0 / (1.0 + days_left)
+    return base * urgency

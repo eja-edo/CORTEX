@@ -37,6 +37,23 @@ from app.models import ActionHistory, Task
 from app.services.tasks import TaskService
 
 TEST_USER_ID = UUID("73552833-a6de-40a1-bb69-6e034ca75460")
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _seeded_user():
+    """Tài khoản dev mà tệp này hardcode — dựng nếu DB không còn nó.
+
+    Xem `tests/integration/seeded_user.py`: giả định "hàng này luôn có sẵn"
+    đã sai một lần và làm 120 test đỏ cùng lúc.
+    """
+    from app.database_async import make_async_sessionmaker
+    from tests.integration.seeded_user import ensure_seeded_user
+
+    engine, session_maker = make_async_sessionmaker()
+    async with session_maker() as db:
+        await ensure_seeded_user(db)
+    await engine.dispose()
+
 MARKER = "[test-action-history]"
 
 
@@ -126,7 +143,11 @@ async def test_id_has_a_server_side_default(async_db):
             "WHERE table_name = 'action_history' AND column_name = 'id'"
         )
     )).scalar_one()
-    assert result is not None and "gen_random_uuid" in result
+    # Khẳng định *có* default ở phía DB, không khẳng định tên hàm nào.
+    # Cột này đã đổi từ `gen_random_uuid()` sang `uuid_generate_v7()` (id có
+    # thứ tự thời gian); khoá theo tên hàm biến một thay đổi hợp lệ thành
+    # một test đỏ, và đó không phải thứ test này canh.
+    assert result is not None and "uuid" in result.lower()
 
 
 @pytest.mark.asyncio

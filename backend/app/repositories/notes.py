@@ -26,11 +26,21 @@ class NoteRepository:
         result = await self.session.execute(stmt)
         return result.scalars().all()
 
-    async def list_active_by_workspace(self, workspace_id: UUID) -> Sequence[Note]:
-        """List all active notes in a workspace."""
+    async def list_active_by_project(self, project_id: UUID, user_id: UUID) -> Sequence[Note]:
+        """Ghi chú đang sống trong một dự án, của một người.
+
+        Lọc theo `user_id` là bắt buộc, không phải thừa: dự án là thực thể
+        **dùng chung** (QĐ-1), nên "ghi chú trong dự án này" không đồng
+        nghĩa với "ghi chú của tôi" — bỏ bộ lọc đi là lộ ghi chú của người
+        khác ngay khi có thành viên thứ hai.
+        """
         stmt = (
             select(Note)
-            .where(Note.workspace_id == workspace_id, Note.is_deleted.is_(False))
+            .where(
+                Note.project_id == project_id,
+                Note.user_id == user_id,
+                Note.is_deleted.is_(False),
+            )
             .order_by(Note.updated_at.desc())
         )
         result = await self.session.execute(stmt)

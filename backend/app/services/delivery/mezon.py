@@ -78,8 +78,17 @@ class MezonAdapter:
             # meantime.
             return DeliveryResult.unavailable("MEZON_BOT_INTERNAL_URL is not configured")
 
+        # Nhắc cấp dự án về channel của dự án, nhắc cá nhân về DM (8.1).
+        # Vẫn cần `user_channel` cho cả hai: nó là bằng chứng người này đã
+        # liên kết Mezon và đã qua `min_level`. Không có nó thì một dự án
+        # sẽ đăng vào channel thay cho một người chưa từng bật Mezon.
+        project_channel_id = payload.project_channel_id
+
         body = {
             "mezon_user_id": user_channel.address,
+            # `None` cho nhắc cá nhân — bot đọc trường này để chọn giữa
+            # `sendToChannel` và `sendDirectMessage`.
+            "mezon_channel_id": project_channel_id,
             "notification_id": str(payload.notification_id),
             "title": payload.title,
             "body": payload.body,

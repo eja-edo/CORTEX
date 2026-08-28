@@ -44,6 +44,8 @@ from datetime import datetime, time, timedelta, timezone
 from typing import Optional
 from uuid import UUID
 
+from pydantic import BaseModel
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -52,6 +54,8 @@ from app.database_async import make_async_sessionmaker
 from app.events.event_bus import get_event_bus
 from app.events.payloads import (
     DayPlanPayload,
+    ProjectSlippingPayload,
+    ProjectWillMissPayload,
     DayReviewPayload,
     ScheduleDigestItem,
     ScheduleStartsSoonPayload,
@@ -63,7 +67,18 @@ from app.events.payloads import (
     TaskStalePayload,
 )
 from app.events.schemas import EventEnvelope
-from app.models import AttentionItemType, Schedule, StateEvaluatorFlag, Task, TaskPriority, TaskStatus
+from app.models import (
+    AttentionItemType,
+    Project,
+    ProjectOrigin,
+    ProjectSnapshot,
+    ProjectStatus,
+    Schedule,
+    StateEvaluatorFlag,
+    Task,
+    TaskPriority,
+    TaskStatus,
+)
 from app.services.risk_detection import compute_risk
 from app.services.today import OPEN_STATUSES, _due_day, _today
 from app.utils.logger import get_logger
@@ -78,6 +93,19 @@ STARTS_SOON_FLAG_KEY = "starts_soon"
 DAY_REVIEW_FLAG_KEY = "day_review"
 DAY_PLAN_FLAG_KEY = "day_plan"
 AT_RISK_FLAG_KEY = "at_risk"
+PROJECT_SLIPPING_FLAG_KEY = "project_slipping"
+PROJECT_WILL_MISS_FLAG_KEY = "project_will_miss"
+# Cờ trung gian của bộ chống rung ở `_publish_will_miss` — "đã vượt ngưỡng
+# một lần", chưa phát. Là một `flag_key` riêng chứ không phải cột thêm nên
+# nó thừa hưởng nguyên bộ diff/idempotency đã có.
+PROJECT_WILL_MISS_PENDING_FLAG_KEY = "project_will_miss_pending"
+
+# Chân trời của `project.slipping` (DESIGN 6.1): xa hơn thế thì việc mở tăng
+# là chuyện bình thường của một dự án đang chạy, không phải tín hiệu trượt.
+PROJECT_SLIPPING_HORIZON_DAYS = 14
+# Cửa sổ tính tốc độ của `project.will_miss` (DESIGN 6.2). Hệ quả đã biết và
+# chấp nhận: dự án mới im trong hai tuần đầu vì chưa có dữ liệu tốc độ.
+PROJECT_VELOCITY_WINDOW_DAYS = 14
 
 # The two per-user daily digests reset by calendar day rather than by their
 # condition going false — see `_clear_stale_daily_flags`.
@@ -210,6 +238,10 @@ class StateEvaluator:
             self._evaluate_schedule_starts_soon,
             self._evaluate_day_plan,
             self._evaluate_day_review,
+            # Sau cùng: hai predicate này đọc `tasks` của cả dự án, nên chạy
+            # sau khi các predicate cấp task đã ổn định trong cùng một tick
+            # giữ cho số liệu chúng phát ra khớp với thứ vừa được nhắc.
+            self._evaluate_projects,
         )
         try:
             while self._running:
@@ -601,6 +633,309 @@ class StateEvaluator:
             logger.warning(f"Failed to publish task.at_risk event for task {task.id}: {exc}")
 
     # ------------------------------------------------------------------
+    # Predicate cấp dự án — DESIGN 6
+    # ------------------------------------------------------------------
+    #
+    # Cả hai chạy **một lần mỗi ngày cho mỗi dự án**, không phải mỗi tick.
+    # Đó là yêu cầu của DESIGN 4.3 chứ không phải tối ưu: `deadline` suy ra
+    # từ `max(due_date)` nhảy mỗi lần thêm task, và nếu đánh giá theo tick
+    # thì `project.slipping` bật/tắt theo từng lần ghi. Mốc "đã đánh giá
+    # hôm nay chưa" đọc từ `project_snapshots`, nên nó sống sót qua restart
+    # — khác với một biến trong bộ nhớ.
+
+    async def _evaluate_projects(self):
+        """Một lượt cho cả hai predicate dự án, vì cả hai dùng chung số liệu.
+
+        Tách làm hai vòng lặp nghĩa là quét `tasks` hai lần cho cùng một tập
+        dự án và có nguy cơ hai lần đọc ra hai con số khác nhau — rồi phát
+        `slipping` theo số này và `will_miss` theo số kia.
+        """
+        async with self._session_maker() as db:
+            today = _today()
+            today_start = datetime.combine(today, time.min)
+
+            projects = list(
+                (
+                    await db.execute(
+                        select(Project).where(Project.status == ProjectStatus.ACTIVE)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if not projects:
+                return
+
+            due_today = [
+                p
+                for p in projects
+                if not await self._already_evaluated_today(db, p.id, today_start)
+            ]
+            if not due_today:
+                return
+
+            slipping: dict[UUID, ProjectSlippingPayload] = {}
+            will_miss: dict[UUID, ProjectWillMissPayload] = {}
+            owner_by_project: dict[UUID, UUID] = {}
+
+            for project in due_today:
+                owner_by_project[project.id] = project.owner_id
+                metrics = await self._project_metrics(db, project, today, today_start)
+
+                previous = await self._latest_snapshot(db, project.id)
+                db.add(
+                    ProjectSnapshot(
+                        project_id=project.id,
+                        open_count=metrics["open_count"],
+                        completed_last_14d=metrics["completed_last_14d"],
+                    )
+                )
+
+                # `deadline IS NULL` là cổng chung của cả hai predicate và là
+                # bất biến chịu lực của DESIGN 3.4: dự án cá nhân không bao
+                # giờ có deadline, nên nó không bao giờ sinh nhắc cấp dự án
+                # dù có bao nhiêu việc quá hạn. Không có nhánh này thì sớm
+                # muộn xuất hiện câu "Cá nhân có 47 việc quá hạn" — đúng
+                # loại nhiễu P5 cấm.
+                if project.deadline is None:
+                    continue
+
+                days_left = (project.deadline.date() - today).days
+
+                if (
+                    previous is not None
+                    and metrics["open_count"] > previous.open_count
+                    and days_left <= PROJECT_SLIPPING_HORIZON_DAYS
+                ):
+                    slipping[project.id] = ProjectSlippingPayload(
+                        project_id=project.id,
+                        name=project.name,
+                        open_count=metrics["open_count"],
+                        previous_open_count=previous.open_count,
+                        days_to_deadline=days_left,
+                        deadline=project.deadline,
+                        source_channel_id=project.source_channel_id,
+                        top_tasks=metrics["top_tasks"],
+                    )
+
+                payload = self._will_miss_payload(project, metrics, days_left, today)
+                if payload is not None:
+                    will_miss[project.id] = payload
+
+            await db.commit()
+
+            await self._publish_project_predicate(
+                db,
+                flag_key=PROJECT_SLIPPING_FLAG_KEY,
+                event_type="project.slipping",
+                payloads=slipping,
+                owner_by_project=owner_by_project,
+            )
+            await self._publish_will_miss(db, will_miss, owner_by_project)
+
+    async def _already_evaluated_today(
+        self, db: AsyncSession, project_id: UUID, today_start: datetime
+    ) -> bool:
+        return bool(
+            await db.scalar(
+                select(func.count())
+                .select_from(ProjectSnapshot)
+                .where(
+                    ProjectSnapshot.project_id == project_id,
+                    ProjectSnapshot.evaluated_at >= today_start,
+                )
+            )
+        )
+
+    async def _latest_snapshot(
+        self, db: AsyncSession, project_id: UUID
+    ) -> ProjectSnapshot | None:
+        return await db.scalar(
+            select(ProjectSnapshot)
+            .where(ProjectSnapshot.project_id == project_id)
+            .order_by(ProjectSnapshot.evaluated_at.desc())
+            .limit(1)
+        )
+
+    async def _project_metrics(
+        self,
+        db: AsyncSession,
+        project: Project,
+        today,
+        today_start: datetime,
+    ) -> dict:
+        """Số liệu của một dự án, và nơi duy nhất `deadline` được suy ra.
+
+        **Chỉ đếm Task.** Không bao giờ tính tiến độ từ số cuộc họp đã diễn
+        ra (DESIGN 6.3) — đó là kiểu hỏng kinh điển làm dự án nhiều họp
+        trông như đang chạy tốt. `CalendarItemService` trộn Task và Schedule
+        để *hiển thị*; đó là chuyện khác và không được chảy vào đây.
+        """
+        open_tasks = list(
+            (
+                await db.execute(
+                    select(Task).where(
+                        Task.project_id == project.id,
+                        Task.status.in_(OPEN_STATUSES),
+                        Task.recurrence_id.is_(None),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        window_start = today_start - timedelta(days=PROJECT_VELOCITY_WINDOW_DAYS)
+        completed_last_14d = int(
+            await db.scalar(
+                select(func.count())
+                .select_from(Task)
+                .where(
+                    Task.project_id == project.id,
+                    Task.status == TaskStatus.DONE,
+                    Task.completed_at.isnot(None),
+                    Task.completed_at >= window_start,
+                )
+            )
+            or 0
+        )
+
+        # DESIGN 4.3 — `deadline := max(due_date)`, tính lại mỗi ngày một
+        # lần ở đây và không ở đâu khác. `deadline_is_manual` khoá lại lựa
+        # chọn của người dùng: suy ra là mặc định, không phải phán quyết.
+        #
+        # Dự án cá nhân bị loại **trước** cả cờ manual, và đây là chỗ suýt
+        # hỏng: suy ra deadline từ `max(due_date)` sẽ cấp cho dự án cá nhân
+        # một deadline ngay khi người dùng có một việc lẻ có hạn — và cùng
+        # lúc đó bất biến `deadline IS NULL` của DESIGN 3.4 sụp, kéo theo cả
+        # hai predicate cấp dự án bắt đầu nói về "Cá nhân". Bất biến đó
+        # không tự giữ mình; đây là nơi nó được giữ.
+        if project.origin is ProjectOrigin.PERSONAL:
+            pass
+        elif not project.deadline_is_manual:
+            derived = max((t.due_date for t in open_tasks if t.due_date), default=None)
+            if derived != project.deadline:
+                project.deadline = derived
+
+        ordered = sorted(open_tasks, key=lambda t: _rank_key(t, today))
+        return {
+            "open_count": len(open_tasks),
+            "completed_last_14d": completed_last_14d,
+            "top_tasks": [_task_item(t) for t in ordered[:MAX_DIGEST_ITEMS]],
+        }
+
+    def _will_miss_payload(
+        self, project: Project, metrics: dict, days_left: int, today
+    ) -> ProjectWillMissPayload | None:
+        """DESIGN 6.2 — số học thuần, không ML, không token.
+
+            tốc_độ  := completed trong 14 ngày qua / 14
+            ngày_cần := việc_mở / tốc_độ
+            phát khi now + ngày_cần > deadline
+
+        Im khi không còn việc mở: một dự án đã xong không "sẽ trễ". Tốc độ 0
+        **với** việc mở còn lại thì ngược lại là tín hiệu mạnh nhất có thể —
+        hai tuần không hoàn thành gì thì theo bất kỳ phép ngoại suy nào cũng
+        không kịp.
+        """
+        open_count = metrics["open_count"]
+        if open_count == 0:
+            return None
+
+        velocity = metrics["completed_last_14d"] / PROJECT_VELOCITY_WINDOW_DAYS
+        days_needed = float("inf") if velocity == 0 else open_count / velocity
+        if days_needed <= days_left:
+            return None
+
+        return ProjectWillMissPayload(
+            project_id=project.id,
+            name=project.name,
+            open_count=open_count,
+            completed_last_14d=metrics["completed_last_14d"],
+            velocity_per_day=velocity,
+            # `inf` không serialise được sang JSON. Trần hoá bằng một số
+            # lớn-nhưng-thật: "cần hơn một năm" nói đúng điều cần nói và
+            # vẫn đi qua được mọi tầng.
+            days_needed=min(days_needed, 3650.0),
+            days_to_deadline=days_left,
+            deadline=project.deadline,
+            source_channel_id=project.source_channel_id,
+            top_tasks=metrics["top_tasks"],
+        )
+
+    async def _publish_project_predicate(
+        self,
+        db: AsyncSession,
+        *,
+        flag_key: str,
+        event_type: str,
+        payloads: dict[UUID, "BaseModel"],
+        owner_by_project: dict[UUID, UUID],
+    ) -> None:
+        to_publish, _ = await self._diff_flags(
+            db,
+            item_type=AttentionItemType.PROJECT,
+            flag_key=flag_key,
+            current_ids=set(payloads),
+            user_id_by_item=owner_by_project,
+        )
+        for project_id in to_publish:
+            try:
+                event_bus = await self._get_event_bus()
+                await event_bus.publish(
+                    EventEnvelope(
+                        type=event_type,
+                        source="StateEvaluator",
+                        user_id=owner_by_project[project_id],
+                        payload=payloads[project_id].model_dump(),
+                    )
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to publish %s for project %s: %s", event_type, project_id, exc
+                )
+
+    async def _publish_will_miss(
+        self,
+        db: AsyncSession,
+        payloads: dict[UUID, ProjectWillMissPayload],
+        owner_by_project: dict[UUID, UUID],
+    ) -> None:
+        """Chống rung: chỉ phát khi vượt ngưỡng **hai lần đánh giá liên tiếp**.
+
+        DESIGN 4.3 yêu cầu điều này vì `deadline` suy ra từ `max(due_date)`,
+        nên một task mới có hạn xa đẩy deadline ra và một task hoàn thành
+        kéo nó về — `will_miss` sẽ bật/tắt theo nếu phát ngay lần đầu.
+
+        Cơ chế dùng lại đúng bảng cờ: lần vượt đầu tiên chỉ đặt cờ *pending*,
+        lần thứ hai mới phát. Cờ nằm trong DB nên nó sống sót qua restart,
+        khác với việc nhớ trong bộ nhớ tiến trình.
+        """
+        pending_now = set(payloads)
+        previously_pending, _ = await self._diff_flags(
+            db,
+            item_type=AttentionItemType.PROJECT,
+            flag_key=PROJECT_WILL_MISS_PENDING_FLAG_KEY,
+            current_ids=pending_now,
+            user_id_by_item=owner_by_project,
+        )
+        # `_diff_flags` trả về những cái *mới* vượt ngưỡng lần này. Cái đủ
+        # điều kiện phát là phần còn lại: đã pending từ lần trước và vẫn
+        # vượt lần này.
+        confirmed = {
+            pid: payload
+            for pid, payload in payloads.items()
+            if pid not in previously_pending
+        }
+        await self._publish_project_predicate(
+            db,
+            flag_key=PROJECT_WILL_MISS_FLAG_KEY,
+            event_type="project.will_miss",
+            payloads=confirmed,
+            owner_by_project=owner_by_project,
+        )
+
+    # ------------------------------------------------------------------
     # schedule.starts_soon — event bắt đầu trong [MIN, MAX] phút
     # ------------------------------------------------------------------
 
@@ -669,9 +1004,26 @@ class StateEvaluator:
             users_with_open_work: dict[UUID, int] = {}
         else:
             async with self._session_maker() as db:
+                # Điều kiện phát dùng **cùng thước** với nội dung: ai có
+                # việc đến hạn hôm nay thì có gì để tổng kết. Đếm cả backlog
+                # ở đây sẽ bắn bản tổng kết cho người hôm nay không có việc
+                # nào — và thẻ của họ hiện "Xong 0/0".
+                #
+                # Vẫn là một truy vấn gộp theo user thay vì gọi
+                # `get_tasks_in_range` cho từng người: đây là vòng quét toàn
+                # hệ thống, và N truy vấn cho N người dùng là N+1 ở đúng chỗ
+                # chạy mỗi năm phút.
+                day_start = datetime.combine(_today(), time.min)
+                day_end = datetime.combine(_today(), time.max)
                 counts_result = await db.execute(
                     select(Task.user_id, func.count(Task.id))
-                    .where(Task.status.in_(OPEN_STATUSES))
+                    .where(
+                        Task.status.in_(OPEN_STATUSES),
+                        Task.recurrence_id.is_(None),
+                        Task.due_date.isnot(None),
+                        Task.due_date >= day_start,
+                        Task.due_date <= day_end,
+                    )
                     .group_by(Task.user_id)
                 )
                 users_with_open_work = dict(counts_result.all())
@@ -696,30 +1048,44 @@ class StateEvaluator:
             today = _today()
             today_start = datetime.combine(today, time.min)
 
-            open_result = await db.execute(
-                select(Task).where(
-                    Task.user_id == user_id,
-                    Task.status.in_(OPEN_STATUSES),
-                )
-            )
-            open_tasks = list(open_result.scalars().all())
-            overdue_task_count = sum(
-                1 for t in open_tasks if t.due_date is not None and t.due_date < today_start
-            )
+            # **Dùng chung định nghĩa "việc của ngày X" với lưới lịch.**
+            #
+            # `CalendarItemService.get_tasks_in_range` là nơi câu hỏi đó
+            # được trả lời cho màn Lịch và màn Việc; gọi lại nó ở đây là
+            # thứ duy nhất đảm bảo bản tổng kết và màn hình của cùng một
+            # ngày không thể nói hai con số khác nhau. Chúng đã từng: bản
+            # tổng kết tự viết truy vấn riêng, chọn *mọi* việc đang mở, và
+            # báo "còn 10 việc chưa xong" trong khi chỉ 1 việc đến hạn hôm
+            # nay — chín việc còn lại có hạn từ tuần sau tới tháng 2/2027.
+            #
+            # Hàm đó **không lọc trạng thái**, nên nó trả về cả hai nửa mà
+            # một bản tổng kết cần: đã xong và chưa xong.
+            from app.services.calendar_items import CalendarItemService
 
-            # `completed_at`, not `updated_at`: the column exists precisely
-            # to tell "finished today" from "renamed today" (see its comment
-            # in models.py). Without this half, a day where the user cleared
-            # nine tasks read exactly like one where they cleared none.
-            completed_result = await db.execute(
-                select(Task).where(
-                    Task.user_id == user_id,
-                    Task.status == TaskStatus.DONE,
-                    Task.completed_at.isnot(None),
-                    Task.completed_at >= today_start,
-                )
+            todays_tasks = await CalendarItemService(db).get_tasks_in_range(
+                user_id, today, today
             )
-            completed_tasks = list(completed_result.scalars().all())
+            open_tasks = [t for t in todays_tasks if t.status in OPEN_STATUSES]
+            completed_tasks = [t for t in todays_tasks if t.status is TaskStatus.DONE]
+
+            # Quá hạn đếm riêng và **không vào mẫu số của tỷ lệ**: việc quá
+            # hạn từ tuần trước là thứ cần cảnh báo, nhưng nó không phải
+            # thứ hôm nay có cơ hội làm xong. Trộn vào tỷ lệ sẽ làm một
+            # ngày làm việc tốt đọc như một ngày tệ.
+            overdue_task_count = int(
+                await db.scalar(
+                    select(func.count())
+                    .select_from(Task)
+                    .where(
+                        Task.user_id == user_id,
+                        Task.status.in_(OPEN_STATUSES),
+                        Task.recurrence_id.is_(None),
+                        Task.due_date.isnot(None),
+                        Task.due_date < today_start,
+                    )
+                )
+                or 0
+            )
 
             ordered_open = sorted(open_tasks, key=lambda t: _rank_key(t, today))
             ordered_done = sorted(
@@ -732,7 +1098,7 @@ class StateEvaluator:
                 source="StateEvaluator",
                 user_id=user_id,
                 payload=DayReviewPayload(
-                    open_task_count=open_task_count,
+                    open_task_count=len(open_tasks),
                     overdue_task_count=overdue_task_count,
                     completed_today_count=len(completed_tasks),
                     completed_today=[_task_item(t) for t in ordered_done[:MAX_DIGEST_ITEMS]],

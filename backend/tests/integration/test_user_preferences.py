@@ -14,6 +14,7 @@ import pytest_asyncio
 from sqlalchemy import delete
 
 from app.database_async import make_async_sessionmaker
+from tests.project_helper import personal_project_id, personal_project_id_sync
 from app.models import (
     AttentionBundleQueue,
     AttentionItemType,
@@ -87,7 +88,12 @@ async def api_client(async_db, user_id):
 async def test_get_with_no_row_returns_nulls_not_404(api_client):
     response = await api_client.get("/preferences")
     assert response.status_code == 200, response.text
-    assert response.json() == {"quiet_hours_start": None, "quiet_hours_end": None}
+    # So khớp theo *trường đang canh*, không so cả dict: thêm một tuỳ chọn
+    # mới (`chat_model` là lần gần nhất) không phải là hồi quy của giờ yên
+    # tĩnh, nhưng so cả dict thì nó làm đỏ ở đây.
+    body = response.json()
+    assert body["quiet_hours_start"] is None
+    assert body["quiet_hours_end"] is None
 
 
 @pytest.mark.asyncio
@@ -98,8 +104,9 @@ async def test_put_then_get_round_trips(api_client):
     assert put_response.status_code == 200, put_response.text
     assert put_response.json()["quiet_hours_start"] == "22:00:00"
 
-    get_response = await api_client.get("/preferences")
-    assert get_response.json() == {"quiet_hours_start": "22:00:00", "quiet_hours_end": "07:00:00"}
+    body = (await api_client.get("/preferences")).json()
+    assert body["quiet_hours_start"] == "22:00:00"
+    assert body["quiet_hours_end"] == "07:00:00"
 
 
 @pytest.mark.asyncio
@@ -115,7 +122,9 @@ async def test_both_null_clears_quiet_hours(api_client):
     await api_client.put("/preferences", json={"quiet_hours_start": "22:00:00", "quiet_hours_end": "07:00:00"})
     response = await api_client.put("/preferences", json={"quiet_hours_start": None, "quiet_hours_end": None})
     assert response.status_code == 200
-    assert response.json() == {"quiet_hours_start": None, "quiet_hours_end": None}
+    body = response.json()
+    assert body["quiet_hours_start"] is None
+    assert body["quiet_hours_end"] is None
 
 
 # ============================================================================
@@ -125,6 +134,7 @@ async def test_both_null_clears_quiet_hours(api_client):
 
 async def _make_task(db, user_id, *, suffix: str, priority, due_date) -> Task:
     task = Task(
+        project_id=await personal_project_id(db, user_id),
         user_id=user_id, title=f"{TITLE_PREFIX}{suffix}", status=TaskStatus.TODO,
         due_date=due_date, priority=priority,
     )

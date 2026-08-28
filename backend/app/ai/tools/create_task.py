@@ -48,6 +48,13 @@ class CreateTaskInput(BaseModel):
     parent_task_id: Optional[str] = Field(
         None, description="UUID of a parent task, if this is a sub-task/checklist item under another task"
     )
+    project_ref: Optional[str] = Field(
+        None,
+        description=(
+            "Project this task belongs to, by name. Omit when the user "
+            "didn't say — the server then applies the ladder in DESIGN 3.5."
+        ),
+    )
 
 
 def _parse_due_date(value: Optional[str]) -> Optional[str]:
@@ -64,12 +71,27 @@ def _parse_due_date(value: Optional[str]) -> Optional[str]:
 async def create_task_handler(args: dict, ctx: ToolContext) -> dict:
     """Create a task through the task.create command.
 
-    Tasks are user-scoped, so the Command carries no workspace_id and
+    Tasks are user-scoped, so the Command carries no project_id and
     CommandRegistry falls through to its ownership check — same shape as
     create_schedule.
+
+    `project_ref` được giải **trước** khi dựng Command, và giải không được
+    thì dừng hẳn: tạo việc vào nhầm dự án rồi báo "đã tạo" là kiểu hỏng im
+    lặng mà 9.2 tồn tại để chặn. Thiếu `project_ref` thì khác hẳn — đó là
+    "người dùng không nói", và thang 3.5 xử lý đúng trường hợp đó.
     """
+    from app.ai.tools.project_ref import resolve_project_ref, unresolved_result
     from app.commands.registry import get_command_registry
     from app.commands.schemas import Command
+
+    project_id = None
+    project_ref = args.get("project_ref")
+    if project_ref:
+        async with ctx.async_db() as db:
+            resolution = await resolve_project_ref(db, ctx.user_id, project_ref)
+        if not resolution.resolved:
+            return unresolved_result(resolution, project_ref)
+        project_id = str(resolution.project.id)
 
     command = Command(
         command_name="task.create",
@@ -80,6 +102,7 @@ async def create_task_handler(args: dict, ctx: ToolContext) -> dict:
             "description": args.get("description"),
             "related_event_id": args.get("related_event_id"),
             "parent_task_id": args.get("parent_task_id"),
+            "project_id": project_id,
         },
         requested_by=ctx.user_id,
         conversation_id=ctx.conversation_id,
@@ -144,6 +167,15 @@ CREATE_TASK_SCHEMA = {
         "parent_task_id": {
             "type": "string",
             "description": "UUID of a parent task, if this is a sub-task under another task",
+        },
+        "project_ref": {
+            "type": "string",
+            "description": (
+                "Name of the project this task belongs to, if the user said "
+                "which one. Omit when they didn't — the server files it "
+                "sensibly on its own. Never guess a project name; if you are "
+                "unsure which project they meant, ask."
+            ),
         },
     },
     "required": ["title"],

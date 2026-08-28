@@ -124,6 +124,10 @@ def _as_occurrence_view(template: Task, exception: Task) -> Task:
     return Task(
         id=template.id,
         user_id=exception.user_id,
+        # Bắt buộc truyền: xem docstring ở trên — cột không set sẽ đọc ra
+        # `None` chứ không phải giá trị mặc định, và `project_id` không
+        # nullable nên nó sẽ trượt validation lúc serialize.
+        project_id=exception.project_id,
         title=exception.title,
         status=exception.status,
         due_date=exception.due_date,
@@ -183,7 +187,7 @@ class CalendarItemService:
         self, user_id: UUID, range_start: datetime, range_end: datetime
     ) -> list[CalendarItem]:
         schedule_items = await self._get_schedules(user_id, range_start, range_end)
-        tasks = await self._get_tasks(user_id, range_start.date(), range_end.date())
+        tasks = await self.get_tasks_in_range(user_id, range_start.date(), range_end.date())
 
         items = schedule_items + [task_to_item(t) for t in tasks]
         items.sort(key=_sort_key)
@@ -224,8 +228,19 @@ class CalendarItemService:
         )
         return standalone + [_instance_dict_to_item(i) for i in instances]
 
-    async def _get_tasks(self, user_id: UUID, range_start: date, range_end: date) -> list[Task]:
-        """Tasks with no `due_date` are left out: they have no day to sit on.
+    async def get_tasks_in_range(self, user_id: UUID, range_start: date, range_end: date) -> list[Task]:
+        """Việc của một khoảng ngày — **không lọc trạng thái**.
+
+        Công khai vì nó là định nghĩa dùng chung của *"việc của ngày X"*:
+        lưới lịch vẽ từ đây, và `StateEvaluator._publish_day_review` đếm từ
+        đây. Hai chỗ tự viết truy vấn riêng là hai chỗ sẽ trôi khỏi nhau —
+        và chúng đã trôi: bản tổng kết cuối ngày từng chọn *mọi* việc đang
+        mở, nên nó nói "còn 10 việc" trong khi màn hình cùng ngày hiện 1.
+
+        Đã xong và chưa xong đều trả về. Người gọi tự tách theo `status` —
+        một bản tổng kết cần cả hai nửa để nói được tỷ lệ.
+
+        Tasks with no `due_date` are left out: they have no day to sit on.
         They are still real work — the "Hôm nay" screen (2.7) is where they
         surface, not the calendar grid.
 

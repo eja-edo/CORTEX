@@ -499,6 +499,140 @@ async def handle_day_plan(event: EventEnvelope) -> None:
         )
 
 
+# ============================================================================
+# Predicate cấp dự án — DESIGN 6
+# ============================================================================
+#
+# Hai handler này là chỗ duy nhất trong hệ thống nói được một câu mà công cụ
+# tổng hợp việc không nói được: không phải *"việc X quá hạn"* mà *"Alpha còn
+# 5 ngày, việc mở tăng từ 8 lên 12"*. Đó là lý do Tuần 1 tồn tại.
+#
+# Cả hai đi qua `request_attention_async` như mọi thứ khác — P1 không có
+# ngoại lệ. `item_type=PROJECT` là thứ khiến dedup và feedback loop tính
+# theo dự án chứ không theo từng việc trong đó.
+#
+# `payload["source_channel_id"]` là đường tới định tuyến kênh (8.1): delivery
+# layer đọc nó để gửi về channel của dự án. `None` — dự án cá nhân, dự án tạo
+# tay — nghĩa là về DM, và không cần nhánh riêng ở đây.
+
+
+async def handle_project_slipping(event: EventEnvelope) -> None:
+    """`project.slipping` — việc mở tăng trong khi hạn còn ≤ 14 ngày.
+
+    Câu nhắc cố ý đặt hai con số cạnh nhau. *"12 việc mở"* một mình không
+    đọc được; *"từ 8 lên 12"* thì đọc được ngay, và đó là toàn bộ nội dung
+    tín hiệu này mang.
+    """
+    if event.user_id is None:
+        logger.warning("project.slipping event missing user_id, skipping: %s", event.event_id)
+        return
+
+    project_id = event.payload.get("project_id")
+    if not project_id:
+        logger.warning("project.slipping event missing project_id, skipping: %s", event.event_id)
+        return
+
+    name = event.payload.get("name", "")
+    open_count = event.payload.get("open_count", 0)
+    previous = event.payload.get("previous_open_count", 0)
+    days_left = event.payload.get("days_to_deadline", 0)
+    top_tasks = event.payload.get("top_tasks") or []
+
+    body = join_facts(
+        f"Còn {days_left} ngày",
+        f"việc mở tăng từ {previous} lên {open_count}",
+    )
+    lines = [body]
+    if top_tasks:
+        lines.extend(_listed(top_tasks, open_count, heading="Đang mở:"))
+
+    async with AsyncSessionLocal() as db:
+        await request_attention_async(
+            db,
+            user_id=event.user_id,
+            type="project_slipping",
+            title=f"{name} đang chậm lại",
+            body=body,
+            content=text_blocks(lines),
+            actions=[{"label": "Xem", "action": "navigate", "url": "/tasks"}],
+            payload={
+                "project_id": project_id,
+                "open_count": open_count,
+                "previous_open_count": previous,
+                "days_to_deadline": days_left,
+                "deadline": event.payload.get("deadline"),
+                "source_channel_id": event.payload.get("source_channel_id"),
+                "top_tasks": top_tasks,
+            },
+            item_type=AttentionItemType.PROJECT,
+            item_id=UUID(project_id),
+            reason_key="project.slipping",
+        )
+
+
+async def handle_project_will_miss(event: EventEnvelope) -> None:
+    """`project.will_miss` — cảnh báo **trước** khi trễ, không phải sau.
+
+    Trình bày cách tính chứ không tuyên án: tốc độ hiện tại và số ngày cần,
+    cạnh số ngày còn lại. Một câu *"dự án này sẽ trễ"* không kiểm được thì
+    lần sai đầu tiên là lần cuối người dùng tin nó.
+
+    Tốc độ 0 được nói bằng lời, không bằng số: *"chưa hoàn thành việc nào
+    trong 14 ngày"* đúng và đọc được, còn "cần 3650 ngày" thì đúng về số
+    học nhưng vô nghĩa với người đọc.
+    """
+    if event.user_id is None:
+        logger.warning("project.will_miss event missing user_id, skipping: %s", event.event_id)
+        return
+
+    project_id = event.payload.get("project_id")
+    if not project_id:
+        logger.warning("project.will_miss event missing project_id, skipping: %s", event.event_id)
+        return
+
+    name = event.payload.get("name", "")
+    open_count = event.payload.get("open_count", 0)
+    completed = event.payload.get("completed_last_14d", 0)
+    days_needed = event.payload.get("days_needed", 0)
+    days_left = event.payload.get("days_to_deadline", 0)
+    top_tasks = event.payload.get("top_tasks") or []
+
+    pace = (
+        "chưa hoàn thành việc nào trong 14 ngày qua"
+        if completed == 0
+        else f"theo tốc độ 14 ngày qua ({completed} việc) cần khoảng {round(days_needed)} ngày nữa"
+    )
+    body = join_facts(f"Còn {days_left} ngày", f"{open_count} việc chưa xong", pace)
+    lines = [body]
+    if top_tasks:
+        lines.extend(_listed(top_tasks, open_count, heading="Đang mở:"))
+
+    async with AsyncSessionLocal() as db:
+        await request_attention_async(
+            db,
+            user_id=event.user_id,
+            type="project_will_miss",
+            title=f"{name} nhiều khả năng trễ hạn",
+            body=body,
+            content=text_blocks(lines),
+            actions=[{"label": "Xem", "action": "navigate", "url": "/tasks"}],
+            payload={
+                "project_id": project_id,
+                "open_count": open_count,
+                "completed_last_14d": completed,
+                "velocity_per_day": event.payload.get("velocity_per_day"),
+                "days_needed": days_needed,
+                "days_to_deadline": days_left,
+                "deadline": event.payload.get("deadline"),
+                "source_channel_id": event.payload.get("source_channel_id"),
+                "top_tasks": top_tasks,
+            },
+            item_type=AttentionItemType.PROJECT,
+            item_id=UUID(project_id),
+            reason_key="project.will_miss",
+        )
+
+
 DIRECT_DELIVERY_HANDLERS = {
     "schedule.reminder.due": handle_schedule_reminder_due,
     "task.overdue": handle_task_overdue,
@@ -509,4 +643,6 @@ DIRECT_DELIVERY_HANDLERS = {
     "schedule.starts_soon": handle_schedule_starts_soon,
     "day.review": handle_day_review,
     "day.plan": handle_day_plan,
+    "project.slipping": handle_project_slipping,
+    "project.will_miss": handle_project_will_miss,
 }

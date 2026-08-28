@@ -21,6 +21,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import delete, select
 
+from tests.project_helper import personal_project_id, personal_project_id_sync
 from app.models import (
     AttentionChannel,
     AttentionItemType,
@@ -32,6 +33,23 @@ from app.schemas import AttentionSurfaceCreate
 from app.services.attention_log import AttentionLogService
 
 TEST_USER_ID = UUID("73552833-a6de-40a1-bb69-6e034ca75460")
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _seeded_user():
+    """Tài khoản dev mà tệp này hardcode — dựng nếu DB không còn nó.
+
+    Xem `tests/integration/seeded_user.py`: giả định "hàng này luôn có sẵn"
+    đã sai một lần và làm 120 test đỏ cùng lúc.
+    """
+    from app.database_async import make_async_sessionmaker
+    from tests.integration.seeded_user import ensure_seeded_user
+
+    engine, session_maker = make_async_sessionmaker()
+    async with session_maker() as db:
+        await ensure_seeded_user(db)
+    await engine.dispose()
+
 REASON_PREFIX = "test-2.9."
 
 
@@ -355,7 +373,10 @@ async def test_log_survives_the_item_it_points_at(service, async_db):
     meant to learn from."""
     from app.models import Task, TaskStatus
 
-    task = Task(user_id=TEST_USER_ID, title="[test-2.9] doomed task", status=TaskStatus.TODO)
+    task = Task(
+        project_id=await personal_project_id(async_db, TEST_USER_ID),
+        user_id=TEST_USER_ID, title="[test-2.9] doomed task", status=TaskStatus.TODO,
+    )
     async_db.add(task)
     await async_db.commit()
     await async_db.refresh(task)

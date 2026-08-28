@@ -20,10 +20,11 @@ from app.schemas import TaskCreate
 from app.services.next_action import NextActionService
 from app.services.tasks import TaskService
 from tests.integration.isolated_user import ISOLATED_TEST_USER_ID, ensure_isolated_user
+from tests.utc_today import utc_now
 
 TEST_USER_ID = ISOLATED_TEST_USER_ID
-TWO_DAYS_AGO = datetime.now().replace(microsecond=0) - timedelta(days=2)
-ONE_DAY_AGO = datetime.now().replace(microsecond=0) - timedelta(days=1)
+TWO_DAYS_AGO = utc_now() - timedelta(days=2)
+ONE_DAY_AGO = utc_now() - timedelta(days=1)
 
 
 @pytest_asyncio.fixture
@@ -62,7 +63,7 @@ async def test_at_risk_task_surfaces_even_when_crowded_out_of_now_actions(async_
         await tasks.create_task(
             TaskCreate(
                 title=f"[test-3.5] chặn trước {days_overdue}",
-                due_date=datetime.now().replace(microsecond=0) - timedelta(days=days_overdue),
+                due_date=utc_now() - timedelta(days=days_overdue),
                 priority=TaskPriority.LOW,
             ),
             TEST_USER_ID,

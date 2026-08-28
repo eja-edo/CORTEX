@@ -38,6 +38,7 @@ from app.events.schemas import EventEnvelope
 from app.models import Schedule, Task, TaskStatus
 from app.repositories.tasks import TaskRepository
 from app.schemas import TaskCreate, TaskRejectionCheck, TaskResponse, TaskUpdate
+from app.services.projects import ProjectService
 from app.services.recurrence import RecurrenceService
 from app.utils.logger import get_logger
 
@@ -137,8 +138,17 @@ class TaskService:
             logger.warning(f"Failed to publish {event_type} event: {exc}")
 
     async def create_task(self, payload: TaskCreate, user_id: UUID) -> Task:
+        # Resolved before the row is built, not after: `project_id` is
+        # NOT NULL, so there is no valid intermediate state where a task
+        # exists without a project (DESIGN 3.3/3.5).
+        project_id = await ProjectService(self.session).resolve_for_task(
+            user_id=user_id,
+            explicit_project_id=payload.project_id,
+            related_event_id=payload.related_event_id,
+        )
         task = Task(
             user_id=user_id,
+            project_id=project_id,
             title=payload.title,
             # The state machine governs *transitions*; the initial status is
             # free (logging already-finished work is legitimate).
@@ -314,6 +324,9 @@ class TaskService:
 
         exception = Task(
             user_id=user_id,
+            # Kế thừa từ template: một occurrence không bao giờ thuộc dự án
+            # khác với chuỗi sinh ra nó.
+            project_id=template.project_id,
             title=template.title,
             status=template.status,
             due_date=template.due_date,

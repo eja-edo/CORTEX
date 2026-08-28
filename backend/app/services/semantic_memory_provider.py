@@ -34,9 +34,31 @@ class SemanticMemoryResult(TypedDict):
 
 
 class SemanticMemoryProvider(ABC):
+    """Bộ nhớ ngữ nghĩa dài hạn.
+
+    **`user_id` luôn là id của một người — không bao giờ là id container.**
+    Cả hai hiện thực (pgvector, Zep) đều theo hợp đồng này, và nó là hợp
+    đồng chứ không phải quy ước đặt tên tình cờ.
+
+    Từng không phải vậy: trường này nhận `workspace_id`, nên bộ nhớ thuộc
+    về một workspace thay vì một người. Hai hệ quả đã đo được:
+
+    * một người có hai workspace thì có hai bộ nhớ rời nhau, không cái nào
+      biết cái kia;
+    * hội thoại không có container — DM Mezon là một — **mất bộ nhớ hoàn
+      toàn**, vì không có khoá nào để ghi vào.
+
+    Bộ nhớ là thứ hệ thống biết về một *người*: thói quen, ràng buộc, quy
+    trình của họ. Không có mảnh nào trong đó thuộc về một hộp chứa, nên
+    chia nhỏ theo hộp chỉ tạo ra những khoảng mù không ai chủ đích tạo.
+
+    `str` chứ không phải `UUID` là để phù hợp API của Zep (nó nhận chuỗi
+    tuỳ ý làm id người dùng); người gọi truyền `str(user.id)`.
+    """
 
     @abstractmethod
     async def ensure_user(self, user_id: str) -> bool:
+        """`user_id`: id **người dùng**, dạng chuỗi. Xem docstring của lớp."""
         ...
 
     @abstractmethod
@@ -77,12 +99,29 @@ class FallbackSemanticMemoryProvider(SemanticMemoryProvider):
         primary: SemanticMemoryProvider | None = None,
         fallback: SemanticMemoryProvider | None = None,
     ):
+        # **pgvector là chính, Zep là dự phòng** — đảo lại so với trước.
+        #
+        # Đo tại 2026-08-27 trên cùng một bộ nhớ ("khi tôi remote thì phải
+        # check-in Slack…"):
+        #
+        #   pgvector  'hôm nay tôi remote' → 1   'làm việc từ xa' → 1
+        #   Zep       'hôm nay tôi remote' → 0   'check-in Slack' → 0
+        #
+        # Zep nhận ghi (202 Accepted) nhưng không tìm ra, kể cả một chuỗi
+        # con có trong chính nội dung, kể cả sau vài phút. Ghi bất đồng bộ
+        # nghĩa là bộ nhớ vừa dạy không đọc lại được ngay — mà đó chính là
+        # tình huống dùng thật: người dùng dạy một quy trình rồi hỏi lại.
+        #
+        # Đây là phép đo DESIGN 11.3 đặt ra cho Zep, và kết quả ngược với
+        # giả định của nó: pgvector không kém hơn, Zep mới là thứ không trả
+        # về gì. Zep giữ ở vị trí dự phòng chứ không gỡ — đảo một dòng là
+        # đủ để thử lại khi nó được cấu hình đúng.
         if primary is None:
-            from app.services.zep_memory import ZepMemoryProvider
-            primary = ZepMemoryProvider()
-        if fallback is None:
             from app.services.pgvector_memory_provider import PgVectorMemoryProvider
-            fallback = PgVectorMemoryProvider(db=db)
+            primary = PgVectorMemoryProvider(db=db)
+        if fallback is None:
+            from app.services.zep_memory import ZepMemoryProvider
+            fallback = ZepMemoryProvider()
         self._primary = primary
         self._fallback = fallback
 
@@ -92,7 +131,7 @@ class FallbackSemanticMemoryProvider(SemanticMemoryProvider):
             return await meth(*args, **kwargs)
         except SemanticMemoryUnavailable:
             logger.warning(
-                "Zep %s failed — falling back to PgVector", method,
+                "PgVector %s failed — falling back to Zep", method,
             )
             fallback_meth = getattr(self._fallback, method)
             return await fallback_meth(*args, **kwargs)

@@ -100,7 +100,13 @@ async def extract_and_store(
     if not conv:
         return {"success": False, "error": "Conversation not found"}
 
-    workspace_id_str = str(conv.workspace_id) if conv.workspace_id else None
+    # Bộ nhớ ngữ nghĩa khoá theo **người**, không theo container.
+    #
+    # Trước đây nó truyền `conv.workspace_id` vào tham số `user_id` của
+    # provider — nghĩa là bộ nhớ thuộc về một workspace, và một người có hai
+    # workspace thì có hai bộ nhớ rời nhau không biết gì về nhau. Cùng lúc
+    # đó, hội thoại không có workspace (DM Mezon) mất bộ nhớ hoàn toàn.
+    memory_owner_id = str(conv.user_id)
 
     store = ConversationStore(db)
     new_messages = await store.get_messages_since(conversation_id, conv.last_summary_message_id)
@@ -167,17 +173,14 @@ async def extract_and_store(
     semantic_count = 0
 
     if semantic_memories:
-        if not workspace_id_str:
-            logger.warning(f"No workspace_id for conversation {conversation_id} — skipping semantic memory storage")
-        else:
-            provider = get_semantic_memory_provider(db)
-            await provider.ensure_user(user_id=workspace_id_str)
+        provider = get_semantic_memory_provider(db)
+        await provider.ensure_user(user_id=memory_owner_id)
 
-            semantic_count = await provider.add_semantic_memories_batch(
-                user_id=workspace_id_str,
-                memories=semantic_memories,
-            )
-            logger.info(f"Stored {semantic_count}/{len(semantic_memories)} semantic memories for workspace {workspace_id_str}")
+        semantic_count = await provider.add_semantic_memories_batch(
+            user_id=memory_owner_id,
+            memories=semantic_memories,
+        )
+        logger.info(f"Stored {semantic_count}/{len(semantic_memories)} semantic memories for user {memory_owner_id}")
 
     # ── 3. Store task candidates ──
     #
@@ -252,10 +255,23 @@ def _parse_extraction_response(content: str) -> dict | None:
     if "semantic_memories" not in data or not isinstance(data["semantic_memories"], list):
         data["semantic_memories"] = []
 
-    # Normalize string memories to dict format with defaults
+    # Chuẩn hoá bộ nhớ dạng chuỗi về dict.
+    #
+    # Nhánh này là một tấm lưới an toàn, và nó **im lặng** — đó là vấn đề.
+    # Prompt yêu cầu object; khi model trả chuỗi, nhánh này gán
+    # `category="unknown"` và `expected_lifetime="medium"`, rồi mọi thứ chạy
+    # tiếp như không có gì. Đo được: một quy trình remote được lưu thành ba
+    # fact `unknown`/`medium`, mất cả phân loại lẫn vòng đời `long` mà
+    # prompt đã yêu cầu — và không ai biết cho tới khi đi đọc thẳng DB.
+    #
+    # Giữ lưới (mất bộ nhớ tệ hơn mất metadata) nhưng ghi log, để lần model
+    # không tuân schema tiếp theo lộ ra ở log chứ không lộ ra ở một truy
+    # vấn thất bại vài tuần sau.
     normalized = []
+    degraded = 0
     for m in data["semantic_memories"]:
         if isinstance(m, str):
+            degraded += 1
             normalized.append({
                 "content": m,
                 "category": "unknown",
@@ -264,6 +280,13 @@ def _parse_extraction_response(content: str) -> dict | None:
             })
         elif isinstance(m, dict) and m.get("confidence", 0) >= 0.7:
             normalized.append(m)
+    if degraded:
+        logger.warning(
+            "Memory extraction returned %d/%d semantic memories as bare strings — "
+            "category and expected_lifetime were lost. The prompt asks for objects; "
+            "see the worked example in prompts/memory/semantic_extraction.md.",
+            degraded, len(data["semantic_memories"]),
+        )
     data["semantic_memories"] = normalized
 
     return data

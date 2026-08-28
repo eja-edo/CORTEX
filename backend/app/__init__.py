@@ -17,6 +17,8 @@ from app.api.google_calendar import router as google_calendar_router
 from app.api.assets import router as assets_router
 from app.api.notes import router as notes_router
 from app.api.tasks import router as tasks_router
+from app.api.projects import router as projects_router
+from app.api.projects import schedule_project_router
 from app.api.attention_log import router as attention_log_router
 from app.api.user_preferences import router as user_preferences_router
 from app.api.calendar import router as calendar_router
@@ -28,7 +30,6 @@ from app.api.schedules import router as schedules_router
 from app.api.upload import router as upload_router
 from app.api.knowledge import router as knowledge_router
 from app.api.internal import router as internal_router
-from app.api.workspaces import router as workspaces_router
 from app.api.plan_proposals import router as plan_proposals_router
 from app.api.proposals import router as proposals_router
 from app.api.sse import notification_sse_router, sync_sse_router
@@ -171,11 +172,16 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning(f"Async engine initialisation failed: {exc}")
 
-    # Start transcription results consumer
-    try:
-        await transcription_results_consumer.start()
-    except Exception as exc:
-        logger.warning(f"Transcription results consumer disabled: {exc}")
+    # Start transcription results consumer — chỉ khi pipeline Asset được bật.
+    # Đóng băng theo DESIGN 11.2: `stt_service` đã gỡ khỏi compose mặc định,
+    # nên consumer này chỉ ngồi giữ một consumer group Redis không ai ghi vào.
+    if settings.ENABLE_ASSET_PIPELINE:
+        try:
+            await transcription_results_consumer.start()
+        except Exception as exc:
+            logger.warning(f"Transcription results consumer disabled: {exc}")
+    else:
+        logger.info("🧊 Transcription consumer frozen (ENABLE_ASSET_PIPELINE=false)")
 
     # Start EventBus's durable cross-process consumer (Milestone 1.10).
     # Without this, subscribe() only ever fires via the in-process fast
@@ -197,10 +203,15 @@ async def lifespan(app: FastAPI):
     # OCR processing is handled by external OCR service
     logger.info("🔧 OCR Service Mode: EXTERNAL (OCR service handles processing)")
 
-    # Start LLM processor worker in separate thread
-    llm_worker = get_llm_processor_worker()
-    _llm_worker_thread = WorkerThread("LLM", llm_worker)
-    _llm_worker_thread.start()
+    # Start LLM processor worker in separate thread — cùng cờ, cùng lý do:
+    # nó đọc OCR frame và transcript segment từ Mongo, và cả hai nguồn đều
+    # đã đóng băng (DESIGN 11.3).
+    if settings.ENABLE_ASSET_PIPELINE:
+        llm_worker = get_llm_processor_worker()
+        _llm_worker_thread = WorkerThread("LLM", llm_worker)
+        _llm_worker_thread.start()
+    else:
+        logger.info("🧊 LLM processor worker frozen (ENABLE_ASSET_PIPELINE=false)")
 
     # Start ReminderWorker in separate thread
     reminder_worker = ReminderWorker()
@@ -243,7 +254,8 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        await transcription_results_consumer.stop()
+        if settings.ENABLE_ASSET_PIPELINE:
+            await transcription_results_consumer.stop()
 
         try:
             event_bus = await get_event_bus()
@@ -298,6 +310,11 @@ app.include_router(google_calendar_router, prefix=settings.API_STR)
 app.include_router(schedules_router, prefix=settings.API_STR)
 app.include_router(notes_router, prefix=settings.API_STR)
 app.include_router(tasks_router, prefix=settings.API_STR)
+app.include_router(projects_router, prefix=settings.API_STR)
+# Gán chuỗi sự kiện vào dự án. Router riêng dưới prefix `/schedules`
+# nhưng sống trong `api/projects.py`: thứ nó ghi là quan hệ lịch ↔ dự án,
+# và mọi quy tắc chi phối nó nằm ở phần dự án của thiết kế (3.2/3.5).
+app.include_router(schedule_project_router, prefix=settings.API_STR)
 app.include_router(attention_log_router, prefix=settings.API_STR)
 app.include_router(user_preferences_router, prefix=settings.API_STR)
 app.include_router(calendar_router, prefix=settings.API_STR)
@@ -308,7 +325,6 @@ app.include_router(images_router, prefix=settings.API_STR)
 app.include_router(notifications_router, prefix=settings.API_STR)
 app.include_router(upload_router, prefix=settings.API_STR)
 app.include_router(knowledge_router, prefix=settings.API_STR)
-app.include_router(workspaces_router, prefix=settings.API_STR)
 app.include_router(sync_sse_router, prefix=settings.API_STR)
 app.include_router(notification_sse_router, prefix=settings.API_STR)
 app.include_router(proposals_router, prefix=settings.API_STR)

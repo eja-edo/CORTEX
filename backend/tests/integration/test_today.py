@@ -388,3 +388,173 @@ async def test_api_today_shape(api_client, async_db):
     assert card["priority"] == "high"
     # No percentage anywhere in the main payload.
     assert "progress" not in card
+
+
+# ============================================================================
+# 7.1 — xếp hạng theo rủi ro dự án
+# ============================================================================
+
+
+def _naive_now() -> datetime:
+    """`tasks.due_date` và `projects.deadline` đều là `DateTime` không mang
+    timezone, và asyncpg từ chối trộn naive với aware. Một chỗ duy nhất để
+    lấy "bây giờ" đúng kiểu, thay vì rải `.replace(tzinfo=None)` khắp nơi."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+class TestProjectRiskRanking:
+    """Tầng một của khoá sắp xếp: dự án nguy hơn đứng trước.
+
+    Đây là hạng mục quan trọng nhất của Tuần 1 (DESIGN 13.2) vì nó là thứ
+    làm màn Hôm nay nói được một câu công cụ tổng hợp không nói được: không
+    phải *"việc này quá hạn 3 ngày"* mà *"việc này quá hạn 3 ngày trong một
+    dự án còn 2 ngày nữa tới hạn"*.
+    """
+
+    @pytest_asyncio.fixture
+    async def projects(self, async_db):
+        """Hai dự án cùng deadline-less/deadline-ed, dọn sạch sau mỗi test."""
+        from app.models import Project, ProjectMember, ProjectOrigin
+        from sqlalchemy import select
+
+        created: list[Project] = []
+
+        async def _make(name: str, deadline):
+            # `projects.deadline` là `DateTime` không timezone (khác
+            # `tasks.due_date`), nên phải bỏ tzinfo trước khi ghi — asyncpg
+            # từ chối trộn naive và aware.
+            if deadline is not None and deadline.tzinfo is not None:
+                deadline = deadline.replace(tzinfo=None)
+            project = Project(
+                owner_id=TEST_USER_ID,
+                name=f"{MARKER} {name}",
+                origin=ProjectOrigin.MANUAL,
+                deadline=deadline,
+            )
+            async_db.add(project)
+            await async_db.flush()
+            created.append(project)
+            return project
+
+        yield _make
+
+        for project in created:
+            await async_db.execute(
+                delete(ProjectMember).where(ProjectMember.project_id == project.id)
+            )
+            await async_db.execute(delete(Task).where(Task.project_id == project.id))
+            await async_db.execute(delete(Project).where(Project.id == project.id))
+        await async_db.commit()
+
+    async def _overdue_task(self, async_db, *, title, project_id, days_overdue, priority):
+        task = Task(
+            user_id=TEST_USER_ID,
+            project_id=project_id,
+            title=f"{MARKER} {title}",
+            status=TaskStatus.TODO,
+            priority=priority,
+            due_date=_naive_now() - timedelta(days=days_overdue),
+        )
+        async_db.add(task)
+        await async_db.flush()
+        return task
+
+    @pytest.mark.asyncio
+    async def test_a_task_in_a_deadline_pressed_project_outranks_a_worse_loose_task(
+        self, async_db, projects
+    ):
+        """Cụ thể là điểm khác biệt: việc lẻ trễ **nhiều hơn** vẫn xếp sau.
+
+        Nếu chỉ xếp theo số ngày quá hạn — như trước 7.1 — thứ tự sẽ ngược
+        lại, và người dùng dành buổi sáng cho việc không ai chờ.
+        """
+        pressed = await projects("Alpha", _naive_now() + timedelta(days=1))
+        personal = await projects("Cá nhân", None)
+
+        await self._overdue_task(
+            async_db,
+            title="việc của Alpha",
+            project_id=pressed.id,
+            days_overdue=1,
+            priority=TaskPriority.LOW,
+        )
+        await self._overdue_task(
+            async_db,
+            title="việc lẻ trễ lâu hơn",
+            project_id=personal.id,
+            days_overdue=9,
+            priority=TaskPriority.URGENT,
+        )
+        await async_db.commit()
+
+        result = await TodayService(async_db).get_today(TEST_USER_ID)
+        assert [a.title for a in result.now_actions][0] == f"{MARKER} việc của Alpha"
+
+    @pytest.mark.asyncio
+    async def test_loose_tasks_keep_the_old_order_among_themselves(
+        self, async_db, projects
+    ):
+        """Ràng buộc rõ trong 7.1: *"Không được thay đổi hành vi hiện tại
+        cho việc lẻ."*
+
+        Mọi việc không thuộc dự án có hạn đều nhận rủi ro dự án 0.0, nên
+        tầng một hoà và tầng hai — quá hạn nhiều nhất, rồi ưu tiên cao hơn —
+        quyết định, đúng như trước khi có 7.1.
+        """
+        personal = await projects("Cá nhân", None)
+
+        await self._overdue_task(
+            async_db,
+            title="trễ ít",
+            project_id=personal.id,
+            days_overdue=1,
+            priority=TaskPriority.URGENT,
+        )
+        await self._overdue_task(
+            async_db,
+            title="trễ nhiều",
+            project_id=personal.id,
+            days_overdue=8,
+            priority=TaskPriority.LOW,
+        )
+        await async_db.commit()
+
+        result = await TodayService(async_db).get_today(TEST_USER_ID)
+        assert [a.title for a in result.now_actions] == [
+            f"{MARKER} trễ nhiều",
+            f"{MARKER} trễ ít",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_project_on_schedule_does_not_jump_the_queue(
+        self, async_db, projects
+    ):
+        """Deadline gần mà không có việc nào trượt thì không đổi thứ tự.
+
+        Nếu chỉ cần "sắp tới hạn" là được đẩy lên, mọi dự án đang chạy tốt
+        sẽ chiếm hết ba thẻ của màn Hôm nay — nói nhiều hơn chứ không đúng
+        hơn (P5).
+        """
+        pressed = await projects("Alpha", _naive_now() + timedelta(days=1))
+        personal = await projects("Cá nhân", None)
+
+        on_time = Task(
+            user_id=TEST_USER_ID,
+            project_id=pressed.id,
+            title=f"{MARKER} việc Alpha đúng hạn",
+            status=TaskStatus.TODO,
+            priority=TaskPriority.URGENT,
+            due_date=_naive_now() + timedelta(days=1),
+        )
+        async_db.add(on_time)
+        await self._overdue_task(
+            async_db,
+            title="việc lẻ quá hạn",
+            project_id=personal.id,
+            days_overdue=4,
+            priority=TaskPriority.MEDIUM,
+        )
+        await async_db.commit()
+
+        result = await TodayService(async_db).get_today(TEST_USER_ID)
+        assert [a.title for a in result.now_actions][0] == f"{MARKER} việc lẻ quá hạn"

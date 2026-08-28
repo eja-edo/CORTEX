@@ -83,8 +83,9 @@ are no tasks — that is the normal case.
 
 def append_task_instructions(user_content: str) -> str:
     """Add the task-extraction task to an already-built extraction request."""
+    from app.services.memory_extraction_prompt import response_shape
+
     return (
         f"{user_content}\n\n{TASK_EXTRACTION_INSTRUCTIONS}\n"
-        "Respond with a JSON object containing episodic_summary, "
-        "semantic_memories, title, and tasks."
+        + response_shape(',\n  "tasks": [ ... as described above ... ]')
     )

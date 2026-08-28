@@ -56,14 +56,19 @@ class ConversationStore:
     async def get_or_create_conversation(
         self,
         user_id: UUID,
-        workspace_id: UUID | None = None,
         title: str | None = None,
     ) -> AgentConversation:
-        """Create a new conversation."""
+        """Create a new conversation.
+
+        **Hội thoại thuộc về một người, không thuộc về một container.** Nó
+        từng mang `workspace_id`, và DESIGN 9.2 đã bác bỏ phiên bản dự án
+        của cùng ý tưởng đó: một ngữ cảnh container ngầm ở mức phiên là thứ
+        khiến agent lặng lẽ thao tác nhầm chỗ. Người dùng nói chuyện với
+        Cortex, không nói chuyện với một thư mục.
+        """
 
         new_conv = AgentConversation(
             user_id=user_id,
-            workspace_id=workspace_id,
             title=title or f"Conversation {datetime.utcnow().isoformat()}",
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow(),
@@ -101,7 +106,7 @@ class ConversationStore:
         conv = result.scalars().first()
         if conv is not None:
             return conv
-        return await self.get_or_create_conversation(user_id=user_id, workspace_id=None)
+        return await self.get_or_create_conversation(user_id=user_id)
 
     async def get_recent_messages(
         self,

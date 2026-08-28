@@ -33,7 +33,9 @@ class NoteCreateArgs(BaseModel):
     create_note tool (which lets the LLM pick a color) can still pass it
     through — NoteCreate.style otherwise silently defaults to yellow.
     """
-    workspace_id: UUID
+    # Container của ghi chú. `None` là hợp lệ — service rơi về dự án cá
+    # nhân (DESIGN 3.5 bước 3).
+    project_id: Optional[UUID] = None
     title: Optional[str] = Field(default=None, min_length=1, max_length=255)
     content: str = Field(default="")
     parent_note_id: Optional[UUID] = None
@@ -144,6 +146,10 @@ class TaskCreateArgs(BaseModel):
     due_date: Optional[date] = None
     priority: Optional[TaskPriority] = None
     description: Optional[str] = Field(None, max_length=10000)
+    # Đã giải sẵn từ `project_ref` ở tầng tool — command layer không bao
+    # giờ nhận một cái *tên* dự án. Giải tên có thể phải hỏi lại người dùng
+    # (`ask_user_choice`), và một command không có chỗ cho một câu hỏi.
+    project_id: Optional[UUID] = None
     related_event_id: Optional[UUID] = None
     parent_task_id: Optional[UUID] = None
 

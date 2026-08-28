@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db, SessionLocal
 from app.dependencies import get_current_active_user
-from app.models import Asset, AssetStatus, AssetType, Upload, UploadPart, UploadStatus, User, Workspace, WorkspaceMember
+from app.models import Asset, AssetStatus, AssetType, Upload, UploadPart, UploadStatus, User
 from app.schemas import (
     UploadAccessUrlResponse,
     UploadCompleteRequest,
@@ -90,6 +90,41 @@ def _detect_media_type(upload: Upload) -> str:
     return "unknown"
 
 
+
+def _personal_project_id_sync(db, user_id) -> UUID:
+    """Dự án cá nhân của một người, tạo nếu chưa có — bản đồng bộ.
+
+    `ProjectService.get_or_create_personal` là bản async và đường upload
+    này chạy trên session đồng bộ. Hai bản ngắn và tách rời dễ tin hơn một
+    cầu nối async-sang-sync phải đúng dưới cả hai vòng lặp sự kiện.
+    """
+    from app.models import Project, ProjectJoinSource, ProjectMember, ProjectOrigin, User
+
+    project = (
+        db.query(Project)
+        .filter(Project.owner_id == user_id, Project.origin == ProjectOrigin.PERSONAL)
+        .first()
+    )
+    if project is not None:
+        return project.id
+
+    user = db.query(User).filter(User.id == user_id).first()
+    name = (getattr(user, "full_name", None) or "").strip() or (
+        getattr(user, "email", None) or ""
+    ).strip() or "Cá nhân"
+
+    project = Project(owner_id=user_id, name=name, origin=ProjectOrigin.PERSONAL)
+    db.add(project)
+    db.flush()
+    db.add(
+        ProjectMember(
+            project_id=project.id, user_id=user_id, joined_via=ProjectJoinSource.DERIVED
+        )
+    )
+    db.flush()
+    return project.id
+
+
 def _resolve_asset_type(media_type: str) -> AssetType:
     if media_type == "audio":
         return AssetType.LIVE_SESSION
@@ -104,7 +139,6 @@ def _get_or_create_asset_for_upload(
     current_user: User,
     media_type: str,
     total_size: int,
-    workspace_id: UUID | None = None,
 ) -> tuple[Asset, bool]:
     existing_asset = (
         db.query(Asset)
@@ -118,41 +152,17 @@ def _get_or_create_asset_for_upload(
     if existing_asset:
         return existing_asset, False
 
-    # If workspace_id not provided, try to find user's personal workspace
-    if workspace_id is None:
-        personal_ws = (
-            db.query(WorkspaceMember)
-            .join(Workspace)
-            .filter(
-                WorkspaceMember.user_id == current_user.id,
-                Workspace.is_personal == True,
-            )
-            .first()
-        )
-        if personal_ws:
-            workspace_id = personal_ws.workspace_id
-        else:
-            # Auto-create personal workspace if not exists
-            new_workspace = Workspace(
-                name=f"{current_user.email}'s Workspace",
-                is_personal=True,
-                owner_id=current_user.id,
-            )
-            db.add(new_workspace)
-            db.flush()
-            
-            member = WorkspaceMember(
-                workspace_id=new_workspace.id,
-                user_id=current_user.id,
-                role="owner",
-            )
-            db.add(member)
-            db.commit()
-            workspace_id = new_workspace.id
+    # Container của asset là **dự án cá nhân**, tạo lười (DESIGN 3.4/11.4).
+    #
+    # Đoạn trước ở đây tự đẻ một workspace "cá nhân" khi không tìm thấy —
+    # tức là tải một tệp lên cũng sinh ra một container không ai xin. Đó
+    # chính là lỗi P4 mà DESIGN lấy `workspaces` làm ví dụ, và giờ nó biến
+    # mất cùng lúc với `auth.py` thôi làm việc tương tự lúc đăng ký.
+    project_id = _personal_project_id_sync(db, current_user.id)
 
     asset = Asset(
         user_id=current_user.id,
-        workspace_id=workspace_id,
+        project_id=project_id,
         type=_resolve_asset_type(media_type),
         status=AssetStatus.PENDING,
         title=upload.filename or Path(upload.object_key).name,
@@ -377,8 +387,7 @@ async def complete_upload(
             current_user=current_user,
             media_type=media_type,
             total_size=upload.total_size,
-            workspace_id=payload.workspace_id,
-        )
+            )
         # Đảm bảo status READY để người dùng có thể trigger process
         if asset.status == AssetStatus.PENDING:
             asset.status = AssetStatus.READY
@@ -456,7 +465,6 @@ async def complete_upload(
         current_user=current_user,
         media_type=media_type,
         total_size=final_total_size,
-        workspace_id=payload.workspace_id,
     )
     asset.status = AssetStatus.READY
     db.commit()

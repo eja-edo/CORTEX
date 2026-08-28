@@ -36,7 +36,6 @@ class EventEnvelope(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     correlation_id: Optional[str] = Field(None, description="Request trace ID")
     user_id: Optional[UUID] = Field(None, description="User who triggered event")
-    workspace_id: Optional[UUID] = Field(None, description="Workspace context")
     conversation_id: Optional[UUID] = Field(None, description="Conversation context")
     payload: dict[str, Any] = Field(default_factory=dict, description="Event-specific data")
     version: str = Field(default="1.0.0", description="Event schema version")

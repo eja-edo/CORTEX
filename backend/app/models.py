@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from enum import Enum
 
-from sqlalchemy import BigInteger, Boolean, Column, DateTime, Enum as SQLEnum, ForeignKey, Index, Integer, Numeric, String, Text, Time, UniqueConstraint, text
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, Column, DateTime, Enum as SQLEnum, ForeignKey, Index, Integer, Numeric, String, Text, Time, UniqueConstraint, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -84,13 +84,6 @@ class EditScope(str, Enum):
     ALL = "all"
 
 
-class WorkspaceRole(str, Enum):
-    """Workspace membership role enumeration."""
-    OWNER = "owner"
-    EDITOR = "editor"
-    VIEWER = "viewer"
-
-
 class AssetType(str, Enum):
     """Supported asset source types."""
     UPLOADED_VIDEO = "uploaded_video"
@@ -124,6 +117,10 @@ class AttentionItemType(str, Enum):
     COMMITMENT = "commitment"
     SCHEDULE = "schedule"
     USER = "user"
+    # Cấp dự án (DESIGN 6). Khác `USER` ở chỗ nó trỏ vào một hàng
+    # `projects` thật, và khác `TASK` ở chỗ nhắc của nó đi về channel của
+    # dự án chứ không về DM (DESIGN 8.1).
+    PROJECT = "project"
 
 
 class AttentionLevel(str, Enum):
@@ -225,7 +222,10 @@ class Asset(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
-    workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True)
+    # Xem `Note.project_id` — cùng lý do.
+    project_id = Column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     type = Column(SQLEnum(AssetType, values_callable=_enum_values, name="assettype"), nullable=False)
     status = Column(SQLEnum(AssetStatus, values_callable=_enum_values, name="assetstatus"), nullable=False, default=AssetStatus.PENDING, server_default=text("'pending'"))
     title = Column(String(255), nullable=True)
@@ -247,7 +247,6 @@ class Asset(Base):
     __table_args__ = (
         Index("ix_assets_user_created", "user_id", "created_at"),
         Index("ix_assets_user_status", "user_id", "status"),
-        Index("ix_assets_workspace_id", "workspace_id"),
     )
 
 
@@ -350,6 +349,18 @@ class Schedule(Base):
     
     # Workflow link
     workflow_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    # Nullable và ở lại như vậy. Bất đối xứng có chủ ý với `Task.project_id`
+    # (NOT NULL): sự kiện chỉ được gắn dự án khi có tín hiệu chắc chắn từ
+    # bot họp hoặc do người dùng gắn tay (DESIGN 4.2). Phần lớn sự kiện —
+    # 1:1, ăn trưa, lịch cá nhân — sẽ mãi mãi NULL, và đó là đúng: lịch là
+    # khung thời gian, không phải cấu trúc dự án.
+    # Chỉ đặt trên HÀNG TEMPLATE của chuỗi (`recurrence_id IS NULL`).
+    project_id = Column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    # `hangoutLink` của Google — mức khớp chính xác thứ hai trong thang ở
+    # DESIGN 4.2. Google để link Meet ở đây, KHÔNG phải ở `location`.
+    hangout_link = Column(String(1024), nullable=True)
 
     # Recurrence fields
     recurrence_rule = Column(JSONB, nullable=True)
@@ -421,7 +432,11 @@ class ScheduleExternalMap(Base):
 
     __table_args__ = (
         UniqueConstraint("schedule_id", "provider", name="uq_schedule_external_maps_schedule_provider"),
-        UniqueConstraint("provider", "provider_calendar_id", "provider_event_id", name="uq_schedule_external_maps_provider_event"),
+        # `user_id` là phần bắt buộc của khoá này, không phải thừa:
+        # `provider_calendar_id` mặc định `'primary'` cho MỌI người, nên nếu
+        # thiếu `user_id` thì hai người cùng sync một cuộc họp sẽ đụng ràng
+        # buộc và người thứ hai fail. Xem migration `b2c3d4e5f6a7`.
+        UniqueConstraint("user_id", "provider", "provider_calendar_id", "provider_event_id", name="uq_schedule_external_maps_provider_event"),
         Index("ix_schedule_external_maps_user_provider", "user_id", "provider"),
         Index("ix_schedule_external_maps_provider_event_id", "provider_event_id"),
     )
@@ -494,7 +509,11 @@ class Note(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     user_id = Column(UUID(as_uuid=True), nullable=False)
-    workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=True, index=True)
+    # Container của ghi chú. `workspace_id` đã bị gỡ hẳn cùng với toàn bộ
+    # khái niệm workspace (DESIGN 11.4 — `projects` là container duy nhất).
+    project_id = Column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     parent_note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="SET NULL"), nullable=True, index=True)
     title = Column(String(500), nullable=False, server_default=text("'Untitled'"))
     content = Column(Text, nullable=False)
@@ -530,7 +549,6 @@ class Note(Base):
         Index("ix_notes_user_id", "user_id"),
         Index("ix_notes_user_id_updated_at", "user_id", "updated_at"),
         Index("ix_notes_user_parent_updated_at", "user_id", "parent_note_id", "updated_at"),
-        Index("ix_notes_workspace_id", "workspace_id"),
     )
 
 
@@ -624,39 +642,6 @@ class UploadPart(Base):
     )
 
 
-class Workspace(Base):
-    """Workspace: organizational unit for grouping notes and assets."""
-    __tablename__ = "workspaces"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
-    owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
-    name = Column(String(255), nullable=False)
-    slug = Column(String(255), nullable=True, unique=True)
-    is_personal = Column(Boolean, nullable=False, default=False, server_default=text("false"))
-    created_at = Column(DateTime, default=_utcnow, server_default=text("NOW()"))
-    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, server_default=text("NOW()"))
-
-    members = relationship("WorkspaceMember", back_populates="workspace", cascade="all, delete-orphan")
-
-
-class WorkspaceMember(Base):
-    """Workspace membership: which users belong to which workspace with what role."""
-    __tablename__ = "workspace_members"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
-    workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    role = Column(SQLEnum(WorkspaceRole, values_callable=_enum_values, name="workspacerole"), nullable=False, default=WorkspaceRole.VIEWER)
-    invited_by = Column(UUID(as_uuid=True), nullable=True)
-    joined_at = Column(DateTime, default=_utcnow, server_default=text("NOW()"))
-
-    workspace = relationship("Workspace", back_populates="members")
-
-    __table_args__ = (
-        UniqueConstraint("workspace_id", "user_id", name="uq_workspace_members_workspace_user"),
-    )
-
-
 class NoteEditProposal(Base):
     """Reviewable proposal for AI-generated note edits (not yet applied to the note)."""
     __tablename__ = "note_edit_proposals"
@@ -745,7 +730,6 @@ class AgentConversation(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
-    workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=True, index=True)
     title = Column(String(255), nullable=True)
     summary = Column(Text, nullable=True)
     message_count = Column(Integer, nullable=False, default=0, server_default=text("0"))
@@ -760,7 +744,6 @@ class AgentConversation(Base):
     __table_args__ = (
         Index("ix_agent_conversations_user_id", "user_id"),
         Index("ix_agent_conversations_user_created", "user_id", "created_at"),
-        Index("ix_agent_conversations_workspace_id", "workspace_id"),
     )
 
 
@@ -789,6 +772,150 @@ class AgentMessage(Base):
     __table_args__ = (
         Index("ix_agent_messages_conversation_created", "conversation_id", "created_at"),
         Index("ix_agent_messages_conversation_role", "conversation_id", "role"),
+    )
+
+
+class ProjectStatus(str, Enum):
+    ACTIVE = "active"
+    CLOSED = "closed"
+
+
+class ProjectOrigin(str, Enum):
+    """Nguồn của một project. Ba giá trị, không được gộp.
+
+    `personal` KHÔNG được gộp vào `manual`: mục 4.4 của `docs/DESIGN.md` đo
+    chất lượng quy tắc suy ra bằng tỷ lệ người dùng sửa quy gán, và dự án
+    cá nhân lẫn vào sẽ làm con số đó vô nghĩa.
+    """
+    DERIVED = "derived"
+    MANUAL = "manual"
+    PERSONAL = "personal"
+
+
+class ProjectJoinSource(str, Enum):
+    DERIVED = "derived"
+    MANUAL = "manual"
+
+
+class Project(Base):
+    """Một khối công việc có đích và có hạn — xem `docs/DESIGN.md` mục 3.
+
+    Cố ý KHÔNG phải `Workspace` đổi tên. Workspace là hộp đựng *tài liệu*
+    (`is_personal`, tự sinh lúc đăng ký, `WorkspaceMember.role` là quyền
+    *đọc*); project là khối *công việc* và thành viên của nó là *ai chịu
+    trách nhiệm*. Chi phí đo thật của việc đổi tên nằm ở DESIGN 3.6.
+
+    **Dùng chung, không thuộc về một người** (QĐ-1). `owner_id` là *ai tạo
+    ra*; "dự án của tôi" tra qua `ProjectMember`, không qua `owner_id`.
+    """
+    __tablename__ = "projects"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
+    owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    status = Column(
+        SQLEnum(ProjectStatus, values_callable=_enum_values, name="projectstatus"),
+        nullable=False,
+        default=ProjectStatus.ACTIVE,
+        server_default=text("'active'"),
+    )
+    # Suy ra (DESIGN 4.3), người dùng sửa được. `deadline_is_manual` khoá
+    # lại để lần suy ra sau không ghi đè lựa chọn của họ.
+    deadline = Column(DateTime, nullable=True)
+    deadline_is_manual = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    # Mezon channel — danh tính CHUNG của dự án (QĐ-2, DESIGN 3.1.1).
+    # Cố ý không neo vào chuỗi sự kiện lịch: lịch không sync chéo giữa
+    # người dùng, và trong một lịch công việc không có tín hiệu nào phân
+    # biệt "chuỗi này là dự án" với "chuỗi này là standup/1:1/ăn trưa".
+    # NULL cho dự án cá nhân và dự án tạo tay.
+    source_channel_id = Column(String(255), nullable=True)
+    origin = Column(
+        SQLEnum(ProjectOrigin, values_callable=_enum_values, name="projectorigin"),
+        nullable=False,
+    )
+    created_at = Column(DateTime, default=_utcnow, server_default=text("NOW()"), nullable=False)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, server_default=text("NOW()"), nullable=False)
+
+    members = relationship("ProjectMember", back_populates="project", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        # Bất biến chịu lực của DESIGN 3.4, ở tầng DB chứ không chỉ ở một
+        # câu `if`. Câu `if` đó đã từng thiếu, và một hàng thật nhận
+        # `deadline` từ `max(due_date)` của các việc lẻ trong lúc nó thiếu.
+        # Đây là thứ duy nhất ngăn dự án cá nhân sinh nhắc cấp dự án.
+        CheckConstraint(
+            "origin <> 'personal' OR deadline IS NULL",
+            name="ck_projects_personal_has_no_deadline",
+        ),
+        Index(
+            "uq_projects_source_channel",
+            "source_channel_id",
+            unique=True,
+            postgresql_where=text("source_channel_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_projects_personal_per_user",
+            "owner_id",
+            unique=True,
+            postgresql_where=text("origin = 'personal'"),
+        ),
+    )
+
+
+class ProjectMember(Base):
+    """Ai đang ở trong một dự án.
+
+    **Cố ý không có cột `role`.** Đó chính là thứ làm `WorkspaceMember` sai
+    ngữ nghĩa khi đem sang đây — role ở đó là quyền *đọc tài liệu*, không
+    phải *chịu trách nhiệm việc*. Thêm role chỉ khi có một quyết định cụ
+    thể cần tới nó; hiện chưa có.
+
+    Thành viên được **suy ra, không mời** (P4): nhận việc từ channel của
+    dự án là đủ để vào. Không có luồng mời/duyệt trong v1.
+    """
+    __tablename__ = "project_members"
+
+    project_id = Column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id = Column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    joined_via = Column(
+        SQLEnum(ProjectJoinSource, values_callable=_enum_values, name="projectjoinsource"),
+        nullable=False,
+    )
+    joined_at = Column(DateTime, default=_utcnow, server_default=text("NOW()"), nullable=False)
+
+    project = relationship("Project", back_populates="members")
+
+    __table_args__ = (Index("ix_project_members_user", "user_id"),)
+
+
+class ProjectSnapshot(Base):
+    """Số liệu của một dự án tại một lần đánh giá — DESIGN 6.1.
+
+    Tồn tại vì `StateEvaluatorFlag` chỉ trả lời *"điều kiện này đang đúng"*,
+    không trả lời *"lần trước là bao nhiêu"*. `project.slipping` cần cái
+    sau: nó phát khi số việc mở **tăng** so với lần đánh giá trước, và
+    không có chỗ nào khác trong hệ thống lưu con số đó.
+
+    Bảng riêng thay vì một cột JSONB trên bảng cờ: cùng dữ liệu này là đầu
+    vào của `project.will_miss`, và bảng cờ thì mọi predicate đều đọc — làm
+    nó phình ra là trả giá ở chỗ nóng nhất.
+    """
+    __tablename__ = "project_snapshots"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
+    project_id = Column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    open_count = Column(Integer, nullable=False)
+    completed_last_14d = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    evaluated_at = Column(DateTime, default=_utcnow, server_default=text("NOW()"), nullable=False)
+
+    __table_args__ = (
+        Index("ix_project_snapshots_project_evaluated", "project_id", "evaluated_at"),
     )
 
 
@@ -845,6 +972,35 @@ class Task(Base):
     due_date = Column(DateTime(timezone=False), nullable=True)
     priority = Column(SQLEnum(TaskPriority, values_callable=_enum_values, name="taskpriority"), nullable=True)
     description = Column(Text, nullable=True)
+    # Bắt buộc: mọi task thuộc đúng một project (DESIGN 3.3). Task có thể
+    # không gắn sự kiện nào, nhưng không bao giờ không có project — khi
+    # không có ngữ cảnh nào khác thì rơi về dự án cá nhân (DESIGN 3.4).
+    #
+    # `project_id` và `related_event_id` là HAI quan hệ độc lập: project
+    # nói *việc này thuộc về đâu*, related_event nói *nó sinh ra từ cuộc
+    # họp nào*. Đổi project không đụng tới related_event.
+    project_id = Column(
+        UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True
+    )
+    # Người dùng đã phải sửa quy gán project của task này (DESIGN 4.4).
+    # Một nhãn âm cho quy tắc suy ra ở 3.5 bước 2: tỷ lệ cột này trên tổng
+    # số task thuộc dự án `origin='derived'` là chỉ số chất lượng của quy
+    # tắc. Ngưỡng ở 4.4: >20% nghĩa là quy tắc sai — sửa quy tắc, không
+    # thêm UI.
+    #
+    # Không reset khi task đổi dự án lần nữa: nó ghi "quy gán tự động cho
+    # task này từng sai", và việc đó không hết đúng vì có lần sửa thứ hai.
+    project_id_corrected = Column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    # Id của action item ở hệ thống đã sinh ra nó (bot họp). `NULL` cho mọi
+    # task tạo trong app, và đó là đa số tuyệt đối.
+    #
+    # Tồn tại vì webhook **luôn** được gửi lại. Không có nó, mỗi lần gửi lại
+    # đẻ thêm một bản sao — và bản sao không bị dedup ở `attention_log` gộp,
+    # vì dedup khoá theo `item_id`. Kết quả là người dùng bị nhắc hai lần về
+    # một việc, đúng thất bại mà DESIGN 1.2 định nghĩa.
+    source_external_id = Column(String(255), nullable=True)
     # Nullable and stays that way: the two dominant creation paths (chat,
     # and Cortex creating tasks itself) produce a task attached to nothing.
     # "Belongs to no event" is the common case here, not the exception.
@@ -1121,6 +1277,22 @@ class UserPreferences(Base):
     # `ModelClient._resolve`), so retiring a model cannot strand a user on
     # something the provider no longer serves.
     chat_model = Column(String(120), nullable=True)
+    # Nhóm A của phép thử A/B ở DESIGN mục 12: bỏ qua Attention Gate và gọi
+    # thẳng `create_notification_*` — "đến hạn → ping một lần", đúng cách
+    # một công cụ nhắc ngây thơ làm.
+    #
+    # Đây là hạ tầng của cổng nghiệm thu **duy nhất** của cả sản phẩm. Giả
+    # định đang đặt cược (12.1): nhắc qua Gate hơn nhắc ngây thơ đủ nhiều
+    # để người dùng cảm nhận được. Sai thì bot họp thêm chức năng nhắc
+    # trong hai tuần và Cortex không còn sản phẩm.
+    #
+    # Cờ đặt theo hướng **"bỏ qua"**, không phải "bật Gate": hàng thiếu,
+    # tài khoản mới, hay một lỗi đọc preferences đều rơi về hành vi *có
+    # Gate* — tức là im hơn. Đặt ngược lại thì mọi trường hợp biên rơi về
+    # nhắc nhiều hơn, và đó là hướng sai để sai (P5).
+    gate_bypass = Column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     created_at = Column(DateTime, default=_utcnow, nullable=False, server_default=text("NOW()"))
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False, server_default=text("NOW()"))
 

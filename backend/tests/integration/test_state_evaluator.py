@@ -24,14 +24,45 @@ from app.config import settings
 from app.database_async import make_async_sessionmaker
 from app.events.event_bus import EventBus, reset_event_bus
 from app.events.schemas import EventEnvelope
+from tests.project_helper import personal_project_id, personal_project_id_sync
 from app.models import AttentionItemType, Schedule, ScheduleType, StateEvaluatorFlag, Task, TaskPriority, TaskStatus
 from app.services.state_evaluator import StateEvaluator
 
 TEST_USER_ID = UUID("73552833-a6de-40a1-bb69-6e034ca75460")
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _seeded_user():
+    """Tài khoản dev mà tệp này hardcode — dựng nếu DB không còn nó.
+
+    Xem `tests/integration/seeded_user.py`: giả định "hàng này luôn có sẵn"
+    đã sai một lần và làm 120 test đỏ cùng lúc.
+    """
+    from app.database_async import make_async_sessionmaker
+    from tests.integration.seeded_user import ensure_seeded_user
+
+    engine, session_maker = make_async_sessionmaker()
+    async with session_maker() as db:
+        await ensure_seeded_user(db)
+    await engine.dispose()
+
 TITLE_PREFIX = "[test-4.6] "
 
-YESTERDAY = datetime.combine(date.today() - timedelta(days=1), time(9, 0))
-TWO_DAYS_AGO = datetime.combine(date.today() - timedelta(days=2), time(9, 0))
+def _utc_today() -> date:
+    """Cùng thước ngày với production.
+
+    `StateEvaluator._today()` dùng **UTC**; `date.today()` dùng giờ máy.
+    Ở UTC+7 hai cái lệch nhau một ngày trong khung 00:00–07:00 giờ VN, nên
+    một test dựng việc "đến hạn hôm nay" theo giờ local thực ra dựng việc
+    đến hạn *ngày mai* theo UTC — và evaluator đúng khi không thấy nó.
+    Triệu chứng: cả nhóm test day.plan/day.review đỏ vào ban đêm, xanh lại
+    vào ban ngày, không đụng dòng code nào.
+    """
+    return datetime.now(timezone.utc).date()
+
+
+YESTERDAY = datetime.combine(_utc_today() - timedelta(days=1), time(9, 0))
+TWO_DAYS_AGO = datetime.combine(_utc_today() - timedelta(days=2), time(9, 0))
 
 
 def _utcnow() -> datetime:
@@ -131,6 +162,7 @@ async def _make_task(
     db, *, title_suffix: str, status: TaskStatus, due_date, priority=None, parent_task_id=None
 ) -> Task:
     task = Task(
+        project_id=await personal_project_id(db, TEST_USER_ID),
         user_id=TEST_USER_ID,
         title=f"{TITLE_PREFIX}{title_suffix}",
         status=status,
@@ -518,7 +550,13 @@ async def test_schedule_starts_soon_excludes_outside_window(async_db, evaluator,
 
 @pytest.mark.asyncio
 async def test_day_review_lifecycle_publishes_once_per_transition(async_db, evaluator, event_subscriber, monkeypatch):
-    task = await _make_task(async_db, title_suffix="day_review_open", status=TaskStatus.TODO, due_date=None)
+    # `day.review` dùng chung định nghĩa "việc của ngày X" với lưới lịch
+    # (`CalendarItemService.get_tasks_in_range`) — tức là **đến hạn hôm
+    # nay**. Việc quá hạn đếm riêng, việc không hạn thuộc `task.stale`.
+    task = await _make_task(
+        async_db, title_suffix="day_review_open", status=TaskStatus.TODO,
+        due_date=datetime.combine(_utc_today(), time(9, 0)),
+    )
 
     try:
         # Force "past the review hour" so the condition only depends on
@@ -568,7 +606,7 @@ async def test_day_plan_separates_due_today_from_carried_over(async_db, evaluato
     """Work that slipped from an earlier day is the part a plan has to
     confront first, so it travels in its own list rather than being summed
     into one "you have 4 things" count."""
-    today = date.today()
+    today = _utc_today()
     due_today = await _make_task(
         async_db, title_suffix="plan_today", status=TaskStatus.TODO,
         due_date=datetime.combine(today, time(17, 0)), priority=TaskPriority.URGENT,
@@ -607,7 +645,7 @@ async def test_day_plan_separates_due_today_from_carried_over(async_db, evaluato
 async def test_day_plan_includes_todays_schedules(async_db, evaluator, event_subscriber, monkeypatch):
     """A day with only meetings still deserves a plan, so a schedule can
     put a user on the list with no task involved at all."""
-    today = date.today()
+    today = _utc_today()
     start = datetime.combine(today, time(10, 0), tzinfo=timezone.utc)
     schedule = await _make_schedule(
         async_db, title_suffix="plan_meeting", start_time=start, end_time=start + timedelta(hours=1),
@@ -627,7 +665,7 @@ async def test_day_plan_includes_todays_schedules(async_db, evaluator, event_sub
 
 @pytest.mark.asyncio
 async def test_day_plan_publishes_once_per_day(async_db, evaluator, event_subscriber, monkeypatch):
-    today = date.today()
+    today = _utc_today()
     await _make_task(
         async_db, title_suffix="plan_once", status=TaskStatus.TODO,
         due_date=datetime.combine(today, time(12, 0)),
@@ -654,7 +692,7 @@ async def test_day_plan_republishes_after_a_stale_flag_from_yesterday(async_db, 
     user would silently never get a plan again. `_clear_stale_daily_flags`
     resets by calendar day instead.
     """
-    today = date.today()
+    today = _utc_today()
     await _make_task(
         async_db, title_suffix="plan_stale_flag", status=TaskStatus.TODO,
         due_date=datetime.combine(today, time(12, 0)),
@@ -681,7 +719,7 @@ async def test_day_plan_republishes_after_a_stale_flag_from_yesterday(async_db, 
 
 @pytest.mark.asyncio
 async def test_day_plan_silent_before_the_start_hour(async_db, evaluator, event_subscriber, monkeypatch):
-    today = date.today()
+    today = _utc_today()
     await _make_task(
         async_db, title_suffix="plan_too_early", status=TaskStatus.TODO,
         due_date=datetime.combine(today, time(12, 0)),
@@ -705,13 +743,15 @@ async def test_day_review_reports_what_was_finished_today(async_db, evaluator, e
     """Two counts made a productive day and a wasted one read identically.
     `completed_at` is the column that tells them apart — deliberately not
     `updated_at`, which also moves when a done task is merely renamed."""
-    today = date.today()
+    today = _utc_today()
     done = await _make_task(
-        async_db, title_suffix="review_done", status=TaskStatus.DONE, due_date=None,
+        async_db, title_suffix="review_done", status=TaskStatus.DONE,
+        due_date=datetime.combine(today, time(9, 0)),
     )
     done.completed_at = datetime.combine(today, time(9, 0))
     still_open = await _make_task(
-        async_db, title_suffix="review_open", status=TaskStatus.TODO, due_date=None,
+        async_db, title_suffix="review_open", status=TaskStatus.TODO,
+        due_date=datetime.combine(today, time(9, 0)),
     )
     await async_db.commit()
 
@@ -728,6 +768,55 @@ async def test_day_review_reports_what_was_finished_today(async_db, evaluator, e
         assert still_open.title in {i["title"] for i in payload["still_open"]}
         # A finished task must not also show up as carrying over.
         assert done.title not in {i["title"] for i in payload["still_open"]}
+    finally:
+        await _clear_user_flags(async_db, "day_review")
+
+
+@pytest.mark.asyncio
+async def test_day_review_leaves_out_work_the_day_was_never_about(
+    async_db, evaluator, event_subscriber, monkeypatch
+):
+    """Tổng kết cuối ngày nói về **hôm nay**, không đọc lại backlog.
+
+    Trước bộ lọc này, câu chọn *mọi* việc đang mở. Với dữ liệu thật nó cho
+    ra "còn 10 việc chưa xong" trong đó chín việc chưa tới hạn — một cái
+    hạn tháng 2/2027 — và làm tỷ lệ trên thẻ vô nghĩa vì mẫu số không phải
+    thứ người ta có cơ hội làm xong hôm nay.
+
+    Nó cũng làm `day.plan` buổi sáng và `day.review` buổi tối của cùng một
+    ngày nói hai con số không so được với nhau (1 và 10).
+
+    Việc **không hạn** cũng bị loại, và đó là chủ ý chứ không phải sót:
+    `task.stale` đã là predicate riêng cho "việc không hạn bị bỏ quên" —
+    gộp vào đây là nói cùng một chuyện hai lần.
+    """
+    today = _utc_today()
+    due_today = await _make_task(
+        async_db, title_suffix="review_today",
+        status=TaskStatus.TODO,
+        due_date=datetime.combine(today, time(9, 0)),
+    )
+    next_month = await _make_task(
+        async_db, title_suffix="review_far",
+        status=TaskStatus.TODO,
+        due_date=datetime.combine(today + timedelta(days=45), time(9, 0)),
+    )
+    undated = await _make_task(
+        async_db, title_suffix="review_undated", status=TaskStatus.TODO, due_date=None,
+    )
+    await async_db.commit()
+
+    try:
+        monkeypatch.setattr(settings, "STATE_EVALUATOR_DAY_REVIEW_HOUR_UTC", 0)
+        await evaluator._evaluate_day_review()
+
+        events = [e for e in _events_of_type(event_subscriber, "day.review") if e.user_id == TEST_USER_ID]
+        assert len(events) == 1
+        titles = {i["title"] for i in events[0].payload["still_open"]}
+
+        assert due_today.title in titles
+        assert next_month.title not in titles
+        assert undated.title not in titles
     finally:
         await _clear_user_flags(async_db, "day_review")
 

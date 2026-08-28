@@ -8,7 +8,7 @@ conversation_service.py) — that mechanism also feeds skill retrieval and
 runs on every historical message, not just the current one; replacing it
 outright would be a much larger, riskier change to the live chat pipeline
 than Milestone 1.7 warrants. ContextService is additive: it builds the
-workspace/recent-notes/recent-schedules sections that don't exist anywhere
+project/recent-notes/recent-schedules sections that don't exist anywhere
 today, surfaced via `UnifiedContext.to_llm_string()` appended to the system
 prompt (see ConversationService.build_system_prompt).
 """
@@ -20,8 +20,8 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.context.schemas import ContextPill, UnifiedContext, WorkspaceContext
-from app.models import Note, Schedule, Workspace, WorkspaceMember
+from app.context.schemas import ContextPill, ProjectContext, UnifiedContext
+from app.models import Note, Project, ProjectMember, Schedule
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -36,7 +36,7 @@ class ContextService:
     async def build_context(
         self,
         user_id: UUID,
-        workspace_id: Optional[UUID] = None,
+        project_id: Optional[UUID] = None,
         conversation_id: Optional[UUID] = None,
         runtime_context: Optional[dict] = None,
         intent: Optional[str] = None,
@@ -46,7 +46,7 @@ class ContextService:
 
         Args:
             user_id: User ID
-            workspace_id: Current workspace, if any
+            project_id: Dự án đang mở, nếu có
             conversation_id: Current conversation, if any (unused today —
                 accepted for forward-compat, e.g. a future
                 ConversationContext section)
@@ -65,9 +65,9 @@ class ContextService:
         page = runtime_context.get("page") if isinstance(runtime_context.get("page"), dict) else {}
         runtime = runtime_context.get("runtime") if isinstance(runtime_context.get("runtime"), dict) else {}
 
-        workspace = None
-        if workspace_id is not None:
-            workspace = await self._get_workspace_context(workspace_id, user_id)
+        project = None
+        if project_id is not None:
+            project = await self._get_project_context(project_id, user_id)
 
         recent_notes = await self._get_recent_notes(user_id, limit=5)
         recent_schedules = await self._get_upcoming_schedules(user_id, limit=5)
@@ -76,7 +76,7 @@ class ContextService:
             pills=pills,
             page=page,
             runtime=runtime,
-            workspace=workspace,
+            project=project,
             recent_notes=recent_notes,
             recent_schedules=recent_schedules,
         )
@@ -88,7 +88,7 @@ class ContextService:
             f"Context built for user {user_id}",
             extra={
                 "user_id": str(user_id),
-                "workspace_id": str(workspace_id) if workspace_id else None,
+                "project_id": str(project_id) if project_id else None,
                 "pills_count": len(context.pills),
                 "recent_notes_count": len(context.recent_notes),
                 "recent_schedules_count": len(context.recent_schedules),
@@ -106,19 +106,23 @@ class ContextService:
             pills.append(ContextPill(text=pill_data["text"], source=pill_data.get("source", "user")))
         return pills
 
-    async def _get_workspace_context(self, workspace_id: UUID, user_id: UUID) -> Optional[WorkspaceContext]:
+    async def _get_project_context(self, project_id: UUID, user_id: UUID) -> Optional[ProjectContext]:
         try:
-            workspace = (
-                await self.db.execute(select(Workspace).where(Workspace.id == workspace_id))
+            project = (
+                await self.db.execute(select(Project).where(Project.id == project_id))
             ).scalar_one_or_none()
-            if workspace is None:
+            if project is None:
                 return None
 
+            # Không phải thành viên thì coi như không có dự án nào đang mở —
+            # cùng lối "404, không 403" của `api/projects.py`: dựng ngữ cảnh
+            # cho một dự án người này không ở trong là rò nội dung của nó
+            # vào prompt.
             member = (
                 await self.db.execute(
-                    select(WorkspaceMember).where(
-                        WorkspaceMember.workspace_id == workspace_id,
-                        WorkspaceMember.user_id == user_id,
+                    select(ProjectMember).where(
+                        ProjectMember.project_id == project_id,
+                        ProjectMember.user_id == user_id,
                     )
                 )
             ).scalar_one_or_none()
@@ -127,20 +131,19 @@ class ContextService:
 
             member_count = (
                 await self.db.execute(
-                    select(func.count()).select_from(WorkspaceMember).where(
-                        WorkspaceMember.workspace_id == workspace_id
+                    select(func.count()).select_from(ProjectMember).where(
+                        ProjectMember.project_id == project_id
                     )
                 )
             ).scalar_one()
 
-            return WorkspaceContext(
-                workspace_id=workspace.id,
-                workspace_name=workspace.name,
-                role=member.role.value if hasattr(member.role, "value") else str(member.role),
+            return ProjectContext(
+                project_id=project.id,
+                project_name=project.name,
                 member_count=member_count,
             )
         except Exception as exc:
-            logger.warning(f"Failed to build workspace context (non-fatal): {exc}")
+            logger.warning(f"Failed to build project context (non-fatal): {exc}")
             return None
 
     async def _get_recent_notes(self, user_id: UUID, limit: int = 5) -> list[dict]:

@@ -17,14 +17,16 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import delete
 
+from tests.project_helper import personal_project_id, personal_project_id_sync
 from app.models import Task, TaskPriority, TaskStatus
 from app.services.risk_detection import list_at_risk_tasks
 from tests.integration.isolated_user import ISOLATED_TEST_USER_ID, ensure_isolated_user
+from tests.utc_today import utc_today
 
 TEST_USER_ID = ISOLATED_TEST_USER_ID
-YESTERDAY = datetime.combine(date.today() - timedelta(days=1), time(9, 0))
-THREE_DAYS_AGO = datetime.combine(date.today() - timedelta(days=3), time(9, 0))
-TOMORROW = datetime.combine(date.today() + timedelta(days=1), time(9, 0))
+YESTERDAY = datetime.combine(utc_today() - timedelta(days=1), time(9, 0))
+THREE_DAYS_AGO = datetime.combine(utc_today() - timedelta(days=3), time(9, 0))
+TOMORROW = datetime.combine(utc_today() + timedelta(days=1), time(9, 0))
 
 
 @pytest_asyncio.fixture
@@ -44,6 +46,7 @@ async def async_db():
 
 async def _task(db, title, due_date=None, priority=None, status=TaskStatus.TODO, parent_task_id=None) -> Task:
     task = Task(
+        project_id=await personal_project_id(db, TEST_USER_ID),
         user_id=TEST_USER_ID, title=title, status=status,
         due_date=due_date, priority=priority, parent_task_id=parent_task_id,
     )

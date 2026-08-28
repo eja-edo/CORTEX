@@ -30,6 +30,23 @@ from app.services.calendar_items import CalendarItemService, _sort_key
 from app.services.tasks import TaskService
 
 TEST_USER_ID = UUID("73552833-a6de-40a1-bb69-6e034ca75460")
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _seeded_user():
+    """Tài khoản dev mà tệp này hardcode — dựng nếu DB không còn nó.
+
+    Xem `tests/integration/seeded_user.py`: giả định "hàng này luôn có sẵn"
+    đã sai một lần và làm 120 test đỏ cùng lúc.
+    """
+    from app.database_async import make_async_sessionmaker
+    from tests.integration.seeded_user import ensure_seeded_user
+
+    engine, session_maker = make_async_sessionmaker()
+    async with session_maker() as db:
+        await ensure_seeded_user(db)
+    await engine.dispose()
+
 TITLE_PREFIX = "[test-2.6] "
 
 # A fixed day well away from anything else in the dev database.

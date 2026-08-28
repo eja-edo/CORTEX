@@ -19,7 +19,7 @@ class ToolContext:
     
     Provides:
     - User ID (from authenticated session, never from LLM)
-    - Workspace ID (optional, scopes operations)
+    - Project ID (optional, scopes operations)
     - Database access (both sync and async)
     
     Security Critical:
@@ -32,12 +32,20 @@ class ToolContext:
         self,
         user_id: UUID,
         async_db: AsyncSession,
-        workspace_id: Optional[UUID] = None,
         conversation_id: Optional[UUID] = None,
+        project_id: Optional[UUID] = None,
     ):
-        """Initialize tool context with user and database access."""
+        """Initialize tool context with user and database access.
+
+        `project_id` là ngữ cảnh container duy nhất (DESIGN 11.4).
+
+        **`None` là giá trị bình thường, không phải thiếu sót.** Chat qua DM
+        Mezon không có dự án nào đang mở, và một tool từ chối chạy vì thiếu
+        ngữ cảnh sẽ chết đúng ở bề mặt hay dùng nhất. Tool nào cần một dự án
+        cụ thể thì hỏi tên qua `project_ref` (9.2), không đọc ngầm ở đây.
+        """
         self.user_id = user_id
-        self.workspace_id = workspace_id
+        self.project_id = project_id
         self.conversation_id = conversation_id
         self._async_db = async_db
         self._sync_db: Optional[Session] = None
@@ -82,4 +90,4 @@ class ToolContext:
             self._sync_db = None
 
     def __repr__(self) -> str:
-        return f"ToolContext(user_id={self.user_id}, workspace_id={self.workspace_id})"
+        return f"ToolContext(user_id={self.user_id}, project_id={self.project_id})"

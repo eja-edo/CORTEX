@@ -389,7 +389,8 @@ async def add_semantic_memory(
 
     Args:
         user_id: The user ID in Zep.
-        category: "project" | "preference" | "constraint" | "environment" | "decision_pattern"
+        category: "project" | "preference" | "constraint" | "environment" |
+            "decision_pattern" | "routine"
         content: The memory text.
         confidence: 0.0-1.0
         expected_lifetime: "short" | "medium" | "long" | "permanent"
@@ -422,7 +423,8 @@ async def search_semantic_memories(
     """Search semantic memories in the user's Zep graph.
 
     Args:
-        user_id: The workspace/user ID in Zep.
+        user_id: Id **người dùng** (không phải container) — xem
+            `SemanticMemoryProvider` về vì sao hợp đồng này chặt.
         query: Natural language search query.
         limit: Max results (default 10, max 50).
         min_score: Minimum relevance score filter (0.0-1.0).

@@ -155,10 +155,24 @@ def test_tasks_table_has_exactly_the_agreed_columns():
     task's own checklist — self-referential, same shape as
     `related_event_id`. `recurrence_id`/`original_start_time`/`is_exception`
     are the per-occurrence completion mechanism for a checklist task tied to
-    a recurring event — mirrors `Schedule`'s own exception-row columns."""
+    a recurring event — mirrors `Schedule`'s own exception-row columns.
+
+    `project_id` is NOT NULL and `related_event_id` is nullable, on purpose:
+    every task belongs to exactly one project, while belonging to a meeting
+    stays the exception. The two are independent — one says *what this work
+    is for*, the other *where it came from* (`docs/DESIGN.md` 3.3).
+
+    `project_id_corrected` is not a task attribute anyone displays — it is
+    the label DESIGN 4.4 measures the *derivation rule* by. Its ratio over
+    tasks in `origin='derived'` projects is what says whether rule 3.5 step
+    2 works; above 20% the rule is wrong and gets fixed, not papered over
+    with more UI."""
     assert {c.name for c in Task.__table__.columns} == {
         "id",
         "user_id",
+        "project_id",
+        "project_id_corrected",
+        "source_external_id",
         "title",
         "status",
         "due_date",

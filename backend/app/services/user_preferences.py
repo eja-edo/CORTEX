@@ -70,6 +70,18 @@ async def get_chat_model_async(session: AsyncSession, user_id: UUID) -> str | No
     return prefs.chat_model if prefs else None
 
 
+def is_gate_bypassed(prefs: UserPreferences | None, /) -> bool:
+    """Nhóm A của phép thử A/B (DESIGN 12.2).
+
+    `prefs is None` → `False` → **Gate bật**. Không có hàng preferences là
+    trạng thái mặc định của mọi tài khoản chưa từng mở trang cài đặt, và nó
+    phải rơi về hành vi im hơn, không phải ồn hơn.
+    """
+    if prefs is None:
+        return False
+    return bool(getattr(prefs, "gate_bypass", False))
+
+
 def is_reason_disabled(prefs: UserPreferences | None, reason_key: str) -> bool:
     if prefs is None:
         return False

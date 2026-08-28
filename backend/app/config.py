@@ -261,5 +261,18 @@ class Settings:
     AGENT_TOOL_CALL_COUNT_SCOPE: str = os.getenv("AGENT_TOOL_CALL_COUNT_SCOPE", "turn")
     AGENT_TOKEN_BUDGET_HISTORY: bool = os.getenv("AGENT_TOKEN_BUDGET_HISTORY", "false").lower() == "true"
 
+    # ── Đóng băng: worker của bề mặt đã gỡ khỏi đường chính ─────────────────
+    # `docs/DESIGN.md` mục 11.2 — gỡ một worker bằng một cờ mặc định `False`,
+    # **không** bằng cách xoá code. Bật lại là đổi một biến môi trường.
+    #
+    # Cả hai worker dưới đây chỉ phục vụ Asset (OCR/STT → Mongo → LLM). Với
+    # 0 asset từng xử lý, chúng chạy để không làm gì, nhưng vẫn giữ kết nối
+    # Mongo và Redis consumer group sống — nên bật mặc định là bắt đường
+    # chính trả tiền cho một tính năng chưa có người dùng.
+    #
+    # Điều kiện hồi sinh nằm ở DESIGN 11.3: có nguồn việc đến từ ảnh/văn bản
+    # chụp (OCR), hoặc bot họp hiện tại không đủ (STT).
+    ENABLE_ASSET_PIPELINE: bool = os.getenv("ENABLE_ASSET_PIPELINE", "false").lower() == "true"
+
 
 settings = Settings()

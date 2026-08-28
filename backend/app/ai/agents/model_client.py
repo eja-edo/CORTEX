@@ -7,7 +7,7 @@ Design
 - One request runs on exactly one model: the one asked for, or the
   default. No rotation, no cross-model fallback — see `ModelClient`.
 - Retry for transient errors (500/503) on that same model.
-- Streaming buffers the turn before yielding it.
+- Streaming passes each output chunk straight through.
 
 Usage
 -----
@@ -25,6 +25,9 @@ from __future__ import annotations
 
 import asyncio
 from typing import AsyncIterator
+
+import httpx
+from openai import APIConnectionError, APITimeoutError
 
 from app.config import settings
 from app.ai.agents.base_provider import LLMProvider
@@ -84,11 +87,54 @@ def is_quota_error(exc: Exception) -> bool:
     return "429" in s or "quota" in s or "rate_limit" in s
 
 
+def is_connection_error(exc: Exception) -> bool:
+    """The gateway could not be reached at all — distinct from the gateway
+    answering badly. Worth its own message: nothing the user writes will
+    help, the service is simply not there."""
+    return isinstance(
+        exc,
+        (APIConnectionError, APITimeoutError,
+         httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError),
+    )
+
+
 def is_retryable_error(exc: Exception) -> bool:
+    """Worth a second attempt on the same model.
+
+    Connection drops and timeouts are in here because they are the most
+    common transient failure there is, and for a long time they were the
+    one kind that got no retry at all: this function matched "500"/"503"
+    in the message, and `openai.APIConnectionError` stringifies to
+    "Connection error." — no status code anywhere in it. A gateway that
+    blinks for a second failed the whole turn.
+    """
     if is_quota_error(exc):
         return False
+    if isinstance(exc, (EmptyModelStreamError, APIConnectionError, APITimeoutError)):
+        return True
+    if isinstance(exc, (httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError)):
+        return True
     s = str(exc)
-    return "500" in s or "503" in s
+    # 502 and 504 belong here as much as 500 and 503 do, and were missing:
+    # a gateway answering "[502] Upstream error: Service temporarily
+    # overloaded" is the textbook case for trying again, and it got zero
+    # attempts because the list only named two of the four codes.
+    return any(code in s for code in ("500", "502", "503", "504"))
+
+
+class EmptyModelStreamError(RuntimeError):
+    """The stream completed successfully but carried no output at all.
+
+    Measured against the local gateway: it intermittently answers with a
+    body that has no `choices` and no `usage`. Nothing raises — the HTTP
+    call is a clean 200 and the SSE stream simply ends — so without this
+    the turn ends "successfully" with nothing in it, and the caller has
+    no way to tell that apart from a model that legitimately chose to say
+    nothing. It happened four times in one test session.
+
+    Classified as retryable because that is what it is: a hiccup that a
+    second attempt usually clears.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -181,50 +227,91 @@ class ModelClient:
         preferred_model: str | None = None,
     ) -> AsyncIterator[ProviderStreamChunk]:
         """
-        Stream one turn from the chosen model.
+        Stream one turn from the chosen model, chunk by chunk.
 
-        Chunks are buffered and only yielded once the stream completes.
-        That was originally what made mid-stream fallback possible — half
-        an answer from one model followed by half from another is worse
-        than either — and it stays for the retry below, which has the
-        same problem in miniature: a stream that dies after twenty tokens
-        must be able to start over cleanly.
+        Chunks carrying output — content, reasoning, tool calls — go out
+        the moment they arrive. Chunks carrying none (the trailing
+        usage-only chunk, a bare finish_reason) are held back and flushed
+        at the end, which costs the caller nothing: no user-visible text
+        lives in them, and `usage` is only read once the turn is over.
 
-        The cost is real and worth stating: nothing reaches the caller
-        until the model has finished, so "streaming" here is about the
-        caller not having to wait for a full request/response round trip,
-        not about tokens appearing as the model writes them.
+        Holding those back is what keeps the retry below honest. A retry
+        may only replay a turn that the caller has not started reading;
+        once one token is out, "start over cleanly" is no longer
+        available, and a fresh attempt would splice half an answer onto
+        the front of another. So the rule is: **retry before the first
+        visible chunk, surface the error after it.** Transient failures
+        overwhelmingly happen at connect time, before anything is
+        emitted, so this keeps the retry that mattered and drops only the
+        one that was never safe.
+
+        This used to buffer the entire turn and replay it at the end,
+        which made every retry safe at the cost of the feature: nothing
+        reached the caller until the model had finished writing, so a
+        thirty-second answer was thirty seconds of blank screen followed
+        by a wall of text. The SSE plumbing on both sides was real and
+        correct; this method was the reason none of it was visible.
         """
         model = self._resolve(preferred_model)
         last_exc: Exception | None = None
 
         for attempt in range(1, self._retry_attempts + 1):
-            buffered: list[ProviderStreamChunk] = []
+            held: list[ProviderStreamChunk] = []
+            delivered = 0
             try:
                 stream = self._provider.generate_stream(
                     model=model, messages=messages, config=config, tools=tools
                 )
                 async for chunk in stream:
-                    buffered.append(chunk)
+                    if chunk.content or chunk.reasoning or chunk.tool_calls:
+                        delivered += 1
+                        yield chunk
+                    else:
+                        held.append(chunk)
             except Exception as exc:
                 last_exc = exc
+                # Past the point of no return: the caller has already shown
+                # some of this turn to a person. Retrying now would append a
+                # second, unrelated attempt to what they are reading, so the
+                # only honest move is to let the error through and let the
+                # caller tell them the answer stopped early.
+                if delivered:
+                    logger.error(
+                        f"stream: {model} died {delivered} chunks in — not retryable, "
+                        f"the partial turn is already with the caller → {str(exc)[:200]}"
+                    )
+                    raise
                 if is_fatal_error(exc) or is_quota_error(exc):
                     logger.error(f"stream: {model} failed, not retryable → {str(exc)[:200]}")
                     raise
                 if is_retryable_error(exc) and attempt < self._retry_attempts:
                     logger.warning(
                         f"stream: transient error on {model} attempt "
-                        f"{attempt}/{self._retry_attempts} after {len(buffered)} "
-                        f"buffered chunks (discarded), waiting {self._retry_delay}s. "
-                        f"{str(exc)[:120]}"
+                        f"{attempt}/{self._retry_attempts} before any output, "
+                        f"waiting {self._retry_delay}s. {str(exc)[:120]}"
                     )
                     await asyncio.sleep(self._retry_delay)
                     continue
                 logger.error(f"stream: {model} failed → {str(exc)[:200]}", exc_info=True)
                 raise
 
-            logger.info(f"stream: {model} OK ({len(buffered)} chunks)")
-            for chunk in buffered:
+            if not delivered:
+                # A clean stream that said nothing. See EmptyModelStreamError.
+                last_exc = EmptyModelStreamError(
+                    f"{model} returned an empty stream ({len(held)} chunks, no output)"
+                )
+                if attempt < self._retry_attempts:
+                    logger.warning(
+                        f"stream: {model} returned an empty stream on attempt "
+                        f"{attempt}/{self._retry_attempts}, waiting {self._retry_delay}s"
+                    )
+                    await asyncio.sleep(self._retry_delay)
+                    continue
+                logger.error(f"stream: {model} returned an empty stream, retries exhausted")
+                raise last_exc
+
+            logger.info(f"stream: {model} OK ({delivered} output chunks, {len(held)} trailing)")
+            for chunk in held:
                 yield chunk
             return
 

@@ -41,8 +41,12 @@ BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
 def test_item_type_values():
     # `user` was added in A1 for `day.review` — a per-user, not per-item,
-    # digest (see AttentionItemType's docstring).
-    assert {v.value for v in AttentionItemType} == {"task", "commitment", "schedule", "user"}
+    # digest (see AttentionItemType's docstring). `project` came with the
+    # two project predicates (DESIGN 6): nhắc cấp dự án trỏ vào một hàng
+    # `projects`, và phạm vi đó là thứ quyết định nó về channel hay về DM.
+    assert {v.value for v in AttentionItemType} == {
+        "task", "commitment", "schedule", "user", "project",
+    }
 
 
 def test_level_values_are_the_five_intervention_levels():

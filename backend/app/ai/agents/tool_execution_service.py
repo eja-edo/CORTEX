@@ -277,7 +277,7 @@ class ToolExecutionService:
         turn: int,
         tool_call_counts: dict[str, int],
         source_id_counter: int,
-        workspace_id: UUID | None,
+        project_id: UUID | None,
     ):
         """
         Execute all tool_calls for one turn.
@@ -312,7 +312,7 @@ class ToolExecutionService:
                         async with AsyncSessionLocal() as db:
                             call_ctx = ToolContext(
                                 user_id=ctx.user_id, async_db=db,
-                                workspace_id=ctx.workspace_id, conversation_id=ctx.conversation_id,
+                                project_id=ctx.project_id, conversation_id=ctx.conversation_id,
                             )
                             result = await self.registry.execute(name, args, call_ctx)
                         logger.info(f"Tool '{name}' executed | result: {str(result)[:200]}")

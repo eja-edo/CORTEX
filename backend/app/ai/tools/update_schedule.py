@@ -40,8 +40,8 @@ class UpdateScheduleInput(BaseModel):
 async def update_schedule_handler(args: dict, ctx: ToolContext) -> dict:
     """Update a schedule.
 
-    Permission: schedule.update has no workspace_id on its Command (Schedule
-    has no workspace concept — only user_id) — same ownership-only check as
+    Permission: schedule.update has no container on its Command (Schedule
+    has only user_id) — same ownership-only check as
     before migration.
     """
     from app.commands.registry import get_command_registry

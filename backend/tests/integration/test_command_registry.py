@@ -2,8 +2,8 @@
 Integration tests for Milestone 1.5 — CommandRegistry.
 
 Runs against the real dev Postgres + Redis, reusing the seeded user/
-workspace (same convention as test_core_events.py). Covers: registration,
-argument validation, permission checks (workspace role + non-workspace-
+seeded user. Covers: registration,
+argument validation, permission checks (project membership + container-less
 scoped ownership), snapshot creation, audit logging, event publishing,
 and the revert pipeline (generic mechanics + real note/schedule handlers
 exercising the actual `_default_revert` branches).
@@ -30,13 +30,29 @@ from app.commands.registry import CommandRegistry
 from app.commands.schemas import Command, CommandStatus, PermissionScope
 from app.events.event_bus import EventBus, reset_event_bus
 from app.events.schemas import EventEnvelope
-from app.models import Note, Schedule, ScheduleType, User, WorkspaceMember
+from app.models import Note, Schedule, ScheduleType, User
 from app.schemas import NoteCreate
 from app.services.notes import NoteService
 from app.services.schedule_service import ScheduleService
 
 TEST_USER_ID = UUID("73552833-a6de-40a1-bb69-6e034ca75460")
-TEST_WORKSPACE_ID = UUID("4a31721d-13d1-4292-b89e-5838848bac8b")
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _seeded_user():
+    """Tài khoản dev mà tệp này hardcode — dựng nếu DB không còn nó.
+
+    Xem `tests/integration/seeded_user.py`: giả định "hàng này luôn có sẵn"
+    đã sai một lần và làm 120 test đỏ cùng lúc.
+    """
+    from app.database_async import make_async_sessionmaker
+    from tests.integration.seeded_user import ensure_seeded_user
+
+    engine, session_maker = make_async_sessionmaker()
+    async with session_maker() as db:
+        await ensure_seeded_user(db)
+    await engine.dispose()
+
 
 
 # ============================================================================
@@ -80,6 +96,21 @@ async def _reset_event_bus_between_tests():
 
 
 @pytest_asyncio.fixture
+async def seeded_project():
+    """Dự án của `TEST_USER_ID`, tạo lười đúng như đường thật làm."""
+    from app.database_async import make_async_sessionmaker
+    from app.services.projects import ProjectService
+
+    engine, session_maker = make_async_sessionmaker()
+    async with session_maker() as db:
+        project = await ProjectService(db).get_or_create_personal(TEST_USER_ID)
+        await db.commit()
+        project_id = project.id
+    await engine.dispose()
+    return project_id
+
+
+@pytest_asyncio.fixture
 async def async_db():
     """Dedicated engine per test — see test_core_events.py's `async_db` for
     why the module-level AsyncSessionLocal singleton isn't safe here."""
@@ -104,7 +135,7 @@ def sync_db():
 
 @pytest_asyncio.fixture
 async def ctx(async_db):
-    context = ToolContext(user_id=TEST_USER_ID, async_db=async_db, workspace_id=TEST_WORKSPACE_ID)
+    context = ToolContext(user_id=TEST_USER_ID, async_db=async_db)
     yield context
     context.close()
 
@@ -137,7 +168,7 @@ async def event_subscriber():
 @pytest_asyncio.fixture
 async def other_user_id(async_db):
     """A second, throwaway user — needed to test permission-denial paths.
-    The dev DB only seeds one real user (owner of TEST_WORKSPACE_ID)."""
+    The dev DB only seeds one real user."""
     user = User(
         email=f"cmdreg-test-{uuid4().hex[:8]}@example.com",
         hashed_password="not-a-real-hash",
@@ -146,28 +177,26 @@ async def other_user_id(async_db):
     async_db.add(user)
     await async_db.commit()
     yield user.id
-    await async_db.execute(delete(WorkspaceMember).where(WorkspaceMember.user_id == user.id))
     await async_db.execute(delete(User).where(User.id == user.id))
     await async_db.commit()
 
 
-async def _add_member(async_db, workspace_id: UUID, user_id: UUID, role: str) -> None:
-    """
-    Insert via raw SQL, not the ORM: `workspace_members.role` is declared as
-    SQLAlchemy `SQLEnum(WorkspaceRole, name="workspacerole")`, but the real
-    DB column is a plain VARCHAR (no `workspacerole` Postgres enum type
-    exists) — pre-existing model/schema drift, unrelated to Milestone 1.5.
-    ORM inserts try to bind-cast to the nonexistent type and fail; reads
-    work fine since SQLAlchemy decodes the varchar without needing the cast.
-    """
-    from sqlalchemy import text
+async def _add_member(async_db, project_id: UUID, user_id: UUID) -> None:
+    """Thêm một người vào dự án.
 
-    await async_db.execute(
-        text("INSERT INTO workspace_members (id, workspace_id, user_id, role, joined_at) "
-             "VALUES (:id, :workspace_id, :user_id, :role, now())"),
-        {"id": str(uuid4()), "workspace_id": str(workspace_id), "user_id": str(user_id), "role": role},
+    Không có tham số `role`: `ProjectMember` cố ý không có cột đó (QĐ-1) —
+    "ai được đọc tài liệu" và "ai chịu trách nhiệm việc" là hai câu hỏi
+    khác nhau, và ba mức owner/editor/viewer chỉ trả lời câu thứ nhất.
+    """
+    from app.models import ProjectJoinSource, ProjectMember
+
+    async_db.add(
+        ProjectMember(
+            project_id=project_id, user_id=user_id, joined_via=ProjectJoinSource.MANUAL
+        )
     )
     await async_db.commit()
+
 
 
 def _events_of_type(events: list[EventEnvelope], event_type: str) -> list[EventEnvelope]:
@@ -202,7 +231,7 @@ async def real_note_create_handler(command: Command, ctx: ToolContext) -> dict:
         service = NoteService(db)
         note = await service.create_note(
             payload=NoteCreate(
-                workspace_id=args.workspace_id,
+                project_id=args.project_id,
                 title=args.title,
                 content=args.content or "empty note",
                 parent_note_id=args.parent_note_id,
@@ -369,7 +398,7 @@ async def test_execute_wrong_type_arg(registry, ctx):
 
     command = Command(
         command_name="note.create",
-        args={"workspace_id": "not-a-uuid", "title": "Test"},
+        args={"project_id": "not-a-uuid", "title": "Test"},
         requested_by=ctx.user_id,
     )
     result = await registry.execute(command, ctx)
@@ -404,47 +433,56 @@ async def test_execute_handler_exception_is_reported(registry, ctx):
 # ============================================================================
 
 @pytest.mark.asyncio
-async def test_permission_read_scope_always_allowed(registry, async_db, other_user_id):
-    """READ scope allowed even for a user with zero workspace membership."""
+async def test_permission_read_scope_always_allowed(registry, async_db, other_user_id, seeded_project):
+    """READ luôn được phép, kể cả với người không ở trong dự án nào."""
     registry.register(name="dummy.op", description="", args_schema=_NoArgs, handler=dummy_success_handler, permission_scope=PermissionScope.READ)
 
-    other_ctx = ToolContext(user_id=other_user_id, async_db=async_db, workspace_id=TEST_WORKSPACE_ID)
-    command = Command(command_name="dummy.op", args={}, requested_by=other_user_id, workspace_id=TEST_WORKSPACE_ID)
+    other_ctx = ToolContext(user_id=other_user_id, async_db=async_db, project_id=seeded_project)
+    command = Command(command_name="dummy.op", args={}, requested_by=other_user_id, project_id=seeded_project)
     result = await registry.execute(command, other_ctx)
 
     assert result.success is True
 
 
 @pytest.mark.asyncio
-async def test_permission_write_scope_owner_allowed(registry, ctx):
-    """TEST_USER_ID is the real seeded OWNER of TEST_WORKSPACE_ID."""
+async def test_permission_write_scope_member_allowed(registry, ctx, seeded_project):
+    """TEST_USER_ID là chủ sở hữu — và do đó là thành viên — của dự án này."""
     registry.register(name="dummy.op", description="", args_schema=_NoArgs, handler=dummy_success_handler, permission_scope=PermissionScope.WRITE)
 
-    command = Command(command_name="dummy.op", args={}, requested_by=ctx.user_id, workspace_id=TEST_WORKSPACE_ID)
+    command = Command(command_name="dummy.op", args={}, requested_by=ctx.user_id, project_id=seeded_project)
     result = await registry.execute(command, ctx)
 
     assert result.success is True
 
 
 @pytest.mark.asyncio
-async def test_permission_write_scope_editor_allowed(registry, async_db, other_user_id):
-    await _add_member(async_db, TEST_WORKSPACE_ID, other_user_id, "editor")
+async def test_permission_write_scope_added_member_allowed(
+    registry, async_db, other_user_id, seeded_project
+):
+    """Vào dự án là ghi được — không có bậc vai nào ở giữa (QĐ-1)."""
+    await _add_member(async_db, seeded_project, other_user_id)
     registry.register(name="dummy.op", description="", args_schema=_NoArgs, handler=dummy_success_handler, permission_scope=PermissionScope.WRITE)
 
-    other_ctx = ToolContext(user_id=other_user_id, async_db=async_db, workspace_id=TEST_WORKSPACE_ID)
-    command = Command(command_name="dummy.op", args={}, requested_by=other_user_id, workspace_id=TEST_WORKSPACE_ID)
+    other_ctx = ToolContext(user_id=other_user_id, async_db=async_db, project_id=seeded_project)
+    command = Command(command_name="dummy.op", args={}, requested_by=other_user_id, project_id=seeded_project)
     result = await registry.execute(command, other_ctx)
 
     assert result.success is True
 
 
 @pytest.mark.asyncio
-async def test_permission_write_scope_viewer_denied(registry, async_db, other_user_id):
-    await _add_member(async_db, TEST_WORKSPACE_ID, other_user_id, "viewer")
+async def test_permission_write_scope_non_member_denied(
+    registry, async_db, other_user_id, seeded_project
+):
+    """Tính chất bảo mật thật: không ở trong dự án thì không ghi được.
+
+    Không có nhánh này, `project_id` trở thành cách ghi vào dự án người khác
+    chỉ bằng cách đoán một UUID.
+    """
     registry.register(name="dummy.op", description="", args_schema=_NoArgs, handler=dummy_success_handler, permission_scope=PermissionScope.WRITE)
 
-    other_ctx = ToolContext(user_id=other_user_id, async_db=async_db, workspace_id=TEST_WORKSPACE_ID)
-    command = Command(command_name="dummy.op", args={}, requested_by=other_user_id, workspace_id=TEST_WORKSPACE_ID)
+    other_ctx = ToolContext(user_id=other_user_id, async_db=async_db, project_id=seeded_project)
+    command = Command(command_name="dummy.op", args={}, requested_by=other_user_id, project_id=seeded_project)
     result = await registry.execute(command, other_ctx)
 
     assert result.success is False
@@ -453,50 +491,45 @@ async def test_permission_write_scope_viewer_denied(registry, async_db, other_us
 
 
 @pytest.mark.asyncio
-async def test_permission_write_scope_non_member_denied(registry, async_db, other_user_id):
-    """other_user_id has no WorkspaceMember row at all in TEST_WORKSPACE_ID."""
-    registry.register(name="dummy.op", description="", args_schema=_NoArgs, handler=dummy_success_handler, permission_scope=PermissionScope.WRITE)
+async def test_admin_scope_is_the_same_check_as_write(
+    registry, async_db, other_user_id, seeded_project
+):
+    """ADMIN không còn khác WRITE, và điều đó được ghi lại chứ không để ngầm.
 
-    other_ctx = ToolContext(user_id=other_user_id, async_db=async_db, workspace_id=TEST_WORKSPACE_ID)
-    command = Command(command_name="dummy.op", args={}, requested_by=other_user_id, workspace_id=TEST_WORKSPACE_ID)
-    result = await registry.execute(command, other_ctx)
-
-    assert result.success is False
-    assert "not a member" in result.error
-
-
-@pytest.mark.asyncio
-async def test_permission_admin_scope_owner_allowed(registry, ctx):
+    Ba mức workspace (owner/editor/viewer) từng làm ADMIN có nghĩa riêng.
+    `ProjectMember` cố ý không có `role` (QĐ-1), nên cả hai mức giờ hỏi
+    cùng một câu: *có ở trong dự án không?*. Giữ `PermissionScope.ADMIN`
+    trong enum là để lệnh nào cần một bậc cao hơn về sau có chỗ khai báo —
+    nhưng hôm nay nó không cấp thêm gì, và một test nói thẳng điều đó tốt
+    hơn một hàng rào tưởng là có.
+    """
     registry.register(name="dummy.op", description="", args_schema=_NoArgs, handler=dummy_success_handler, permission_scope=PermissionScope.ADMIN)
 
-    command = Command(command_name="dummy.op", args={}, requested_by=ctx.user_id, workspace_id=TEST_WORKSPACE_ID)
-    result = await registry.execute(command, ctx)
+    ctx_member = ToolContext(user_id=TEST_USER_ID, async_db=async_db, project_id=seeded_project)
+    allowed = await registry.execute(
+        Command(command_name="dummy.op", args={}, requested_by=TEST_USER_ID, project_id=seeded_project),
+        ctx_member,
+    )
+    assert allowed.success is True
 
-    assert result.success is True
-
-
-@pytest.mark.asyncio
-async def test_permission_admin_scope_editor_denied(registry, async_db, other_user_id):
-    await _add_member(async_db, TEST_WORKSPACE_ID, other_user_id, "editor")
-    registry.register(name="dummy.op", description="", args_schema=_NoArgs, handler=dummy_success_handler, permission_scope=PermissionScope.ADMIN)
-
-    other_ctx = ToolContext(user_id=other_user_id, async_db=async_db, workspace_id=TEST_WORKSPACE_ID)
-    command = Command(command_name="dummy.op", args={}, requested_by=other_user_id, workspace_id=TEST_WORKSPACE_ID)
-    result = await registry.execute(command, other_ctx)
-
-    assert result.success is False
-    assert "owner access required" in result.error
+    ctx_outsider = ToolContext(user_id=other_user_id, async_db=async_db, project_id=seeded_project)
+    denied = await registry.execute(
+        Command(command_name="dummy.op", args={}, requested_by=other_user_id, project_id=seeded_project),
+        ctx_outsider,
+    )
+    assert denied.success is False
+    assert "not a member" in denied.error
 
 
 @pytest.mark.asyncio
-async def test_permission_no_workspace_id_allowed_regardless_of_membership(registry, async_db, other_user_id):
-    """Schedule-style commands: no workspace_id at all. Any authenticated
-    requested_by is allowed at this layer — ownership is enforced by the
-    handler/service itself (see _check_permission docstring)."""
+async def test_permission_no_container_allowed_regardless_of_membership(registry, async_db, other_user_id):
+    """Lệnh kiểu schedule: không có container nào. Bất kỳ `requested_by` đã
+    xác thực nào cũng qua được tầng này — quyền ở mức tài nguyên do
+    handler/service tự kiểm (xem docstring `_check_permission`)."""
     registry.register(name="schedule.create", description="", args_schema=_NoArgs, handler=dummy_success_handler, permission_scope=PermissionScope.WRITE)
 
-    other_ctx = ToolContext(user_id=other_user_id, async_db=async_db, workspace_id=None)
-    command = Command(command_name="schedule.create", args={}, requested_by=other_user_id, workspace_id=None)
+    other_ctx = ToolContext(user_id=other_user_id, async_db=async_db)
+    command = Command(command_name="schedule.create", args={}, requested_by=other_user_id)
     result = await registry.execute(command, other_ctx)
 
     assert result.success is True
@@ -507,17 +540,16 @@ async def test_permission_no_workspace_id_allowed_regardless_of_membership(regis
 # ============================================================================
 
 @pytest.mark.asyncio
-async def test_execute_success_publishes_command_event(registry, ctx, event_subscriber):
+async def test_execute_success_publishes_command_event(registry, ctx, event_subscriber, seeded_project):
     registry.register(name="dummy.op", description="", args_schema=_TitleArgs, handler=dummy_success_handler, permission_scope=PermissionScope.READ, revertable=True)
 
-    command = Command(command_name="dummy.op", args={"title": "Hello"}, requested_by=ctx.user_id, workspace_id=TEST_WORKSPACE_ID)
+    command = Command(command_name="dummy.op", args={"title": "Hello"}, requested_by=ctx.user_id, project_id=seeded_project)
     result = await registry.execute(command, ctx)
 
     events = _events_of_type(event_subscriber, "command.dummy.op")
     assert len(events) == 1
     event = events[0]
     assert event.user_id == ctx.user_id
-    assert event.workspace_id == TEST_WORKSPACE_ID
     assert event.payload["command_id"] == command.command_id
     assert event.payload["action_id"] == result.action_id
     assert event.payload["title"] == "Hello"  # merged from result_data
@@ -696,14 +728,14 @@ async def test_revert_cross_user_is_not_found(registry, ctx, other_user_id):
 # ============================================================================
 
 @pytest.mark.asyncio
-async def test_default_revert_note_create(registry, ctx):
+async def test_default_revert_note_create(registry, ctx, seeded_project):
     registry.register(name="note.create", description="", args_schema=NoteCreateArgs, handler=real_note_create_handler, permission_scope=PermissionScope.WRITE, revertable=True)
 
     command = Command(
         command_name="note.create",
-        args={"workspace_id": str(TEST_WORKSPACE_ID), "title": "Revert Me", "content": "will be reverted"},
+        args={"project_id": str(seeded_project), "title": "Revert Me", "content": "will be reverted"},
         requested_by=ctx.user_id,
-        workspace_id=TEST_WORKSPACE_ID,
+        project_id=seeded_project,
     )
     result = await registry.execute(command, ctx)
     assert result.success is True

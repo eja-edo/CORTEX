@@ -20,7 +20,12 @@ from pydantic import BaseModel, Field
 class NoteCreatedPayload(BaseModel):
     """Payload for note.created event."""
     note_id: UUID
-    workspace_id: UUID
+    # Container của ghi chú kể từ DESIGN 11.4. `workspace_id` giữ lại cho
+    # subscriber cũ và giờ **nullable**: ghi chú tạo qua đường mới không có
+    # workspace nào, và một payload bắt buộc trường đó sẽ chặn đúng đường
+    # ghi vừa được mở.
+    project_id: Optional[UUID] = None
+    workspace_id: Optional[UUID] = None
     title: str
     parent_note_id: Optional[UUID] = None
     content_type: str = "markdown"
@@ -268,6 +273,60 @@ class DayPlanPayload(BaseModel):
 
 
 # ============================================================================
+# Project Events — DESIGN 6
+# ============================================================================
+#
+# Cả hai đều mang `source_channel_id`, và đó không phải tiện tay: định tuyến
+# kênh (DESIGN 8.1) đọc nó để gửi nhắc cấp dự án về channel của dự án thay
+# vì về DM. Mang sẵn trong payload nghĩa là delivery layer không phải mở
+# thêm một truy vấn ở nhánh nóng nhất của nó.
+
+
+class ProjectSlippingPayload(BaseModel):
+    """Payload for project.slipping — số việc mở của dự án **tăng** so với
+    lần đánh giá trước, trong khi hạn còn ≤ 14 ngày.
+
+    Đây là tín hiệu goal-progress đã mất khi `goals` bị xoá, và không
+    predicate nào khác phát hiện được: mọi predicate cấp task đều nhìn một
+    việc tại một thời điểm, nên không thấy được việc đang sinh ra nhanh hơn
+    việc xong.
+
+    `previous_open_count` đi kèm `open_count` vì con số sau một mình không
+    đọc được — 12 việc mở là nhiều hay ít tuỳ vào tuần trước là 4 hay 20.
+    """
+    project_id: UUID
+    name: str
+    open_count: int
+    previous_open_count: int
+    days_to_deadline: int
+    deadline: Optional[datetime] = None
+    source_channel_id: Optional[str] = None
+    top_tasks: list[TaskDigestItem] = Field(default_factory=list)
+
+
+class ProjectWillMissPayload(BaseModel):
+    """Payload for project.will_miss — theo tốc độ hoàn thành 14 ngày qua,
+    dự án kết thúc **sau** hạn của nó.
+
+    Số học thuần trên `completed_at`, không ML, không token (P3).
+
+    `velocity_per_day` và `days_needed` là phần "trình bày cách tính": một
+    câu *"dự án này sẽ trễ"* không có chúng thì người dùng không kiểm được,
+    và không kiểm được thì lần sai đầu tiên là lần cuối họ tin nó.
+    """
+    project_id: UUID
+    name: str
+    open_count: int
+    completed_last_14d: int
+    velocity_per_day: float
+    days_needed: float
+    days_to_deadline: int
+    deadline: Optional[datetime] = None
+    source_channel_id: Optional[str] = None
+    top_tasks: list[TaskDigestItem] = Field(default_factory=list)
+
+
+# ============================================================================
 # Conversation Events
 # ============================================================================
 
@@ -331,6 +390,8 @@ EVENT_PAYLOAD_REGISTRY: dict[str, type[BaseModel]] = {
     "task.at_risk": TaskAtRiskPayload,
     "day.review": DayReviewPayload,
     "day.plan": DayPlanPayload,
+    "project.slipping": ProjectSlippingPayload,
+    "project.will_miss": ProjectWillMissPayload,
     "conversation.message.created": ConversationMessageCreatedPayload,
     "tool.executed": ToolExecutedPayload,
     "google_calendar.synced": GoogleCalendarSyncedPayload,

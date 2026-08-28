@@ -16,6 +16,8 @@ from app.ai.agents.memory_trigger_service import MemoryTriggerService
 from app.ai.agents.conversation_store import ConversationStore
 from app.ai.agents.model_client import (
     ModelClient,
+    EmptyModelStreamError,
+    is_connection_error,
     is_fatal_error,
     is_quota_error,
     is_model_incompatible_error,
@@ -39,6 +41,12 @@ MAX_TOKENS_PER_DAY_PER_USER = 2_000_000
 MAX_TURN_RETRIES = 3
 
 _model_client = ModelClient()
+
+
+# asyncio only holds a weak reference to a running task, so a fire-and-forget
+# one can be garbage-collected mid-flight. Holding it here until it finishes is
+# the documented way to keep it alive.
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
 
 
 class AgentService:
@@ -91,8 +99,8 @@ class AgentService:
             logger.warning(f"Intent detection failed (non-fatal): {exc}")
             return None
 
-    async def _build_context_string(self, workspace_id: UUID | None, conv_id: UUID, context: dict | None, message: str = "") -> str | None:
-        """Milestone 1.7 (ContextService): workspace/recent-notes/upcoming-
+    async def _build_context_string(self, project_id: UUID | None, conv_id: UUID, context: dict | None, message: str = "") -> str | None:
+        """Milestone 1.7 (ContextService): project/recent-notes/upcoming-
         schedules section appended to the system prompt. Never raises —
         this is an enrichment, not a requirement for the chat flow."""
         try:
@@ -100,7 +108,7 @@ class AgentService:
             context_service = ContextService(self.db)
             unified_context = await context_service.build_context(
                 user_id=self.user.id,
-                workspace_id=workspace_id,
+                project_id=project_id,
                 conversation_id=conv_id,
                 runtime_context=context,
                 intent=self._detect_intent(message),
@@ -110,9 +118,9 @@ class AgentService:
             logger.warning(f"ContextService failed to build context (non-fatal): {exc}")
             return None
 
-    async def handle(self, message: str, conversation_id: UUID | None = None, workspace_id: UUID | None = None, context: dict | None = None, model: str | None = None) -> dict:
+    async def handle(self, message: str, conversation_id: UUID | None = None, project_id: UUID | None = None, context: dict | None = None, model: str | None = None) -> dict:
         preferred_model = model if model and model != "auto" else None
-        conv, title = await self.conversation_service.get_or_create(conversation_id, workspace_id, message)
+        conv, title = await self.conversation_service.get_or_create(conversation_id, project_id, message)
         if conv is None:
             return {"conversation_id": str(conversation_id), "reply": title}
 
@@ -124,7 +132,7 @@ class AgentService:
         recent_messages = await self.conversation_service.load_history(conv.id, conv.last_summary_message_id)
         self.conversation_service.log_raw_messages(recent_messages, "handle")
 
-        context_string = await self._build_context_string(workspace_id, conv.id, context, message)
+        context_string = await self._build_context_string(project_id, conv.id, context, message)
         system_prompt = await self.conversation_service.build_system_prompt(conv, message, context, summarizer, SYSTEM_PROMPT, context_string=context_string, recent_messages=recent_messages)
 
         await self.conversation_service.save_user_message(conv.id, message, context)
@@ -134,7 +142,7 @@ class AgentService:
         gen_config = GenerationConfig(system_instruction=system_prompt)
         logger.info(f"Available tools: {[t.name for t in tools] if tools else 'None'}")
 
-        ctx = ToolContext(user_id=self.user.id, async_db=self.db, workspace_id=workspace_id, conversation_id=conv.id)
+        ctx = ToolContext(user_id=self.user.id, async_db=self.db, project_id=project_id, conversation_id=conv.id)
 
         messages = _build_history_contents(recent_messages)
         _trim_incomplete_tail(messages, "handle")
@@ -179,23 +187,49 @@ class AgentService:
                 error_str = str(api_error)
                 if is_fatal_error(api_error):
                     logger.error(f"Fatal API error: {error_str[:300]}", exc_info=True)
-                    reply_text = "There was a configuration error. Please contact support if this persists."
+                    reply_text = "Dịch vụ AI đang có lỗi cấu hình. Nếu tình trạng này lặp lại, bạn báo lại giúp mình nhé."
                 elif is_quota_error(api_error):
                     logger.warning(f"Model rate-limited: {error_str[:200]}")
-                    reply_text = "The AI service is currently rate-limited. Please wait a moment and try again."
+                    reply_text = "Dịch vụ AI đang bị giới hạn tần suất. Bạn đợi một chút rồi thử lại nhé."
+                elif is_connection_error(api_error):
+                    logger.error(f"Cannot reach the model gateway: {error_str[:200]}")
+                    reply_text = "Mình không kết nối được tới dịch vụ AI. Bạn kiểm tra xem nó còn chạy không, rồi thử lại nhé."
                 else:
                     logger.error(f"API error after retries: {error_str[:300]}", exc_info=True)
-                    reply_text = "I encountered an error processing your request. Please try again."
+                    reply_text = "Mình gặp lỗi khi xử lý yêu cầu. Bạn thử lại nhé."
                 break
 
             if not response:
                 logger.warning("API returned empty response")
-                reply_text = "I'm unable to generate a response at this time."
+                reply_text = "Mô hình không trả về nội dung nào. Bạn thử gửi lại sau ít phút nhé."
                 break
 
             tool_calls = response.tool_calls or []
             if not tool_calls:
-                reply_text = response.content or "I couldn't process your request."
+                # `reasoning` là phương án cuối, không phải phương án đẹp.
+                #
+                # Đo được: gateway trả `finish_reason=stop`, 126 completion
+                # tokens, không tool call, `content` rỗng — người dùng nhận
+                # "I couldn't process your request." dù model đã trả lời.
+                # Với model suy luận, câu trả lời nằm trong `reasoning_content`.
+                #
+                # Thà đưa phần suy luận thô còn hơn đưa một câu báo lỗi nói
+                # rằng chẳng có gì cả, trong khi có (P7 nói bỏ khi nghi ngờ;
+                # đây không phải nghi ngờ — nội dung có thật, chỉ sai chỗ).
+                reply_text = response.content or response.reasoning
+                if not reply_text:
+                    # Không đổ lỗi cho tin nhắn của người dùng. Model không
+                    # trả gì cả — với gateway này ca hay gặp là `choices`
+                    # rỗng do lỗi phía dịch vụ, và "I couldn't process your
+                    # request." khiến người dùng đi sửa câu hỏi của mình.
+                    logger.warning(
+                        "Empty model reply (finish_reason=%s, usage=%s)",
+                        response.finish_reason, response.usage,
+                    )
+                    reply_text = (
+                        "Mô hình không trả về nội dung nào. "
+                        "Bạn thử gửi lại sau ít phút nhé."
+                    )
                 logger.info(f"Agent finished at turn {turn + 1} (no tool calls)")
                 break
 
@@ -212,7 +246,7 @@ class AgentService:
                 break
 
             tool_result_messages, exec_results, _, _, source_id_counter = await self.tool_service.execute_tools_pass(
-                tool_calls, conv, ctx, turn, tool_call_counts, source_id_counter, workspace_id,
+                tool_calls, conv, ctx, turn, tool_call_counts, source_id_counter, project_id,
             )
 
             for _, tool_name, result in exec_results:
@@ -298,10 +332,35 @@ class AgentService:
             logger.warning(f"Could not read chat model preference (non-fatal): {pref_err}")
             return None
 
-    async def handle_streaming_generator(self, message: str, conversation_id: UUID | None = None, workspace_id: UUID | None = None, context: dict | None = None, model: str | None = None, temperature: float | None = None, surface: str | None = None):
+    async def _name_conversation(self, conv_id: UUID, message: str) -> str | None:
+        """Generate and save a conversation title, off the critical path.
+
+        Gets its own session on purpose: `AsyncSession` is not safe for
+        concurrent use, and the request-scoped one is busy streaming the
+        answer this call is deliberately no longer holding up.
+
+        Swallows its own failures. A conversation with no name is a cosmetic
+        problem; a background task that raises into nobody's `await` is a
+        log full of "Task exception was never retrieved".
+        """
+        try:
+            title = await self.conversation_service._generate_conversation_title(message)
+            if not title:
+                return None
+            async with AsyncSessionLocal() as db:
+                await ConversationStore(db).update_conversation_title(conv_id, title)
+                await db.commit()
+            logger.info(f"Named conversation {conv_id}: {title}")
+            return title
+        except Exception as exc:
+            logger.warning(f"Title generation failed (non-fatal): {exc}")
+            return None
+
+    async def handle_streaming_generator(self, message: str, conversation_id: UUID | None = None, project_id: UUID | None = None, context: dict | None = None, model: str | None = None, temperature: float | None = None, surface: str | None = None):
         user_id = self.user.id
         conv = None
         ctx = None
+        title_task = None
         conversation_id_str = None
         # None keeps every existing (web) call site byte-for-byte unchanged:
         # still create-a-new-conversation-every-time when no conversation_id
@@ -321,15 +380,23 @@ class AgentService:
             elif surface == "mezon":
                 conv = await self.conversation_service.store.get_or_create_mezon_conversation(user_id)
             else:
-                conv = await self.conversation_service.store.get_or_create_conversation(user_id=user_id, workspace_id=workspace_id)
-                try:
-                    new_title = await self.conversation_service._generate_conversation_title(message)
-                    await self.conversation_service.store.update_conversation_title(conv.id, new_title)
-                    conv.title = new_title
-                    yield {"event": "title_generated", "conversation_id": str(conv.id), "title": new_title}
-                    logger.info(f"Generated and saved title for conversation {conv.id}: {new_title}")
-                except Exception as exc:
-                    logger.warning(f"Title generation failed (non-fatal): {exc}")
+                conv = await self.conversation_service.store.get_or_create_conversation(user_id=user_id)
+                # Naming the conversation is a second, whole model round trip,
+                # and it used to be awaited right here — ahead of the answer.
+                #
+                # Measured on the local gateway: 97 of the 128 seconds a user
+                # spent looking at an empty chat before the first token of
+                # their actual answer went to this call. It buys a label in
+                # the sidebar. Nobody is waiting to read the label.
+                #
+                # So it runs alongside the answer now and is yielded whenever
+                # it happens to be ready; if it is still running when the turn
+                # ends, it finishes on its own and saves itself, and the
+                # client picks the name up the next time it lists
+                # conversations.
+                title_task = asyncio.create_task(self._name_conversation(conv.id, message))
+                _BACKGROUND_TASKS.add(title_task)
+                title_task.add_done_callback(_BACKGROUND_TASKS.discard)
 
             conversation_id_str = str(conv.id)
 
@@ -345,10 +412,10 @@ class AgentService:
             await self.conversation_service.save_user_message(conv.id, message, context, source=message_source)
             await self.conversation_service.increment_message_count(conv.id)
 
-            context_string = await self._build_context_string(workspace_id, conv.id, context, message)
+            context_string = await self._build_context_string(project_id, conv.id, context, message)
             system_prompt = await self.conversation_service.build_system_prompt(conv, message, context, summarizer, SYSTEM_PROMPT, context_string=context_string, recent_messages=recent_messages)
 
-            ctx = ToolContext(user_id=user_id, async_db=self.db, workspace_id=workspace_id, conversation_id=conv.id)
+            ctx = ToolContext(user_id=user_id, async_db=self.db, project_id=project_id, conversation_id=conv.id)
 
             tools = self.registry.get_provider_tools()
             gen_config = GenerationConfig(system_instruction=system_prompt, temperature=temperature)
@@ -393,6 +460,7 @@ class AgentService:
 
                 turn_text = ""
                 tool_calls = []
+                partial_shown = False
                 _turn_completion_before = total_usage.get("completion_tokens", 0)
                 _turn_completion = 0
 
@@ -400,6 +468,7 @@ class AgentService:
                     async for chunk in _model_client.stream(messages, gen_config, tools=tools, preferred_model=preferred_model):
                         if chunk.content:
                             turn_text += chunk.content
+                            partial_shown = True
                             yield {"event": "token", "text": chunk.content}
                         if chunk.reasoning:
                             yield {"event": "reasoning_token", "text": chunk.reasoning}
@@ -412,19 +481,39 @@ class AgentService:
 
                     _turn_completion = total_usage.get("completion_tokens", 0) - _turn_completion_before
                     reply_text += turn_text
+
+                    # Ready yet? Never waited on — only collected.
+                    if title_task is not None and title_task.done():
+                        _title = title_task.result()
+                        title_task = None
+                        if _title:
+                            yield {"event": "title_generated", "conversation_id": str(conv.id), "title": _title}
                     logger.info(f"Stream turn {turn + 1} complete | text_len={len(turn_text)} tool_calls={len(tool_calls)}")
 
                 except Exception as stream_err:
                     err_str = str(stream_err)
                     logger.error(f"Streaming error at turn {turn + 1} after all retries: {err_str[:300]}", exc_info=True)
-                    if is_fatal_error(stream_err):
-                        user_msg = "There was a configuration error with the AI service. Please contact support if this persists."
+                    # Tiếng Việt như phần còn lại của sản phẩm: đây là câu
+                    # duy nhất người dùng đọc khi mọi thứ hỏng, và cho tới
+                    # gần đây nó còn không tới được họ (frontend không có
+                    # nhánh nào cho sự kiện `error`).
+                    if isinstance(stream_err, EmptyModelStreamError):
+                        user_msg = "Mô hình không trả về nội dung nào. Bạn thử gửi lại sau ít phút nhé."
+                    elif is_fatal_error(stream_err):
+                        user_msg = "Dịch vụ AI đang có lỗi cấu hình. Nếu tình trạng này lặp lại, bạn báo lại giúp mình nhé."
                     elif is_quota_error(stream_err):
-                        user_msg = "The AI service is currently rate-limited. Please wait a moment and try again."
+                        user_msg = "Dịch vụ AI đang bị giới hạn tần suất. Bạn đợi một chút rồi thử lại nhé."
+                    elif is_connection_error(stream_err):
+                        user_msg = "Mình không kết nối được tới dịch vụ AI. Bạn kiểm tra xem nó còn chạy không, rồi thử lại nhé."
                     elif is_model_incompatible_error(stream_err):
-                        user_msg = "None of the available AI models could process this request. Please try rephrasing or simplifying your message."
+                        user_msg = "Không mô hình nào xử lý được yêu cầu này. Bạn thử diễn đạt lại ngắn gọn hơn xem sao."
+                    elif partial_shown:
+                        # Đã có chữ hiện trên màn hình rồi — đừng nói như thể
+                        # chưa có gì xảy ra. Người dùng đang nhìn một câu bị
+                        # cụt và cần biết đó là lỗi, không phải câu trả lời.
+                        user_msg = "Câu trả lời bị ngắt giữa chừng. Bạn thử gửi lại nhé."
                     else:
-                        user_msg = "I encountered an error while generating a response. Please try again."
+                        user_msg = "Mình gặp lỗi khi tạo câu trả lời. Bạn thử lại nhé."
                     yield {"event": "error", "message": user_msg}
                     hard_error_occurred = True
                     break
@@ -480,7 +569,7 @@ class AgentService:
                         async with AsyncSessionLocal() as db:
                             call_ctx = ToolContext(
                                 user_id=ctx.user_id, async_db=db,
-                                workspace_id=ctx.workspace_id, conversation_id=ctx.conversation_id,
+                                project_id=ctx.project_id, conversation_id=ctx.conversation_id,
                             )
                             result = await self.tool_service.execute_single_tool(name, args, call_ctx)
                         return tc, name, args, result
@@ -586,6 +675,26 @@ class AgentService:
                     yield {"event": "token", "text": limit_text}
                     _synth_completion = 0
 
+            # Lưới cuối: kết thúc bình thường mà không có chữ nào.
+            #
+            # Trước đây ca này rơi thẳng xuống `done` — không token, không
+            # `error`, không lưu gì. Người dùng nhận một bong bóng rỗng và
+            # không có cách nào biết là hỏng hay AI cố tình im. Đo được 4
+            # lần trong một phiên test khi gateway trả stream không có
+            # `choices`.
+            #
+            # `EmptyModelStreamError` đã chặn phần lớn ca đó ở tầng dưới;
+            # đây là lưới cho những đường còn lại (ví dụ lượt cuối chỉ có
+            # tool_calls rồi hết lượt). Thà nói sai còn hơn im lặng.
+            if not reply_text and not hard_error_occurred:
+                logger.warning(
+                    f"event=empty_turn conversation_id={conv.id} turns={turn} "
+                    f"saved_assistant={saved_assistant_count} streaming=true"
+                )
+                fallback = "Mình chưa tạo được câu trả lời cho tin nhắn này. Bạn thử gửi lại nhé."
+                reply_text = fallback
+                yield {"event": "token", "text": fallback}
+
             if reply_text and saved_assistant_count == 0:
                 try:
                     await self.conversation_service.store.save_message(conversation_id=conv.id, role="assistant", content=reply_text, token_count=_synth_completion or None, source=message_source)
@@ -603,6 +712,12 @@ class AgentService:
 
             await self.memory_service.maybe_trigger(summarizer, conv)
             await self.db.commit()
+
+            if title_task is not None and title_task.done():
+                _title = title_task.result()
+                title_task = None
+                if _title:
+                    yield {"event": "title_generated", "conversation_id": str(conv.id), "title": _title}
 
             if not conversation_id_str:
                 conversation_id_str = str(conv.id)

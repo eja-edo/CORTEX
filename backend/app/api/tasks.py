@@ -7,8 +7,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database_async import get_async_db
 from app.dependencies import get_current_user_or_internal
-from app.models import TaskStatus
-from app.schemas import TaskCreate, TaskRejectionCheck, TaskResponse, TaskUpdate
+from app.models import Task, TaskStatus
+from app.schemas import (
+    TaskCreate,
+    TaskProjectUpdate,
+    TaskRejectionCheck,
+    TaskResponse,
+    TaskUpdate,
+)
 from app.services.tasks import InvalidTaskTransition, TaskService
 
 _OCCURRENCE_START_TIME_DESC = (
@@ -242,3 +248,38 @@ async def delete_task(
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
     return None
+
+
+@router.patch("/{task_id}/project", response_model=TaskResponse)
+async def set_task_project(
+    task_id: UUID,
+    payload: TaskProjectUpdate,
+    current_user=Depends(get_current_user_or_internal),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Chuyển một task sang dự án khác — DESIGN 9.1, và là lối sửa của 10.1.
+
+    Endpoint riêng chứ không phải một trường trong `TaskUpdate`, vì nó làm
+    một việc mà sửa tiêu đề không làm: **ghi một nhãn cho 4.4**. Mỗi lượt
+    sửa quy gán là một nhãn âm cho quy tắc suy ra ở 3.5 bước 2, và tỷ lệ
+    sửa trên tổng số gán vào dự án `origin='derived'` là chỉ số chất lượng
+    của quy tắc đó. Trộn vào đường ghi chung nghĩa là mọi lần đổi tiêu đề
+    đều phải đi qua nhánh "đây có phải một lượt sửa quy gán không".
+
+    **Không đụng `related_event_id`.** Task này sinh ra từ cuộc họp nào là
+    một sự thật lịch sử; nó không đổi vì task được xếp lại vào dự án khác.
+    """
+    from app.services.projects import ProjectService
+
+    task = await db.get(Task, task_id)
+    if task is None or task.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    service = ProjectService(db)
+    if await service.get_for_user(payload.project_id, current_user.id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    await service.move_task(task, payload.project_id, current_user.id)
+    await db.commit()
+    await db.refresh(task)
+    return TaskService(db).to_response(task)

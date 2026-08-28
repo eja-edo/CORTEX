@@ -37,6 +37,23 @@ from app.services.schedule_service import ScheduleService
 # Real seeded user/workspace in the dev DB (same convention as
 # workflow_service/tests/conftest.py's TEST_USER_ID).
 TEST_USER_ID = UUID("73552833-a6de-40a1-bb69-6e034ca75460")
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _seeded_user():
+    """Tài khoản dev mà tệp này hardcode — dựng nếu DB không còn nó.
+
+    Xem `tests/integration/seeded_user.py`: giả định "hàng này luôn có sẵn"
+    đã sai một lần và làm 120 test đỏ cùng lúc.
+    """
+    from app.database_async import make_async_sessionmaker
+    from tests.integration.seeded_user import ensure_seeded_user
+
+    engine, session_maker = make_async_sessionmaker()
+    async with session_maker() as db:
+        await ensure_seeded_user(db)
+    await engine.dispose()
+
 TEST_WORKSPACE_ID = UUID("4a31721d-13d1-4292-b89e-5838848bac8b")
 
 
@@ -112,7 +129,7 @@ def _events_of_type(events: list[EventEnvelope], event_type: str) -> list[EventE
 async def test_note_created_event(async_db, event_subscriber):
     service = NoteService(async_db)
     note = await service.create_note(
-        payload=NoteCreate(workspace_id=TEST_WORKSPACE_ID, title="Event Test Note", content="hello"),
+        payload=NoteCreate(title="Event Test Note", content="hello"),
         user_id=TEST_USER_ID,
     )
     try:
@@ -122,7 +139,8 @@ async def test_note_created_event(async_db, event_subscriber):
         event = events[0]
         assert event.source == "NoteService"
         assert event.user_id == TEST_USER_ID
-        assert event.workspace_id == TEST_WORKSPACE_ID
+        # Container nằm trong payload, không phải trên envelope.
+        assert event.payload["project_id"] is not None
         assert event.payload["note_id"] == note.id
         assert event.payload["title"] == "Event Test Note"
     finally:
@@ -134,7 +152,7 @@ async def test_note_created_event(async_db, event_subscriber):
 async def test_note_updated_event_content_path(async_db, event_subscriber):
     service = NoteService(async_db)
     note = await service.create_note(
-        payload=NoteCreate(workspace_id=TEST_WORKSPACE_ID, title="To Update", content="original"),
+        payload=NoteCreate(title="To Update", content="original"),
         user_id=TEST_USER_ID,
     )
     try:
@@ -160,7 +178,7 @@ async def test_note_update_noop_does_not_publish(async_db, event_subscriber):
     """Saving the exact same content must not fire note.updated."""
     service = NoteService(async_db)
     note = await service.create_note(
-        payload=NoteCreate(workspace_id=TEST_WORKSPACE_ID, title="Noop", content="same"),
+        payload=NoteCreate(title="Noop", content="same"),
         user_id=TEST_USER_ID,
     )
     try:
@@ -182,7 +200,7 @@ async def test_note_update_noop_does_not_publish(async_db, event_subscriber):
 async def test_note_deleted_event(async_db, event_subscriber):
     service = NoteService(async_db)
     note = await service.create_note(
-        payload=NoteCreate(workspace_id=TEST_WORKSPACE_ID, title="To Delete", content="bye"),
+        payload=NoteCreate(title="To Delete", content="bye"),
         user_id=TEST_USER_ID,
     )
     event_subscriber.clear()
@@ -215,7 +233,7 @@ async def test_event_publish_failure_does_not_break_note_create(async_db, monkey
 
     service = NoteService(async_db)
     note = await service.create_note(
-        payload=NoteCreate(workspace_id=TEST_WORKSPACE_ID, title="Resilient", content="x"),
+        payload=NoteCreate(title="Resilient", content="x"),
         user_id=TEST_USER_ID,
     )
     try:
@@ -377,7 +395,7 @@ async def test_conversation_message_created_event(async_db, event_subscriber):
     from app.ai.agents.conversation_store import ConversationStore
 
     store = ConversationStore(async_db)
-    conv = await store.get_or_create_conversation(user_id=TEST_USER_ID, workspace_id=TEST_WORKSPACE_ID)
+    conv = await store.get_or_create_conversation(user_id=TEST_USER_ID)
     await async_db.commit()
 
     try:
@@ -431,14 +449,18 @@ async def test_tool_executed_event(async_db, event_subscriber):
     store_stub = None  # execute_single_tool doesn't touch self.store
     service = ToolExecutionService(user=None, db=async_db, store=store_stub, registry=registry)
 
-    ctx = ToolContext(user_id=TEST_USER_ID, async_db=async_db, workspace_id=TEST_WORKSPACE_ID)
+    ctx = ToolContext(user_id=TEST_USER_ID, async_db=async_db)
 
-    result = await service.execute_single_tool("search_notes", {"query": "test"}, ctx)
+    # Chủ thể của test là *một tool chạy sinh đúng một event*, không phải
+    # tool nào. Dùng `list_pending_tasks` vì nó nằm trong tám tool đang sống
+    # (`app/ai/tools/__init__.py`); `search_notes` đã đóng băng theo Notes
+    # (DESIGN 11.3) nên gọi nó ở đây chỉ đo được "tool không tồn tại".
+    result = await service.execute_single_tool("list_pending_tasks", {}, ctx)
     await asyncio.sleep(0.05)
 
     events = _events_of_type(event_subscriber, "tool.executed")
     assert len(events) == 1
-    assert events[0].payload["tool_name"] == "search_notes"
+    assert events[0].payload["tool_name"] == "list_pending_tasks"
     assert events[0].payload["success"] is True
     assert events[0].payload["duration_ms"] >= 0
     assert result is not None
@@ -452,7 +474,7 @@ async def test_tool_executed_event_on_failure(async_db, event_subscriber):
 
     registry = get_tool_registry()
     service = ToolExecutionService(user=None, db=async_db, store=None, registry=registry)
-    ctx = ToolContext(user_id=TEST_USER_ID, async_db=async_db, workspace_id=TEST_WORKSPACE_ID)
+    ctx = ToolContext(user_id=TEST_USER_ID, async_db=async_db)
 
     result = await service.execute_single_tool("nonexistent_tool_xyz", {}, ctx)
     await asyncio.sleep(0.05)

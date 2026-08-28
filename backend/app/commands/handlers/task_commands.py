@@ -58,6 +58,10 @@ async def task_create_handler(command: Command, ctx: ToolContext) -> dict:
                 due_date=args.due_date,
                 priority=args.priority,
                 description=args.description,
+                # `None` ở đây không phải "không có dự án" mà là "người gọi
+                # không có ý kiến" — `TaskService.create_task` khi đó chạy
+                # thang 3.5: dự án của sự kiện liên quan, rồi dự án cá nhân.
+                project_id=args.project_id,
                 related_event_id=args.related_event_id,
                 parent_task_id=args.parent_task_id,
             ),
@@ -373,8 +377,20 @@ async def task_delete_revert_handler(snapshot: ActionSnapshot, ctx: ToolContext)
         raise ValueError("Cannot revert task.delete: snapshot missing task_id")
 
     async with ctx.async_db() as db:
+        # Snapshot cũ (ghi trước khi `projects` tồn tại) không có trường
+        # này. Rơi về dự án cá nhân thay vì fail — khôi phục một việc vào
+        # đúng chỗ mặc định tốt hơn là không khôi phục được.
+        from app.services.projects import ProjectService
+
+        raw_project_id = prev_state.get("project_id")
+        project_id = (
+            UUID(raw_project_id)
+            if raw_project_id
+            else (await ProjectService(db).get_or_create_personal(ctx.user_id)).id
+        )
         task = Task(
             user_id=ctx.user_id,
+            project_id=project_id,
             title=prev_state.get("title") or "Untitled",
             status=TaskStatus(prev_state["status"]) if prev_state.get("status") else TaskStatus.TODO,
             due_date=datetime.fromisoformat(prev_state["due_date"]) if prev_state.get("due_date") else None,

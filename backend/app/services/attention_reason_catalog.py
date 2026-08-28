@@ -22,6 +22,7 @@ reason is a sign the catalog fell behind, not a normal state.
 """
 
 from dataclasses import dataclass
+from enum import Enum
 
 from app.models import AttentionLevel
 from app.utils.logger import get_logger
@@ -29,10 +30,35 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+class ReasonScope(str, Enum):
+    """Ai là người nhận đúng của một lời nhắc — DESIGN 8.1.
+
+    `PERSONAL` là mặc định và là phần lớn: một việc quá hạn là chuyện giữa
+    Cortex và một người, và nó đi về DM.
+
+    `PROJECT` là thứ *duy nhất* trong thiết kế tạo ra giá trị tập thể ở đúng
+    chi phí tập thể. Nó gỡ chính lỗi cấu trúc đã giết hướng "bot nghe
+    channel" (DESIGN 1.4): ở đó tập thể trả giá (cho bot vào nghe) còn cá
+    nhân hưởng (nhắc riêng). Ở đây, thứ cả nhóm quan tâm — dự án đang trượt —
+    về channel chung, còn thứ riêng của một người ở lại DM.
+
+    Phạm vi nằm ở catalog, không nằm ở Gate: Gate quyết định **có nói không**,
+    delivery layer quyết định **nói qua đâu** (P2). Đó cũng là lý do
+    `attention_gate.py` không phải sửa một dòng nào cho mục 8.1.
+    """
+
+    PERSONAL = "personal"
+    PROJECT = "project"
+
+
 @dataclass(frozen=True)
 class ReasonMeta:
     base_level: AttentionLevel
     description: str
+    # Mặc định `PERSONAL`: một reason mới quên khai phạm vi sẽ về DM của
+    # đúng một người, chứ không phát nhầm vào một channel chung. Sai theo
+    # hướng ít ồn hơn (P5, P7).
+    scope: ReasonScope = ReasonScope.PERSONAL
 
 
 REASON_CATALOG: dict[str, ReasonMeta] = {
@@ -74,6 +100,22 @@ REASON_CATALOG: dict[str, ReasonMeta] = {
     "day.plan": ReasonMeta(
         base_level=AttentionLevel.INFORM,
         description="The work day is starting and there is work due or scheduled for today.",
+    ),
+    "project.slipping": ReasonMeta(
+        base_level=AttentionLevel.RECOMMEND,
+        description=(
+            "A project's open work grew since the last evaluation while its deadline is "
+            "inside two weeks — the goal-progress signal that died with `goals`."
+        ),
+        scope=ReasonScope.PROJECT,
+    ),
+    "project.will_miss": ReasonMeta(
+        base_level=AttentionLevel.ASK,
+        description=(
+            "At the current completion rate the project finishes after its deadline. "
+            "A warning *before* it is late, not after."
+        ),
+        scope=ReasonScope.PROJECT,
     ),
 }
 
@@ -124,6 +166,16 @@ def superseded_by(reason_key: str) -> frozenset[str]:
     """Reasons that, if already surfaced for the same item, make
     `reason_key` redundant. Empty for reasons that stand alone."""
     return SUPERSEDED_BY.get(reason_key, frozenset())
+
+
+def scope_for(reason_key: str) -> ReasonScope:
+    """Phạm vi của một reason. Reason chưa đăng ký → `PERSONAL`.
+
+    Không log cảnh báo ở đây: `base_level_for` đã cảnh báo cho cùng một
+    `reason_key`, và cảnh báo hai lần cho một sự việc chỉ làm log khó đọc.
+    """
+    entry = REASON_CATALOG.get(reason_key)
+    return entry.scope if entry is not None else ReasonScope.PERSONAL
 
 
 def base_level_for(reason_key: str) -> AttentionLevel:

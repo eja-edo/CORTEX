@@ -17,6 +17,7 @@ from sqlalchemy import delete, select
 
 from app.database_async import close_async_engine, make_async_sessionmaker
 from app.events.schemas import EventEnvelope
+from tests.project_helper import personal_project_id, personal_project_id_sync
 from app.models import AttentionLog, Notification, Task, TaskPriority, TaskStatus
 from app.services.notification_subscribers import handle_task_overdue
 from tests.integration.isolated_user import ensure_isolated_user
@@ -53,6 +54,7 @@ async def task(user_id):
     engine, session_maker = make_async_sessionmaker()
     async with session_maker() as db:
         t = Task(
+            project_id=await personal_project_id(db, user_id),
             user_id=user_id, title=f"{TITLE_PREFIX}subscriber",
             status=TaskStatus.TODO, due_date=YESTERDAY, priority=TaskPriority.URGENT,
         )

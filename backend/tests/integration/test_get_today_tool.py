@@ -21,12 +21,13 @@ from app.models import Task, TaskPriority, TaskStatus
 from app.schemas import TaskCreate
 from app.services.tasks import TaskService
 from tests.integration.isolated_user import ISOLATED_TEST_USER_ID, ensure_isolated_user
+from tests.utc_today import utc_now
 
 TEST_USER_ID = ISOLATED_TEST_USER_ID
 # Task.due_date is a naive TIMESTAMP WITHOUT TIME ZONE column — match it,
 # same as test_today.py's own fixtures do.
-YESTERDAY = datetime.now().replace(microsecond=0) - timedelta(days=1)
-TWO_DAYS_AGO = datetime.now().replace(microsecond=0) - timedelta(days=2)
+YESTERDAY = utc_now() - timedelta(days=1)
+TWO_DAYS_AGO = utc_now() - timedelta(days=2)
 
 
 @pytest_asyncio.fixture

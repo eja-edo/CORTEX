@@ -104,9 +104,16 @@ def test_note_create_args_rejects_title_too_long():
         NoteCreateArgs(workspace_id=uuid4(), title="x" * 300, content="")
 
 
-def test_note_create_args_requires_workspace_id():
-    with pytest.raises(ValidationError):
-        NoteCreateArgs(title="Test", content="")
+def test_note_create_args_needs_no_container_at_all():
+    """Thiếu `project_id` là hợp lệ (DESIGN 11.4).
+
+    Trước đây một container bắt buộc ở tầng schema, nghĩa là "ghi nhanh một
+    ý" là thao tác phải chọn chỗ trước — và ở DM Mezon thì không có chỗ nào
+    để chọn. Giờ service rơi về dự án cá nhân, cùng đáy thang mà task đã
+    dùng (3.5 bước 3).
+    """
+    args = NoteCreateArgs(title="Test", content="")
+    assert args.project_id is None
 
 
 def test_note_update_args_optional_fields():

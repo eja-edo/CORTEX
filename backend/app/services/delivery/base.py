@@ -58,6 +58,30 @@ class DeliveryPayload:
         )
 
     @property
+    def project_channel_id(self) -> str | None:
+        """Channel Mezon nhận lời nhắc này, hoặc `None` nghĩa là DM.
+
+        Định tuyến theo **phạm vi** (DESIGN 8.1): `project.slipping` và
+        `project.will_miss` là chuyện của cả nhóm và về channel của dự án;
+        mọi reason cấp cá nhân về DM. Quyết định nằm ở đây, trong delivery
+        layer, chứ không ở Attention Gate — Gate quyết định *có nói không*,
+        đây quyết định *nói qua đâu* (P2). Đó cũng là lý do 8.1 không phải
+        sửa một dòng nào của `attention_gate.py`.
+
+        `None` cho dự án cá nhân và dự án tạo tay: chúng không neo vào
+        channel nào (DESIGN 3.1.1), nên nhắc của chúng về DM — không cần
+        nhánh riêng ở đâu cả.
+        """
+        from app.services.attention_reason_catalog import ReasonScope, scope_for
+
+        if self.reason_key is None:
+            return None
+        if scope_for(self.reason_key) is not ReasonScope.PROJECT:
+            return None
+        channel_id = (self.payload or {}).get("source_channel_id")
+        return str(channel_id) if channel_id else None
+
+    @property
     def effective_level(self) -> AttentionLevel:
         """The level used for `min_level` comparisons.
 

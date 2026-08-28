@@ -24,6 +24,7 @@ from sqlalchemy import delete, select
 
 from app.database import sync_session
 from app.database_async import make_async_sessionmaker
+from tests.project_helper import personal_project_id, personal_project_id_sync
 from app.models import (
     AttentionBundleQueue,
     AttentionItemType,
@@ -70,6 +71,7 @@ async def async_db(user_id):
 
 async def _make_task(db, user_id, *, suffix: str, priority, due_date) -> Task:
     task = Task(
+        project_id=await personal_project_id(db, user_id),
         user_id=user_id,
         title=f"{TITLE_PREFIX}{suffix}",
         status=TaskStatus.TODO,
@@ -253,6 +255,7 @@ async def test_item_less_candidate_bypasses_the_gate_entirely(async_db, user_id)
 def test_sync_dedup_matches_async_behaviour(user_id):
     with sync_session() as db:
         task = Task(
+            project_id=personal_project_id_sync(db, user_id),
             user_id=user_id, title=f"{TITLE_PREFIX}sync-dedup",
             status=TaskStatus.TODO, due_date=YESTERDAY, priority=TaskPriority.LOW,
         )
@@ -281,6 +284,7 @@ def test_sync_dedup_matches_async_behaviour(user_id):
 def test_sync_busy_check_silences_non_critical_and_queues_it(user_id):
     with sync_session() as db:
         task = Task(
+            project_id=personal_project_id_sync(db, user_id),
             user_id=user_id, title=f"{TITLE_PREFIX}sync-busy",
             status=TaskStatus.TODO, due_date=YESTERDAY, priority=TaskPriority.LOW,
         )
@@ -435,6 +439,7 @@ def test_sync_path_applies_supersession_too(user_id):
     task_id = uuid4()
     with sync_session() as db:
         task = Task(
+            project_id=personal_project_id_sync(db, user_id),
             id=task_id, user_id=user_id, title=f"{TITLE_PREFIX}sync-supersede",
             status=TaskStatus.TODO, due_date=YESTERDAY, priority=TaskPriority.URGENT,
         )

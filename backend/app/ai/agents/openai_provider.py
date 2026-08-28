@@ -273,15 +273,32 @@ class OpenAIProvider(LLMProvider):
         return kwargs
 
     def _openai_response_to_provider(self, response: object) -> ProviderResponse:
+        # Hai lối thoát sớm này từng im lặng, và chúng là lối hay đi nhất
+        # khi gateway hỏng: response về nhưng `choices` rỗng. Người dùng nhận
+        # "I couldn't process your request." — câu nói rằng *tin nhắn của họ*
+        # có vấn đề, trong khi thật ra dịch vụ mới là thứ hỏng. Log để phân
+        # biệt được hai ca đó trong log thay vì đoán.
         choice = response.choices[0] if hasattr(response, "choices") and response.choices else None
         if not choice:
+            logger.warning(
+                "Gateway returned a response with no choices (usage=%s)",
+                getattr(response, "usage", None),
+            )
             return ProviderResponse()
 
         message = getattr(choice, "message", None)
         if not message:
+            logger.warning("Gateway returned a choice with no message")
             return ProviderResponse()
 
         content = getattr(message, "content", None)
+        # Gateway đặt phần suy luận ở đâu thì tuỳ model; thử các tên đã gặp.
+        reasoning = None
+        for attr in ("reasoning_content", "reasoning"):
+            value = getattr(message, attr, None)
+            if isinstance(value, str) and value.strip():
+                reasoning = value
+                break
         tool_calls: list[ToolCall] = []
 
         openai_tool_calls = getattr(message, "tool_calls", None) or []
@@ -310,8 +327,25 @@ class OpenAIProvider(LLMProvider):
                 "total_tokens": getattr(usage_data, "total_tokens", 0),
             }
 
+        if not content and not tool_calls:
+            # Không có gì để trả cho người dùng. Trước đây chỗ này im lặng và
+            # người dùng nhận "I couldn't process your request." dù model đã
+            # sinh cả trăm token — không có cách nào biết token đi đâu. Ghi
+            # lại các trường thật sự có trên message để lần sau đọc log là ra.
+            logger.warning(
+                "Model returned no content and no tool calls "
+                "(finish_reason=%s, fields=%s, reasoning=%s chars)",
+                getattr(choice, "finish_reason", None),
+                sorted(
+                    k for k in vars(message).keys()
+                    if not k.startswith("_")
+                ) if hasattr(message, "__dict__") else "n/a",
+                len(reasoning) if reasoning else 0,
+            )
+
         return ProviderResponse(
             content=content,
+            reasoning=reasoning,
             tool_calls=tool_calls if tool_calls else None,
             finish_reason=getattr(choice, "finish_reason", None),
             usage=usage,

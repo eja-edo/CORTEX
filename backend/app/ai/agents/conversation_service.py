@@ -212,7 +212,7 @@ class ConversationService:
     async def get_or_create(
         self,
         conversation_id: UUID | None,
-        workspace_id: UUID | None,
+        project_id: UUID | None,
         message: str,
     ) -> tuple:
         """Get existing conversation or create new one (generates title for new)."""
@@ -225,10 +225,9 @@ class ConversationService:
                 )
                 return None, "Conversation not found. Please start a new chat."
         else:
-            conv = await self.store.get_or_create_conversation(
-                user_id=self.user.id,
-                workspace_id=workspace_id,
-            )
+            # Hội thoại thuộc về một người, không thuộc container nào —
+            # xem `ConversationStore.get_or_create_conversation`.
+            conv = await self.store.get_or_create_conversation(user_id=self.user.id)
             try:
                 new_title = await self._generate_conversation_title(message)
                 await self.store.update_conversation_title(conv.id, new_title)
@@ -268,10 +267,10 @@ class ConversationService:
         recent_messages: list | None = None,
     ) -> str:
         """Build system prompt with summary context, skill section, and
-        (Milestone 1.7) ContextService's workspace/recent-activity section.
+        (Milestone 1.7) ContextService's project/recent-activity section.
 
         `context_string` comes from `UnifiedContext.to_llm_string()`
-        (app/context/) — it's the NEW, DB-sourced part (workspace/recent
+        (app/context/) — it's the NEW, DB-sourced part (project/recent
         notes/upcoming schedules). It's separate from `context` (the
         frontend's raw pills/page/runtime dict), which still goes through
         `_inject_context_into_text` per-message as before — not duplicated

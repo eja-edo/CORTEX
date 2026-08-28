@@ -2,7 +2,7 @@
 
 from uuid import uuid4
 
-from app.context.schemas import ContextPill, UnifiedContext, WorkspaceContext
+from app.context.schemas import ContextPill, UnifiedContext, ProjectContext
 
 
 def test_context_pill_defaults():
@@ -10,8 +10,8 @@ def test_context_pill_defaults():
     assert pill.source == "user"
 
 
-def test_workspace_context():
-    ws = WorkspaceContext(workspace_id=uuid4(), workspace_name="My Workspace", role="editor")
+def test_project_context():
+    ws = ProjectContext(project_id=uuid4(), project_name="Dự án của tôi")
     assert ws.member_count == 0
 
 
@@ -20,7 +20,7 @@ def test_unified_context_defaults_are_empty():
     assert ctx.pills == []
     assert ctx.page == {}
     assert ctx.runtime == {}
-    assert ctx.workspace is None
+    assert ctx.project is None
     assert ctx.recent_notes == []
     assert ctx.recent_schedules == []
 
@@ -44,11 +44,12 @@ def test_to_llm_string_does_not_render_pills_page_runtime():
     assert "mobile" not in rendered
 
 
-def test_to_llm_string_includes_workspace():
-    ctx = UnifiedContext(workspace=WorkspaceContext(workspace_id=uuid4(), workspace_name="Team Alpha", role="owner"))
+def test_to_llm_string_includes_project():
+    ctx = UnifiedContext(project=ProjectContext(project_id=uuid4(), project_name="Team Alpha"))
     rendered = ctx.to_llm_string()
     assert "Team Alpha" in rendered
-    assert "owner" in rendered
+    # Không còn khẳng định về vai: `ProjectMember` cố ý không có `role`
+    # (QĐ-1), nên không có gì để in ra.
 
 
 def test_to_llm_string_includes_recent_notes():

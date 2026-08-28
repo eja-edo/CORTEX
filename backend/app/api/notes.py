@@ -10,7 +10,7 @@ from app.dependencies import get_current_active_user, get_current_user_or_intern
 from app.models import User
 from app.schemas import NoteCreate, NotePatchRequest, NoteResponse, NoteRevisionResponse, NoteSummary, NoteUpdate
 from app.services.notes import NoteService
-from app.services.workspace_permission import WorkspacePermission
+from app.services.project_permission import ProjectPermission
 
 router = APIRouter(prefix="/notes", tags=["notes"])
 
@@ -44,19 +44,23 @@ async def get_notes(
     return responses
 
 
-@router.get("/workspaces/{workspace_id}", response_model=list[NoteSummary])
-async def get_workspace_notes(
-    workspace_id: UUID,
+@router.get("/projects/{project_id}", response_model=list[NoteSummary])
+async def get_project_notes(
+    project_id: UUID,
     current_user = Depends(get_current_user_or_internal),
     db: AsyncSession = Depends(get_async_db),
 ):
-    """Get all notes in a workspace. User must be a member."""
-    # Check workspace membership (sync DB)
+    """Ghi chú của người đang đăng nhập trong một dự án.
+
+    Thay `GET /notes/workspaces/{id}` (DESIGN 11.4). Không phải thành viên
+    thì **404, không phải 403** — cùng lối với `api/projects.py`: nói 403 là
+    xác nhận có một dự án id như vậy tồn tại.
+    """
     with SessionLocal() as sync_db:
-        WorkspacePermission.require_member(workspace_id, current_user.id, sync_db)
+        ProjectPermission.require_member(project_id, current_user.id, sync_db)
 
     service = NoteService(db)
-    notes = await service.get_notes_by_workspace(workspace_id)
+    notes = await service.get_notes_by_project(project_id, current_user.id)
     result = []
     for note in notes:
         content = await service.materialize_note_content(note)

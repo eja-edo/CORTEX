@@ -30,6 +30,29 @@ def _to_naive_utc(dt: datetime) -> datetime:
     return dt.astimezone(timezone.utc).replace(tzinfo=None)
 
 
+def _wire_utc(value: Optional[datetime]) -> Optional[str]:
+    """Chuỗi ISO **luôn mang dấu múi giờ**, cho một `datetime` naive-UTC.
+
+    Trong module này occurrence được chuẩn hoá về naive UTC để so sánh và
+    tra cứu exception (xem `_to_naive_utc`). Đó là quy ước nội bộ hợp lý —
+    nhưng gọi thẳng `.isoformat()` trên nó thì ra `"2026-08-26T13:00:00"`,
+    một chuỗi **không nói mình là giờ gì**.
+
+    Và JavaScript có một quy tắc dứt khoát cho chuỗi đó: `new Date()` coi
+    một ISO datetime không hậu tố là **giờ địa phương**. Nên 13:00 UTC hiện
+    lên màn hình đúng 13:00 thay vì 20:00 ở Việt Nam — lệch đúng bằng
+    offset, im lặng, và chỉ sai với những lần lặp *ảo* nên trông như một
+    lỗi ngẫu nhiên.
+
+    Hàng đọc thẳng từ ORM không dính: cột là `DateTime(timezone=True)` nên
+    `.isoformat()` của chúng đã có `+00:00`.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.isoformat()
+
 class RecurrenceService:
     """Service for handling recurring event logic."""
 
@@ -125,8 +148,8 @@ class RecurrenceService:
                     "user_id": str(root.user_id),
                     "title": root.title,
                     "type": root.type.value if hasattr(root.type, 'value') else root.type,
-                    "start_time": occ_start.isoformat(),
-                    "end_time": (occ_start + duration).isoformat(),
+                    "start_time": _wire_utc(occ_start),
+                    "end_time": _wire_utc(occ_start + duration),
                     "location": root.location,
                     "description": root.description,
                     "is_completed": root.is_completed,
@@ -135,7 +158,7 @@ class RecurrenceService:
                     "is_exception": False,
                     "is_cancelled": False,
                     "recurrence_id": str(root.id),
-                    "original_start_time": occ_start.isoformat(),
+                    "original_start_time": _wire_utc(occ_start),
                     "is_virtual": True,
                     "version": root.version,
                     "created_at": root.created_at.isoformat() if root.created_at else None,

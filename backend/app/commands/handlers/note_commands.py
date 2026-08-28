@@ -22,15 +22,14 @@ logger = get_logger(__name__)
 
 async def note_create_handler(command: Command, ctx: ToolContext) -> dict:
     """Create note command handler. Called by CommandRegistry after
-    validation/permission checks (WRITE scope + workspace_id → editor
-    check)."""
+    validation/permission checks (WRITE scope + `project_id` → thành viên dự án)."""
     args = NoteCreateArgs(**command.args)
 
     async with ctx.async_db() as db:
         service = NoteService(db)
         note = await service.create_note(
             payload=NoteCreate(
-                workspace_id=args.workspace_id,
+                project_id=args.project_id,
                 title=args.title,
                 content=args.content,
                 parent_note_id=args.parent_note_id,
@@ -44,7 +43,7 @@ async def note_create_handler(command: Command, ctx: ToolContext) -> dict:
 
         return {
             "id": str(note.id),
-            "workspace_id": str(note.workspace_id),
+            "project_id": str(note.project_id) if note.project_id else None,
             "title": note.title,
             "created_at": note.created_at.isoformat() if note.created_at else None,
             "prev_state": {"note_id": str(note.id)},  # For revert (soft delete)

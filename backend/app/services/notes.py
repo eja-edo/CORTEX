@@ -14,7 +14,6 @@ from app.models import Note
 from app.repositories.notes import NoteRepository
 from app.schemas import NoteCreate, NotePatchRequest, NoteResponse, NoteSummary, NoteUpdate
 from app.services.markdown_config import build_markdown_renderer
-from app.services.workspace_permission import WorkspacePermission
 from app.utils.logger import get_logger
 from app.utils.note_delta import apply_text_patch, build_text_patch
 
@@ -61,7 +60,7 @@ class NoteService:
             self._event_bus = await get_event_bus()
         return self._event_bus
 
-    async def _publish_event(self, event_type: str, user_id: UUID, workspace_id: UUID | None, payload: dict) -> None:
+    async def _publish_event(self, event_type: str, user_id: UUID, payload: dict) -> None:
         """Publish a note.* event. Never raises — a broken EventBus must not break note mutations."""
         try:
             bus = await self._get_event_bus()
@@ -69,17 +68,13 @@ class NoteService:
                 type=event_type,
                 source="NoteService",
                 user_id=user_id,
-                workspace_id=workspace_id,
                 payload=payload,
             ))
         except Exception as exc:
             logger.warning(f"Failed to publish {event_type} event: {exc}")
 
     async def create_note(self, payload: NoteCreate, user_id: UUID) -> Note:
-        # Check user has write permission in the workspace
-        with SessionLocal() as sync_db:
-            member = WorkspacePermission.require_member(payload.workspace_id, user_id, sync_db)
-            WorkspacePermission.require_editor(member)
+        project_id = await self._resolve_project(payload, user_id)
 
         if payload.parent_note_id is not None:
             parent = await self.repository.get_active_by_id_and_user(payload.parent_note_id, user_id)
@@ -93,7 +88,7 @@ class NoteService:
 
         note = Note(
             user_id=user_id,
-            workspace_id=payload.workspace_id,
+            project_id=project_id,
             parent_note_id=payload.parent_note_id,
             title=title,
             content=payload.content,
@@ -113,10 +108,9 @@ class NoteService:
         await self._publish_event(
             "note.created",
             user_id=user_id,
-            workspace_id=created.workspace_id,
             payload=NoteCreatedPayload(
                 note_id=created.id,
-                workspace_id=created.workspace_id,
+                project_id=created.project_id,
                 title=created.title,
                 parent_note_id=created.parent_note_id,
                 content_type=created.content_type,
@@ -124,14 +118,32 @@ class NoteService:
         )
         return created
 
+    async def _resolve_project(self, payload: NoteCreate, user_id: UUID) -> UUID:
+        """Dự án của một ghi chú — cùng thang mà task dùng (DESIGN 3.5).
+
+        Nói rõ chứ không gửi: người gọi chỉ định thì dùng, và **phải là
+        thành viên** — nếu không, `project_id` trở thành một cách ghi vào
+        dự án người khác chỉ bằng cách đoán một UUID. Không chỉ định thì
+        rơi về dự án cá nhân, tạo lười.
+        """
+        from app.services.project_permission import ProjectPermission
+        from app.services.projects import ProjectService
+
+        if payload.project_id is not None:
+            with SessionLocal() as sync_db:
+                ProjectPermission.require_member(payload.project_id, user_id, sync_db)
+            return payload.project_id
+
+        personal = await ProjectService(self.session).get_or_create_personal(user_id)
+        return personal.id
+
     async def get_notes(self, user_id: UUID) -> list[Note]:
         notes = await self.repository.list_active_by_user(user_id)
         return list(notes)
 
-    async def get_notes_by_workspace(self, workspace_id: UUID) -> list[Note]:
-        """Get all active notes in a workspace."""
-        notes = await self.repository.list_active_by_workspace(workspace_id)
-        return list(notes)
+    async def get_notes_by_project(self, project_id: UUID, user_id: UUID) -> list[Note]:
+        """Ghi chú của một người trong một dự án."""
+        return list(await self.repository.list_active_by_project(project_id, user_id))
 
     async def get_note(self, note_id: UUID, user_id: UUID) -> Note | None:
         return await self.repository.get_active_by_id_and_user(note_id, user_id)
@@ -169,7 +181,6 @@ class NoteService:
                 await self._publish_event(
                     "note.updated",
                     user_id=user_id,
-                    workspace_id=updated.workspace_id,
                     payload=NoteUpdatedPayload(
                         note_id=updated.id,
                         version=updated.version,
@@ -216,7 +227,6 @@ class NoteService:
             await self._publish_event(
                 "note.updated",
                 user_id=user_id,
-                workspace_id=final_note.workspace_id,
                 payload=NoteUpdatedPayload(
                     note_id=final_note.id,
                     version=final_note.version,
@@ -275,7 +285,6 @@ class NoteService:
             await self._publish_event(
                 "note.updated",
                 user_id=user_id,
-                workspace_id=final_note.workspace_id,
                 payload=NoteUpdatedPayload(
                     note_id=final_note.id,
                     version=final_note.version,
@@ -286,13 +295,11 @@ class NoteService:
 
     async def soft_delete(self, note_id: UUID, user_id: UUID) -> bool:
         deleted_ids: list[UUID] = []
-        workspace_by_id: dict[UUID, UUID] = {}
         async with self.session.begin():
             notes = await self.repository.list_active_by_user(user_id)
             children_by_parent: dict[UUID | None, list[UUID]] = {}
             for note in notes:
                 children_by_parent.setdefault(note.parent_note_id, []).append(note.id)
-                workspace_by_id[note.id] = note.workspace_id
 
             to_delete: list[UUID] = []
             stack = [note_id]
@@ -315,7 +322,6 @@ class NoteService:
             await self._publish_event(
                 "note.deleted",
                 user_id=user_id,
-                workspace_id=workspace_by_id.get(deleted_id),
                 payload=NoteDeletedPayload(note_id=deleted_id).model_dump(),
             )
 
@@ -336,7 +342,7 @@ class NoteService:
         return NoteResponse(
             id=note.id,
             user_id=note.user_id,
-            workspace_id=note.workspace_id,
+            project_id=note.project_id,
             parent_note_id=getattr(note, "parent_note_id", None),
             title=note.title,
             content=content,
@@ -363,7 +369,7 @@ class NoteService:
         return NoteSummary(
             id=note.id,
             user_id=note.user_id,
-            workspace_id=note.workspace_id,
+            project_id=note.project_id,
             parent_note_id=getattr(note, "parent_note_id", None),
             title=note.title,
             content_type=note.content_type,

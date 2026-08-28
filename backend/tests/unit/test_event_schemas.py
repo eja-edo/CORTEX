@@ -60,7 +60,7 @@ def test_event_serialization_round_trip():
         type="note.created",
         source="NoteService",
         user_id=uuid4(),
-        workspace_id=uuid4(),
+        project_id=uuid4(),
         payload={"note_id": str(uuid4())},
     )
 
@@ -74,7 +74,6 @@ def test_event_serialization_round_trip():
     restored = EventEnvelope.from_dict(event_dict)
     assert restored.event_id == original.event_id
     assert restored.user_id == original.user_id
-    assert restored.workspace_id == original.workspace_id
     assert restored.timestamp == original.timestamp
 
 
@@ -91,7 +90,7 @@ def test_event_envelope_timestamp_is_utc():
 def test_note_created_payload():
     payload = NoteCreatedPayload(
         note_id=uuid4(),
-        workspace_id=uuid4(),
+        project_id=uuid4(),
         title="Test Note",
         parent_note_id=uuid4(),
     )
@@ -188,7 +187,7 @@ def test_google_calendar_synced_payload_defaults():
 
 def test_payload_validation_error_missing_required_field():
     with pytest.raises(ValidationError):
-        NoteCreatedPayload(title="Test")  # missing note_id/workspace_id
+        NoteCreatedPayload(title="Test")  # thiếu note_id
 
 
 @pytest.mark.parametrize("event_type", list(EVENT_PAYLOAD_REGISTRY.keys()))

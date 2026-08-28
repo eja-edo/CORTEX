@@ -95,7 +95,7 @@ async def chat(
             message=payload.message,
             model=payload.model,
             conversation_id=payload.conversation_id,
-            workspace_id=payload.workspace_id,
+            project_id=payload.project_id,
             context=payload.context,
         )
         
@@ -151,7 +151,7 @@ async def stream_chat(
             async for chunk in service.handle_streaming_generator(
                 message=payload.message,
                 conversation_id=payload.conversation_id,
-                workspace_id=payload.workspace_id,
+                project_id=payload.project_id,
                 context=payload.context,
                 model=payload.model,
                 temperature=payload.temperature,
@@ -185,8 +185,12 @@ async def stream_chat(
         except GeneratorExit:
             pass
         except Exception as exc:
+            # `str(exc)` từng đi thẳng ra client ở đây. Người dùng nhận một
+            # traceback rút gọn thay vì một câu tiếng Việt, và kèm theo đó
+            # là tên model, endpoint nội bộ, đôi khi cả mẩu payload — thứ
+            # không nên rời khỏi server. Chi tiết ở lại trong log.
             logger.error(f"Error in stream chat: {exc}", exc_info=True)
-            yield f'data: {json.dumps({"event": "error", "message": str(exc)})}\n\n'
+            yield f'data: {json.dumps({"event": "error", "message": "Có lỗi khi xử lý tin nhắn của bạn. Bạn thử lại nhé."}, ensure_ascii=False)}\n\n'
     
     return StreamingResponse(
         stream_events(),
@@ -238,7 +242,6 @@ async def list_conversations(
         "conversations": [
             {
                 "id": str(conv.id),
-                "workspace_id": str(conv.workspace_id) if conv.workspace_id else None,
                 "title": conv.title or "Untitled Conversation",
                 "message_count": conv.message_count,
                 "has_summary": bool(conv.summary),
@@ -300,7 +303,6 @@ async def get_conversation(
     
     return {
         "id": str(conv.id),
-        "workspace_id": str(conv.workspace_id) if conv.workspace_id else None,
         "title": conv.title,
         "summary": conv.summary,
         "message_count": conv.message_count,

@@ -11,6 +11,8 @@ from app.models import (
     AttentionItemType,
     AttentionLevel,
     AttentionResponse,
+    ProjectOrigin,
+    ProjectStatus,
     TaskPriority,
     TaskStatus,
     UploadStatus,
@@ -96,6 +98,10 @@ class ScheduleResponse(BaseModel):
     """Schema for schedule response"""
     id: Optional[UUID] = None  # None for virtual instances
     user_id: UUID
+    # Nullable và thường là NULL. Sự kiện chỉ được gắn dự án khi có tín
+    # hiệu chắc chắn (DESIGN 4.2) — frontend dùng nó để tô màu, và NULL
+    # phải hiện ra như "chưa thuộc dự án", không phải như một dự án nữa.
+    project_id: Optional[UUID] = None
     title: str
     type: ScheduleType
     start_time: datetime
@@ -196,7 +202,16 @@ class TokenExchangeRequest(BaseModel):
 
 
 class NoteCreate(BaseModel):
-    workspace_id: UUID  # Required: which workspace this note belongs to
+    """Tạo ghi chú.
+
+    `project_id` là container của ghi chú (DESIGN 11.4). Nó tuỳ chọn, và
+    **thiếu nó là hợp lệ** — service khi đó rơi về dự án cá nhân,
+    cùng đáy thang mà task đã dùng (3.5 bước 3). Bắt buộc một container ở
+    tầng schema sẽ làm "ghi nhanh một ý" trở thành thao tác cần chọn chỗ
+    trước, và đó là cách chắc nhất để không ai ghi gì.
+    """
+
+    project_id: UUID | None = None
     content: str = Field(..., min_length=1, max_length=MAX_NOTE_CONTENT_LENGTH)
     content_type: str = Field(default="markdown", max_length=20)
     parent_note_id: UUID | None = None
@@ -440,7 +455,8 @@ class NoteSummary(BaseModel):
 
     id: UUID
     user_id: UUID
-    workspace_id: UUID | None
+    # Container của ghi chú (DESIGN 11.4).
+    project_id: UUID | None
     parent_note_id: UUID | None
     title: str
     content_type: str
@@ -458,7 +474,8 @@ class NoteResponse(BaseModel):
 
     id: UUID
     user_id: UUID
-    workspace_id: UUID | None
+    # Container của ghi chú (DESIGN 11.4).
+    project_id: UUID | None
     parent_note_id: UUID | None
     title: str
     content: str
@@ -619,6 +636,11 @@ class TaskCreate(BaseModel):
     due_date: datetime | None = None
     priority: TaskPriority | None = None
     description: str | None = Field(default=None, max_length=10000)
+    # Optional on the wire, never null on the row. The stored column is
+    # NOT NULL; leaving this unset just means the caller has no opinion and
+    # `ProjectService.resolve_for_task` picks — the event's project, else
+    # the personal project (DESIGN 3.5).
+    project_id: UUID | None = None
     related_event_id: UUID | None = None
     parent_task_id: UUID | None = None
     source_conversation_id: UUID | None = None
@@ -664,6 +686,9 @@ class TaskResponse(BaseModel):
 
     id: UUID
     user_id: UUID
+    # Không nullable: mọi task thuộc đúng một project (DESIGN 3.3).
+    # Frontend dùng trường này để tô màu và để lọc.
+    project_id: UUID
     title: str
     status: TaskStatus
     due_date: datetime | None
@@ -683,6 +708,177 @@ class TaskResponse(BaseModel):
     is_exception: bool = False
     created_at: datetime
     updated_at: datetime
+
+
+class ProjectCreate(BaseModel):
+    """Tạo tay — **lối phụ, không phải cửa chính** (DESIGN 9.1).
+
+    Cửa chính là 4.1: một channel Mezon có việc thì tự thành dự án. Endpoint
+    này tồn tại cho trường hợp người dùng biết chính xác họ muốn gì và
+    không có channel nào — và cho `create_project` của agent, vốn bị hạn
+    chế đúng vào tình huống người dùng nói thẳng tên và ý định (9.2).
+
+    Không nhận `source_channel_id`: neo một dự án vào channel là việc của
+    quy tắc suy ra, không phải của người dùng gõ tay một chuỗi id.
+    """
+
+    name: str = Field(..., min_length=1, max_length=255)
+    deadline: datetime | None = None
+
+
+class ProjectUpdate(BaseModel):
+    """Sửa `name`, `deadline`, `status`. Tất cả tuỳ chọn.
+
+    `deadline` dùng `Field(default=...)` chứ không mặc định `None` ngầm, vì
+    ở đây `None` là một giá trị **có nghĩa** — "bỏ hạn" — khác hẳn với
+    "không nhắc tới hạn". `model_fields_set` là thứ phân biệt hai cái, và
+    service đọc nó (xem `ProjectService.update`).
+    """
+
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    deadline: datetime | None = None
+    status: ProjectStatus | None = None
+
+
+class ProjectResponse(BaseModel):
+    """Một dự án kèm số liệu tóm tắt — DESIGN 9.1.
+
+    Số liệu đi kèm chứ không nằm ở endpoint riêng: mọi chỗ hiển thị một dự
+    án đều cần chúng cùng lúc (bộ chuyển dự án, màn Việc, `list_projects`
+    của agent), và tách ra chỉ tạo N+1 ở phía client.
+
+    `risk` là `project_risk` (7.1) — cùng con số đã xếp hạng màn Hôm nay,
+    nên hai bề mặt không thể nói hai điều khác nhau về cùng một dự án.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    status: ProjectStatus
+    origin: ProjectOrigin
+    # Suy ra từ `max(due_date)` mỗi ngày một lần, trừ khi người dùng khoá
+    # (DESIGN 4.3). `None` là hợp lệ và phổ biến — dự án cá nhân **luôn**
+    # `None`, và đó là bất biến chịu lực ở 3.4.
+    deadline: datetime | None
+    deadline_is_manual: bool
+    # Channel Mezon của dự án. Frontend không hiển thị nó; nó có mặt để
+    # trả lời "nhắc cấp dự án sẽ về đâu" (8.1) mà không phải đoán.
+    source_channel_id: str | None
+    open_task_count: int
+    completed_task_count: int
+    member_count: int
+    risk: float
+    created_at: datetime
+    updated_at: datetime
+
+
+class TaskProjectUpdate(BaseModel):
+    """Chuyển một task sang dự án khác — `PATCH /tasks/{id}/project`.
+
+    Cố ý là endpoint riêng chứ không phải một trường trong `TaskUpdate`:
+    đổi dự án ghi thêm một nhãn cho 4.4, còn sửa tiêu đề thì không. Trộn
+    hai thứ vào một đường ghi nghĩa là mọi lần sửa tiêu đề đều phải đi qua
+    nhánh quyết định "đây có phải một lượt sửa quy gán không".
+    """
+
+    project_id: UUID
+
+
+class ScheduleProjectUpdate(BaseModel):
+    """Gán một chuỗi sự kiện vào dự án — `PATCH /schedules/{id}/project`.
+
+    `None` gỡ liên kết. Chỉ hợp lệ trên hàng template (DESIGN 3.2): đặt lên
+    occurrence exception thì một chuỗi 30 lần lặp sinh 30 hàng cùng project
+    và quy tắc suy ra ở 3.5 bước 2 sẽ trôi.
+    """
+
+    project_id: UUID | None
+
+
+class ScheduleProjectUpdateResponse(BaseModel):
+    """Kết quả gán chuỗi, kèm **số task cũ bị ảnh hưởng**.
+
+    Gán chuỗi **không** tự đổi project của các task đã tạo từ nó (DESIGN
+    3.5) — task đã có project riêng, ghi đè hàng loạt là hành vi phá hoại.
+    Con số này để UI hỏi *"chuyển N việc cũ sang theo không?"* thay vì làm
+    im lặng rồi để người dùng phát hiện sau.
+    """
+
+    schedule_id: UUID
+    project_id: UUID | None
+    affected_task_count: int
+
+
+class InternalTaskItem(BaseModel):
+    """Một action item từ bot họp — `docs/DESIGN.md` mục 9.1.
+
+    Mọi trường định danh đều **tuỳ chọn trừ `title`**, và mỗi cái vắng mặt
+    làm hệ thống lùi một nấc chứ không làm nó hỏng:
+
+    - không `assignee_*` → item bị bỏ qua và báo lại (P7: không đoán người);
+    - không `source_channel_id` → không có dự án từ channel, rơi về thang
+      3.5 (dự án của sự kiện, rồi dự án cá nhân);
+    - không `provider_event_id` → task không gắn cuộc họp nào, và đó là
+      trạng thái bình thường của phần lớn task.
+
+    `external_id` là thứ duy nhất nên coi là bắt buộc trên thực tế dù schema
+    cho phép thiếu: không có nó, mỗi lần webhook được gửi lại sẽ đẻ một bản
+    sao, và bản sao không bị dedup của Attention Gate gộp.
+    """
+
+    title: str = Field(..., min_length=1, max_length=255)
+    external_id: str | None = Field(
+        default=None,
+        max_length=255,
+        description="Id của action item ở hệ thống nguồn. Bỏ qua item đã nhận.",
+    )
+    assignee_mezon_user_id: str | None = Field(
+        default=None,
+        description="Người nhận việc, theo Mezon user id. Phải là liên kết đã xác minh.",
+    )
+    assignee_user_id: UUID | None = Field(
+        default=None, description="Người nhận theo Cortex user id, nếu bên gửi đã biết."
+    )
+    source_channel_id: str | None = Field(
+        default=None,
+        description="Channel Mezon cuộc họp được đăng vào — danh tính dự án (QĐ-2).",
+    )
+    source_channel_name: str | None = Field(
+        default=None, description="Tên channel, dùng đặt tên dự án khi tạo lười."
+    )
+    provider_event_id: str | None = Field(
+        default=None, description="Id sự kiện Google của cuộc họp, để ghi nguồn gốc."
+    )
+    due_date: datetime | None = None
+    priority: TaskPriority | None = None
+    description: str | None = Field(default=None, max_length=10000)
+
+
+class InternalTaskBatch(BaseModel):
+    """Cả cuộc họp một lần.
+
+    Lô chứ không phải từng item, vì đó là hình dạng dữ liệu thật: bot chốt
+    biên bản rồi đẩy toàn bộ action item. `MAX_ITEMS` chặn một biên bản
+    hỏng biến thành vài nghìn task.
+    """
+
+    items: list[InternalTaskItem] = Field(..., min_length=1, max_length=100)
+
+
+class InternalTaskItemResult(BaseModel):
+    external_id: str | None
+    task_id: UUID | None
+    created: bool
+    # `None` nghĩa là vào được. Có giá trị thì bot cần nói lại với người
+    # dùng ở channel, thay vì im lặng đánh rơi việc.
+    skipped_reason: str | None
+
+
+class InternalTaskBatchResult(BaseModel):
+    created_count: int
+    skipped_count: int
+    items: list[InternalTaskItemResult]
 
 
 class TaskRejectionCheck(BaseModel):
@@ -963,7 +1159,6 @@ class UploadInitRequest(BaseModel):
     # Set 0 for live streaming mode when final size/parts are unknown at init time.
     total_parts: int = Field(default=0, ge=0)
     total_size: int = Field(default=0, ge=0)
-    workspace_id: UUID | None = Field(default=None, description="Optional: workspace to associate uploaded asset with")
 
 
 class UploadInitResponse(BaseModel):
@@ -996,7 +1191,6 @@ class UploadPartConfirmResponse(BaseModel):
 
 class UploadCompleteRequest(BaseModel):
     upload_id: UUID
-    workspace_id: UUID | None = Field(default=None, description="Workspace to assign asset to. If not provided, uses personal workspace.")
     # Required for live streaming mode where init total_parts == 0.
     total_parts: int | None = Field(default=None, ge=1)
     total_size: int | None = Field(default=None, ge=1)
@@ -1047,7 +1241,7 @@ class UploadAccessUrlResponse(BaseModel):
 
 
 class AssetCreate(BaseModel):
-    workspace_id: UUID  # Required: which workspace this asset belongs to
+    project_id: UUID | None = None
     type: AssetType
     title: str | None = Field(default=None, max_length=255)
     description: str | None = None
@@ -1067,7 +1261,7 @@ class AssetResponse(BaseModel):
 
     id: UUID
     user_id: UUID
-    workspace_id: UUID
+    project_id: UUID | None = None
     type: AssetType
     status: AssetStatus
     title: str | None
@@ -1154,7 +1348,7 @@ class AgentChatRequest(BaseModel):
     """Request body for agent chat endpoint."""
     message: str = Field(..., min_length=1, max_length=5000, description="User message")
     conversation_id: UUID | None = Field(default=None, description="Existing conversation ID, or null to start new")
-    workspace_id: UUID | None = Field(default=None, description="Optional workspace context")
+    project_id: UUID | None = Field(default=None, description="Dự án đang mở, nếu có")
     context: dict | None = Field(default=None, description="Structured context (pills, runtime info) to include for LLM but not display as user text")
     model: str | None = Field(default=None, description="Model id to run this turn on. Omitted, 'auto', or an unknown id all mean the default model — see ModelClient._resolve")
     temperature: float | None = Field(default=None, ge=0.0, le=2.0, description="Sampling temperature override")

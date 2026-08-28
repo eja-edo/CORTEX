@@ -5,8 +5,8 @@ permission checking, audit logging, undo snapshots, and event publishing.
 Architecture:
   Command → CommandRegistry.execute() → Handler → Result
               ├─ Validate args (Pydantic)
-              ├─ Check permission (workspace role, or ownership for
-              │  domains without workspace_id — see _check_permission)
+              ├─ Check permission (project membership, or ownership for
+              │  domains without a container — see _check_permission)
               ├─ Execute handler
               ├─ Create snapshot (if revertable)
               ├─ Log audit trail
@@ -197,9 +197,11 @@ class CommandRegistry:
         Check if the requesting user may execute this command.
 
         - READ: always allowed.
-        - WRITE/ADMIN + `command.workspace_id` set: workspace role check via
-          WorkspacePermission (editor for WRITE, owner for ADMIN).
-        - WRITE/ADMIN + no `workspace_id` (domains without a workspace concept,
+        - WRITE/ADMIN + `command.project_id` set: membership check via
+          `ProjectPermission`. Không có bậc vai: `ProjectMember` cố ý không
+          có `role` (QĐ-1) vì "ai được đọc tài liệu" và "ai chịu trách
+          nhiệm việc" là hai câu hỏi khác nhau — xem `project_permission.py`.
+        - WRITE/ADMIN + no scope at all (domains without a container,
           e.g. Schedule — the model only has `user_id`): `command.requested_by`
           is a required field on `Command` (always populated from
           `ctx.user_id`, never from LLM/tool args), so there is always an
@@ -211,27 +213,18 @@ class CommandRegistry:
             PermissionError: if the check fails.
         """
         from app.database import SessionLocal
-        from app.services.workspace_permission import WorkspacePermission
+        from app.services.project_permission import ProjectPermission
 
         if handler_def.permission_scope == PermissionScope.READ:
             return
 
-        if command.workspace_id is not None:
+        if command.project_id is not None:
             with SessionLocal() as sync_db:
-                member = WorkspacePermission.get_member(command.workspace_id, command.requested_by, sync_db)
-                if member is None:
+                if not ProjectPermission.is_member(command.project_id, command.requested_by, sync_db):
                     raise PermissionError(
-                        f"Permission denied: user {command.requested_by} is not a member of workspace {command.workspace_id}"
+                        f"Permission denied: user {command.requested_by} is not a member of "
+                        f"project {command.project_id}"
                     )
-                if handler_def.permission_scope == PermissionScope.WRITE:
-                    if member.role.value not in ("owner", "editor"):
-                        raise PermissionError(f"Permission denied: editor access required for {command.command_name}")
-                elif handler_def.permission_scope == PermissionScope.ADMIN:
-                    if member.role.value != "owner":
-                        raise PermissionError(f"Permission denied: owner access required for {command.command_name}")
-        # else: no workspace_id — see docstring; requested_by being present (guaranteed
-        # by the Command schema) is the only thing enforceable at this layer.
-
         logger.debug(f"Permission granted: {command.command_name}", extra={"user_id": str(command.requested_by)})
 
     async def _create_snapshot(self, command: Command, result_data: dict, ctx: ToolContext) -> str:
@@ -265,7 +258,7 @@ class CommandRegistry:
                 "command_id": command.command_id,
                 "command_name": command.command_name,
                 "user_id": str(command.requested_by),
-                "workspace_id": str(command.workspace_id) if command.workspace_id else None,
+                "project_id": str(command.project_id) if command.project_id else None,
                 "conversation_id": str(command.conversation_id) if command.conversation_id else None,
                 "status": command.status.value,
                 "duration_ms": command.duration_ms,
@@ -287,7 +280,6 @@ class CommandRegistry:
                 type=f"command.{command.command_name}",
                 source="CommandRegistry",
                 user_id=command.requested_by,
-                workspace_id=command.workspace_id,
                 conversation_id=command.conversation_id,
                 correlation_id=command.correlation_id,
                 payload={

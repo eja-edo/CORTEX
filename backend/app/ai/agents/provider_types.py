@@ -40,6 +40,11 @@ class GenerationConfig:
 @dataclass
 class ProviderResponse:
     content: str | None = None
+    # Một số model suy luận sau gateway OpenAI-compatible trả lời trong
+    # `reasoning_content` và để `content` rỗng. `ProviderStreamChunk` đã có
+    # trường này từ đầu; nhánh không-stream thì không, nên câu trả lời rơi
+    # mất im lặng — xem `_openai_response_to_provider`.
+    reasoning: str | None = None
     tool_calls: list[ToolCall] | None = None
     finish_reason: str | None = None
     usage: dict[str, Any] | None = None

@@ -25,9 +25,26 @@ from sqlalchemy import delete, select
 from app.ai.agents.tool_context import ToolContext
 from app.commands.registry import get_command_registry
 from app.events.event_bus import EventBus, reset_event_bus
-from app.models import Note, Schedule, User, WorkspaceMember
+from app.models import Note, Schedule, User
 
 TEST_USER_ID = UUID("73552833-a6de-40a1-bb69-6e034ca75460")
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _seeded_user():
+    """Tài khoản dev mà tệp này hardcode — dựng nếu DB không còn nó.
+
+    Xem `tests/integration/seeded_user.py`: giả định "hàng này luôn có sẵn"
+    đã sai một lần và làm 120 test đỏ cùng lúc.
+    """
+    from app.database_async import make_async_sessionmaker
+    from tests.integration.seeded_user import ensure_seeded_user
+
+    engine, session_maker = make_async_sessionmaker()
+    async with session_maker() as db:
+        await ensure_seeded_user(db)
+    await engine.dispose()
+
 TEST_WORKSPACE_ID = UUID("4a31721d-13d1-4292-b89e-5838848bac8b")
 
 
@@ -70,8 +87,23 @@ def sync_db():
 
 
 @pytest_asyncio.fixture
-async def ctx(async_db):
-    context = ToolContext(user_id=TEST_USER_ID, async_db=async_db, workspace_id=TEST_WORKSPACE_ID)
+async def seeded_project(async_db):
+    """Dự án của `TEST_USER_ID`, tạo lười như đường thật làm.
+
+    Không hardcode một id: dự án cá nhân sinh ra lần đầu có người cần nó
+    (DESIGN 3.4), nên fixture đi qua đúng cửa đó thay vì cấy sẵn một hàng —
+    một fixture đi đường khác với production là một fixture nói dối.
+    """
+    from app.services.projects import ProjectService
+
+    project = await ProjectService(async_db).get_or_create_personal(TEST_USER_ID)
+    await async_db.commit()
+    return project.id
+
+
+@pytest_asyncio.fixture
+async def ctx(async_db, seeded_project):
+    context = ToolContext(user_id=TEST_USER_ID, async_db=async_db, project_id=seeded_project)
     yield context
     context.close()
 
@@ -86,7 +118,22 @@ async def other_user_id(async_db):
     async_db.add(user)
     await async_db.commit()
     yield user.id
-    await async_db.execute(delete(WorkspaceMember).where(WorkspaceMember.user_id == user.id))
+    # Dọn theo đúng thứ tự FK. Dự án cá nhân giờ được tạo lười cho bất kỳ
+    # ai ghi một ghi chú không kèm ngữ cảnh, nên một tài khoản dùng một lần
+    # có thể đã sở hữu một dự án — và `projects.owner_id` chặn việc xoá user.
+    from sqlalchemy import text as _sql
+
+    from app.models import Note as NoteModel, Project, ProjectMember
+
+    # `action_history` cũng trỏ vào user: tài khoản này giờ đi qua tầng
+    # command (ghi audit + snapshot hoàn tác), thứ mà bản workspace của
+    # test không chạm tới.
+    await async_db.execute(
+        _sql("DELETE FROM action_history WHERE user_id = :uid"), {"uid": user.id}
+    )
+    await async_db.execute(delete(NoteModel).where(NoteModel.user_id == user.id))
+    await async_db.execute(delete(ProjectMember).where(ProjectMember.user_id == user.id))
+    await async_db.execute(delete(Project).where(Project.owner_id == user.id))
     await async_db.execute(delete(User).where(User.id == user.id))
     await async_db.commit()
 
@@ -116,11 +163,13 @@ async def test_create_note_tool_response_shape_unchanged(ctx):
     result = await create_note_handler({"content": "Hello from migrated tool", "style_color": "blue"}, ctx)
 
     try:
-        # Exact key set the pre-migration tool returned — no "result"
-        # wrapper, no leaked "prev_state"/"title".
-        assert set(result.keys()) == {"id", "workspace_id", "created_at", "action_id", "revert_hint", "success"}
+        # Bộ khoá chính xác tool trả về — không bọc "result", không rò
+        # "prev_state"/"title". `workspace_id` đã đổi thành `project_id`:
+        # container của ghi chú giờ là dự án (DESIGN 11.4), và trả về khoá
+        # cũ sẽ nói với agent về một khái niệm không còn ở đâu trong UI.
+        assert set(result.keys()) == {"id", "project_id", "created_at", "action_id", "revert_hint", "success"}
         assert result["success"] is True
-        assert result["workspace_id"] == str(TEST_WORKSPACE_ID)
+        assert result["project_id"] == str(ctx.project_id)
         assert result["action_id"] is not None
         assert "hoàn tác" in result["revert_hint"]
     finally:
@@ -142,24 +191,48 @@ async def test_create_note_tool_uses_style_color(ctx):
 
 
 @pytest.mark.asyncio
-async def test_create_note_tool_permission_denied_for_viewer(async_db, other_user_id):
+async def test_create_note_tool_refuses_a_project_you_are_not_in(
+    async_db, other_user_id, seeded_project
+):
+    """Tính chất bảo mật thật, giữ nguyên qua lần đổi container.
+
+    Bản workspace của test này kiểm hai mức (viewer bị chặn, người ngoài bị
+    chặn). `ProjectMember` cố ý **không có `role`** (QĐ-1), nên chỉ còn một
+    mức — và đó là mức quan trọng: không phải thành viên thì không ghi được.
+    Không có nhánh này, `project_id` trở thành cách ghi vào dự án người khác
+    chỉ bằng cách đoán một UUID.
+    """
     from app.ai.tools.create_note import create_note_handler
 
-    await _add_member(async_db, TEST_WORKSPACE_ID, other_user_id, "viewer")
-    other_ctx = ToolContext(user_id=other_user_id, async_db=async_db, workspace_id=TEST_WORKSPACE_ID)
+    other_ctx = ToolContext(
+        user_id=other_user_id, async_db=async_db, project_id=seeded_project
+    )
 
     with pytest.raises(PermissionError):
         await create_note_handler({"content": "Should not be created"}, other_ctx)
 
 
 @pytest.mark.asyncio
-async def test_create_note_tool_permission_denied_for_non_member(async_db, other_user_id):
+async def test_create_note_tool_falls_back_to_the_personal_project(async_db, other_user_id):
+    """Không có ngữ cảnh dự án là trạng thái **bình thường**, không phải lỗi.
+
+    Chat qua DM Mezon không có dự án nào đang mở. Bản trước ném lỗi ở đây,
+    nghĩa là agent không ghi được ghi chú nào ở đúng bề mặt hay dùng nhất.
+    """
     from app.ai.tools.create_note import create_note_handler
+    from app.models import Project, ProjectOrigin
 
-    other_ctx = ToolContext(user_id=other_user_id, async_db=async_db, workspace_id=TEST_WORKSPACE_ID)
+    other_ctx = ToolContext(user_id=other_user_id, async_db=async_db)
+    result = await create_note_handler({"content": "Ghi nhanh một ý"}, other_ctx)
 
-    with pytest.raises(PermissionError):
-        await create_note_handler({"content": "Should not be created"}, other_ctx)
+    try:
+        note = await async_db.get(Note, UUID(result["id"]))
+        project = await async_db.get(Project, note.project_id)
+        assert project.origin is ProjectOrigin.PERSONAL
+        assert project.owner_id == other_user_id
+    finally:
+        await async_db.execute(delete(Note).where(Note.id == UUID(result["id"])))
+        await async_db.commit()
 
 
 @pytest.mark.asyncio

@@ -15,9 +15,18 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.config import settings
 from app.database import get_db
+from app.database_async import get_async_db
 from app.models import Asset, AssetStatus, AttentionItemType
+from app.schemas import (
+    InternalTaskBatch,
+    InternalTaskBatchResult,
+    InternalTaskItemResult,
+)
+from app.services.task_ingest import TaskIngestService
 from app.services.attention_gate import request_attention_sync
 from app.core.internal_auth import verify_internal_key, get_internal_user, InternalUser
 from app.utils.logger import get_logger
@@ -188,6 +197,89 @@ def create_notification_internal(
     """Deprecated alias for /internal/attention/request, kept for any
     caller not yet migrated. Routes through the same Attention Gate."""
     return _create_attention_request(payload, db)
+
+
+@router.post("/tasks", response_model=InternalTaskBatchResult)
+async def ingest_tasks_internal(
+    payload: InternalTaskBatch,
+    _: None = Depends(verify_internal_key),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Bot họp đẩy action item vào — `docs/DESIGN.md` mục 9.1, tầng 1 của 1.1.
+
+    Cortex **không tự trích xuất** action item (1.4): bot họp đã làm khâu
+    đó, và cạnh tranh nó là tự chọn trận thua. Endpoint này chỉ nhận về,
+    gom theo dự án, rồi giao cho tầng 3 quyết định lúc nào nói.
+
+    **Luôn trả 200 kể cả khi có item bị bỏ qua**, và đó là chủ ý. Một người
+    trong cuộc họp chưa liên kết Mezon là chuyện bình thường, không phải
+    lỗi của bên gửi; trả 4xx sẽ khiến bot thử lại cả lô mãi mãi cho một
+    tình huống không lần thử lại nào sửa được. Item nào không vào được thì
+    nằm trong `items[].skipped_reason` để bot nói lại ở channel.
+
+    Không có bước xác nhận: task vào thẳng `todo`. `pending_confirm` dành
+    cho thứ **Cortex tự đoán** từ hội thoại — action item ở đây đã qua mắt
+    người trong cuộc họp rồi, bắt xác nhận lại là bắt làm hai lần một việc.
+    """
+    result = await TaskIngestService(db).ingest(payload.items)
+
+    logger.info(
+        "internal task ingest: %d created, %d skipped",
+        result.created_count,
+        result.skipped_count,
+    )
+    return InternalTaskBatchResult(
+        created_count=result.created_count,
+        skipped_count=result.skipped_count,
+        items=[
+            InternalTaskItemResult(
+                external_id=item.external_id,
+                task_id=item.task_id,
+                created=item.created,
+                skipped_reason=item.skipped_reason,
+            )
+            for item in result.items
+        ],
+    )
+
+
+class GateBypassUpdate(BaseModel):
+    """Gán một người dùng vào nhóm A hoặc B của phép thử (DESIGN 12.2)."""
+
+    enabled: bool
+
+
+@router.patch("/users/{user_id}/gate-bypass", include_in_schema=False)
+async def set_gate_bypass_internal(
+    user_id: UUID,
+    payload: GateBypassUpdate,
+    _: None = Depends(verify_internal_key),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Bật/tắt Attention Gate cho một người dùng — điều khiển phép thử A/B.
+
+    **Cố ý là endpoint nội bộ, không phải một mục trong trang cài đặt.**
+    Đây là biến điều khiển của một thí nghiệm, không phải một tuỳ chọn sản
+    phẩm: cho người dùng thấy nó là mời họ tự đổi nhóm giữa chừng, và phép
+    thử đo một thứ không còn ý nghĩa. Nó cũng không phải thứ nên tồn tại
+    lâu dài — khi hai con số ở 12.3 đọc xong, cột này hết việc.
+    """
+    from app.models import UserPreferences
+
+    prefs = await db.get(UserPreferences, user_id)
+    if prefs is None:
+        prefs = UserPreferences(user_id=user_id)
+        db.add(prefs)
+    prefs.gate_bypass = payload.enabled
+    await db.commit()
+
+    logger.info(
+        "gate_bypass set to %s for user %s (A/B group %s)",
+        payload.enabled,
+        user_id,
+        "A — nhắc ngây thơ" if payload.enabled else "B — qua Gate",
+    )
+    return {"user_id": str(user_id), "gate_bypass": payload.enabled}
 
 
 @router.get("/health")

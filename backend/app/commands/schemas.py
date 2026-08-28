@@ -50,7 +50,10 @@ class Command(BaseModel):
 
     # Context
     requested_by: UUID = Field(..., description="User ID (NEVER from LLM)")
-    workspace_id: Optional[UUID] = Field(None, description="Workspace context")
+    # Ngữ cảnh dự án. `None` là bình thường: task và schedule là của một
+    # người, không thuộc container nào, và chúng đi nhánh ownership của
+    # `CommandRegistry._check_permission`.
+    project_id: Optional[UUID] = Field(None, description="Project context")
     conversation_id: Optional[UUID] = Field(None, description="Conversation context")
 
     # Permission & Audit

@@ -50,7 +50,7 @@ async def async_db(user_id):
 
 async def _make_conversation(db, user_id) -> AgentConversation:
     store = ConversationStore(db)
-    conv = await store.get_or_create_conversation(user_id=user_id, workspace_id=None)
+    conv = await store.get_or_create_conversation(user_id=user_id)
     await db.commit()
     return conv
 

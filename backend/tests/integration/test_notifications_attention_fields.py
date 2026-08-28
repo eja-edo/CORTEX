@@ -14,6 +14,7 @@ import pytest_asyncio
 from sqlalchemy import delete
 
 from app.database_async import make_async_sessionmaker
+from tests.project_helper import personal_project_id, personal_project_id_sync
 from app.models import AttentionItemType, AttentionLog, Notification, Task, TaskPriority, TaskStatus
 from app.services.attention_gate import request_attention_async
 from app.services.notifications import create_notification_async
@@ -48,7 +49,7 @@ async def async_db(user_id):
 async def api_client(async_db, user_id):
     from app import app
     from app.database import SessionLocal, get_db
-    from app.dependencies import get_current_active_user
+    from app.dependencies import get_current_active_user, get_current_user_or_internal
 
     class _StubUser:
         id = user_id
@@ -61,6 +62,10 @@ async def api_client(async_db, user_id):
             db.close()
 
     app.dependency_overrides[get_current_active_user] = lambda: _StubUser()
+    # `/notifications` hỏi `get_current_user_or_internal`, không phải
+    # `get_current_active_user` — nó chấp nhận cả `X-Internal-Token`. Ghi đè
+    # thiếu cái này thì mọi request trả 401 và test đo nhầm thứ khác.
+    app.dependency_overrides[get_current_user_or_internal] = lambda: _StubUser()
     app.dependency_overrides[get_db] = _override_db
 
     transport = httpx.ASGITransport(app=app)
@@ -68,12 +73,14 @@ async def api_client(async_db, user_id):
         yield client
 
     app.dependency_overrides.pop(get_current_active_user, None)
+    app.dependency_overrides.pop(get_current_user_or_internal, None)
     app.dependency_overrides.pop(get_db, None)
 
 
 @pytest.mark.asyncio
 async def test_gated_notification_exposes_attention_fields_over_the_api(async_db, user_id, api_client):
     task = Task(
+        project_id=await personal_project_id(async_db, user_id),
         user_id=user_id, title=f"{TITLE_PREFIX}task", status=TaskStatus.TODO,
         due_date=YESTERDAY, priority=TaskPriority.URGENT,
     )

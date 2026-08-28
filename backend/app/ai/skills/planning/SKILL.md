@@ -24,6 +24,23 @@ The Plan skill turns a want into a structured, actionable plan. It is NOT just
 calendar management — it is goal planning. Use it whenever the user expresses
 a goal, desire, or long-term intention.
 
+### Where a goal lives
+
+**A goal is stored as a project.** Cortex has no separate goal entity — the
+thing this skill calls a Goal is a row in `projects`, and the milestones and
+checklist below are the tasks inside it.
+
+That has two practical consequences:
+
+* Before planning, `list_projects` — the user may already have a project for
+  this goal, and building a second plan beside it splits the same work in two.
+* When the plan is confirmed, its tasks belong to that project. Pass
+  `project_ref` on `create_task` so they land together instead of scattering
+  into the personal catch-all.
+
+The words the user reaches for — "mục tiêu", "goal", "kế hoạch X", "OKR",
+"đợt này" — all mean a project. Never tell them Cortex doesn't track goals.
+
 ### Core principle
 
 A good plan answers, in order:
