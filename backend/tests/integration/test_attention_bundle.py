@@ -323,3 +323,44 @@ async def test_occurrence_of_a_series_inherits_the_template_project(async_db, us
     notification = (await _notifications_of(async_db, user_id))[0]
     assert alpha.name in notification.title
     assert notification.payload["project_id"] == str(alpha.id)
+
+
+@pytest.mark.asyncio
+async def test_project_scoped_reminder_is_released_to_its_channel_not_bundled(async_db, user_id):
+    """`project.slipping` bị giữ lại khi bận vẫn phải về channel dự án.
+
+    Mức nền của nó là `RECOMMEND`, không nằm trong `_CRITICAL_LEVELS`, nên
+    nó **thật sự** đi qua đường này mỗi lần Gate im vì người dùng đang họp.
+    Nếu nó bị gộp vào cụm cá nhân thì `reason_key` thành `attention.bundle`
+    (phạm vi `PERSONAL`) và cảnh báo của cả nhóm lặng lẽ về DM một người —
+    gộp được phép đổi *thời điểm*, không được đổi *người nhận*.
+    """
+    alpha = await _project(async_db, user_id, name="Alpha")
+
+    # Một nhắc cá nhân và một nhắc cấp dự án, cùng người, cùng dự án.
+    await _enqueue_task(async_db, user_id, await _task_in(async_db, user_id, alpha, title="a1"))
+    await enqueue_async(
+        async_db, user_id=user_id, item_type=AttentionItemType.PROJECT, item_id=alpha.id,
+        reason_key="project.slipping", title=f"{TITLE_PREFIX}Alpha đang chậm lại",
+        body="Còn 5 ngày · việc mở tăng từ 8 lên 12",
+        payload={"project_id": str(alpha.id), "source_channel_id": alpha.source_channel_id},
+        actions=[], attention_log_id=None,
+    )
+
+    # Hai lượt phát, không phải một cụm nuốt cả hai.
+    assert await flush_due_bundles(async_db) == 2
+
+    notifications = await _notifications_of(async_db, user_id)
+    assert len(notifications) == 2
+
+    slipping = next(n for n in notifications if n.reason_key == "project.slipping")
+    bundle = next(n for n in notifications if n.reason_key == BUNDLE_REASON_KEY)
+
+    # Cái cấp dự án giữ nguyên đường định tuyến của nó...
+    assert DeliveryPayload.from_notification(slipping).project_channel_id == alpha.source_channel_id
+    assert slipping.type == "project_slipping"
+    # ...và không bị hạ xuống mức của một cụm.
+    assert slipping.attention_level is not None
+    # Cái cá nhân vẫn về DM như cũ.
+    assert DeliveryPayload.from_notification(bundle).project_channel_id is None
+    assert len(bundle.payload["bundled_items"]) == 1

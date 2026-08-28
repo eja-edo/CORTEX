@@ -19,6 +19,12 @@ Gộp **theo** dự án không phải phát **vào** dự án: `BUNDLE_REASON_KE
 phạm vi `PERSONAL`, nên mọi cụm đều về DM (DESIGN 8.1). Xem chú thích ở
 `_compose_bundle`.
 
+Hệ quả của điều trên: **lời nhắc cấp dự án không được gộp.** Gộp đổi được
+thời điểm, không được đổi người nhận — mà một cụm `PERSONAL` thì về DM,
+còn `project.slipping` phải về channel của cả nhóm. `_split_by_scope` tách
+chúng ra và `_release_scoped_row` phát lại từng cái nguyên `reason_key`
+gốc, tức là nguyên đường định tuyến của nó.
+
 The bundle Notification itself does **not** go back through the Gate. It
 already *is* the Gate's output for those candidates — re-gating it would be
 asking "is it worth mentioning that I decided this was worth mentioning",
@@ -45,6 +51,7 @@ from app.models import (
     Schedule,
     Task,
 )
+from app.services.attention_reason_catalog import ReasonScope, base_level_for, scope_for
 from app.services.availability import is_user_busy
 from app.services.notifications import create_notification_async
 from app.utils.logger import get_logger
@@ -267,6 +274,75 @@ async def _pending_rows_for_user(session: AsyncSession, user_id: UUID) -> list[A
     return list((await session.execute(stmt)).scalars().all())
 
 
+def _split_by_scope(
+    rows: list[AttentionBundleQueue],
+) -> tuple[list[AttentionBundleQueue], list[AttentionBundleQueue]]:
+    """Tách `(hàng gộp được, hàng phải phát riêng)` theo phạm vi của reason.
+
+    Gộp tồn tại để giảm số lần làm phiền **một người**. Một reason phạm vi
+    `PROJECT` (`project.slipping`) không nói với một người — nó nói với cả
+    nhóm, qua channel dự án (DESIGN 8.1). Trộn nó vào cụm cá nhân là đổi
+    người nhận, không phải đổi thời điểm, và đó là thứ gộp không có quyền
+    làm.
+
+    Đây là một lỗi có thật, không phải phòng xa: `project.slipping` có mức
+    nền `RECOMMEND`, không nằm trong `_CRITICAL_LEVELS` của Gate, nên nó
+    **bị im khi bận** và đi qua đúng đường này. Trước khi có hàm này, cảnh
+    báo *"Alpha đang chậm lại"* mà Gate giữ lại trong lúc họp sẽ ra dưới
+    `reason_key='attention.bundle'` (phạm vi `PERSONAL`) và lặng lẽ về DM
+    của một người thay vì channel của cả nhóm. `project.will_miss` thoát
+    lỗi này chỉ vì mức nền của nó là `ASK` — tức là nhờ may, không nhờ
+    thiết kế.
+    """
+    personal: list[AttentionBundleQueue] = []
+    scoped: list[AttentionBundleQueue] = []
+    for row in rows:
+        if scope_for(row.reason_key) is ReasonScope.PROJECT:
+            scoped.append(row)
+        else:
+            personal.append(row)
+    return personal, scoped
+
+
+async def _release_scoped_row(
+    session: AsyncSession, row: AttentionBundleQueue, now: datetime
+) -> None:
+    """Phát lại một hàng phạm vi dự án **nguyên hình dạng của nó**.
+
+    Giữ `reason_key` gốc là điểm mấu chốt: đó là thứ duy nhất
+    `DeliveryPayload.project_channel_id` đọc để chọn channel. `payload`
+    gốc đi kèm nguyên vẹn vì `source_channel_id` nằm trong đó.
+
+    Hai chỗ phải xấp xỉ, và cả hai đều xấp xỉ về phía an toàn:
+
+    - `type` suy từ `reason_key` (`project.slipping` → `project_slipping`).
+      Bảng hàng đợi không lưu `type`; quy ước này đúng với mọi reason cấp
+      dự án đang có, và chỉ nhánh này dùng tới nó.
+    - Mức phát lấy mức **nền** của reason từ catalog. Mức thật lúc Gate
+      quyết định là `SILENT` và không được lưu lại. Mức nền là xấp xỉ trung
+      thực nhất — Gate đã kết luận "đáng nói, chỉ chưa phải lúc", nên phát
+      lại đúng chỗ nó bắt đầu.
+
+    `content` không có trong bảng hàng đợi; `_build_notification` tự dựng
+    một khối từ `body`. Cụm cá nhân mất chi tiết này từ lâu rồi và đây
+    không phải chỗ để sửa nó.
+    """
+    notification = await create_notification_async(
+        session,
+        user_id=row.user_id,
+        type=row.reason_key.replace(".", "_"),
+        title=row.title,
+        body=row.body or "",
+        actions=list(row.actions or []),
+        payload=dict(row.payload or {}),
+        reason_key=row.reason_key,
+        attention_level=base_level_for(row.reason_key),
+        attention_log_id=row.attention_log_id,
+    )
+    row.flushed_at = now
+    row.bundle_notification_id = notification.id
+
+
 def _group_by_project(
     rows: list[AttentionBundleQueue],
 ) -> dict[UUID | None, list[AttentionBundleQueue]]:
@@ -302,9 +378,10 @@ async def _project_names(session: AsyncSession, ids: list[UUID]) -> dict[UUID, s
 
 async def flush_due_bundles(session: AsyncSession) -> int:
     """Flush every user whose pending bundle is ready to go out (no longer
-    busy). Returns how many **bundles** went out this sweep — one user can
-    now produce several, one per dự án (DESIGN 7.2). The worker logs it,
-    tests assert on it.
+    busy). Returns how many **notification** went out this sweep — một
+    người có thể sinh ra nhiều, một cụm mỗi dự án (DESIGN 7.2) cộng với
+    mỗi lời nhắc cấp dự án được phát riêng (xem `_split_by_scope`). The
+    worker logs it, tests assert on it.
 
     One user at a time: a failure partway through (bad row, DB hiccup) must
     not roll back bundles for users who already succeeded in this same
@@ -326,7 +403,17 @@ async def flush_due_bundles(session: AsyncSession) -> int:
             if not rows:
                 continue
 
-            groups = _group_by_project(rows)
+            personal_rows, scoped_rows = _split_by_scope(rows)
+
+            for row in scoped_rows:
+                await _release_scoped_row(session, row, _naive_utcnow())
+                await session.commit()
+                flushed += 1
+
+            if not personal_rows:
+                continue
+
+            groups = _group_by_project(personal_rows)
             names = await _project_names(session, [pid for pid in groups if pid is not None])
 
             for project_id, group_rows in groups.items():
