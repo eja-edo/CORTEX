@@ -51,7 +51,7 @@ type RecordingsListProps = {
     recordingType?: 'screen' | 'audio' | null
     /** Called when user clicks "View Knowledge" on a processed asset */
     onViewKnowledge?: (assetId: string, assetTitle: string) => void
-    workspaceId?: string | null
+    projectId?: string | null
     onAssetChange?: () => void
 }
 
@@ -341,7 +341,7 @@ export function RecordingsList({
     requestWithAuth, recordings, playingId,
     onPlayServerVideo, onPlayServerAudio,
     activeStream, recordingType,
-    onViewKnowledge, workspaceId, onAssetChange,
+    onViewKnowledge, projectId, onAssetChange,
 }: RecordingsListProps) {
     const [assets, setAssets] = useState<AssetResponse[]>([])
     const [isLoadingAssets, setIsLoadingAssets] = useState(false)
@@ -372,8 +372,8 @@ export function RecordingsList({
         setIsLoadingAssets(true)
         setAssetError('')
         try {
-            const url = workspaceId 
-                ? `/assets/workspaces/${workspaceId}` 
+            const url = projectId 
+                ? `/assets/workspaces/${projectId}` 
                 : '/assets?limit=200&offset=0'
             const list = await requestWithAuth<AssetResponse[]>(url)
             list.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
@@ -383,7 +383,7 @@ export function RecordingsList({
         } finally {
             setIsLoadingAssets(false)
         }
-    }, [requestWithAuth, workspaceId])
+    }, [requestWithAuth, projectId])
 
     useEffect(() => {
         // eslint-disable-next-line react-hooks/set-state-in-effect

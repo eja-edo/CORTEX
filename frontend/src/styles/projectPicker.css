@@ -1,0 +1,143 @@
+/* ==========================================================================
+   Project picker — DESIGN 10.1 / 10.2
+
+   Một dropdown, hai vai trò, cùng một hình dạng:
+     · trong chi tiết việc  → sửa quy gán project ngay tại chỗ (10.1)
+     · trên đầu màn Việc    → chọn phạm vi của trang (10.2)
+
+   Cố ý không có gì hơn: không tìm kiếm, không nhóm, không kéo thả. Mục 10.2
+   dựng hàng rào quanh màn Việc vì mỗi thứ thêm vào đó là một bước về phía
+   sân đã thua (Todoist). Dropdown này chịu cùng hàng rào.
+
+   Dùng token của base.css nên hỗ trợ theme là tự động.
+   ========================================================================== */
+
+.project-picker {
+    position: relative;
+    display: inline-flex;
+    min-width: 0;
+}
+
+.project-picker-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    max-width: 220px;
+    padding: 3px 6px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+}
+
+.project-picker-trigger:hover:not(:disabled) {
+    background: var(--bg-hover);
+    border-color: var(--border);
+}
+
+.project-picker-trigger:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+.project-picker-trigger:disabled {
+    color: var(--text-disabled);
+    cursor: default;
+}
+
+.project-picker-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.project-picker-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 40;
+    min-width: 200px;
+    /* Trần chiều cao rồi cuộn, thay vì để danh sách đẩy trang dài ra: với
+       nhiều dự án, một menu cao bằng màn hình che mất chính thứ người dùng
+       đang sửa. */
+    max-height: 320px;
+    overflow-y: auto;
+    margin: 0;
+    padding: 4px;
+    list-style: none;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgb(0 0 0 / 12%);
+}
+
+.project-picker-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 8px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.project-picker-option:hover,
+.project-picker-option:focus-visible {
+    background: var(--bg-hover);
+    outline: none;
+}
+
+.project-picker-option.is-current {
+    background: var(--accent-light);
+    color: var(--accent);
+}
+
+.project-picker-option-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Số việc đang mở. Đứng cạnh tên vì nó là thứ giúp chọn đúng dự án khi hai
+   cái tên gần giống nhau — không phải một chỉ số để theo dõi. */
+.project-picker-count {
+    flex: none;
+    font-size: 11px;
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+}
+
+.project-picker-create {
+    color: var(--text-tertiary);
+}
+
+.project-picker-menu > li + li .project-picker-create {
+    margin-top: 4px;
+    border-top: 1px solid var(--border);
+    border-radius: 0 0 4px 4px;
+    padding-top: 8px;
+}
+
+/* Hàng tiêu đề của màn Việc: tiêu đề bên trái, phạm vi ngay cạnh nó. */
+.tasks-page-header-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.task-detail-modal-property--project {
+    gap: 4px;
+}

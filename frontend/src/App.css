@@ -20,6 +20,7 @@
 @import './styles/workflow-builder.css';
 @import './styles/today.css';
 @import './styles/tasksPage.css';
+@import './styles/projectPicker.css';
 @import './styles/notificationsPage.css';
 @import './styles/diff-review.css';
 @import './styles/toast.css';

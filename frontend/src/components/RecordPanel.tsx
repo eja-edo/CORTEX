@@ -56,7 +56,7 @@ type RecordPanelProps = {
     isVisible: boolean
     initialAssetId?: string | null
     onAssetViewed?: () => void
-    workspaceId?: string | null
+    projectId?: string | null
     onAssetChange?: () => void
 }
 
@@ -74,12 +74,12 @@ function formatDate(date: Date): string {
         ' ' + date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
 }
 
-export function RecordPanel({ requestWithAuth, isVisible, workspaceId, onAssetChange }: RecordPanelProps) {
+export function RecordPanel({ requestWithAuth, isVisible, projectId, onAssetChange }: RecordPanelProps) {
     const navigate = useNavigate()
-    const params = useParams<{ workspaceId: string }>()
+    const params = useParams<{ projectId: string }>()
     
     // Get workspace ID from URL params first, fallback to props (for page reload support)
-    const effectiveWorkspaceId = params.workspaceId || workspaceId
+    const effectiveProjectId = params.projectId || projectId
     const [recordings, setRecordings] = useState<Recording[]>([])
     const [isRecordingAudio, setIsRecordingAudio] = useState(false)
     const [isRecordingScreen, setIsRecordingScreen] = useState(false)
@@ -215,14 +215,14 @@ export function RecordPanel({ requestWithAuth, isVisible, workspaceId, onAssetCh
             const complete = await requestWithAuth<UploadCompleteResponse>('/upload/complete', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ upload_id: ctx.uploadId, workspace_id: effectiveWorkspaceId, total_parts: uploadedParts, total_size: totalSize }),
+                body: JSON.stringify({ upload_id: ctx.uploadId, workspace_id: effectiveProjectId, total_parts: uploadedParts, total_size: totalSize }),
             })
             return { status: 'uploaded' as const, objectKey: complete.object_key, assetId: complete.asset_id, error: undefined }
         } catch (err) {
             const message = err instanceof Error ? err.message : 'Live upload failed'
             return { status: 'failed' as const, objectKey: undefined, assetId: undefined, error: message }
         }
-    }, [enqueueBufferedUpload, requestWithAuth, effectiveWorkspaceId])
+    }, [enqueueBufferedUpload, requestWithAuth, effectiveProjectId])
 
     const startAudioRecording = useCallback(async () => {
         setError('')
@@ -565,14 +565,14 @@ export function RecordPanel({ requestWithAuth, isVisible, workspaceId, onAssetCh
             const complete = await requestWithAuth<UploadCompleteResponse>('/upload/complete', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ upload_id: uploadId, workspace_id: effectiveWorkspaceId }),
+                body: JSON.stringify({ upload_id: uploadId, workspace_id: effectiveProjectId }),
             })
             updateRecording(recordingId, rec => ({ ...rec, uploadState: 'uploaded', uploadProgress: 100, uploadedObjectKey: complete.object_key, uploadedAssetId: complete.asset_id, uploadError: undefined }))
         } catch (err) {
             const message = err instanceof Error ? err.message : 'Upload failed'
             updateRecording(recordingId, rec => ({ ...rec, uploadState: 'failed', uploadError: message }))
         }
-    }, [requestWithAuth, splitBlobIntoParts, updateRecording, uploadPartWithRetry, effectiveWorkspaceId])
+    }, [requestWithAuth, splitBlobIntoParts, updateRecording, uploadPartWithRetry, effectiveProjectId])
 
     return (
         <div className='record-workspace' style={{ display: isVisible ? undefined : 'none' }}>
@@ -654,7 +654,7 @@ export function RecordPanel({ requestWithAuth, isVisible, workspaceId, onAssetCh
                     activeStream={activeStream}
                     recordingType={recordingType}
                     onViewKnowledge={(assetId) => navigate(`/assets/${assetId}/knowledge`)}
-                    workspaceId={effectiveWorkspaceId}
+                    projectId={effectiveProjectId}
                     onAssetChange={onAssetChange}
                 />
             </div>

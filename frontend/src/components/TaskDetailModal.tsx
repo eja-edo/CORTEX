@@ -1,11 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
-import { CalendarDays, Circle, CheckCircle2, Clock3, Plus, Trash2, X, XCircle } from 'lucide-react'
+import { CalendarDays, Circle, CheckCircle2, Clock3, FolderKanban, Plus, Trash2, X, XCircle } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { Task, TaskPriority, TaskStatus } from '../types'
 import type { TaskDetailPatch } from './TaskDetailPopover'
 import { PriorityIcon } from './PriorityIcon'
 import { PriorityMenu } from './PriorityMenu'
 import { priorityLabel } from '../utils/taskPriority'
+import { ProjectPicker } from './ProjectPicker'
+import { useProjectStore } from '../stores/projectStore'
+import { strings } from '../i18n/strings'
+import { useToast } from '../hooks/useToast'
 import { DueDateEditor } from './DueDateEditor'
 import { MarkdownField } from './MarkdownField'
 import { TaskChecklistRow } from './TaskChecklistRow'
@@ -61,6 +65,39 @@ export function TaskDetailModal({
     } = useTaskChecklist(task.id)
     const { confirm, dialog } = useConfirmDialog()
     useEscapeToClose(onClose)
+
+    // DESIGN 10.1 — sửa quy gán project **ngay tại chỗ nhìn thấy nó sai**.
+    // Không có trang quản lý dự án để điều hướng sang, và sự vắng mặt đó là
+    // chủ ý: nó bỏ được một mục nav, và rút quãng đường sửa từ bốn bước
+    // xuống một. Mỗi lượt sửa là một nhãn cho DESIGN 4.4.
+    const projects = useProjectStore((state) => state.projects)
+    const fetchProjects = useProjectStore((state) => state.fetchAll)
+    const hasLoadedProjects = useProjectStore((state) => state.hasLoaded)
+    const moveTaskToProject = useProjectStore((state) => state.moveTask)
+    const createProject = useProjectStore((state) => state.create)
+    const [movingProject, setMovingProject] = useState(false)
+    const toast = useToast()
+
+    useEffect(() => {
+        if (!hasLoadedProjects) void fetchProjects()
+    }, [hasLoadedProjects, fetchProjects])
+
+    const handleMoveProject = async (projectId: string) => {
+        // Tên đọc **trước** khi gọi: chuyển việc ra khỏi dự án đang mở làm
+        // hàng của nó biến mất khỏi danh sách, modal unmount theo, và
+        // `projects` lúc đó đã là danh sách vừa nạp lại.
+        const name = projects.find((p) => p.id === projectId)?.name
+        setMovingProject(true)
+        try {
+            await moveTaskToProject(draft.id, projectId)
+            setDraft((d) => ({ ...d, project_id: projectId }))
+            if (name) toast.show({ kind: 'success', message: strings.projects.moved(name) })
+        } catch {
+            toast.show({ kind: 'error', message: strings.projects.moveFailed })
+        } finally {
+            setMovingProject(false)
+        }
+    }
 
     useEffect(() => {
         setDraft(task)
@@ -207,6 +244,22 @@ export function TaskDetailModal({
                                     onClose={() => setPriorityMenuOpen(false)}
                                 />
                             )}
+
+                            <div className="task-detail-modal-property task-detail-modal-property--project">
+                                <FolderKanban size={14} aria-hidden />
+                                <ProjectPicker
+                                    projects={projects}
+                                    value={draft.project_id}
+                                    onChange={(projectId) => void handleMoveProject(projectId)}
+                                    onCreate={(name) => {
+                                        void createProject(name).then((project) =>
+                                            handleMoveProject(project.id),
+                                        )
+                                    }}
+                                    disabled={movingProject}
+                                    label={strings.projects.moveLabel}
+                                />
+                            </div>
 
                             {onSetDueDate && (
                                 <div className="task-detail-modal-property">

@@ -13,7 +13,7 @@ function noteTitleFromMd(content: string): string {
 
 type ViewMode = 'split' | 'edit' | 'preview'
 
-interface WorkspaceNoteEditorProps {
+interface NoteEditorPaneProps {
     note: NoteItem
     onChange: (id: string, contentMd: string) => void
     onTitleChange?: (id: string, title: string) => void
@@ -24,14 +24,14 @@ interface WorkspaceNoteEditorProps {
     onReviewProposalResolved?: (noteId: string) => void
 }
 
-export function WorkspaceNoteEditor({
+export function NoteEditorPane({
     note,
     onChange,
     onTitleChange,
     blockEditingEnabled = false,
     reviewProposal,
     onReviewProposalResolved,
-}: WorkspaceNoteEditorProps) {
+}: NoteEditorPaneProps) {
     const [localMd, setLocalMd] = useState(note.contentMd)
     const [debouncedMd, setDebouncedMd] = useState(note.contentMd)
     const [localTitle, setLocalTitle] = useState(note.title || noteTitleFromMd(note.contentMd))

@@ -1,5 +1,5 @@
 /**
- * Route constants for workspace-centric routing
+ * Route constants for project-centric routing
  * 
  * Route structure:
  * /                          → GlobalHome (user dashboard)
@@ -7,15 +7,15 @@
  * /notifications             → Notifications
  * /settings                  → UserSettings
  * 
- * /w/:workspaceId            → Workspace landing (legacy alias for /schedule)
- * /w/:workspaceId/notes      → NotesList
- * /w/:workspaceId/notes/:id  → NoteEditor
- * /w/:workspaceId/records    → RecordsList
- * /w/:workspaceId/records/:assetId/knowledge → KnowledgeView
+ * /p/:projectId            → Project landing (legacy alias for /schedule)
+ * /p/:projectId/notes      → NotesList
+ * /p/:projectId/notes/:id  → NoteEditor
+ * /p/:projectId/records    → RecordsList
+ * /p/:projectId/records/:assetId/knowledge → KnowledgeView
  */
 
 export const ROUTES = {
-  // Global routes (no workspace context)
+  // Global routes (no project context)
   HOME: '/',
   /** "Hôm nay" — the product's main screen (2.7). */
   TODAY: '/today',
@@ -26,20 +26,20 @@ export const ROUTES = {
   NOTIFICATIONS: '/notifications',
   AUTH_CALLBACK: '/auth/callback',
 
-  // Workspace routes (require workspaceId)
-  WORKSPACE_BASE: '/w/:workspaceId',
-  WORKSPACE_NOTES: '/w/:workspaceId/notes',
-  WORKSPACE_NOTE: '/w/:workspaceId/notes/:noteId',
-  WORKSPACE_RECORDS: '/w/:workspaceId/records',
-  WORKSPACE_RECORD_KNOWLEDGE: '/w/:workspaceId/records/:assetId/knowledge',
-  WORKSPACE_WORKFLOWS: '/w/:workspaceId/workflows',
-  WORKSPACE_WORKFLOW: '/w/:workspaceId/workflows/:workflowId',
+  // Project routes (require projectId)
+  PROJECT_BASE: '/p/:projectId',
+  PROJECT_NOTES: '/p/:projectId/notes',
+  PROJECT_NOTE: '/p/:projectId/notes/:noteId',
+  PROJECT_RECORDS: '/p/:projectId/records',
+  PROJECT_RECORD_KNOWLEDGE: '/p/:projectId/records/:assetId/knowledge',
+  PROJECT_WORKFLOWS: '/p/:projectId/workflows',
+  PROJECT_WORKFLOW: '/p/:projectId/workflows/:workflowId',
 } as const
 
 export type RoutePath = typeof ROUTES[keyof typeof ROUTES]
 
 /**
- * Every exact pathname that renders without a workspace.
+ * Every exact pathname that renders without a project.
  *
  * App.tsx redirects anything it doesn't recognise back to `/`, so a route
  * that exists in ROUTES but is missing here is unreachable — you click the
@@ -61,18 +61,18 @@ export const GLOBAL_ROUTES: readonly string[] = [
 
 /** True for a pathname the app knows how to render. */
 export function isKnownRoute(pathname: string): boolean {
-  return GLOBAL_ROUTES.includes(pathname) || isWorkspaceRoute(pathname)
+  return GLOBAL_ROUTES.includes(pathname) || isProjectRoute(pathname)
 }
 
 /**
- * Helper to build workspace-scoped URLs
+ * Helper to build project-scoped URLs
  */
-export function workspaceRoute(workspaceId: string, path: '/notes' | '/records' | '/workflows' | '' = ''): string {
-  if (!workspaceId) {
-    console.warn('workspaceRoute called with empty workspaceId')
+export function projectRoute(projectId: string, path: '/notes' | '/records' | '/workflows' | '' = ''): string {
+  if (!projectId) {
+    console.warn('projectRoute called with empty projectId')
     return '/'
   }
-  return `/w/${workspaceId}${path}`
+  return `/p/${projectId}${path}`
 }
 
 /**
@@ -90,7 +90,7 @@ export function tasksRoute(): string {
 }
 
 /**
- * Helper to build the "Hôm nay" URL. Top-level, not workspace-scoped —
+ * Helper to build the "Hôm nay" URL. Top-level, not project-scoped —
  * tasks are all personal in Phase 2.
  */
 export function todayRoute(): string {
@@ -105,58 +105,58 @@ export function notificationsRoute(): string {
 }
 
 /**
- * Helper to build note URL within workspace
+ * Helper to build note URL within project
  */
-export function noteRoute(workspaceId: string, noteId: string): string {
-  if (!workspaceId || !noteId) {
-    console.warn('noteRoute called with empty workspaceId or noteId')
+export function noteRoute(projectId: string, noteId: string): string {
+  if (!projectId || !noteId) {
+    console.warn('noteRoute called with empty projectId or noteId')
     return '/'
   }
-  return `/w/${workspaceId}/notes/${noteId}`
+  return `/p/${projectId}/notes/${noteId}`
 }
 
 /**
  * Helper to build knowledge view URL
  */
-export function knowledgeRoute(workspaceId: string, assetId: string): string {
-  if (!workspaceId || !assetId) {
-    console.warn('knowledgeRoute called with empty workspaceId or assetId')
+export function knowledgeRoute(projectId: string, assetId: string): string {
+  if (!projectId || !assetId) {
+    console.warn('knowledgeRoute called with empty projectId or assetId')
     return '/'
   }
-  return `/w/${workspaceId}/records/${assetId}/knowledge`
+  return `/p/${projectId}/records/${assetId}/knowledge`
 }
 
 /**
- * Helper to build workflow URL within workspace
+ * Helper to build workflow URL within project
  */
-export function workflowRoute(workspaceId: string, workflowId?: string): string {
-  if (!workspaceId) {
-    console.warn('workflowRoute called with empty workspaceId')
+export function workflowRoute(projectId: string, workflowId?: string): string {
+  if (!projectId) {
+    console.warn('workflowRoute called with empty projectId')
     return '/'
   }
   if (workflowId) {
-    return `/w/${workspaceId}/workflows/${workflowId}`
+    return `/p/${projectId}/workflows/${workflowId}`
   }
-  return `/w/${workspaceId}/workflows`
+  return `/p/${projectId}/workflows`
 }
 
 /**
- * Extract workspaceId from pathname
+ * Extract projectId from pathname
  */
-export function extractWorkspaceId(pathname: string): string | null {
+export function extractProjectId(pathname: string): string | null {
   const match = pathname.match(/^\/w\/([^/]+)/)
   return match ? match[1] : null
 }
 
 /**
- * Check if path is a workspace-scoped route
+ * Check if path is a project-scoped route
  */
-export function isWorkspaceRoute(pathname: string): boolean {
+export function isProjectRoute(pathname: string): boolean {
   return pathname.startsWith('/w/')
 }
 
 /**
- * Check if path is a global route (no workspace context)
+ * Check if path is a global route (no project context)
  */
 export function isGlobalRoute(pathname: string): boolean {
   return pathname === '/'

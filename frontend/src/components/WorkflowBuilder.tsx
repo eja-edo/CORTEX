@@ -42,7 +42,7 @@ function getDefaultData(type: string): Record<string, unknown> {
 }
 
 type WorkflowBuilderProps = {
-  workspaceId: string | null
+  projectId: string | null
   workflowId: string | null
   onBack?: () => void
   onNavigate?: (workflowId: string) => void
@@ -57,7 +57,7 @@ export function WorkflowBuilder(props: WorkflowBuilderProps) {
   )
 }
 
-function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate, onWorkflowsChanged }: WorkflowBuilderProps) {
+function WorkflowBuilderInner({ projectId, workflowId, onBack, onNavigate, onWorkflowsChanged }: WorkflowBuilderProps) {
   const { confirm, dialog: confirmDialog } = useConfirmDialog()
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null)
@@ -220,11 +220,11 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate, onW
   }, [wf, setNodes, setEdges])
 
   useEffect(() => {
-    if (workspaceId) {
-      void wf.fetchWorkflows({ workspace_id: workspaceId })
+    if (projectId) {
+      void wf.fetchWorkflows({ project_id: projectId })
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspaceId])
+  }, [projectId])
 
   useEffect(() => {
     if (workflowId && workflowId !== currentWorkflowId) {
@@ -379,7 +379,7 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate, onW
         const payload: WorkflowCreatePayload = {
           name: workflowName || 'Untitled Workflow',
           description: workflowDescription || undefined,
-          workspace_id: workspaceId ?? undefined,
+          project_id: projectId ?? undefined,
           trigger_type: triggerType,
           trigger_config: triggerConfig,
           definition,
@@ -398,7 +398,7 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate, onW
     } finally {
       setSaving(false)
     }
-  }, [currentWorkflowId, workflowName, workflowDescription, triggerType, triggerConfig, workspaceId, wf, buildDefinition, reconcileSupplementaryTriggers, onWorkflowsChanged])
+  }, [currentWorkflowId, workflowName, workflowDescription, triggerType, triggerConfig, projectId, wf, buildDefinition, reconcileSupplementaryTriggers, onWorkflowsChanged])
 
   const handleActivate = useCallback(async () => {
     if (!currentWorkflowId) return
@@ -440,10 +440,10 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate, onW
       setNodes([])
       setEdges([])
       setView('list')
-      if (workspaceId) void wf.fetchWorkflows({ workspace_id: workspaceId })
+      if (projectId) void wf.fetchWorkflows({ project_id: projectId })
       onWorkflowsChanged?.()
     }
-  }, [confirm, currentWorkflowId, wf, setNodes, setEdges, workflowName, workspaceId, onWorkflowsChanged])
+  }, [confirm, currentWorkflowId, wf, setNodes, setEdges, workflowName, projectId, onWorkflowsChanged])
 
   const handleRemoveNode = useCallback(() => {
     setSelectedNode(prev => {
@@ -605,7 +605,7 @@ function WorkflowBuilderInner({ workspaceId, workflowId, onBack, onNavigate, onW
         onBack={() => {
           setView('list')
           if (onBack) onBack()
-          if (workspaceId) void wf.fetchWorkflows({ workspace_id: workspaceId })
+          if (projectId) void wf.fetchWorkflows({ project_id: projectId })
         }}
         onSave={handleSave}
         onActivate={handleActivate}

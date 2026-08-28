@@ -1,5 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, GitBranch, Home, ListChecks, Menu, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings, StickyNote, Trash2, Video, X } from 'lucide-react'
+import { ChevronDown, Home, ListChecks, Menu, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings, StickyNote, Trash2, Video, X } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
 import 'react-big-calendar/lib/css/react-big-calendar.css'
 import './App.css'
@@ -14,12 +14,10 @@ import type { AppNotification } from './components/NotificationBell'
 import { NotificationBell } from './components/NotificationBell'
 import type { NotificationKind } from './components/NotificationBell'
 import { UserMenu } from './components/UserMenu'
-import { WorkspaceNoteEditor } from './components/WorkspaceNoteEditor'
-import { WorkspaceSearch } from './components/WorkspaceSearch'
-import { WorkspaceSwitcher } from './components/WorkspaceSwitcher'
-import { WorkspaceCreateModal } from './components/WorkspaceCreateModal'
-import { WorkspaceMembersModal } from './components/WorkspaceMembersModal'
-import { WorkspaceSettingsModal } from './components/WorkspaceSettingsModal'
+import { NoteEditorPane } from './components/NoteEditorPane'
+import { NoteSearch } from './components/NoteSearch'
+import { ProjectSwitcher } from './components/ProjectSwitcher'
+import { useProjects } from './hooks/useProjects'
 import { GlobalHome } from './components/GlobalHome'
 import { AskAI } from './components/AskAI'
 import { ErrorBoundary } from './components/ErrorBoundary'
@@ -30,7 +28,6 @@ import { getStoredTheme, applyThemeToDocument } from './utils/theme'
 import type { AppTheme } from './utils/theme'
 import { getBlockEditingEnabled, setBlockEditingEnabled } from './utils/noteSettings'
 import { useAuth } from './hooks/useAuth'
-import { useWorkspaces } from './hooks/useWorkspaces'
 import { useNotes, noteTitleFromMd } from './hooks/useNotes'
 import { useSchedules } from './hooks/useSchedules'
 import { useCalendarItems } from './hooks/useCalendarItems'
@@ -40,10 +37,9 @@ import { useNotifications } from './hooks/useNotifications'
 import { usePreferences } from './hooks/usePreferences'
 import { requestWithAuth, getCurrentTokens, setCurrentTokens } from './services/api'
 import { strings } from './i18n/strings'
-import { ROUTES, extractWorkspaceId, isKnownRoute, noteRoute, knowledgeRoute, scheduleRoute, tasksRoute, todayRoute, notificationsRoute, workspaceRoute, workflowRoute } from './services/routes'
+import { ROUTES, extractProjectId, isKnownRoute, noteRoute, knowledgeRoute, notificationsRoute, scheduleRoute, tasksRoute, todayRoute, projectRoute, workflowRoute } from './services/routes'
 import { TasksPage } from './components/TasksPage'
 import { NotificationsPage } from './components/NotificationsPage'
-import type { Workspace } from './types'
 
 // Lazy-loaded: each of these pulls in a large dependency (ReactFlow,
 // react-big-calendar, video/audio playback, or the block editor) that a
@@ -56,86 +52,87 @@ const WorkflowBuilder = lazy(() => import('./components/WorkflowBuilder').then(m
 
 const SSE_TAB_APPID_KEY = 'cortex_sse_appid'
 
-type WorkspaceView = 'dashboard' | 'note' | 'records' | 'knowledge' | 'schedule' | 'tasks' | 'notifications' | 'settings' | 'workflow'
 
-function getRouteWorkspaceState(pathname: string): {
-  view: WorkspaceView
-  workspaceId: string | null
+type SurfaceView = 'dashboard' | 'note' | 'records' | 'knowledge' | 'schedule' | 'tasks' | 'notifications' | 'settings' | 'workflow'
+
+function getRouteState(pathname: string): {
+  view: SurfaceView
+  projectId: string | null
   noteId: string | null
   assetId: string | null
   workflowId: string | null
 } {
   if (matchPath('/schedule', pathname)) {
-    return { view: 'schedule', workspaceId: null, noteId: null, assetId: null, workflowId: null }
+    return { view: 'schedule', projectId: null, noteId: null, assetId: null, workflowId: null }
   }
 
-  if (matchPath('/w/:workspaceId/schedule', pathname)) {
-    const wsId = extractWorkspaceId(pathname)
-    return { view: 'schedule', workspaceId: wsId, noteId: null, assetId: null, workflowId: null }
+  if (matchPath('/w/:projectId/schedule', pathname)) {
+    const wsId = extractProjectId(pathname)
+    return { view: 'schedule', projectId: wsId, noteId: null, assetId: null, workflowId: null }
   }
 
   if (matchPath('/tasks', pathname)) {
-    return { view: 'tasks', workspaceId: null, noteId: null, assetId: null, workflowId: null }
+    return { view: 'tasks', projectId: null, noteId: null, assetId: null, workflowId: null }
   }
 
   if (matchPath('/notifications', pathname)) {
-    return { view: 'notifications', workspaceId: null, noteId: null, assetId: null, workflowId: null }
+    return { view: 'notifications', projectId: null, noteId: null, assetId: null, workflowId: null }
   }
 
   if (matchPath('/settings', pathname)) {
-    return { view: 'settings', workspaceId: null, noteId: null, assetId: null, workflowId: null }
+    return { view: 'settings', projectId: null, noteId: null, assetId: null, workflowId: null }
   }
 
-  const workspaceId = extractWorkspaceId(pathname)
+  const projectId = extractProjectId(pathname)
 
-  if (workspaceId) {
-    const workflowMatch = matchPath('/w/:workspaceId/workflows/:workflowId', pathname)
+  if (projectId) {
+    const workflowMatch = matchPath('/w/:projectId/workflows/:workflowId', pathname)
     if (workflowMatch?.params.workflowId) {
       return {
         view: 'workflow',
-        workspaceId,
+        projectId,
         noteId: null,
         assetId: null,
         workflowId: workflowMatch.params.workflowId
       }
     }
 
-    if (matchPath('/w/:workspaceId/workflows', pathname)) {
-      return { view: 'workflow', workspaceId, noteId: null, assetId: null, workflowId: null }
+    if (matchPath('/w/:projectId/workflows', pathname)) {
+      return { view: 'workflow', projectId, noteId: null, assetId: null, workflowId: null }
     }
 
-    const knowledgeMatch = matchPath('/w/:workspaceId/records/:assetId/knowledge', pathname)
+    const knowledgeMatch = matchPath('/w/:projectId/records/:assetId/knowledge', pathname)
     if (knowledgeMatch?.params.assetId) {
       return {
         view: 'knowledge',
-        workspaceId,
+        projectId,
         noteId: null,
         assetId: knowledgeMatch.params.assetId,
         workflowId: null
       }
     }
 
-    const noteMatch = matchPath('/w/:workspaceId/notes/:noteId', pathname)
+    const noteMatch = matchPath('/w/:projectId/notes/:noteId', pathname)
     if (noteMatch?.params.noteId) {
       return {
         view: 'note',
-        workspaceId,
+        projectId,
         noteId: noteMatch.params.noteId,
         assetId: null,
         workflowId: null
       }
     }
 
-    if (matchPath('/w/:workspaceId/records', pathname)) {
-      return { view: 'records', workspaceId, noteId: null, assetId: null, workflowId: null }
+    if (matchPath('/w/:projectId/records', pathname)) {
+      return { view: 'records', projectId, noteId: null, assetId: null, workflowId: null }
     }
 
-    if (matchPath('/w/:workspaceId', pathname) || matchPath('/w/:workspaceId/notes', pathname)) {
-      return { view: 'dashboard', workspaceId, noteId: null, assetId: null, workflowId: null }
+    if (matchPath('/w/:projectId', pathname) || matchPath('/w/:projectId/notes', pathname)) {
+      return { view: 'dashboard', projectId, noteId: null, assetId: null, workflowId: null }
     }
   }
 
-  return { view: 'dashboard', workspaceId: null, noteId: null, assetId: null, workflowId: null }
+  return { view: 'dashboard', projectId: null, noteId: null, assetId: null, workflowId: null }
 }
 
 function getOrCreateSseTabAppId(): string {
@@ -219,16 +216,18 @@ function SidebarSection({
 function App() {
   const navigate = useNavigate()
   const location = useLocation()
-  const routeWorkspaceState = useMemo(() => getRouteWorkspaceState(location.pathname), [location.pathname])
+  const routeState = useMemo(() => getRouteState(location.pathname), [location.pathname])
 
   const auth = useAuth()
-  const workspaces = useWorkspaces()
-  const notes = useNotes(workspaces.currentWorkspace, routeWorkspaceState.noteId)
+  // Dự án là container duy nhất: nó nhóm cả việc, ghi chú lẫn bản ghi
+  // (DESIGN 11.4).
+  const projects = useProjects()
+  const notes = useNotes(projects.currentProject, routeState.noteId)
   const schedules = useSchedules()
   // The calendar's unified feed (2.6): schedules + tasks in one shape,
   // over the same visible range the schedule list uses.
   const calendarItems = useCalendarItems(schedules.startDate, schedules.endDate)
-  const assets = useAssets(workspaces.currentWorkspace)
+  const assets = useAssets(projects.currentProject)
   const sidebarWorkflows = useWorkflows()
 
   const [isCreateEventOpen, setIsCreateEventOpen] = useState<boolean>(false)
@@ -242,13 +241,10 @@ function App() {
     }
   })
   const [pendingSelection, setPendingSelection] = useState<string>('')
-  const [isCreateWorkspaceOpen, setIsCreateWorkspaceOpen] = useState(false)
   const toast = useToast()
   const { confirm, dialog: confirmDialog } = useConfirmDialog()
-  const [managingMembersWorkspace, setManagingMembersWorkspace] = useState<{ id: string; name: string; is_personal: boolean } | null>(null)
-  const [settingsWorkspace, setSettingsWorkspace] = useState<Workspace | null>(null)
   const [createEventInitialTimes, setCreateEventInitialTimes] = useState<{ startDate: string; endDate: string } | null>(null)
-  const [isWorkspaceSidebarCollapsed, setIsWorkspaceSidebarCollapsed] = useState<boolean>(() => {
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => {
     try {
       return JSON.parse(localStorage.getItem('cortex_sidebar_collapsed') ?? 'false')
     } catch {
@@ -257,11 +253,11 @@ function App() {
   })
   useEffect(() => {
     try {
-      localStorage.setItem('cortex_sidebar_collapsed', JSON.stringify(isWorkspaceSidebarCollapsed))
+      localStorage.setItem('cortex_sidebar_collapsed', JSON.stringify(isSidebarCollapsed))
     } catch {
       // ignore storage failures
     }
-  }, [isWorkspaceSidebarCollapsed])
+  }, [isSidebarCollapsed])
 
   /* auth still owns these two strings; they used to render as in-flow
      `.status-bar` banners that pushed the whole app down and had no dismiss.
@@ -312,23 +308,22 @@ function App() {
    const [blockEditingEnabled, _setBlockEditingEnabled] = useState<boolean>(getBlockEditingEnabled)
    const [sectionNoteOpen, setSectionNoteOpen] = useState(true)
    const [sectionRecordOpen, setSectionRecordOpen] = useState(true)
-   const [sectionWorkflowOpen, setSectionWorkflowOpen] = useState(true)
    const notif = useNotifications()
    const preferences = usePreferences()
    const syncToastTimerRef = useRef<number | null>(null)
 
-  const activeWorkspaceView = routeWorkspaceState.view
-  const [activeWorkspaceAssetId, setActiveWorkspaceAssetId] = useState<string | null>(routeWorkspaceState.assetId)
-  const [activeWorkspaceKnowledgeAssetId, setActiveWorkspaceKnowledgeAssetId] = useState<string | null>(routeWorkspaceState.assetId)
-  const [activeWorkspaceWorkflowId, setActiveWorkspaceWorkflowId] = useState<string | null>(routeWorkspaceState.workflowId)
+  const activeView = routeState.view
+  const [activeAssetId, setActiveAssetId] = useState<string | null>(routeState.assetId)
+  const [activeKnowledgeAssetId, setActiveKnowledgeAssetId] = useState<string | null>(routeState.assetId)
+  const [activeWorkflowId, setActiveWorkflowId] = useState<string | null>(routeState.workflowId)
 
 useEffect(() => {
-     setActiveWorkspaceAssetId(routeWorkspaceState.assetId)
-     setActiveWorkspaceWorkflowId(routeWorkspaceState.workflowId)
-     if (routeWorkspaceState.view === 'knowledge') {
-       setActiveWorkspaceKnowledgeAssetId(routeWorkspaceState.assetId)
+     setActiveAssetId(routeState.assetId)
+     setActiveWorkflowId(routeState.workflowId)
+     if (routeState.view === 'knowledge') {
+       setActiveKnowledgeAssetId(routeState.assetId)
      }
-   }, [routeWorkspaceState.assetId, routeWorkspaceState.view, routeWorkspaceState.workflowId])
+   }, [routeState.assetId, routeState.view, routeState.workflowId])
 
   useEffect(() => {
     applyThemeToDocument(theme)
@@ -345,7 +340,7 @@ useEffect(() => {
   }, [location.pathname, navigate])
 
   useEffect(() => {
-    if (matchPath('/w/:workspaceId', location.pathname) || matchPath('/w/:workspaceId/schedule', location.pathname)) {
+    if (matchPath('/w/:projectId', location.pathname) || matchPath('/w/:projectId/schedule', location.pathname)) {
       navigate(scheduleRoute(), { replace: true })
     }
   }, [location.pathname, navigate])
@@ -370,16 +365,14 @@ useEffect(() => {
   }, [])
 
 useEffect(() => {
-     if (!sectionRecordOpen || !auth.tokens || !workspaces.currentWorkspace) return
+     if (!sectionRecordOpen || !auth.tokens || !projects.currentProject) return
      void assets.loadSidebarAssets()
    // eslint-disable-next-line react-hooks/exhaustive-deps
-   }, [sectionRecordOpen, auth.tokens, workspaces.currentWorkspace])
+   }, [sectionRecordOpen, auth.tokens, projects.currentProject])
 
    useEffect(() => {
-     if (!sectionWorkflowOpen || !auth.tokens || !workspaces.currentWorkspace) return
-     void sidebarWorkflows.fetchWorkflows({ workspace_id: workspaces.currentWorkspace.id })
-   // eslint-disable-next-line react-hooks/exhaustive-deps
-   }, [sectionWorkflowOpen, auth.tokens, workspaces.currentWorkspace])
+     // Workflow đóng băng: không nạp gì nữa.
+   }, [])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -394,11 +387,15 @@ useEffect(() => {
 
 useEffect(() => {
      if (!auth.tokens) {
-       workspaces.setCurrentWorkspace(null)
        return
      }
      void auth.fetchCurrentUser(auth.tokens)
-     void workspaces.fetchWorkspaces()
+     // Nạp lại theo `auth.tokens`, không chỉ một lần lúc mount: store nạp
+     // lần đầu trước khi có token thì `GET /projects` ném "Please login
+     // first", `hasLoaded` thành true, và bộ chuyển đứng im ở "Chưa có dự
+     // án" cho tới khi tải lại trang. Mọi store khác ở đây đã theo đúng
+     // nhịp này rồi.
+     void projects.fetchAll()
      void schedules.fetchSchedules()
      void schedules.fetchGoogleCalendarStatus()
      void notif.fetchNotifications()
@@ -410,26 +407,33 @@ useEffect(() => {
    }, [auth.tokens])
 
 useEffect(() => {
-     if (!auth.tokens || activeWorkspaceView !== 'settings') return
+     if (!auth.tokens || activeView !== 'settings') return
      void preferences.fetchPreferences()
    // eslint-disable-next-line react-hooks/exhaustive-deps
-   }, [auth.tokens, activeWorkspaceView])
+   }, [auth.tokens, activeView])
 
 useEffect(() => {
-     if (!routeWorkspaceState.workspaceId || workspaces.workspaces.length === 0) return
+     // URL mang id container ở segment đầu; nó là id dự án. Mở đúng dự
+     // án đó khi người dùng vào bằng link, thay vì để sidebar chỉ một nơi
+     // và nội dung chỉ nơi khác.
+     if (!routeState.projectId || projects.projects.length === 0) return
 
-     const targetWorkspace = workspaces.workspaces.find(ws => ws.id === routeWorkspaceState.workspaceId)
-     if (targetWorkspace && targetWorkspace.id !== workspaces.currentWorkspace?.id) {
-       workspaces.setCurrentWorkspace(targetWorkspace)
-      }
+     const target = projects.projects.find(p => p.id === routeState.projectId)
+     if (target && target.id !== projects.currentProject?.id) {
+       projects.setOpenProject(target.id)
+     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [routeWorkspaceState.workspaceId, workspaces.workspaces.length, workspaces.workspaces])
+    }, [routeState.projectId, projects.projects.length, projects.projects])
 
 useEffect(() => {
      if (!auth.tokens) return
+     // Khoá theo **dự án**. Hậu quả nếu quên, và đã từng quên:
+     // `fetchNotes` chạy một lần lúc mount khi `currentProject` còn `null`,
+     // thoát sớm, rồi không bao giờ chạy lại. Danh sách ghi chú trống
+     // mãi mà không có lỗi nào.
      void notes.fetchNotes()
    // eslint-disable-next-line react-hooks/exhaustive-deps
-   }, [auth.tokens, workspaces.currentWorkspace?.id])
+   }, [auth.tokens, projects.currentProject?.id])
 
   useEffect(() => {
     const url = new URL(window.location.href)
@@ -468,55 +472,49 @@ const showSyncToast = useCallback((message: string): void => {
     return `${source} sync: +${created} / ~${updated} / -${deleted} (skip ${skipped})`
   }
 
-  const handleWorkspaceSwitch = useCallback((workspace: typeof workspaces.currentWorkspace): void => {
-    if (!workspace || workspace.id === workspaces.currentWorkspace?.id) return
 
-    notes.clearNotes()
-    workspaces.switchWorkspace(workspace)
-    navigate(workspaceRoute(workspace.id), { replace: true })
-  }, [navigate, notes, workspaces])
-
-  const openWorkspaceNote = useCallback((noteId: string) => {
-    const workspaceId = workspaces.currentWorkspace?.id
-    if (workspaceId) {
-      navigate(noteRoute(workspaceId, noteId))
+  const openProjectNote = useCallback((noteId: string) => {
+    // Route ghi chú mang id dự án ở segment đầu (`/p/:projectId/...`).
+    const projectId = projects.currentProject?.id
+    if (projectId) {
+      navigate(noteRoute(projectId, noteId))
     }
-  }, [navigate, workspaces.currentWorkspace])
+  }, [navigate, projects.currentProject])
 
   const handleCreateNote = useCallback(async (parentNoteId?: string): Promise<void> => {
     const created = await notes.handleCreateNote(parentNoteId)
     if (created) {
       setSectionNoteOpen(true)
-      openWorkspaceNote(created.id)
+      openProjectNote(created.id)
       auth.setStatusMessage('Note created.')
     } else {
       auth.setErrorMessage('Cannot create note')
     }
-  }, [notes, openWorkspaceNote, auth, setSectionNoteOpen])
+  }, [notes, openProjectNote, auth, setSectionNoteOpen])
 
   const handleDeleteNote = useCallback(async (noteId: string): Promise<void> => {
     const removedIds = await notes.handleDeleteNote(noteId)
     if (removedIds.length > 0) {
-      if (routeWorkspaceState.noteId && new Set(removedIds).has(routeWorkspaceState.noteId)) {
+      if (routeState.noteId && new Set(removedIds).has(routeState.noteId)) {
         const remaining = notes.recentNotes.filter((n) => !removedIds.includes(n.id))
         const nextId = remaining[0]?.id ?? null
-        const workspaceId = workspaces.currentWorkspace?.id
-        if (activeWorkspaceView === 'note' && workspaceId) {
-          navigate(nextId ? noteRoute(workspaceId, nextId) : workspaceRoute(workspaceId))
+        const projectId = projects.currentProject?.id
+        if (activeView === 'note' && projectId) {
+          navigate(nextId ? noteRoute(projectId, nextId) : projectRoute(projectId))
         }
       }
       auth.setStatusMessage('Note deleted.')
     } else {
       auth.setErrorMessage('Cannot delete note')
     }
-  }, [notes, activeWorkspaceView, navigate, workspaces.currentWorkspace, auth, routeWorkspaceState.noteId, noteRoute])
+  }, [notes, activeView, navigate, projects.currentProject, auth, routeState.noteId, noteRoute])
 
-  const handleWorkspaceSidebarDrop = useCallback(async (targetParentId: string | null): Promise<void> => {
-    await notes.handleWorkspaceSidebarDrop(targetParentId)
+  const handleProjectSidebarDrop = useCallback(async (targetParentId: string | null): Promise<void> => {
+    await notes.handleProjectSidebarDrop(targetParentId)
   }, [notes])
 
-const renderWorkspaceSidebarNoteTree = useCallback((parentId: string | null, depth: number): React.ReactNode => {
-     const childNotes = notes.workspaceNotesByParent.get(parentId) ?? []
+const renderSidebarNoteTree = useCallback((parentId: string | null, depth: number): React.ReactNode => {
+     const childNotes = notes.projectNotesByParent.get(parentId) ?? []
      if (!childNotes.length) return null
 
      return childNotes.map((note) => (
@@ -526,41 +524,41 @@ const renderWorkspaceSidebarNoteTree = useCallback((parentId: string | null, dep
            tabIndex={0}
         className={[
               'app-sidebar-sub-item',
-               activeWorkspaceView === 'note' && routeWorkspaceState.noteId === note.id ? 'active' : '',
-               notes.workspaceDropTargetParentId === note.id ? 'workspace-nav-item--drop-target' : '',
+               activeView === 'note' && routeState.noteId === note.id ? 'active' : '',
+               notes.projectDropTargetParentId === note.id ? 'workspace-nav-item--drop-target' : '',
             ].filter(Boolean).join(' ')}
            style={{ paddingLeft: `${10 + (depth * 14)}px` }}
-           onClick={() => openWorkspaceNote(note.id)}
+           onClick={() => openProjectNote(note.id)}
            onKeyDown={(e) => {
              if (e.key !== 'Enter' && e.key !== ' ') return
              e.preventDefault()
-             openWorkspaceNote(note.id)
+             openProjectNote(note.id)
            }}
            title={note.title}
            draggable
            onDragStart={(e) => {
              e.dataTransfer.effectAllowed = 'move'
              e.dataTransfer.setData('text/plain', note.id)
-             notes.setWorkspaceDraggingNoteId(note.id)
-             notes.setWorkspaceDropTargetParentId(null)
+             notes.setProjectDraggingNoteId(note.id)
+             notes.setProjectDropTargetParentId(null)
            }}
            onDragEnd={() => {
-             notes.setWorkspaceDraggingNoteId(null)
-             notes.setWorkspaceDropTargetParentId(null)
+             notes.setProjectDraggingNoteId(null)
+             notes.setProjectDropTargetParentId(null)
            }}
            onDragOver={(e) => {
-             if (!notes.workspaceDraggingNoteId || !notes.canMoveWorkspaceNote(notes.workspaceDraggingNoteId, note.id)) return
+             if (!notes.projectDraggingNoteId || !notes.canMoveProjectNote(notes.projectDraggingNoteId, note.id)) return
              e.preventDefault()
              e.stopPropagation()
              e.dataTransfer.dropEffect = 'move'
-             notes.setWorkspaceDropTargetParentId(note.id)
+             notes.setProjectDropTargetParentId(note.id)
            }}
            onDrop={(e) => {
              e.preventDefault()
              e.stopPropagation()
-             void handleWorkspaceSidebarDrop(note.id)
-             notes.setWorkspaceDraggingNoteId(null)
-             notes.setWorkspaceDropTargetParentId(null)
+             void handleProjectSidebarDrop(note.id)
+             notes.setProjectDraggingNoteId(null)
+             notes.setProjectDropTargetParentId(null)
            }}
          >
            <StickyNote size={13} />
@@ -588,12 +586,12 @@ const renderWorkspaceSidebarNoteTree = useCallback((parentId: string | null, dep
            </div>
          </div>
          {/* eslint-disable-next-line react-hooks/immutability */}
-         {renderWorkspaceSidebarNoteTree(note.id, depth + 1)}
+         {renderSidebarNoteTree(note.id, depth + 1)}
        </div>
      ))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [notes.workspaceNotesByParent, activeWorkspaceView, routeWorkspaceState.noteId, notes.workspaceDropTargetParentId,
-        notes.workspaceDraggingNoteId, notes.canMoveWorkspaceNote])
+    }, [notes.projectNotesByParent, activeView, routeState.noteId, notes.projectDropTargetParentId,
+        notes.projectDraggingNoteId, notes.canMoveProjectNote])
 
   const handleNoteChange = useCallback((id: string, contentMd: string) => {
     notes.handleNoteChange(id, contentMd)
@@ -1056,31 +1054,18 @@ const processNotificationChunk = (chunk: string): void => {
           )}
           <aside
             id="app-sidebar"
-            className={`app-sidebar ${isWorkspaceSidebarCollapsed ? 'collapsed' : ''} ${isMobileNavOpen ? 'is-mobile-open' : ''}`}
+            className={`app-sidebar ${isSidebarCollapsed ? 'collapsed' : ''} ${isMobileNavOpen ? 'is-mobile-open' : ''}`}
           >
             <div className="app-sidebar-profile">
-              {workspaces.currentWorkspace && (
-                <WorkspaceSwitcher
-                  workspaces={workspaces.workspaces}
-                  currentWorkspace={workspaces.currentWorkspace}
-                  onSwitch={handleWorkspaceSwitch}
-                  onCreateWorkspace={() => setIsCreateWorkspaceOpen(true)}
-                  onRenameWorkspace={workspaces.renameWorkspace}
-                  onDeleteWorkspace={workspaces.deleteWorkspace}
-                  onManageMembers={(workspace) => {
-                    setManagingMembersWorkspace({
-                      id: workspace.id,
-                      name: workspace.name,
-                      is_personal: workspace.is_personal,
-                    })
-                  }}
-                  onOpenSettings={(workspace) => {
-                    setSettingsWorkspace(workspace)
-                  }}
-                  isCollapsed={isWorkspaceSidebarCollapsed}
-                  user={auth.user}
-                />
-              )}
+              {/* Bộ chuyển dự án — chọn cái mình đang làm việc bên trong. */}
+              <ProjectSwitcher
+                projects={projects.projects}
+                currentProject={projects.currentProject}
+                onSwitch={(project) => projects.setOpenProject(project.id)}
+                onCreate={projects.create}
+                onRename={projects.rename}
+                isCollapsed={isSidebarCollapsed}
+              />
             </div>
 
             <div className="app-sidebar-nav">
@@ -1095,7 +1080,7 @@ const processNotificationChunk = (chunk: string): void => {
 
                 <button
                   type="button"
-                  className={`app-sidebar-nav-item ${activeWorkspaceView === 'notifications' ? 'active' : ''}`}
+                  className={`app-sidebar-nav-item ${activeView === 'notifications' ? 'active' : ''}`}
                   onClick={() => navigate(notificationsRoute())}
                 >
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -1132,7 +1117,9 @@ const processNotificationChunk = (chunk: string): void => {
                 </button>
               </div>
 
-            {workspaces.currentWorkspace && (
+            {/* Gác theo dự án (DESIGN 11.4). Đây chính là dòng từng làm cả
+                khối Ghi chú/Bản ghi biến mất khi container vắng mặt. */}
+            {projects.currentProject && (
               <>
                 <div className="app-sidebar-sections">
 
@@ -1141,77 +1128,77 @@ const processNotificationChunk = (chunk: string): void => {
                     label={strings.nav.notes}
                     isOpen={sectionNoteOpen}
                     onToggle={() => setSectionNoteOpen(v => !v)}
-                    isCollapsed={isWorkspaceSidebarCollapsed}
+                    isCollapsed={isSidebarCollapsed}
                     sectionBodyProps={{
-                      className: notes.workspaceDropTargetParentId === null ? 'sidebar-section-body--drop-target' : '',
+                      className: notes.projectDropTargetParentId === null ? 'sidebar-section-body--drop-target' : '',
                       onDragOver: (e) => {
-                        if (!notes.workspaceDraggingNoteId || !notes.canMoveWorkspaceNote(notes.workspaceDraggingNoteId, null)) return
+                        if (!notes.projectDraggingNoteId || !notes.canMoveProjectNote(notes.projectDraggingNoteId, null)) return
                         e.preventDefault()
                         e.dataTransfer.dropEffect = 'move'
-                        notes.setWorkspaceDropTargetParentId(null)
+                        notes.setProjectDropTargetParentId(null)
                       },
                       onDrop: (e) => {
                         e.preventDefault()
                         e.stopPropagation()
-                        void handleWorkspaceSidebarDrop(null)
-                        notes.setWorkspaceDraggingNoteId(null)
-                        notes.setWorkspaceDropTargetParentId(null)
+                        void handleProjectSidebarDrop(null)
+                        notes.setProjectDraggingNoteId(null)
+                        notes.setProjectDropTargetParentId(null)
                       },
                       onDragLeave: (e) => {
                         if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) {
-                          notes.setWorkspaceDropTargetParentId(null)
+                          notes.setProjectDropTargetParentId(null)
                         }
                       },
                     }}
                   >
                     <div className="workspace-note-links">
-                      {notes.workspaceRootNotes.length === 0 ? (
+                      {notes.projectRootNotes.length === 0 ? (
                         <div className="app-sidebar-sub-item" style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
                           <span>{strings.nav.noNotesYet}</span>
                         </div>
                       ) : (
                         <>
-                          {notes.workspaceRootNotes.map((note) => (
+                          {notes.projectRootNotes.map((note) => (
                             <div key={note.id}>
                               <div
                                 role="button"
                                 tabIndex={0}
                                 className={[
                                   'app-sidebar-sub-item',
-                                  activeWorkspaceView === 'note' && routeWorkspaceState.noteId === note.id ? 'active' : '',
-                                  notes.workspaceDropTargetParentId === note.id ? 'workspace-nav-item--drop-target' : '',
+                                  activeView === 'note' && routeState.noteId === note.id ? 'active' : '',
+                                  notes.projectDropTargetParentId === note.id ? 'workspace-nav-item--drop-target' : '',
                                 ].filter(Boolean).join(' ')}
-                                onClick={() => openWorkspaceNote(note.id)}
+                                onClick={() => openProjectNote(note.id)}
                                 onKeyDown={(e) => {
                                   if (e.key !== 'Enter' && e.key !== ' ') return
                                   e.preventDefault()
-                                  openWorkspaceNote(note.id)
+                                  openProjectNote(note.id)
                                 }}
                                 title={note.title}
                                 draggable
                                 onDragStart={(e) => {
                                   e.dataTransfer.effectAllowed = 'move'
                                   e.dataTransfer.setData('text/plain', note.id)
-                                  notes.setWorkspaceDraggingNoteId(note.id)
-                                  notes.setWorkspaceDropTargetParentId(null)
+                                  notes.setProjectDraggingNoteId(note.id)
+                                  notes.setProjectDropTargetParentId(null)
                                 }}
                                 onDragEnd={() => {
-                                  notes.setWorkspaceDraggingNoteId(null)
-                                  notes.setWorkspaceDropTargetParentId(null)
+                                  notes.setProjectDraggingNoteId(null)
+                                  notes.setProjectDropTargetParentId(null)
                                 }}
                                 onDragOver={(e) => {
-                                  if (!notes.workspaceDraggingNoteId || !notes.canMoveWorkspaceNote(notes.workspaceDraggingNoteId, note.id)) return
+                                  if (!notes.projectDraggingNoteId || !notes.canMoveProjectNote(notes.projectDraggingNoteId, note.id)) return
                                   e.preventDefault()
                                   e.stopPropagation()
                                   e.dataTransfer.dropEffect = 'move'
-                                  notes.setWorkspaceDropTargetParentId(note.id)
+                                  notes.setProjectDropTargetParentId(note.id)
                                 }}
                                 onDrop={(e) => {
                                   e.preventDefault()
                                   e.stopPropagation()
-                                  void handleWorkspaceSidebarDrop(note.id)
-                                  notes.setWorkspaceDraggingNoteId(null)
-                                  notes.setWorkspaceDropTargetParentId(null)
+                                  void handleProjectSidebarDrop(note.id)
+                                  notes.setProjectDraggingNoteId(null)
+                                  notes.setProjectDropTargetParentId(null)
                                 }}
                               >
                                 <StickyNote size={13} />
@@ -1238,7 +1225,7 @@ const processNotificationChunk = (chunk: string): void => {
                                   </button>
                                 </div>
                               </div>
-                              {renderWorkspaceSidebarNoteTree(note.id, 1)}
+                              {renderSidebarNoteTree(note.id, 1)}
                             </div>
                           ))}
                         </>
@@ -1246,11 +1233,11 @@ const processNotificationChunk = (chunk: string): void => {
                       <button
                         type="button"
                         className="app-sidebar-sub-item app-sidebar-sub-item--add"
-                        onClick={() => handleCreateNote(routeWorkspaceState.noteId ?? undefined)}
-                        title={routeWorkspaceState.noteId ? strings.nav.addSubNote : strings.nav.newNote}
+                        onClick={() => handleCreateNote(routeState.noteId ?? undefined)}
+                        title={routeState.noteId ? strings.nav.addSubNote : strings.nav.newNote}
                       >
                         <Plus size={13} />
-                        <span>{routeWorkspaceState.noteId ? strings.nav.addSubNote : strings.nav.newNote}</span>
+                        <span>{routeState.noteId ? strings.nav.addSubNote : strings.nav.newNote}</span>
                       </button>
                     </div>
                   </SidebarSection>
@@ -1262,10 +1249,10 @@ const processNotificationChunk = (chunk: string): void => {
                     onToggle={() => {
                       setSectionRecordOpen(v => !v)
                     }}
-                    isCollapsed={isWorkspaceSidebarCollapsed}
+                    isCollapsed={isSidebarCollapsed}
                     onLabelClick={() => {
-                      const workspaceId = workspaces.currentWorkspace?.id
-                      if (workspaceId) navigate(workspaceRoute(workspaceId, '/records'))
+                      const projectId = projects.currentProject?.id
+                      if (projectId) navigate(projectRoute(projectId, '/records'))
                     }}
                   >
                     <div className="workspace-note-links">
@@ -1288,16 +1275,16 @@ const processNotificationChunk = (chunk: string): void => {
                                 key={asset.id}
                                 role="button"
                                 tabIndex={0}
-                                className={`app-sidebar-sub-item ${activeWorkspaceView === 'records' && activeWorkspaceAssetId === asset.id ? 'active' : ''}`}
+                                className={`app-sidebar-sub-item ${activeView === 'records' && activeAssetId === asset.id ? 'active' : ''}`}
                                 onClick={() => {
-                                  const workspaceId = workspaces.currentWorkspace?.id
-                                  if (workspaceId) navigate(knowledgeRoute(workspaceId, asset.id))
+                                  const projectId = projects.currentProject?.id
+                                  if (projectId) navigate(knowledgeRoute(projectId, asset.id))
                                 }}
                                 onKeyDown={(e) => {
                                   if (e.key !== 'Enter' && e.key !== ' ') return
                                   e.preventDefault()
-                                  const workspaceId = workspaces.currentWorkspace?.id
-                                  if (workspaceId) navigate(knowledgeRoute(workspaceId, asset.id))
+                                  const projectId = projects.currentProject?.id
+                                  if (projectId) navigate(knowledgeRoute(projectId, asset.id))
                                 }}
                                 title={displayName}
                               >
@@ -1338,89 +1325,11 @@ const processNotificationChunk = (chunk: string): void => {
                     </div>
                   </SidebarSection>
 
-                  <SidebarSection
-                    icon={<GitBranch size={15} />}
-                    label={strings.nav.workflows}
-                    isOpen={sectionWorkflowOpen}
-                    onToggle={() => setSectionWorkflowOpen(v => !v)}
-                    isCollapsed={isWorkspaceSidebarCollapsed}
-                    onLabelClick={() => {
-                      const workspaceId = workspaces.currentWorkspace?.id
-                      if (workspaceId) navigate(workflowRoute(workspaceId))
-                    }}
-                  >
-                    <div className="workspace-note-links">
-                      {sidebarWorkflows.loading ? (
-                        <div className="app-sidebar-sub-item">
-                          <GitBranch size={13} />
-                          <span>{strings.nav.loading}</span>
-                        </div>
-                      ) : sidebarWorkflows.workflows.length === 0 ? (
-                        <div className="app-sidebar-sub-item">
-                          <GitBranch size={13} />
-                          <span>{strings.nav.noWorkflows}</span>
-                        </div>
-                      ) : (
-                        <>
-                          {sidebarWorkflows.workflows.map(wf => (
-                            <div
-                              key={wf.id}
-                              role="button"
-                              tabIndex={0}
-                              className={`app-sidebar-sub-item ${activeWorkspaceView === 'workflow' && activeWorkspaceWorkflowId === wf.id ? 'active' : ''}`}
-                              onClick={() => {
-                                const workspaceId = workspaces.currentWorkspace?.id
-                                if (workspaceId) navigate(workflowRoute(workspaceId, wf.id))
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key !== 'Enter' && e.key !== ' ') return
-                                e.preventDefault()
-                                const workspaceId = workspaces.currentWorkspace?.id
-                                if (workspaceId) navigate(workflowRoute(workspaceId, wf.id))
-                              }}
-                              title={wf.name}
-                            >
-                              <GitBranch size={13} />
-                              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{wf.name}</span>
-                              <div className="workspace-nav-item-actions">
-                                <button
-                                  type="button"
-                                  className="app-sidebar-sub-action-btn danger"
-                                  title={strings.nav.deleteTitle}
-                                  onClick={async (e) => {
-                                    e.stopPropagation()
-                                    const ok = await confirm({
-                                      title: 'Xoá workflow',
-                                      message: `Xoá "${wf.name || 'workflow này'}"? Không thể hoàn tác.`,
-                                      confirmLabel: 'Xoá',
-                                      cancelLabel: 'Huỷ',
-                                    })
-                                    if (ok) {
-                                      await sidebarWorkflows.deleteWorkflow(wf.id)
-                                      toast.show({ message: 'Đã xoá workflow.' })
-                                    }
-                                  }}
-                                >
-                                  <Trash2 size={12} />
-                                </button>
-                              </div>
-                            </div>
-                          ))}
-                        </>
-                      )}
-                      <button
-                        type="button"
-                        className="app-sidebar-sub-item app-sidebar-sub-item--add"
-                        onClick={() => {
-                          const workspaceId = workspaces.currentWorkspace?.id
-                          if (workspaceId) navigate(workflowRoute(workspaceId))
-                        }}
-                      >
-                        <Plus size={13} />
-                        <span>{strings.nav.newWorkflow}</span>
-                      </button>
-                    </div>
-                  </SidebarSection>
+                  {/* Workflow đã đóng băng — gỡ khỏi sidebar, giữ nguyên
+                      route và toàn bộ code (`docs/DESIGN.md` 11.2). Nó là bề
+                      mặt cuối còn kéo theo `workspace_id`, và bảng
+                      `workflow_definitions` đã không còn trong DB, nên nó
+                      không có gì để hiển thị kể cả khi mở bằng URL. */}
                 </div>
               </>
             )}
@@ -1428,7 +1337,7 @@ const processNotificationChunk = (chunk: string): void => {
             <div className="app-sidebar-footer">
               <button
                 type="button"
-                className={`app-sidebar-nav-item ${activeWorkspaceView === 'settings' ? 'active' : ''}`}
+                className={`app-sidebar-nav-item ${activeView === 'settings' ? 'active' : ''}`}
                 onClick={() => navigate('/settings')}
               >
                 <Settings size={16} />
@@ -1437,11 +1346,11 @@ const processNotificationChunk = (chunk: string): void => {
               <button
                 type="button"
                 className="app-sidebar-nav-item app-sidebar-collapse-toggle"
-                onClick={() => setIsWorkspaceSidebarCollapsed(v => !v)}
-                title={isWorkspaceSidebarCollapsed ? 'Mở rộng sidebar' : 'Thu gọn sidebar'}
+                onClick={() => setIsSidebarCollapsed(v => !v)}
+                title={isSidebarCollapsed ? 'Mở rộng sidebar' : 'Thu gọn sidebar'}
               >
-                {isWorkspaceSidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
-                <span className="app-sidebar-nav-label">{isWorkspaceSidebarCollapsed ? 'Mở rộng' : 'Thu gọn'}</span>
+                {isSidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+                <span className="app-sidebar-nav-label">{isSidebarCollapsed ? 'Mở rộng' : 'Thu gọn'}</span>
               </button>
             </div>
           </aside>
@@ -1452,7 +1361,7 @@ const processNotificationChunk = (chunk: string): void => {
                fresh key remounts the boundary along with the content. */}
             <ErrorBoundary key={location.pathname} label="Nội dung trang">
             <Suspense fallback={<div className="workspace-area-loading">Đang tải…</div>}>
-            {activeWorkspaceView === 'settings' ? (
+            {activeView === 'settings' ? (
               <SettingsPanel
                 googleCalendarStatus={schedules.googleCalendarStatus}
                 onConnectGoogleCalendar={schedules.handleConnectGoogleCalendar}
@@ -1481,7 +1390,7 @@ const processNotificationChunk = (chunk: string): void => {
                 onUpdateChannel={preferences.updateChannel}
                 onDeleteChannel={preferences.removeChannel}
               />
-                        ) : activeWorkspaceView === 'schedule' ? (
+                        ) : activeView === 'schedule' ? (
               <section className="home-workspace">
                 <div className="home-schedule-area">
                   <CalendarView
@@ -1514,72 +1423,75 @@ const processNotificationChunk = (chunk: string): void => {
                   />
                 </div>
               </section>
-            ) : activeWorkspaceView === 'tasks' ? (
+            ) : activeView === 'tasks' ? (
               <TasksPage />
-            ) : activeWorkspaceView === 'notifications' ? (
+            ) : activeView === 'notifications' ? (
               <NotificationsPage
                 onNavigate={(path) => navigate(path)}
                 onNotificationsChanged={() => void notif.fetchNotifications()}
               />
-            ) : activeWorkspaceView === 'workflow' ? (
+            ) : activeView === 'workflow' ? (
               <WorkflowBuilder
-                workspaceId={workspaces.currentWorkspace?.id ?? null}
-                workflowId={activeWorkspaceWorkflowId}
+                projectId={projects.currentProject?.id ?? null}
+                workflowId={activeWorkflowId}
                 onBack={() => {
-                  const workspaceId = workspaces.currentWorkspace?.id
-                  if (workspaceId) navigate(workflowRoute(workspaceId))
+                  const projectId = projects.currentProject?.id
+                  if (projectId) navigate(workflowRoute(projectId))
                 }}
                 onNavigate={(wfId) => {
-                  const workspaceId = workspaces.currentWorkspace?.id
-                  if (workspaceId) navigate(workflowRoute(workspaceId, wfId))
+                  const projectId = projects.currentProject?.id
+                  if (projectId) navigate(workflowRoute(projectId, wfId))
                 }}
                 onWorkflowsChanged={() => {
-                  const workspaceId = workspaces.currentWorkspace?.id
-                  if (workspaceId) void sidebarWorkflows.fetchWorkflows({ workspace_id: workspaceId })
+                  const projectId = projects.currentProject?.id
+                  if (projectId) void sidebarWorkflows.fetchWorkflows({ project_id: projectId })
                 }}
               />
-            ) : !routeWorkspaceState.workspaceId ? (
+            ) : !routeState.projectId ? (
               <GlobalHome
                 user={auth.user}
-                workspaces={workspaces.workspaces}
+                projects={projects.projects}
                 recentNotes={notes.recentNotes}
                 upcomingSchedules={schedules.schedules}
-                onCreateWorkspace={() => setIsCreateWorkspaceOpen(true)}
-                onOpenWorkspace={(workspaceId) => {
-                  const workspace = workspaces.workspaces.find(ws => ws.id === workspaceId)
-                  if (workspace) handleWorkspaceSwitch(workspace)
+                onCreateProject={() => {
+                  const name = window.prompt(strings.projects.newProjectPrompt)?.trim()
+                  if (name) void projects.create(name)
                 }}
-                onOpenNote={(noteId) => openWorkspaceNote(noteId)}
+                onOpenProject={(projectId) => {
+                  projects.setOpenProject(projectId)
+                  navigate(tasksRoute())
+                }}
+                onOpenNote={(noteId) => openProjectNote(noteId)}
               />
-            ) : activeWorkspaceView === 'records' ? (
+            ) : activeView === 'records' ? (
               <RecordPanel
                 requestWithAuth={requestWithAuth}
                 isVisible
-                initialAssetId={activeWorkspaceAssetId}
+                initialAssetId={activeAssetId}
                 onAssetViewed={() => {
-                  const workspaceId = workspaces.currentWorkspace?.id
-                  if (workspaceId) {
-                    navigate(workspaceRoute(workspaceId, '/records'))
+                  const projectId = projects.currentProject?.id
+                  if (projectId) {
+                    navigate(projectRoute(projectId, '/records'))
                   }
                 }}
-                workspaceId={workspaces.currentWorkspace?.id}
+                projectId={projects.currentProject?.id}
                 onAssetChange={() => {
                   void assets.loadSidebarAssets()
                 }}
               />
-            ) : activeWorkspaceView === 'knowledge' && activeWorkspaceKnowledgeAssetId ? (
+            ) : activeView === 'knowledge' && activeKnowledgeAssetId ? (
               <AssetKnowledgeView
-                assetId={activeWorkspaceKnowledgeAssetId}
+                assetId={activeKnowledgeAssetId}
                 requestWithAuth={requestWithAuth}
                 onClose={() => {
-                  const workspaceId = workspaces.currentWorkspace?.id
-                  if (workspaceId) navigate(workspaceRoute(workspaceId, '/records'))
+                  const projectId = projects.currentProject?.id
+                  if (projectId) navigate(projectRoute(projectId, '/records'))
                 }}
               />
-            ) : notes.activeWorkspaceNote ? (
+            ) : notes.activeNote ? (
               <div className="workspace-note-page">
-                <WorkspaceNoteEditor
-                  note={notes.activeWorkspaceNote}
+                <NoteEditorPane
+                  note={notes.activeNote}
                   onChange={handleNoteChange}
                   onTitleChange={handleNoteTitleChange}
                   onAskAI={() => setIsAskAIOpen(true)}
@@ -1594,7 +1506,7 @@ const processNotificationChunk = (chunk: string): void => {
               </div>
             ) : (
               <section className="workspace-empty-note">
-                <p>Chọn một note từ sidebar để mở trong workspace.</p>
+                <p>Chọn một ghi chú từ sidebar để mở.</p>
               </section>
             )}
             </Suspense>
@@ -1605,15 +1517,15 @@ const processNotificationChunk = (chunk: string): void => {
           {auth.tokens && isAskAIOpen && (
             <div className="ask-ai-sidebar">
               <AskAI
-                noteContent={notes.activeWorkspaceNote?.contentMd}
-                noteTitle={notes.activeWorkspaceNote ? noteTitleFromMd(notes.activeWorkspaceNote.contentMd) : undefined}
+                noteContent={notes.activeNote?.contentMd}
+                noteTitle={notes.activeNote ? noteTitleFromMd(notes.activeNote.contentMd) : undefined}
                 pendingSelection={pendingSelection}
-                workspaceId={workspaces.currentWorkspace?.id}
+                projectId={projects.currentProject?.id}
                 onClose={() => setIsAskAIOpen(false)}
                 onInsert={(text) => {
-                  if (!notes.activeWorkspaceNote) return
-                  const newContent = notes.activeWorkspaceNote.contentMd + '\n\n' + text
-                  handleNoteChange(notes.activeWorkspaceNote.id, newContent)
+                  if (!notes.activeNote) return
+                  const newContent = notes.activeNote.contentMd + '\n\n' + text
+                  handleNoteChange(notes.activeNote.id, newContent)
                 }}
                 onToolNavigate={async (toolName: string) => {
                   if (toolName === 'create_note') {
@@ -1656,61 +1568,12 @@ const processNotificationChunk = (chunk: string): void => {
 
       {
         auth.tokens && isSearchOpen && (
-          <WorkspaceSearch
+          <NoteSearch
             notes={notes.recentNotes}
             onOpenNote={(noteId) => {
-              openWorkspaceNote(noteId)
+              openProjectNote(noteId)
             }}
             onClose={() => setIsSearchOpen(false)}
-          />
-        )
-      }
-
-      {/* Create Workspace Modal */}
-      {
-        auth.tokens && isCreateWorkspaceOpen && (
-          <WorkspaceCreateModal
-            onClose={() => setIsCreateWorkspaceOpen(false)}
-            onCreated={(workspaceId) => {
-              setIsCreateWorkspaceOpen(false)
-              const workspace = workspaces.workspaces.find(ws => ws.id === workspaceId)
-              if (workspace) {
-                handleWorkspaceSwitch(workspace)
-              }
-            }}
-            onCreateWorkspace={workspaces.createWorkspace}
-          />
-        )
-      }
-
-      {/* Manage Members Modal */}
-      {
-        auth.tokens && managingMembersWorkspace && (
-          <WorkspaceMembersModal
-            workspace={managingMembersWorkspace}
-            members={[]}
-            onClose={() => setManagingMembersWorkspace(null)}
-            onAddMember={async (email, role) => {
-              const success = await workspaces.addMember(managingMembersWorkspace.id, email, role)
-              if (success) {
-                // TODO: Refresh members list
-              }
-              return success
-            }}
-            onRemoveMember={async (userId) => {
-              const success = await workspaces.removeMember(managingMembersWorkspace.id, userId)
-              if (success) {
-                // TODO: Refresh members list
-              }
-              return success
-            }}
-            onChangeRole={async (userId, role) => {
-              const success = await workspaces.changeMemberRole(managingMembersWorkspace.id, userId, role)
-              if (success) {
-                // TODO: Refresh members list
-              }
-              return success
-            }}
           />
         )
       }
@@ -1719,39 +1582,6 @@ const processNotificationChunk = (chunk: string): void => {
           Rendered once; it is null until a confirmation is pending. */}
       {confirmDialog}
 
-      {/* Workspace Settings Modal */}
-      {
-        auth.tokens && settingsWorkspace && (
-          <WorkspaceSettingsModal
-            workspace={settingsWorkspace}
-            onClose={() => setSettingsWorkspace(null)}
-            onRenameWorkspace={async (id, name) => {
-              const ok = await workspaces.renameWorkspace(id, name)
-              if (ok) {
-                // Update local settingsWorkspace to reflect new name
-                setSettingsWorkspace(prev => prev ? { ...prev, name } : null)
-              }
-              return ok
-            }}
-            onDeleteWorkspace={async (id) => {
-              const ok = await workspaces.deleteWorkspace(id)
-              if (ok) setSettingsWorkspace(null)
-              return ok
-            }}
-            onAddMember={async (email, role) => {
-              return workspaces.addMember(settingsWorkspace.id, email, role)
-            }}
-            onRemoveMember={async (userId) => {
-              return workspaces.removeMember(settingsWorkspace.id, userId)
-            }}
-            onChangeRole={async (userId, role) => {
-              return workspaces.changeMemberRole(settingsWorkspace.id, userId, role)
-            }}
-            members={[]}
-            currentUserId={auth.user?.id}
-          />
-        )
-      }
     </div >
   )
 }

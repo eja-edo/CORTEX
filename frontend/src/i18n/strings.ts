@@ -71,15 +71,15 @@ export const strings = {
       title: 'Không có sự kiện sắp tới',
       desc: 'Sự kiện từ lịch của bạn sẽ xuất hiện ở đây.',
     },
-    workspaces: {
-      title: 'Không gian làm việc',
-      createBtn: 'Tạo không gian làm việc',
-      noWorkspaces: {
-        title: 'Chưa có không gian làm việc',
-        desc: 'Tạo không gian làm việc đầu tiên của bạn để bắt đầu',
+    projects: {
+      title: 'Dự án',
+      createBtn: 'Tạo dự án',
+      empty: {
+        title: 'Chưa có dự án nào',
+        // Nói ra *cửa chính*, không chỉ cửa phụ: phần lớn dự án sinh ra từ
+        // một channel có việc (DESIGN 4.1), không do ai bấm nút tạo.
+        desc: 'Dự án xuất hiện khi có việc từ một channel. Bạn cũng có thể tạo tay.',
       },
-      role: 'Vai trò',
-      noWorkflows: 'Không có workflow nào',
     },
     recentActivity: {
       title: 'Hoạt động gần đây',
@@ -140,127 +140,15 @@ export const strings = {
     },
   },
 
-  // ── Workspace ──
-  workspace: {
-    settings: {
-      title: 'Cài đặt',
-      closeBtn: 'Đóng',
-      general: {
-        title: 'Chung',
-        desc: 'Quản lý cài đặt và tùy preferences của workspace.',
-        nameLabel: 'Tên workspace',
-        namePlaceholder: 'Tên workspace',
-        nameHint: 'Tên này xuất hiện trong sidebar và bộ chuyển đổi workspace.',
-        saveBtn: 'Lưu',
-        saved: 'Đã lưu',
-        idLabel: 'ID workspace',
-        copyId: 'Sao chép',
-        copied: 'Đã sao chép',
-        copyIdTooltip: 'Sao chép ID',
-        copyIdHint: 'Sử dụng ID này khi làm việc với API hoặc chia sẻ liên kết workspace.',
-        typeLabel: 'Loại workspace',
-        personal: 'Không gian cá nhân',
-        team: 'Không gian nhóm',
-        personalHint: 'Không gian cá nhân là riêng tư và không thể chia sẻ.',
-        teamHint: 'Không gian nhóm có thể chia sẻ với thành viên.',
-      },
-      people: {
-        title: 'Thành viên & quyền',
-        desc: 'Quản lý ai có quyền truy cập workspace này và họ có thể làm gì.',
-        inviteLabel: 'Mời thành viên',
-        emailPlaceholder: 'name@company.com',
-        roleEditor: 'Có thể chỉnh sửa',
-        roleViewer: 'Có thể xem',
-        inviteBtn: 'Mời',
-        inviteError: 'Không thể thêm thành viên. Hãy chắc chắn email đúng.',
-        membersLabel: 'Thành viên',
-        memberCount: (n: number) => `${n} thành viên`,
-        searchPlaceholder: 'Lọc theo tên hoặc email',
-        noMembers: 'Không có thành viên nào',
-        youBadge: 'Bạn',
-        removeTooltip: 'Xóa khỏi workspace',
-        removeAction: 'Xóa',
-      },
-      notifications: {
-        title: 'Thông báo',
-        desc: 'Chọn bạn muốn nhận thông báo gì trong workspace này.',
-        noteUpdates: { label: 'Cập nhật ghi chú', desc: 'Khi có người chỉnh sửa ghi chú trong workspace này' },
-        memberJoins: { label: 'Thành viên mới', desc: 'Khi có người tham gia workspace' },
-        mentions: { label: 'Nhắc đến', desc: 'Khi bạn được @nhắc trong ghi chú' },
-        weeklyDigest: { label: 'Tóm tắt tuần', desc: 'Tóm tắt hoạt động hàng tuần' },
-      },
-      integrations: {
-        title: 'Tích hợp',
-        desc: 'Kết nối workspace của bạn với các công cụ và dịch vụ khác.',
-        googleCalendar: { name: 'Google Calendar', desc: 'Đồng bộ sự kiện và lịch' },
-        slack: { name: 'Slack', desc: 'Nhận thông báo trong Slack' },
-        github: { name: 'GitHub', desc: 'Liên kết repo và issue' },
-        connected: 'Đã kết nối',
-        connect: 'Kết nối',
-      },
-      danger: {
-        title: 'Vùng nguy hiểm',
-        desc: 'Các hành động này là vĩnh viễn và không thể hoàn tác.',
-        desc2: (name: string) => `Permanently delete <strong>${name}</strong> and all its contents. This action cannot be undone.`,
-        deleteBtn: 'Xóa workspace',
-        confirmLabel: (name: string) => `Gõ <strong>${name}</strong> để xác nhận`,
-        personalCannotDelete: 'Không gian cá nhân không thể xóa.',
-        onlyOwnerCanDelete: 'Chỉ chủ sở hữu workspace mới có thể xóa.',
-      },
-    },
-    members: {
-      title: 'Quản lý thành viên',
-      subtitle: '—',
-      emailLabel: 'Thêm thành viên qua email',
-      emailPlaceholder: 'user@example.com',
-      roleEditor: 'Editor',
-      roleViewer: 'Viewer',
-      addBtn: 'Mời',
-      adding: 'Đang thêm…',
-      membersCount: (n: number) => `Thành viên (${n})`,
-      noMembers: 'Không có thành viên nào',
-      doneBtn: 'Xong',
-      removeTooltip: 'Remove member',
-      roleOwner: 'Owner',
-      emailRequired: 'Vui lòng nhập email',
-      addError: 'Không thể thêm thành viên',
-    },
-    create: {
-      title: 'Tạo workspace',
-      nameLabel: 'Tên workspace',
-      namePlaceholder: 'ví dụ: Dự án nhóm, Ghi chú cá nhân',
-      nameRequired: 'Tên workspace là bắt buộc',
-      createBtn: 'Tạo workspace',
-      creating: 'Đang tạo…',
-      cancelBtn: 'Hủy',
-      createError: 'Không tạo được workspace',
-    },
-    role: {
-      owner: 'Owner',
-      editor: 'Editor',
-      viewer: 'Viewer',
-    },
-    switcher: {
-      personalBadge: 'Cá nhân · Solo',
-      teamBadge: 'Nhóm',
-      settingsTitle: 'Cài đặt',
-      inviteTitle: 'Mời thành viên',
-      userFallback: 'Người dùng',
-      yourWorkspaces: 'Workspace của bạn',
-      ctxSettings: 'Cài đặt',
-      ctxRename: 'Đổi tên',
-      ctxManageMembers: 'Quản lý thành viên',
-      ctxDelete: 'Xóa',
-      createWorkspaceBtn: 'Tạo workspace',
-    },
-  },
-
   // ── App navigation ──
    nav: {
-    home: 'Trang chủ',
+    // "Hôm nay", không phải "Trang chủ": màn này trả lời *giờ tôi nên làm
+    // gì*, và tên của nó là một phần của câu trả lời đó (DESIGN 10.2).
+    home: 'Hôm nay',
     notifications: 'Thông báo',
     schedule: 'Lịch',
-    tasks: 'Nhiệm vụ',
+    // "Việc" — bề mặt tra cứu và sửa, phạm vi là dự án đang mở (DESIGN 10.2).
+    tasks: 'Việc',
     records: 'Bản ghi',
     workflows: 'Workflow',
     settings: 'Cài đặt',
@@ -273,6 +161,40 @@ export const strings = {
     noWorkflows: 'Chưa có workflow nào',
     noNotesYet: 'Chưa có ghi chú nào',
     deleteTitle: 'Xoá',
+  },
+
+  // ── Dự án (DESIGN 10.1 / 10.2) ──
+  projects: {
+    switcherLabel: 'Dự án',
+    none: 'Chưa có dự án',
+    yourProjects: 'Dự án của bạn',
+    // Nguồn gốc, hiển thị cho người dùng. "Từ channel" trả lời câu họ hay
+    // hỏi nhất về một dự án họ không nhớ đã tạo — vì họ chưa từng tạo nó.
+    originDerived: 'Từ channel',
+    originManual: 'Tạo tay',
+    originPersonal: 'Cá nhân',
+    rename: 'Đổi tên',
+    renameFailed: 'Không đổi được tên dự án.',
+    createFailed: 'Không tạo được dự án.',
+    // Nhãn của dự án cá nhân trong dropdown. Nó là *giá trị mặc định khi
+    // người dùng không nói gì khác*, không phải nơi chứa đồ thất lạc — nên
+    // nó mang tên thật của người dùng, không phải "Khác" hay "Chưa phân loại".
+    personalFallback: 'Cá nhân',
+    newProject: 'Dự án mới…',
+    newProjectPrompt: 'Tên dự án',
+    moveLabel: 'Thuộc dự án',
+    moving: 'Đang chuyển…',
+    moveFailed: 'Không chuyển được dự án. Thử lại nhé.',
+    moved: (name: string) => `Đã chuyển sang ${name}`,
+    empty: 'Chưa có dự án nào',
+    // Màn Việc trống. Nói ra *vì sao* nó trống: dự án sinh ra từ channel
+    // có việc (4.1), không phải từ một nút "Tạo dự án".
+    emptyHint: 'Dự án xuất hiện khi có việc từ một channel. Bạn cũng có thể tạo tay.',
+    noOpenTasks: 'Không còn việc nào đang mở trong dự án này',
+    openCount: (n: number) => `${n} việc đang mở`,
+    deadlineNone: 'Không hạn',
+    deadlineIn: (days: number) => (days < 0 ? `Quá hạn ${-days} ngày` : days === 0 ? 'Hạn hôm nay' : `Còn ${days} ngày`),
+    loadFailed: 'Không tải được danh sách dự án',
   },
 
   // ── Records / Assets ──

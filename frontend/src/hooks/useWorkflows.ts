@@ -47,7 +47,7 @@ export function useWorkflows() {
   const [loading, setLoading] = useState(false)
 
   const fetchWorkflows = useCallback(async (params?: {
-    workspace_id?: string
+    project_id?: string
     status?: string
     page?: number
     page_size?: number
@@ -55,7 +55,7 @@ export function useWorkflows() {
     setLoading(true)
     try {
       const searchParams = new URLSearchParams()
-      if (params?.workspace_id) searchParams.set('workspace_id', params.workspace_id)
+      if (params?.project_id) searchParams.set('project_id', params.project_id)
       if (params?.status) searchParams.set('status', params.status)
       if (params?.page) searchParams.set('page', String(params.page))
       if (params?.page_size) searchParams.set('page_size', String(params.page_size))

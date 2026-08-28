@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { clsx } from 'clsx'
 import {
     Check,
@@ -14,6 +14,7 @@ import { useTasksPage, type TaskWire } from '../hooks/useTasksPage'
 import { useConfirmDialog } from '../hooks/useConfirmDialog'
 import { useToast } from '../hooks/useToast'
 import { TaskChecklistRow } from './TaskChecklistRow'
+import { useProjectStore } from '../stores/projectStore'
 import { SubtaskCreatePanel } from './SubtaskCreatePanel'
 import type { TaskDetailPatch } from './TaskDetailPopover'
 import { toggleTaskWithCascade } from '../utils/taskCascade'
@@ -98,6 +99,24 @@ export function TasksPage() {
     const { confirm, dialog } = useConfirmDialog()
     const toast = useToast()
 
+    // DESIGN 10.2 — màn **Việc** có phạm vi *dự án đang mở*; màn **Hôm nay**
+    // thì không, và sự bất đối xứng đó là chủ ý. Nếu Hôm nay cũng lọc theo
+    // dự án, người dùng phải tự nhớ đi qua từng dự án để biết mình cần làm
+    // gì — đúng công việc Cortex sinh ra để bỏ đi. Xếp hạng ở 7.1 chỉ có
+    // nghĩa khi nó nhìn được toàn bộ.
+    // Phạm vi đến từ bộ chuyển trên sidebar — trang này chỉ *đọc* nó.
+    // Đặt một bộ chuyển thứ hai ở đây sẽ là hai chỗ đổi cùng một thứ, và
+    // người dùng phải đoán cái nào thắng.
+    const projects = useProjectStore((state) => state.projects)
+    const openProjectId = useProjectStore((state) => state.openProjectId)
+    const fetchProjects = useProjectStore((state) => state.fetchAll)
+    const hasLoadedProjects = useProjectStore((state) => state.hasLoaded)
+    const currentProjectName = projects.find((p) => p.id === openProjectId)?.name ?? null
+
+    useEffect(() => {
+        if (!hasLoadedProjects) void fetchProjects()
+    }, [hasLoadedProjects, fetchProjects])
+
     const [taskView, setTaskView] = useState<TaskViewMode>('day')
     const [dayDate, setDayDate] = useState<string>(todayIso())
     const [weekReference, setWeekReference] = useState<Date>(() => new Date())
@@ -120,15 +139,26 @@ export function TasksPage() {
     // UTC instant, so comparing the raw string (`dateOnly`) reads off the
     // wrong day whenever local time and UTC disagree on today's date
     // (anywhere east of UTC, that's most of every evening).
-    const openTasks = useMemo(() => tasks.filter((t) => isLiveTask(t) && t.status !== 'done'), [tasks])
-    const completedTasks = useMemo(() => tasks.filter((t) => t.status === 'done'), [tasks])
+    // Lọc một lần ở đây thay vì ở từng danh sách bên dưới: mọi khung nhìn
+    // của trang này (ngày/tuần/tháng, đã xong, đã đóng) phải nói về cùng
+    // một dự án, nếu không "3 việc đang mở" ở chỗ này và danh sách ở chỗ
+    // kia sẽ đếm hai tập khác nhau.
+    //
+    // `openProjectId === null` (chưa có dự án nào) hiện tất cả — một màn
+    // hình trống không nói được vì sao nó trống là tệ hơn.
+    const scopedTasks = useMemo(
+        () => (openProjectId ? tasks.filter((t) => t.project_id === openProjectId) : tasks),
+        [tasks, openProjectId],
+    )
+    const openTasks = useMemo(() => scopedTasks.filter((t) => isLiveTask(t) && t.status !== 'done'), [scopedTasks])
+    const completedTasks = useMemo(() => scopedTasks.filter((t) => t.status === 'done'), [scopedTasks])
     const completedTasksOnDate = useMemo(
         () => completedTasks.filter((t) => t.completed_at && localDateOfUtcTimestamp(t.completed_at) === dayDate),
         [completedTasks, dayDate],
     )
     const closedTasks = useMemo(
-        () => tasks.filter((t) => t.status === 'cancelled' || t.status === 'rejected'),
-        [tasks],
+        () => scopedTasks.filter((t) => t.status === 'cancelled' || t.status === 'rejected'),
+        [scopedTasks],
     )
 
     const handleDeleteTask = async (task: TaskWire) => {
@@ -179,7 +209,9 @@ export function TasksPage() {
             <header className="tasks-page-header">
                 <h1 className="tasks-page-title">Việc cần làm</h1>
                 <p className="tasks-page-subtitle">
-                    Toàn bộ việc cần làm — không chỉ những gì "Hôm nay" xếp hạng là cần làm ngay.
+                    {currentProjectName
+                        ? `Việc trong ${currentProjectName} — đổi dự án ở bộ chuyển trên sidebar.`
+                        : 'Toàn bộ việc cần làm — không chỉ những gì "Hôm nay" xếp hạng là cần làm ngay.'}
                 </p>
             </header>
 

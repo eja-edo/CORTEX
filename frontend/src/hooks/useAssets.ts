@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react'
-import type { Workspace } from '../types'
+import type { Project } from '../types'
 import { requestWithAuth } from '../services/api'
 
 export type SidebarAsset = {
@@ -10,12 +10,12 @@ export type SidebarAsset = {
     created_at: string
 }
 
-export function useAssets(currentWorkspace: Workspace | null) {
+export function useAssets(currentProject: Project | null) {
     const [sidebarAssets, setSidebarAssets] = useState<SidebarAsset[]>([])
     const [sidebarAssetsLoading, setSidebarAssetsLoading] = useState(false)
 
     const loadSidebarAssets = useCallback(async (): Promise<void> => {
-        if (!currentWorkspace) return
+        if (!currentProject) return
         setSidebarAssetsLoading(true)
         try {
             const assets = await requestWithAuth<Array<{
@@ -24,14 +24,14 @@ export function useAssets(currentWorkspace: Workspace | null) {
                 status: string
                 type: string
                 created_at: string
-            }>>(`/assets/workspaces/${currentWorkspace.id}`)
+            }>>(`/assets/projects/${currentProject.id}`)
             setSidebarAssets(assets)
         } catch (error) {
             console.error('Failed to load sidebar assets:', error)
         } finally {
             setSidebarAssetsLoading(false)
         }
-    }, [currentWorkspace])
+    }, [currentProject])
 
     const deleteAsset = useCallback(async (assetId: string): Promise<boolean> => {
         try {

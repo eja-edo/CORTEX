@@ -136,6 +136,8 @@ export function toolSemanticDescription(toolName: string, toolArgs?: Record<stri
     const title = (toolArgs.title as string) || ''
     const query = (toolArgs.query as string) || ''
     const noteId = (toolArgs.note_id as string) || ''
+    const projectRef = (toolArgs.project_ref as string) || ''
+    const name = (toolArgs.name as string) || ''
 
     switch (toolName) {
         case 'update_note': {
@@ -158,6 +160,28 @@ export function toolSemanticDescription(toolName: string, toolArgs?: Record<stri
         case 'search_notes': {
             return query ? `tìm "${query}"` : 'tìm notes'
         }
+        // Việc và dự án — cùng bộ nhãn với bot (`mezon_bot/src/mezon/
+        // thinking.js`), cố ý sao chép chứ không chia sẻ: hai bên là hai
+        // deployable và có thể phân kỳ hợp lệ.
+        case 'create_task': {
+            return title ? `việc "${title}"` : 'việc mới'
+        }
+        case 'list_pending_tasks':
+            return 'việc chờ xác nhận'
+        case 'confirm_task':
+            return 'xác nhận việc'
+        case 'get_today':
+            return 'hôm nay'
+        case 'list_projects':
+            return 'danh sách dự án'
+        case 'get_project_tasks':
+            return projectRef ? `việc trong "${projectRef}"` : 'việc trong dự án'
+        case 'move_task':
+            return projectRef ? `chuyển sang "${projectRef}"` : 'chuyển dự án'
+        case 'create_project':
+            return name ? `dự án mới "${name}"` : 'dự án mới'
+        case 'ask_user_choice':
+            return 'hỏi lại'
         case 'create_schedule': {
             return title ? `lịch "${title}"` : 'lịch mới'
         }
@@ -218,7 +242,7 @@ export function toolResultSummary(toolName: string, result: unknown, success: bo
 }
 
 interface UseAgentStreamOptions {
-    workspaceId?: string
+    projectId?: string
     noteContent?: string
     noteTitle?: string
     pendingSelection?: string
@@ -228,7 +252,7 @@ interface UseAgentStreamOptions {
 }
 
 export function useAgentStream(options: UseAgentStreamOptions) {
-    const { workspaceId, noteTitle, onToolNavigate, onNoteDiff, onPlanProposal } = options
+    const { projectId, noteTitle, onToolNavigate, onNoteDiff, onPlanProposal } = options
     const navigate = useNavigate()
     const { updateTokenUsage } = useConversationStore()
 
@@ -666,7 +690,7 @@ export function useAgentStream(options: UseAgentStreamOptions) {
 
                 if (event.tool_name === 'create_note') {
                     const noteId = result?.id as string | undefined
-                    const wsId = (result?.workspace_id as string | undefined) || workspaceId
+                    const wsId = (result?.workspace_id as string | undefined) || projectId
                     if (noteId && wsId) {
                         console.debug('Tool navigation: create_note', { noteId, wsId })
                         onToolNavigate?.('create_note').catch(() => { })
@@ -684,7 +708,7 @@ export function useAgentStream(options: UseAgentStreamOptions) {
 
                 if (event.tool_name === 'summarize_asset') {
                     const assetId = result?.id as string | undefined
-                    const wsId = (result?.workspace_id as string | undefined) || workspaceId
+                    const wsId = (result?.workspace_id as string | undefined) || projectId
                     if (assetId && wsId) {
                         console.debug('Tool navigation: summarize_asset', { assetId, wsId })
                         onToolNavigate?.('knowledge').catch(() => { })
@@ -726,10 +750,11 @@ export function useAgentStream(options: UseAgentStreamOptions) {
                 )
             }
 
+            let streamError: string | null = null
             for await (const event of streamAgentMessage(
                 userMsg,
                 conversationId || undefined,
-                workspaceId,
+                projectId,
                 context,
                 {
                     model: selectedModel === 'auto' ? undefined : selectedModel,
@@ -826,6 +851,14 @@ export function useAgentStream(options: UseAgentStreamOptions) {
                     }
                     thinkingSteps = [...thinkingSteps, step]
                     pushStepNow()
+                } else if (event.type === 'error') {
+                    /* The backend already phrased this for a person; show it
+                       as the assistant's reply rather than a toast, because
+                       whatever text streamed before it is still on screen and
+                       the failure needs to sit in the same place, in order. */
+                    flushPendingThinking()
+                    flushPendingText()
+                    streamError = event.error || 'Có lỗi khi xử lý tin nhắn của bạn. Bạn thử lại nhé.'
                 } else if (event.type === 'done' && event.conversation_id) {
                     finalConversationId = event.conversation_id
                     if (event.usage) {
@@ -852,9 +885,18 @@ export function useAgentStream(options: UseAgentStreamOptions) {
 
             updateTokenUsage(0)
 
+            if (streamError) {
+                setError(streamError)
+            }
+
             setMessages(prev =>
                 prev.map(m => m.id === loadingMsgObj.id
-                    ? { ...m, loading: false, thinkingSteps }
+                    ? {
+                        ...m,
+                        loading: false,
+                        thinkingSteps,
+                        ...(streamError ? { content: streamError } : {}),
+                    }
                     : m
                 )
             )
@@ -871,7 +913,7 @@ export function useAgentStream(options: UseAgentStreamOptions) {
             abortRef.current = null
             setIsLoading(false)
         }
-    }, [isLoading, conversationId, updateTokenUsage, buildRuntimeContextText, buildPageContext, navigate, workspaceId, onToolNavigate, saveConversationIdToStorage, selectedModel, onNoteDiff, onPlanProposal])
+    }, [isLoading, conversationId, updateTokenUsage, buildRuntimeContextText, buildPageContext, navigate, projectId, onToolNavigate, saveConversationIdToStorage, selectedModel, onNoteDiff, onPlanProposal])
 
     const acceptChange = useCallback((changeId: string, actionId: string) => {
         persistDismissedActionId(actionId)

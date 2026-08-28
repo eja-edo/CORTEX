@@ -1,4 +1,4 @@
-import type { TokenPair, NotificationListResponse, NotificationResponse, UserPreferencesResponse, ReasonPreference, UserChannel, ChannelLinkCode } from '../types'
+import type { TokenPair, NotificationListResponse, NotificationResponse, UserPreferencesResponse, ReasonPreference, UserChannel, ChannelLinkCode, Project, Task } from '../types'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api'
 const TOKEN_STORAGE_KEY = 'cortex_tokens'
@@ -64,18 +64,38 @@ async function refreshToken(currentRefreshToken: string): Promise<TokenPair> {
     return { accessToken: payload.access_token, refreshToken: payload.refresh_token }
 }
 
+/**
+ * Auth header, plus `Content-Type: application/json` whenever there is a
+ * body and the caller didn't set one.
+ *
+ * The default is here rather than at each call site because forgetting it
+ * fails in a way that points nowhere useful: FastAPI answers **422
+ * Unprocessable Entity**, which reads as "your payload is wrong" — so you
+ * go and check the payload, which is fine. It happened exactly that way
+ * with the project endpoints. An explicit Content-Type from the caller
+ * still wins, so nothing that already sets it changes behaviour.
+ */
+function authHeaders(init: RequestInit | undefined, accessToken: string): Headers {
+    const headers = new Headers(init?.headers ?? {})
+    headers.set('Authorization', `Bearer ${accessToken}`)
+    if (init?.body !== undefined && init.body !== null && !headers.has('Content-Type')) {
+        headers.set('Content-Type', 'application/json')
+    }
+    return headers
+}
+
 export async function requestWithAuth<T>(path: string, init?: RequestInit): Promise<T> {
     if (!currentTokens) throw new Error('Please login first')
 
-    const headers = new Headers(init?.headers ?? {})
-    headers.set('Authorization', `Bearer ${currentTokens.accessToken}`)
+    const headers = authHeaders(init, currentTokens.accessToken)
     let response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers })
     if (response.status === 401) {
         const newTokens = await refreshToken(currentTokens.refreshToken)
         setCurrentTokens(newTokens)
-        const retryHeaders = new Headers(init?.headers ?? {})
-        retryHeaders.set('Authorization', `Bearer ${newTokens.accessToken}`)
-        response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers: retryHeaders })
+        response = await fetch(`${API_BASE_URL}${path}`, {
+            ...init,
+            headers: authHeaders(init, newTokens.accessToken),
+        })
     }
     const text = await response.text()
     const body = text ? JSON.parse(text) : null
@@ -89,7 +109,7 @@ export async function requestWithAuth<T>(path: string, init?: RequestInit): Prom
 
 export interface ConversationListItem {
     id: string
-    workspace_id: string | null
+    project_id: string | null
     title: string
     message_count: number
     has_summary: boolean
@@ -120,7 +140,7 @@ export interface AgentMessage {
 
 export interface ConversationDetailResponse {
     id: string
-    workspace_id: string | null
+    project_id: string | null
     title: string
     summary: string | null
     message_count: number
@@ -183,12 +203,12 @@ export async function deleteConversation(conversationId: string): Promise<Delete
  * Send a chat message to the agent.
  * @param message - User message
  * @param conversationId - Optional existing conversation ID (creates new if not provided)
- * @param workspaceId - Optional workspace ID for context
+ * @param projectId - Dự án đang mở, nếu có
  */
 export async function sendAgentMessage(
     message: string,
     conversationId?: string,
-    workspaceId?: string,
+    projectId?: string,
     context?: Record<string, unknown>,
 ): Promise<{ conversation_id: string; reply: string }> {
     return requestWithAuth('/agent/chat', {
@@ -197,7 +217,7 @@ export async function sendAgentMessage(
         body: JSON.stringify({
             message,
             conversation_id: conversationId,
-            workspace_id: workspaceId,
+            project_id: projectId,
             context,
         }),
     })
@@ -222,9 +242,14 @@ export interface AskChoiceQuestion {
 }
 
 export interface StreamEvent {
+    /* `error` carries a message the backend already wrote for a person to
+       read — rate-limited, empty reply, cut off mid-answer. It used to be
+       missing from this union, and with it the parser below had no branch
+       for the event, so every one of those messages was dropped on the
+       floor and the user watched the answer simply never arrive. */
     type: 'text' | 'done' | 'tool_start' | 'tool_result' | 'thinking' | 'title_generated'
     | 'note_diff' | 'proposal_approved' | 'proposal_rejected' | 'proposal_conflict' | 'proposal_expired'
-    | 'plan_proposal' | 'ask_choice'
+    | 'plan_proposal' | 'ask_choice' | 'error'
     text?: string
     conversation_id?: string
     title?: string
@@ -252,7 +277,7 @@ export interface StreamOptions {
 export async function* streamAgentMessage(
     message: string,
     conversationId?: string,
-    workspaceId?: string,
+    projectId?: string,
     context?: Record<string, unknown>,
     options?: StreamOptions,
 ): AsyncGenerator<StreamEvent, void, undefined> {
@@ -265,7 +290,7 @@ export async function* streamAgentMessage(
     const body = JSON.stringify({
         message,
         conversation_id: conversationId,
-        workspace_id: workspaceId,
+        project_id: projectId,
         context,
         model: options?.model,
         temperature: options?.temperature,
@@ -332,6 +357,8 @@ export async function* streamAgentMessage(
 
                         if (data.event === 'token' && data.text) {
                             yield { type: 'text', text: data.text }
+                        } else if (data.event === 'error') {
+                            yield { type: 'error', error: data.message }
                         } else if (data.event === 'done') {
                             yield {
                                 type: 'done',
@@ -424,6 +451,8 @@ export async function* streamAgentMessage(
                 const data = JSON.parse(buffer.slice(6))
                 if (data.event === 'token' && data.text) {
                     yield { type: 'text', text: data.text }
+                } else if (data.event === 'error') {
+                    yield { type: 'error', error: data.message }
                 } else if (data.event === 'done') {
                     yield {
                         type: 'done',
@@ -654,3 +683,61 @@ export async function deleteUserChannel(channelId: string): Promise<void> {
 }
 
 export { API_BASE_URL }
+
+// ---------------------------------------------------------------------------
+// Projects — DESIGN 9.1
+// ---------------------------------------------------------------------------
+
+/** Open projects the user is a member of, with their summary numbers.
+ *
+ * Membership, not ownership: a project is shared, and someone who was added
+ * because work from its channel reached them must see it (QĐ-1). The server
+ * enforces that; this is just the call. */
+export async function listProjects(status?: 'active' | 'closed'): Promise<Project[]> {
+    const query = status ? `?status=${status}` : ''
+    return requestWithAuth<Project[]>(`/projects${query}`)
+}
+
+export async function createProject(name: string, deadline?: string | null): Promise<Project> {
+    return requestWithAuth<Project>('/projects', {
+        method: 'POST',
+        body: JSON.stringify({ name, deadline: deadline ?? null }),
+    })
+}
+
+export async function updateProject(
+    projectId: string,
+    patch: { name?: string; deadline?: string | null; status?: 'active' | 'closed' },
+): Promise<Project> {
+    return requestWithAuth<Project>(`/projects/${projectId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(patch),
+    })
+}
+
+/** Move one task to another project — the in-place fix from DESIGN 10.1.
+ *
+ * Its own endpoint rather than a field on the task PATCH, because it also
+ * records a label DESIGN 4.4 measures the derivation rule by. It never
+ * touches `related_event_id`. */
+export async function moveTaskToProject(taskId: string, projectId: string): Promise<Task> {
+    return requestWithAuth<Task>(`/tasks/${taskId}/project`, {
+        method: 'PATCH',
+        body: JSON.stringify({ project_id: projectId }),
+    })
+}
+
+/** Attach a recurring event's *template* row to a project.
+ *
+ * `affected_task_count` is the tasks already created from this series that
+ * were deliberately left alone — the UI asks about them rather than
+ * overwriting silently (DESIGN 3.5). */
+export async function setScheduleProject(
+    scheduleId: string,
+    projectId: string | null,
+): Promise<{ schedule_id: string; project_id: string | null; affected_task_count: number }> {
+    return requestWithAuth(`/schedules/${scheduleId}/project`, {
+        method: 'PATCH',
+        body: JSON.stringify({ project_id: projectId }),
+    })
+}

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { NoteItem } from '../components/NoteSidebar'
-import type { Workspace } from '../types'
+import type { Project } from '../types'
 import { requestWithAuth } from '../services/api'
 import { plainTextFromMarkdown } from '../utils/noteMarkdown'
 import { buildTextPatch, type NotePatchOp } from '../utils/textPatch'
@@ -95,7 +95,7 @@ function mapApiNoteSummaryToAppNote(note: ApiNoteSummary): AppNote {
     }
 }
 
-export function useNotes(currentWorkspace: Workspace | null, activeNoteId: string | null) {
+export function useNotes(currentProject: Project | null, activeNoteId: string | null) {
     const [recentNotes, setRecentNotes] = useState<AppNote[]>([])
     const recentNotesRef = useRef<AppNote[]>([])
     const noteSyncTimersRef = useRef<Record<string, number>>({})
@@ -105,8 +105,8 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
     // FIX: Track the activeNoteId in a ref so persist callbacks can check if they're still relevant
     const activeNoteIdRef = useRef<string | null>(activeNoteId)
 
-    const [workspaceDraggingNoteId, setWorkspaceDraggingNoteId] = useState<string | null>(null)
-    const [workspaceDropTargetParentId, setWorkspaceDropTargetParentId] = useState<string | null>(null)
+    const [projectDraggingNoteId, setProjectDraggingNoteId] = useState<string | null>(null)
+    const [projectDropTargetParentId, setProjectDropTargetParentId] = useState<string | null>(null)
 
     useEffect(() => {
         recentNotesRef.current = recentNotes
@@ -133,7 +133,7 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
         [recentNotes],
     )
 
-    const workspaceNotesByParent = useMemo(() => {
+    const projectNotesByParent = useMemo(() => {
         const byParent = new Map<string | null, NoteSummary[]>()
         for (const note of noteSummaries) {
             const parentId = note.parentNoteId ?? null
@@ -144,17 +144,17 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
         return byParent
     }, [noteSummaries])
 
-    const workspaceRootNotes = useMemo(() => {
+    const projectRootNotes = useMemo(() => {
         const existingIds = new Set(noteSummaries.map((note) => note.id))
         return noteSummaries.filter((note) => note.parentNoteId == null || !existingIds.has(note.parentNoteId))
     }, [noteSummaries])
 
-    const activeWorkspaceNote = useMemo(
+    const activeNote = useMemo(
         () => recentNotes.find((note) => note.id === activeNoteId) ?? null,
         [recentNotes, activeNoteId],
     )
 
-    const canMoveWorkspaceNote = useCallback((sourceId: string, targetParentId: string | null): boolean => {
+    const canMoveProjectNote = useCallback((sourceId: string, targetParentId: string | null): boolean => {
         if (sourceId === targetParentId) return false
 
         const childrenByParent = new Map<string | null, string[]>()
@@ -180,11 +180,11 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
         return true
     }, [])
 
-    const handleWorkspaceSidebarDrop = useCallback(async (targetParentId: string | null): Promise<void> => {
-        if (!workspaceDraggingNoteId) return
-        if (!canMoveWorkspaceNote(workspaceDraggingNoteId, targetParentId)) return
-        await handleMoveNote(workspaceDraggingNoteId, targetParentId)
-    }, [workspaceDraggingNoteId, canMoveWorkspaceNote]) // eslint-disable-line react-hooks/exhaustive-deps
+    const handleProjectSidebarDrop = useCallback(async (targetParentId: string | null): Promise<void> => {
+        if (!projectDraggingNoteId) return
+        if (!canMoveProjectNote(projectDraggingNoteId, targetParentId)) return
+        await handleMoveNote(projectDraggingNoteId, targetParentId)
+    }, [projectDraggingNoteId, canMoveProjectNote]) // eslint-disable-line react-hooks/exhaustive-deps
 
     const collectDescendantIds = useCallback((rootNoteId: string): string[] => {
         const notesByParent = new Map<string | null, AppNote[]>()
@@ -219,13 +219,13 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
     }, [])
 
     async function fetchNotes(): Promise<void> {
-        if (!currentWorkspace) return
+        if (!currentProject) return
         try {
-            const data = await requestWithAuth<ApiNoteSummary[]>(`/notes/workspaces/${currentWorkspace.id}`)
+            const data = await requestWithAuth<ApiNoteSummary[]>(`/notes/projects/${currentProject.id}`)
             const mappedNotes = data.map(mapApiNoteSummaryToAppNote)
             setRecentNotes(mappedNotes)
             // FIX: Reset sync states when fetching fresh note list — prevents stale
-            // sync state from a previous workspace or old note list
+            // sync state from a previous project or old note list
             noteSyncStatesRef.current = {}
             noteLoadInFlightRef.current = new Set()
 
@@ -380,22 +380,19 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
     }
 
     async function handleCreateNote(parentNoteId?: string): Promise<AppNote | null> {
-        if (!currentWorkspace) {
-            console.error('Please select a workspace first')
-            return null
-        }
-
-        if (currentWorkspace.my_role === 'viewer') {
-            console.error('You do not have permission to create notes in this workspace')
-            return null
-        }
-
+        // Không chặn ở đây khi chưa có dự án: server rơi về dự án cá nhân
+        // (DESIGN 3.5 bước 3). Bản trước chặn và chỉ `console.error`, nên
+        // nút "Ghi chú mới" im lặng không làm gì — người dùng không thấy
+        // lý do, và không có gì trên màn hình nói họ phải chọn cái gì.
+        //
+        // `ProjectMember` cố ý không có `role` (QĐ-1), nên cũng không còn
+        // nhánh viewer: ở trong dự án là ghi được.
         try {
             const created = await requestWithAuth<ApiNote>('/notes', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    workspace_id: currentWorkspace.id,
+                    project_id: currentProject?.id ?? null,
                     content: '# New note',
                     content_type: 'markdown',
                     parent_note_id: parentNoteId ?? null,
@@ -514,9 +511,9 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
         recentNotes,
         setRecentNotes,
         noteSummaries,
-        workspaceNotesByParent,
-        workspaceRootNotes,
-        activeWorkspaceNote,
+        projectNotesByParent,
+        projectRootNotes,
+        activeNote,
         handleNoteChange,
         handleTitleChange,
         fetchNotes,
@@ -526,11 +523,11 @@ export function useNotes(currentWorkspace: Workspace | null, activeNoteId: strin
         handleMoveNote,
         collectDescendantIds,
         clearNotes,
-        workspaceDraggingNoteId,
-        setWorkspaceDraggingNoteId,
-        workspaceDropTargetParentId,
-        setWorkspaceDropTargetParentId,
-        canMoveWorkspaceNote,
-        handleWorkspaceSidebarDrop,
+        projectDraggingNoteId,
+        setProjectDraggingNoteId,
+        projectDropTargetParentId,
+        setProjectDropTargetParentId,
+        canMoveProjectNote,
+        handleProjectSidebarDrop,
     }
 }

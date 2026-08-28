@@ -13,7 +13,7 @@ function isEditingText(): boolean {
  * Closes a modal/overlay on Escape. Extracted because the same
  * `useEffect(() => { document.addEventListener('keydown', ...) }, [])` block
  * was about to get copy-pasted into seven components; three others already
- * had their own hand-written copy (WorkspaceSearch, AskAI, App.tsx's mobile
+ * had their own hand-written copy (NoteSearch, AskAI, App.tsx's mobile
  * nav drawer) — a single hook keeps the behaviour in one place.
  *
  * Skips while a text field inside the modal has focus. Several of these

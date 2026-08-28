@@ -1,15 +1,5 @@
 export type AuthMode = 'login' | 'register'
 
-export type WorkspaceRole = 'owner' | 'editor' | 'viewer'
-
-export type Workspace = {
-  id: string
-  owner_id: string
-  name: string
-  is_personal: boolean
-  my_role: WorkspaceRole
-}
-
 export type User = {
   id: string
   email: string
@@ -76,6 +66,45 @@ export type TaskStatus = 'pending_confirm' | 'todo' | 'in_progress' | 'done' | '
 
 export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent'
 
+/**
+ * A project — a shared unit of work, not one person's folder (DESIGN 3.1).
+ *
+ * Không phải `Workspace` đổi tên — khái niệm đó đã bị gỡ hẳn. Workspace
+ * từng là hộp đựng
+ * *documents* and its membership answers "who may read"; a project's
+ * membership answers "who is on the hook". See DESIGN 3.6 for the measured
+ * cost of the rename that was rejected.
+ */
+export type Project = {
+  id: string
+  name: string
+  status: 'active' | 'closed'
+  /** `derived` — grew out of a Mezon channel that produced work (the main
+   * door). `manual` — someone typed it (the side door). `personal` — the
+   * default every loose task lands in. The three never merge: DESIGN 4.4
+   * measures the derivation rule's quality by how often assignments to
+   * `derived` projects get corrected, and mixing the others in makes that
+   * number meaningless. */
+  origin: 'derived' | 'manual' | 'personal'
+  /** Derived from `max(due_date)` once a day unless the user pinned it.
+   * `null` is normal, and for a personal project it is *invariant* — that
+   * is the single thing keeping loose work from ever producing a
+   * project-level nudge (DESIGN 3.4). */
+  deadline: string | null
+  deadline_is_manual: boolean
+  /** The Mezon channel this project is anchored to, and the channel its
+   * project-level reminders go to (DESIGN 8.1). Not displayed. */
+  source_channel_id: string | null
+  open_task_count: number
+  completed_task_count: number
+  member_count: number
+  /** `project_risk` from DESIGN 7.1 — the same number that ranks "Hôm
+   * nay", so the two surfaces can never disagree about one project. */
+  risk: number
+  created_at: string
+  updated_at: string
+}
+
 export type Task = {
   id: string
   user_id: string
@@ -93,6 +122,11 @@ export type Task = {
   /** A task's own checklist — self-referential, same shape as
    * `related_event_id`. Null for a top-level task. */
   parent_task_id: string | null
+  /** Which project this work is for. Never null — every task belongs to
+   * exactly one project (DESIGN 3.3). Independent of `related_event_id`:
+   * that one says where the task *came from*, this one says what it is
+   * *for*, and changing the project never touches the origin. */
+  project_id: string
   source_conversation_id: string | null
   source_message_id: string | null
   /** When this task last became `done` — null once reopened. The one field
@@ -183,7 +217,7 @@ export type AgentMessage = {
 
 export type AgentConversation = {
   id: string
-  workspace_id: string | null
+  project_id: string | null
   title: string
   summary: string | null
   message_count: number
@@ -194,7 +228,7 @@ export type AgentConversation = {
 
 export type ConversationListItem = {
   id: string
-  workspace_id: string | null
+  project_id: string | null
   title: string
   message_count: number
   has_summary: boolean
@@ -212,7 +246,7 @@ export type TokenBudgetStatus = {
 export type AgentChatRequest = {
   message: string
   conversation_id?: string
-  workspace_id?: string
+  project_id?: string
 }
 
 export type AgentChatResponse = {
@@ -279,7 +313,7 @@ export type WorkflowConflict = {
 export type WorkflowResponse = {
   id: string
   user_id: string
-  workspace_id: string | null
+  project_id: string | null
   name: string
   description: string | null
   status: WorkflowStatus
@@ -306,7 +340,7 @@ export type WorkflowListResponse = {
 export type WorkflowCreatePayload = {
   name: string
   description?: string
-  workspace_id?: string
+  project_id?: string
   trigger_type: TriggerType
   trigger_config: Record<string, unknown>
   definition: WorkflowDefinitionSchema

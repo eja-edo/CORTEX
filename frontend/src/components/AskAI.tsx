@@ -12,7 +12,7 @@ interface AskAIProps {
     pendingSelection?: string
     onClose: () => void
     onInsert?: (text: string) => void
-    workspaceId?: string
+    projectId?: string
     onToolNavigate?: (toolName: string) => Promise<void>
     onNoteDiff?: (noteId: string, proposalId: string) => void
 }
@@ -23,9 +23,9 @@ type ContextPill = {
     label: string
 }
 
-export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onInsert, workspaceId, onToolNavigate, onNoteDiff }: AskAIProps) {
+export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onInsert, projectId, onToolNavigate, onNoteDiff }: AskAIProps) {
     const [planProposalId, setPlanProposalId] = useState<string | null>(null)
-    const stream = useAgentStream({ workspaceId, noteContent, noteTitle, pendingSelection, onToolNavigate, onNoteDiff, onPlanProposal: setPlanProposalId })
+    const stream = useAgentStream({ projectId, noteContent, noteTitle, pendingSelection, onToolNavigate, onNoteDiff, onPlanProposal: setPlanProposalId })
 
     const [input, setInput] = useState('')
     const [addedPills, setAddedPills] = useState<ContextPill[]>([

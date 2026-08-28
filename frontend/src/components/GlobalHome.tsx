@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { Calendar, Clock, FileText, Plus, Zap, ChevronRight } from 'lucide-react'
-import type { Workspace } from '../types'
+import type { Project } from '../types'
 import type { AppNote } from '../hooks/useNotes'
 import type { Schedule } from '../types'
 import { strings } from '../i18n/strings'
@@ -8,11 +8,11 @@ import { TodayChecklist } from './TodayChecklist'
 
 interface GlobalHomeProps {
   user: { full_name?: string | null; email?: string | null } | null
-  workspaces: Workspace[]
+  projects: Project[]
   recentNotes: AppNote[]
   upcomingSchedules: Schedule[]
-  onCreateWorkspace: () => void
-  onOpenWorkspace: (workspaceId: string) => void
+  onCreateProject: () => void
+  onOpenProject: (projectId: string) => void
   onOpenNote: (noteId: string) => void
 }
 
@@ -39,11 +39,11 @@ function getGreeting(): string {
 
 export function GlobalHome({
   user,
-  workspaces,
+  projects,
   recentNotes,
   upcomingSchedules,
-  onCreateWorkspace,
-  onOpenWorkspace,
+  onCreateProject,
+  onOpenProject,
   onOpenNote,
 }: GlobalHomeProps) {
   /* Falls back to nothing rather than to the email's local part. Greeting a
@@ -155,55 +155,67 @@ export function GlobalHome({
             )}
           </section>
 
-          {/* Workspaces */}
+          {/* Dự án — thay chỗ khối workspace cũ. Cùng vị trí, cùng hình
+              dạng, nhưng nói về thứ người dùng thật sự làm việc bên trong:
+              `projects` là container duy nhất kể từ DESIGN 11.4. */}
           <section className="home-card">
             <div className="home-card-header">
               <div className="home-card-header-left">
                 <Zap size={16} className="home-card-header-icon" />
-                <h2 className="home-card-header-label">{strings.home.workspaces.title}</h2>
+                <h2 className="home-card-header-label">{strings.home.projects.title}</h2>
               </div>
             </div>
 
-            {workspaces.length === 0 ? (
+            {projects.length === 0 ? (
               <div className="home-empty-state">
                 <Zap size={48} className="home-empty-state-icon" />
-                 <p className="home-empty-state-title">{strings.home.workspaces.noWorkspaces.title}</p>
-                 <p className="home-empty-state-desc">{strings.home.workspaces.noWorkspaces.desc}</p>
+                <p className="home-empty-state-title">{strings.home.projects.empty.title}</p>
+                <p className="home-empty-state-desc">{strings.home.projects.empty.desc}</p>
                 <button
                   className="home-create-workspace-btn"
-                  onClick={onCreateWorkspace}
+                  onClick={onCreateProject}
                   style={{ marginTop: '16px', width: 'auto', padding: '8px 24px', borderStyle: 'solid' }}
                 >
                   <Plus size={14} />
-                  {strings.home.workspaces.createBtn}
+                  {strings.home.projects.createBtn}
                 </button>
               </div>
             ) : (
               <div className="home-workspace-list">
-                {workspaces.map(workspace => (
+                {projects.map(project => (
                   <button
-                    key={workspace.id}
+                    key={project.id}
                     className="home-workspace-item"
-                    onClick={() => onOpenWorkspace(workspace.id)}
+                    onClick={() => onOpenProject(project.id)}
                   >
                     <div
                       className="home-workspace-avatar"
                       style={{ background: 'var(--accent)' }}
                     >
-                      {workspace.name.charAt(0).toUpperCase()}
+                      {project.name.charAt(0).toUpperCase()}
                     </div>
                     <div className="home-workspace-info">
-                      <div className="home-workspace-name">{workspace.name}</div>
+                      <div className="home-workspace-name">{project.name}</div>
+                      {/* Nguồn gốc trước, rồi số việc: "cái này ở đâu ra?"
+                          là câu hay hỏi nhất về một dự án không ai nhớ đã
+                          tạo — vì phần lớn dự án sinh ra từ channel, không
+                          do ai bấm nút. */}
                       <div className="home-workspace-role">
-                        {workspace.my_role} &middot; {strings.home.workspaces.noWorkflows}
+                        {project.origin === 'derived'
+                          ? strings.projects.originDerived
+                          : project.origin === 'personal'
+                            ? strings.projects.originPersonal
+                            : strings.projects.originManual}
+                        {' \u00b7 '}
+                        {strings.projects.openCount(project.open_task_count)}
                       </div>
                     </div>
                     <ChevronRight size={16} className="home-workspace-chevron" />
                   </button>
                 ))}
-                <button className="home-create-workspace-btn" onClick={onCreateWorkspace}>
+                <button className="home-create-workspace-btn" onClick={onCreateProject}>
                   <Plus size={14} />
-                  {strings.home.workspaces.createBtn}
+                  {strings.home.projects.createBtn}
                 </button>
               </div>
             )}
