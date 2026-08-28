@@ -18,7 +18,11 @@ from sqlalchemy import delete, select
 from app.database_async import make_async_sessionmaker
 from app.models import (
     AttentionBundleQueue,
+    AttentionChannel,
     AttentionItemType,
+    AttentionLevel,
+    AttentionLog,
+    AttentionResponse,
     Notification,
     Project,
     ProjectMember,
@@ -53,6 +57,7 @@ async def async_db(user_id):
         yield db
         await db.execute(delete(AttentionBundleQueue).where(AttentionBundleQueue.user_id == user_id))
         await db.execute(delete(Notification).where(Notification.user_id == user_id))
+        await db.execute(delete(AttentionLog).where(AttentionLog.user_id == user_id))
         await db.execute(delete(Schedule).where(Schedule.user_id == user_id))
         # Thứ tự theo FK: task trỏ vào project, thành viên cũng vậy.
         await db.execute(delete(Task).where(Task.user_id == user_id))
@@ -364,3 +369,88 @@ async def test_project_scoped_reminder_is_released_to_its_channel_not_bundled(as
     # Cái cá nhân vẫn về DM như cũ.
     assert DeliveryPayload.from_notification(bundle).project_channel_id is None
     assert len(bundle.payload["bundled_items"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_stronger_reason_spoken_during_the_meeting_kills_the_queued_weaker_one(
+    async_db, user_id
+):
+    """Supersession phải áp ở cửa ra, không chỉ ở cửa vào.
+
+    Kịch bản có thật, không dựng:
+
+        10:00  đang họp · task.overdue  → RECOMMEND, không critical
+                                        → im vì bận → vào hàng đợi
+        10:30  vẫn họp  · task.at_risk  → ASK, nằm trong _CRITICAL_LEVELS
+                                        → không bị im → nói ngay
+        11:00  hết họp  · flush
+
+    Nếu flush không kiểm supersession thì 11:00 người dùng nhận "việc quá
+    hạn" sau khi đã nhận "việc có nguy cơ trễ cao" về **cùng một việc** —
+    tin cũ và nhẹ hơn đến sau tin mới và nặng hơn. Đường flush không đi
+    qua `request_attention_async`, nên luật của Gate không tự áp vào đây.
+    """
+    personal = await _project(async_db, user_id, name="Cá nhân", origin=ProjectOrigin.PERSONAL)
+    task = await _task_in(async_db, user_id, personal, title="việc trễ")
+
+    # 10:00 — bị im vì bận, vào hàng đợi.
+    await enqueue_async(
+        async_db, user_id=user_id, item_type=AttentionItemType.TASK, item_id=task.id,
+        reason_key="task.overdue", title=task.title, body=None,
+        payload={}, actions=[], attention_log_id=None,
+    )
+
+    # 10:30 — reason mạnh hơn đã thực sự nói ra về cùng item.
+    async_db.add(
+        AttentionLog(
+            user_id=user_id,
+            item_type=AttentionItemType.TASK,
+            item_id=task.id,
+            reason_key="task.at_risk",
+            level=AttentionLevel.ASK,
+            channel=AttentionChannel.IN_APP,
+            response=AttentionResponse.NO_RESPONSE,
+        )
+    )
+    await async_db.commit()
+
+    # 11:00 — hết họp.
+    assert await flush_due_bundles(async_db) == 0
+    assert await _notifications_of(async_db, user_id) == []
+
+    # Hàng vẫn phải được đóng lại, nếu không lượt quét sau xử lý lại nó.
+    rows = (
+        await async_db.execute(
+            select(AttentionBundleQueue).where(AttentionBundleQueue.user_id == user_id)
+        )
+    ).scalars().all()
+    assert all(row.flushed_at is not None for row in rows)
+    assert await flush_due_bundles(async_db) == 0
+
+
+@pytest.mark.asyncio
+async def test_released_project_reminder_writes_its_own_attention_log(async_db, user_id):
+    """Phát lại là một quyết định nói, nên nó có biên bản riêng.
+
+    Hàng `attention_log` cũ ghi `level='silent'` — biên bản của quyết định
+    *không* nói. Treo notification vào đó thì bảng tự mâu thuẫn: một quyết
+    định im lại có tin nhắn và có cả phản hồi của người dùng.
+    """
+    alpha = await _project(async_db, user_id, name="Alpha")
+    await enqueue_async(
+        async_db, user_id=user_id, item_type=AttentionItemType.PROJECT, item_id=alpha.id,
+        reason_key="project.slipping", title=f"{TITLE_PREFIX}Alpha đang chậm lại",
+        body="Còn 5 ngày · việc mở tăng từ 8 lên 12",
+        payload={"project_id": str(alpha.id), "source_channel_id": alpha.source_channel_id},
+        actions=[], attention_log_id=None,
+    )
+
+    assert await flush_due_bundles(async_db) == 1
+
+    notification = (await _notifications_of(async_db, user_id))[0]
+    assert notification.attention_log_id is not None
+
+    log = await async_db.get(AttentionLog, notification.attention_log_id)
+    assert log.reason_key == "project.slipping"
+    assert log.level is not AttentionLevel.SILENT
+    assert log.item_id == alpha.id

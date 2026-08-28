@@ -19,6 +19,11 @@ Gộp **theo** dự án không phải phát **vào** dự án: `BUNDLE_REASON_KE
 phạm vi `PERSONAL`, nên mọi cụm đều về DM (DESIGN 8.1). Xem chú thích ở
 `_compose_bundle`.
 
+Đường flush **không** đi qua `request_attention_async`, nên hai luật của
+Gate phải được áp lại ở cửa ra — và khoảng chờ chính là khoảng thời gian
+chúng tồn tại để canh: `_drop_superseded` (một reason mạnh hơn đã nói mất
+về cùng item trong lúc chờ) và dedup ở `_release_scoped_row`.
+
 Hệ quả của điều trên: **lời nhắc cấp dự án không được gộp.** Gộp đổi được
 thời điểm, không được đổi người nhận — mà một cụm `PERSONAL` thì về DM,
 còn `project.slipping` phải về channel của cả nhóm. `_split_by_scope` tách
@@ -45,13 +50,22 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     AttentionBundleQueue,
+    AttentionChannel,
     AttentionItemType,
     AttentionLevel,
     Project,
     Schedule,
     Task,
 )
-from app.services.attention_reason_catalog import ReasonScope, base_level_for, scope_for
+from app.repositories.attention_log import AttentionLogRepository
+from app.schemas import AttentionSurfaceCreate
+from app.services.attention_log import AttentionLogService
+from app.services.attention_reason_catalog import (
+    ReasonScope,
+    base_level_for,
+    scope_for,
+    superseded_by,
+)
 from app.services.availability import is_user_busy
 from app.services.notifications import create_notification_async
 from app.utils.logger import get_logger
@@ -274,6 +288,66 @@ async def _pending_rows_for_user(session: AsyncSession, user_id: UUID) -> list[A
     return list((await session.execute(stmt)).scalars().all())
 
 
+async def _drop_superseded(
+    session: AsyncSession, rows: list[AttentionBundleQueue], now: datetime
+) -> list[AttentionBundleQueue]:
+    """Bỏ những hàng đã bị một reason mạnh hơn nói mất trong lúc chờ.
+
+    Đây là luật supersession của Gate (`SUPERSEDES`), áp lại ở cửa ra. Nó
+    phải có ở đây vì đường flush **không** đi qua `request_attention_async`,
+    và khoảng chờ chính là khoảng thời gian luật đó tồn tại để canh:
+
+        10:00  đang họp · `task.overdue` bắn → RECOMMEND, không critical
+               → im vì bận → vào hàng đợi
+        10:30  vẫn họp  · `task.at_risk` bắn → ASK, nằm trong
+               `_CRITICAL_LEVELS` → **không** bị im → nói ngay
+        11:00  hết họp  · flush
+
+    Không có hàm này, 11:00 người dùng nhận *"việc quá hạn"* sau khi đã
+    nhận *"việc có nguy cơ trễ cao"* về **cùng một việc** — tin cũ, nhẹ
+    hơn, đến sau tin mới, nặng hơn. Đúng thứ `SUPERSEDES` được viết ra để
+    chặn, chỉ là đi vào bằng cửa sau.
+
+    Hàng bị bỏ vẫn được đánh dấu `flushed_at`: nó đã được xử lý xong, kết
+    luận là im, và không được phép quay lại ở lượt quét sau. Không ghi
+    `attention_log` — Gate cũng không ghi gì khi nó chặn vì supersession.
+
+    Hàng không có reason mạnh hơn (`superseded_by` trả rỗng, tức phần lớn)
+    không tốn một truy vấn nào.
+    """
+    # Cục bộ, không phải ở đầu tệp: `attention_gate` đã import module này
+    # (`enqueue_async`), nên import ngược ở mức module là vòng tròn. Dùng
+    # chung hàm thay vì chép lại công thức cửa sổ — hai bản sao của cùng
+    # một hằng số là hai bản sẽ trôi khỏi nhau.
+    from app.services.attention_gate import _supersession_window_start
+
+    repository = AttentionLogRepository(session)
+    window_start = _supersession_window_start()
+    kept: list[AttentionBundleQueue] = []
+
+    for row in rows:
+        stronger = superseded_by(row.reason_key)
+        if not stronger:
+            kept.append(row)
+            continue
+        already = await repository.find_last_spoken_any(
+            user_id=row.user_id,
+            item_id=row.item_id,
+            reason_keys=stronger,
+            since=window_start,
+        )
+        if already is None:
+            kept.append(row)
+            continue
+        logger.info(
+            "Bundle release superseded: %r for item %s already covered by %r",
+            row.reason_key, row.item_id, already.reason_key,
+        )
+        row.flushed_at = now
+
+    return kept
+
+
 def _split_by_scope(
     rows: list[AttentionBundleQueue],
 ) -> tuple[list[AttentionBundleQueue], list[AttentionBundleQueue]]:
@@ -306,14 +380,27 @@ def _split_by_scope(
 
 async def _release_scoped_row(
     session: AsyncSession, row: AttentionBundleQueue, now: datetime
-) -> None:
-    """Phát lại một hàng phạm vi dự án **nguyên hình dạng của nó**.
+) -> bool:
+    """Phát lại một hàng phạm vi dự án. Trả về *có nói ra hay không*.
 
     Giữ `reason_key` gốc là điểm mấu chốt: đó là thứ duy nhất
     `DeliveryPayload.project_channel_id` đọc để chọn channel. `payload`
     gốc đi kèm nguyên vẹn vì `source_channel_id` nằm trong đó.
 
-    Hai chỗ phải xấp xỉ, và cả hai đều xấp xỉ về phía an toàn:
+    Supersession đã được lọc trước đó cho **mọi** hàng (`_drop_superseded`).
+    Ở đây còn một luật nữa của Gate phải áp lại, vì phát lại là nói ra:
+    **dedup** — cùng `(item, reason)` có thể đã được nói bằng một đường
+    khác trong lúc chờ. Bị chặn thì dừng ở chỗ đánh dấu `flushed_at` mà
+    không sinh notification: hàng đã xử lý xong, kết luận là im.
+
+    `record_surface` ghi một hàng `attention_log` **mới**, không dùng lại
+    `row.attention_log_id`. Hàng cũ ghi `level='silent'` — nó là biên bản
+    của quyết định *không nói*, và treo một notification vào đó thì bảng
+    tự mâu thuẫn: một quyết định im có tin nhắn, có cả phản hồi của người
+    dùng. Lần nói này là một quyết định riêng, ở một mức riêng, tại một
+    thời điểm riêng.
+
+    Hai chỗ phải xấp xỉ, cả hai xấp xỉ về phía an toàn:
 
     - `type` suy từ `reason_key` (`project.slipping` → `project_slipping`).
       Bảng hàng đợi không lưu `type`; quy ước này đúng với mọi reason cấp
@@ -327,6 +414,20 @@ async def _release_scoped_row(
     một khối từ `body`. Cụm cá nhân mất chi tiết này từ lâu rồi và đây
     không phải chỗ để sửa nó.
     """
+    result = await AttentionLogService(session).record_surface(
+        AttentionSurfaceCreate(
+            item_type=row.item_type,
+            item_id=row.item_id,
+            reason_key=row.reason_key,
+            level=base_level_for(row.reason_key),
+            channel=AttentionChannel.IN_APP,
+        ),
+        user_id=row.user_id,
+    )
+    if result.suppressed or result.log is None:
+        row.flushed_at = now
+        return False
+
     notification = await create_notification_async(
         session,
         user_id=row.user_id,
@@ -337,10 +438,11 @@ async def _release_scoped_row(
         payload=dict(row.payload or {}),
         reason_key=row.reason_key,
         attention_level=base_level_for(row.reason_key),
-        attention_log_id=row.attention_log_id,
+        attention_log_id=result.log.id,
     )
     row.flushed_at = now
     row.bundle_notification_id = notification.id
+    return True
 
 
 def _group_by_project(
@@ -403,12 +505,23 @@ async def flush_due_bundles(session: AsyncSession) -> int:
             if not rows:
                 continue
 
+            rows = await _drop_superseded(session, rows, _naive_utcnow())
+            if not rows:
+                # Mọi hàng đều đã bị nói mất. `flushed_at` của chúng vừa
+                # được đặt, phải commit trước khi đi tiếp — nếu không lượt
+                # quét sau lại xử lý lại đúng những hàng đó.
+                await session.commit()
+                continue
+
             personal_rows, scoped_rows = _split_by_scope(rows)
 
             for row in scoped_rows:
-                await _release_scoped_row(session, row, _naive_utcnow())
+                spoke = await _release_scoped_row(session, row, _naive_utcnow())
+                # Commit kể cả khi im: `flushed_at` đã được đặt, và hàng
+                # không được phép quay lại ở lượt quét sau.
                 await session.commit()
-                flushed += 1
+                if spoke:
+                    flushed += 1
 
             if not personal_rows:
                 continue
