@@ -144,7 +144,7 @@ export function workflowRoute(projectId: string, workflowId?: string): string {
  * Extract projectId from pathname
  */
 export function extractProjectId(pathname: string): string | null {
-  const match = pathname.match(/^\/w\/([^/]+)/)
+  const match = pathname.match(/^\/p\/([^/]+)/)
   return match ? match[1] : null
 }
 
@@ -152,7 +152,7 @@ export function extractProjectId(pathname: string): string | null {
  * Check if path is a project-scoped route
  */
 export function isProjectRoute(pathname: string): boolean {
-  return pathname.startsWith('/w/')
+  return pathname.startsWith('/p/')
 }
 
 /**
@@ -164,5 +164,19 @@ export function isGlobalRoute(pathname: string): boolean {
     || pathname === '/schedule'
     || pathname === '/tasks'
     || pathname === '/auth/callback'
-    || !pathname.startsWith('/w/')
+    || !pathname.startsWith('/p/')
+}
+
+/**
+ * Map a pre-rename `/w/:id/...` pathname onto its `/p/:id/...` equivalent.
+ *
+ * Workspace became project (DESIGN 11.4) and the URL prefix moved with it.
+ * Without this, an old bookmark or a link someone already shared falls
+ * through to the unknown-route redirect and lands on home with nothing to
+ * explain why — the same silent failure the GLOBAL_ROUTES comment above is
+ * about. Returns null for anything that is not a legacy path.
+ */
+export function legacyProjectRoute(pathname: string): string | null {
+  if (!/^\/w\/[^/]/.test(pathname)) return null
+  return `/p/${pathname.slice(3)}`
 }

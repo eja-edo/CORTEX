@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { GLOBAL_ROUTES, ROUTES, isKnownRoute, todayRoute } from '../routes'
+import { GLOBAL_ROUTES, ROUTES, isKnownRoute, legacyProjectRoute, todayRoute } from '../routes'
 
 /**
  * App.tsx redirects any pathname `isKnownRoute` rejects back to `/`. So a
@@ -32,9 +32,24 @@ describe('every declared route is reachable', () => {
         expect(isKnownRoute('/notifications')).toBe(true)
     })
 
-    it('accepts workspace-scoped paths', () => {
-        expect(isKnownRoute('/w/abc123')).toBe(true)
-        expect(isKnownRoute('/w/abc123/notes')).toBe(true)
+    it('accepts project-scoped paths', () => {
+        expect(isKnownRoute('/p/abc123')).toBe(true)
+        expect(isKnownRoute('/p/abc123/notes')).toBe(true)
+    })
+
+    it('rewrites pre-rename /w/ paths instead of dropping them on home', () => {
+        // The workspace→project rename moved the URL prefix. Links people
+        // already have must land on the page they named, not on the
+        // unknown-route fallback.
+        expect(legacyProjectRoute('/w/abc123/notes/n1')).toBe('/p/abc123/notes/n1')
+        expect(legacyProjectRoute('/w/abc123')).toBe('/p/abc123')
+    })
+
+    it('leaves non-legacy paths for the normal fallback', () => {
+        expect(legacyProjectRoute('/p/abc123/notes/n1')).toBeNull()
+        expect(legacyProjectRoute('/nope')).toBeNull()
+        // No project id — nothing to rewrite it to.
+        expect(legacyProjectRoute('/w/')).toBeNull()
     })
 
     it('still rejects genuinely unknown paths', () => {
