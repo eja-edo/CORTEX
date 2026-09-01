@@ -167,3 +167,55 @@ test("*model needs a linked account — it writes to a Cortex user's preferences
   assert.equal(listed, false);
   assert.match(sent[0].content.t, /chưa liên kết/i);
 });
+
+/**
+ * The command is `*switch_model`; `*model` is kept as an alias.
+ *
+ * Both halves are worth pinning. The new name is what `*help` advertises
+ * and what a clan icon should be called; the old one is what anyone who
+ * used this command before has in their fingers, and it must not have
+ * quietly become an unknown command.
+ */
+
+test("the command's own name is switch_model", () => {
+    assert.equal(modelCommand.name, "switch_model");
+    assert.equal(modelCommand.usage, "*switch_model");
+});
+
+test("*switch_model opens the picker", async () => {
+    const { router, sent } = makeRouter({
+        cortex: {
+            resolveChannel: async () => ({ linked: true, user_id: "cortex-1" }),
+            listModels: async () => MODELS,
+            getPreferences: async () => ({ chat_model: "free_auto" }),
+        },
+    });
+
+    await router.handleMessage(message("*switch_model"));
+
+    assert.equal(sent.length, 1);
+});
+
+test("the icon form runs it too, which is the point of the rename", async () => {
+    const { router, sent } = makeRouter({
+        cortex: {
+            resolveChannel: async () => ({ linked: true, user_id: "cortex-1" }),
+            listModels: async () => MODELS,
+            getPreferences: async () => ({ chat_model: "free_auto" }),
+        },
+    });
+
+    await router.handleMessage(message(":switch_model:"));
+
+    assert.equal(sent.length, 1);
+});
+
+test("help lists the command once, under the new name only", () => {
+    const registry = new CommandRegistry({ prefix: "*" }).register(modelCommand);
+
+    assert.deepEqual(
+        registry.list().map((c) => c.name),
+        ["switch_model"]
+    );
+    assert.equal(registry.commands.get("model"), modelCommand);
+});

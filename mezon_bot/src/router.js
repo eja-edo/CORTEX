@@ -153,7 +153,7 @@ class MessageRouter {
         storage: this.storage,
         registry: this.registry,
         prefix: this.prefix,
-        // `*model` renders a form whose submission comes back as a button
+        // `*switch_model` renders a form whose submission comes back as a button
         // click, so it needs the same store the agent's `ask_choice`
         // cards use — see `mezon/pendingForms.js`.
         pendingForms: this.pendingForms,
@@ -915,7 +915,7 @@ class MessageRouter {
   }
 
   /**
-   * Lưu on the `*model` picker.
+   * Lưu on the `*switch_model` picker.
    *
    * The backend is what validates the id — it rejects anything outside
    * the catalogue rather than storing it (see `update_chat_model`), which
@@ -927,7 +927,7 @@ class MessageRouter {
   async _handleModelSubmit({ action, parsed, identity, reply }) {
     const pending = this.pendingForms.get(action.targetId);
     if (!pending) {
-      await reply(`Form này đã hết hạn. Gõ lại \`${this.prefix}model\` để chọn.`);
+      await reply(`Form này đã hết hạn. Gõ lại \`${this.prefix}switch_model\` để chọn.`);
       return;
     }
 

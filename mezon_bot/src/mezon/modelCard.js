@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * The `*model` picker.
+ * The `*switch_model` picker.
  *
  * A radio of whatever `GET /api/agent/models` returns, plus a button.
  * Nothing about the model list is decided here — the catalogue lives in
