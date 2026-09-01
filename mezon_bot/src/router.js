@@ -132,6 +132,30 @@ class MessageRouter {
       return;
     }
 
+    // A message with no text is not a turn. Mezon delivers stickers and
+    // attachment-only messages with an empty `content.t`, and nothing in
+    // this bot reads an incoming attachment — `reply(content, attachments)`
+    // only ever sends them outward.
+    //
+    // Without this the empty string reached `POST /api/agent/stream/chat`,
+    // which rejects it with 422 `string_too_short`, and the failure landed
+    // in the generic catch: the user watched "⏳ đang nghĩ…" turn into
+    // "⚠️ AI đang gặp sự cố" — a sentence blaming the model for a request
+    // it never saw. Observed on live traffic, not hypothetical.
+    //
+    // Ignored rather than answered with an explanation. They sent a
+    // sticker, they did not ask anything; a bot that replies to every
+    // sticker is doing exactly the thing DESIGN 1.2 counts as failure —
+    // saying one more sentence that was not worth saying. Placed before
+    // `_identify` so it also stops a pointless round trip to the backend.
+    if (!message.text?.trim()) {
+      logger.debug("ignoring message with no text", {
+        channel_id: message.channelId,
+        scope: message.scope,
+      });
+      return;
+    }
+
     const reply = async (content, attachments) => {
       const payload = typeof content === "string" ? text(content) : content;
       return this.gateway.sendToChannel(message.channelId, payload, attachments);
