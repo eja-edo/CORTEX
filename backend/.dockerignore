@@ -1,0 +1,20 @@
+# venv của máy host — Linux hay Windows đều là rác trong ảnh, và nó lớn hơn
+# toàn bộ phần còn lại cộng lại.
+venv/
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+
+# Bí mật KHÔNG vào ảnh. Biến môi trường tới từ `env_file:` trong compose, và
+# `load_dotenv()` ở config.py không ghi đè biến đã có sẵn trong môi trường —
+# nên vắng file này ở đây là đúng ý, không phải thiếu sót.
+.env
+.env.*
+!.env.example
+
+logs/
+tests/
+benchmarks/
+docs/

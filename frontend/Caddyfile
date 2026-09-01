@@ -1,0 +1,31 @@
+# Static build of frontend + /api route to backend.
+#
+# Port 5173 not 80, and that's an option to **not edit the line
+# which env**: default `GOOGLE_POST_CONNECT_REDIRECT_URL` is
+# http://localhost:5173, and `BACKEND_CORS_ORIGINS` listed the correct origin.
+# Changing the gate here means pulling the other two places at the same time.
+:5173 {
+	encode gzip
+
+	# /api đi cùng origin với trang, nên không có preflight và không phụ
+	# thuộc vào CORS. Backend vẫn publish 8000 ra host — Google gọi thẳng
+	# vào đó cho callback OAuth, và Swagger sống ở đó.
+	handle /api/* {
+		# Backend có hai đường SSE (`/api/sse/sync/events` và
+		# `/api/sse/notifications/events`). Tắt buffer tường minh thay vì
+		# dựa vào việc Caddy tự nhận ra `text/event-stream`: phần còn lại
+		# của API là JSON nhỏ, không mất gì, mà thông báo trễ vài giây thì
+		# đúng bằng việc không có thông báo.
+		reverse_proxy backend:8000 {
+			flush_interval -1
+		}
+	}
+
+	handle {
+		root * /srv
+		# SPA: mọi đường không phải file thật đều trả index.html, để
+		# `/p/:id/notes/:id` gõ thẳng vào thanh địa chỉ không thành 404.
+		try_files {path} /index.html
+		file_server
+	}
+}
