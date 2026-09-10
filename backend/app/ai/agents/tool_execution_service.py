@@ -309,12 +309,35 @@ class ToolExecutionService:
                         # Fresh session per concurrently-gathered call — see
                         # agent_service.py's streaming twin for why sharing `ctx`
                         # (and its one AsyncSession) across asyncio.gather is unsafe.
-                        async with AsyncSessionLocal() as db:
+                        #
+                        # `AsyncSessionLocal` is `_AsyncSessionLocalProxy`
+                        # (database_async.py): calling it only builds the proxy,
+                        # not a session — the real `AsyncSession` comes back from
+                        # `__aenter__()`. Skipping that (an earlier version of this
+                        # fix did) hands the tool a proxy with none of
+                        # `AsyncSession`'s methods; confirmed live as
+                        # `AttributeError: '_AsyncSessionLocalProxy' object has no
+                        # attribute 'scalars'`, caught here and reported as a normal
+                        # tool failure rather than crashing the turn — but the tool
+                        # itself never actually ran.
+                        #
+                        # `db.close()` is shielded — same reasoning as the streaming
+                        # twin: a client disconnecting mid-request cancels every
+                        # in-flight `_exec_parallel` call via `asyncio.gather`, and an
+                        # unshielded `finally` can itself be cancelled mid-close,
+                        # leaving a connection for Postgres's own GC to force-close.
+                        db = await AsyncSessionLocal().__aenter__()
+                        try:
                             call_ctx = ToolContext(
                                 user_id=ctx.user_id, async_db=db,
                                 project_id=ctx.project_id, conversation_id=ctx.conversation_id,
+                                # Session mới không thấy tin nhắn chưa commit
+                                # của lượt này — xem docstring ToolContext.
+                                current_message=ctx.current_message,
                             )
                             result = await self.registry.execute(name, args, call_ctx)
+                        finally:
+                            await asyncio.shield(db.close())
                         logger.info(f"Tool '{name}' executed | result: {str(result)[:200]}")
                     except Exception as tool_exc:
                         logger.error(f"Tool '{name}' raised exception: {tool_exc}", exc_info=True)

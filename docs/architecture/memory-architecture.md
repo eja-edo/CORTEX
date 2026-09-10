@@ -31,7 +31,7 @@ The memory system has two tiers:
 | Tier | Name | Storage | Purpose | GC |
 |---|---|---|---|---|
 | 1 | **Episodic Summary** | `agent_conversations.summary` (PostgreSQL) | Rolling compressed history of each conversation; overwritten on each extraction | Overwritten, not appended |
-| 2 | **Semantic Memory** | Zep Cloud OR `semantic_memories` table (pgvector) | Long-term facts extracted from conversations; cross-conversation retrieval | Dedup (in-process + similarity) |
+| 2 | **Semantic Memory** | Zep Cloud OR `semantic_memories` table (pgvector) | Long-term facts extracted from conversations; recalled automatically into every turn's context (§10 path A) | Dedup (in-process + similarity) |
 
 The two tiers are produced by a single LLM extraction call. The LLM analyzes new messages (or the full conversation on first pass) and returns a JSON object with three keys: `episodic_summary`, `semantic_memories`, `title`.
 
@@ -378,9 +378,44 @@ ZepMemoryProvider:
 
 ### Retrieval flow
 
-Two retrieval paths:
+Three retrieval paths. **A is the one that runs on every turn**; B and C
+only run when something asks for them.
 
-**A) Agent tool `extract_memory`** (`app/ai/tools/extract_memory.py`):
+**A) Automatic recall** (`app/context/context_service.py::_recall_memories`)
+— added 2026-09-10:
+
+```
+AgentService.handle(message)                    (streaming path too)
+    │
+    ▼
+ContextService.build_context(user_id, …, message=message)
+    ├─ search_semantic_memories(user_id, query=message, limit=5,
+    │                           min_score=MIN_RELEVANCE_SCORE)
+    └─ UnifiedContext.recalled_memories
+            │
+            ▼
+      to_llm_string() → appended to the system prompt, every turn
+```
+
+Before this existed, the tool below was the **only** way anything reached
+the semantic store — and it is a tool the model chooses whether to call.
+So the same user with the same data got a companion that remembered them
+on one turn and a stranger on the next, depending on a decision the model
+made non-deterministically. That variance is what this path removes; the
+system prompt no longer has to beg the model not to forget.
+
+The rendered block carries three lines of instruction (see
+`UnifiedContext._render_memories`) telling the model to check each memory's
+trigger before trusting it, and never to write data from the block alone.
+They are load-bearing: similarity ~0.58 cannot separate a relevant routine
+from a merely nearby one (see `MIN_RELEVANCE_SCORE`), so the last filter is
+the model reading the *"when …"* clause. `tests/eval/` level 3 tests exactly
+that.
+
+**B) Agent tool `extract_memory`** (`app/ai/tools/extract_memory.py`) —
+for looking up something *different* from the current message ("lần trước
+mình chốt gì về giá?"). Re-fetching what path A already placed in context
+costs a round trip and returns the same rows:
 
 ```
 LLM decides to call extract_memory(query, conversation_id?, limit=10)
@@ -393,9 +428,9 @@ extract_memory_handler(args, ctx)
     └─ 4. Format: "=== SEMANTIC MEMORIES ===\n..." + "=== EPISODIC SUMMARY ===\n..."
 ```
 
-The `extract_memory` tool is registered in the tool registry and exposed to the LLM. The system prompt (`assistant_system.md`) instructs the LLM to call it when the user references prior conversations with temporal phrases ("last time", "as we discussed").
+The `extract_memory` tool is registered in the tool registry and exposed to the LLM. Its description and the system prompt both now steer it away from re-fetching what automatic recall already supplied.
 
-**B) `search_semantic_memories` function** (`zep_memory.py:416-447`, legacy shim):
+**C) `search_semantic_memories` function** (`zep_memory.py:416-447`, legacy shim):
 
 Direct call from other components. Uses the same `FallbackSemanticMemoryProvider.search_semantic_memories()` under the hood.
 
@@ -404,7 +439,14 @@ Direct call from other components. Uses the same `FallbackSemanticMemoryProvider
 ```
 PgVectorMemoryProvider.search_semantic_memories(user_id, query, limit, min_score)
     ├─ embed_query(query) → query_embedding
-    ├─ Cosine similarity: (1 - (embedding <-> cast(:q AS vector)) / 2) AS score
+    ├─ Cosine similarity: (1 - (embedding <=> cast(:q AS vector))) AS score
+    │     `<=>` is pgvector's cosine operator. Until 2026-09-10 this used
+    │     `<->` (L2) with the cosine formula `1 - d/2`, so (a) no query ever
+    │     hit the `vector_cosine_ops` HNSW index — all seq scans, confirmed
+    │     by EXPLAIN — and (b) scores sat on a scale nobody meant, making
+    │     `MIN_RELEVANCE_SCORE = 0.55` behave as cosine ≈ 0.595. Embeddings
+    │     here are normalized (norm = 1.0000), so ranking was unaffected;
+    │     only the numbers and the index were.
     ├─ WHERE user_id = :user_id AND embedding IS NOT NULL
     │   AND score >= min_score (if provided)
     ├─ ORDER BY score DESC LIMIT limit

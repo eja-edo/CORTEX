@@ -20,7 +20,13 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.context.schemas import ContextPill, ProjectContext, UnifiedContext
+from app.context.schemas import (
+    ActiveProcedure,
+    ContextPill,
+    ProjectContext,
+    RecalledMemory,
+    UnifiedContext,
+)
 from app.models import Note, Project, ProjectMember, Schedule
 from app.utils.logger import get_logger
 
@@ -40,6 +46,7 @@ class ContextService:
         conversation_id: Optional[UUID] = None,
         runtime_context: Optional[dict] = None,
         intent: Optional[str] = None,
+        message: str = "",
     ) -> UnifiedContext:
         """
         Build unified context for a user/request.
@@ -53,6 +60,8 @@ class ContextService:
             runtime_context: The frontend's raw context dict (pills/page/runtime)
             intent: Detected intent (Milestone 1.8) — when given, filters
                 recent_notes/recent_schedules by relevance
+            message: Lượt nói hiện tại của người dùng, dùng làm truy vấn
+                recall bộ nhớ dài hạn. Rỗng thì bỏ qua bước recall.
 
         Returns:
             UnifiedContext. Never raises — DB lookups that fail are logged
@@ -71,6 +80,8 @@ class ContextService:
 
         recent_notes = await self._get_recent_notes(user_id, limit=5)
         recent_schedules = await self._get_upcoming_schedules(user_id, limit=5)
+        recalled_memories = await self._recall_memories(user_id, message, limit=5)
+        active_procedure = await self._match_procedure(user_id, message)
 
         context = UnifiedContext(
             pills=pills,
@@ -79,6 +90,8 @@ class ContextService:
             project=project,
             recent_notes=recent_notes,
             recent_schedules=recent_schedules,
+            recalled_memories=recalled_memories,
+            active_procedure=active_procedure,
         )
 
         if intent:
@@ -92,6 +105,8 @@ class ContextService:
                 "pills_count": len(context.pills),
                 "recent_notes_count": len(context.recent_notes),
                 "recent_schedules_count": len(context.recent_schedules),
+                "recalled_memories_count": len(context.recalled_memories),
+                "active_procedure": bool(context.active_procedure),
             },
         )
 
@@ -195,6 +210,119 @@ class ContextService:
         except Exception as exc:
             logger.warning(f"Failed to fetch upcoming schedules (non-fatal): {exc}")
             return []
+
+    async def _recall_memories(
+        self, user_id: UUID, message: str, limit: int = 5
+    ) -> list[RecalledMemory]:
+        """Kéo bộ nhớ dài hạn liên quan lên, **mỗi lượt**, không đợi model xin.
+
+        Đây là chỗ sửa kiểu hỏng đắt nhất của tầng bộ nhớ: trước đây tool
+        `extract_memory` là đường **duy nhất** chạm tới kho ngữ nghĩa, và nó
+        là một tool do model tự quyết định gọi. Nên cùng một người dùng,
+        cùng một dữ liệu, lượt nào model nhớ gọi thì thấy "nó hiểu mình",
+        lượt nào quên thì phải giải thích lại từ đầu. Chất lượng giữa các
+        phiên lệch nhau không vì kho bộ nhớ, mà vì một quyết định ngẫu nhiên
+        của model — và system prompt đã phải dành hẳn một mục dài để dạy nó
+        đừng quên. Khi một việc là bắt buộc, nó thuộc về code.
+
+        `extract_memory` vẫn còn nguyên và vẫn có ích: nó tra được thứ *khác*
+        với lượt nói hiện tại ("lần trước mình chốt gì về X"), thứ recall
+        theo message không với tới.
+
+        Không bao giờ ném lỗi: bộ nhớ là phần làm giàu ngữ cảnh, không phải
+        điều kiện để trả lời được.
+        """
+        if not message or not message.strip():
+            return []
+
+        try:
+            from app.services.semantic_memory_provider import (
+                MIN_RELEVANCE_SCORE,
+                get_semantic_memory_provider,
+            )
+
+            provider = get_semantic_memory_provider(self.db)
+            results = await provider.search_semantic_memories(
+                # Bộ nhớ khoá theo **người** — cùng khoá
+                # `memory_extraction_service` ghi vào. Xem docstring của
+                # `SemanticMemoryProvider`.
+                user_id=str(user_id),
+                query=message,
+                limit=limit,
+                min_score=MIN_RELEVANCE_SCORE,
+            )
+            return [
+                RecalledMemory(
+                    content=r.get("content", ""),
+                    category=r.get("category", "fact"),
+                    score=float(r.get("score", 0.0)),
+                )
+                for r in results
+                if r.get("content")
+            ]
+        except Exception as exc:
+            logger.warning(f"Memory recall failed (non-fatal): {exc}")
+            return []
+
+    async def _match_procedure(
+        self, user_id: UUID, message: str
+    ) -> Optional[ActiveProcedure]:
+        """Quy trình khớp hoàn cảnh vừa nêu, kèm tiến độ của lần chạy hôm nay.
+
+        Khác với `_recall_memories` ở chỗ nó **ghi**: khớp trigger sẽ mở
+        một `ProcedureRun` nếu chưa có. Đó là chủ ý — "hôm nay tôi remote"
+        chính là lúc lần chạy bắt đầu, và nếu đợi người dùng nói thêm một
+        câu nữa thì bước đầu tiên họ báo xong sẽ không có chỗ nào để ghi.
+
+        Ngưỡng khớp ở đây chặt (0.70, xem `MIN_TRIGGER_SCORE`) chính vì nó
+        ghi: một lần khớp nhầm không chỉ làm nhiễu ngữ cảnh mà còn tạo ra
+        một run rác.
+
+        Không bao giờ ném lỗi — như mọi phần khác của ngữ cảnh.
+        """
+        try:
+            from app.services.procedures import ProcedureService
+
+            service = ProcedureService(self.db)
+
+            # Nhánh 1 — người dùng **đang ở giữa** một quy trình.
+            #
+            # Ưu tiên hơn khớp trigger, và đó là điểm mấu chốt: "daily xong
+            # rồi nhé" không chứa từ nào khớp trigger "remote". Khi khối
+            # quy trình phụ thuộc trigger, câu đó làm khối biến mất, agent
+            # mất `procedure_id`, và nó **bịa ra một id** —
+            # `remote_work_2026-09-10` — rồi lời gọi tool hỏng. Đang ở
+            # giữa một quy trình là một trạng thái, không phải một câu nói.
+            current = await service.current_run_for_user(user_id)
+            if current is not None:
+                procedure, run = current
+                score = 1.0
+            else:
+                # Nhánh 2 — chưa có run nào; lượt này có mở một cái không.
+                if not message or not message.strip():
+                    return None
+                matched = await service.match(user_id, message)
+                if matched is None:
+                    return None
+                procedure, score = matched
+                run = await service.get_or_open_run(procedure)
+
+            pending = service.pending_steps(procedure, run)
+            pending_orders = {s["order"] for s in pending}
+            done = [s for s in (procedure.steps or []) if s["order"] not in pending_orders]
+
+            return ActiveProcedure(
+                procedure_id=str(procedure.id),
+                title=procedure.title,
+                trigger_text=procedure.trigger_text,
+                score=score,
+                pending=pending,
+                done=done,
+                run_id=str(run.id),
+            )
+        except Exception as exc:
+            logger.warning(f"Procedure matching failed (non-fatal): {exc}")
+            return None
 
     def _filter_by_relevance(self, context: UnifiedContext, intent: str) -> UnifiedContext:
         """Simple keyword-based relevance filter (Milestone 1.8 will pass a

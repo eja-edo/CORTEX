@@ -39,6 +39,13 @@ MAX_TOOL_TURNS = 30
 MAX_SAME_TOOL_CALLS = 20
 MAX_TOKENS_PER_DAY_PER_USER = 2_000_000
 MAX_TURN_RETRIES = 3
+# Neither `handle()` nor `handle_streaming_generator()` passed
+# `max_output_tokens` to the provider — confirmed live: a degenerate
+# response (garbled tokens repeating a single word) ran unbounded until
+# the Mezon bot's own edit-retry loop crashed the process trying to keep
+# up with it. This is the floor that failure mode needs, not a quality
+# tuning knob — 4096 tokens is already generous for a chat reply.
+MAX_CHAT_OUTPUT_TOKENS = 4096
 
 _model_client = ModelClient()
 
@@ -112,6 +119,9 @@ class AgentService:
                 conversation_id=conv_id,
                 runtime_context=context,
                 intent=self._detect_intent(message),
+                # Recall bộ nhớ dài hạn dùng chính lượt nói này làm truy vấn
+                # — trước đây `message` chỉ tới đây để lọc độ liên quan.
+                message=message,
             )
             return unified_context.to_llm_string()
         except Exception as exc:
@@ -139,10 +149,10 @@ class AgentService:
         await self.conversation_service.increment_message_count(conv.id)
 
         tools = self.registry.get_provider_tools()
-        gen_config = GenerationConfig(system_instruction=system_prompt)
+        gen_config = GenerationConfig(system_instruction=system_prompt, max_output_tokens=MAX_CHAT_OUTPUT_TOKENS)
         logger.info(f"Available tools: {[t.name for t in tools] if tools else 'None'}")
 
-        ctx = ToolContext(user_id=self.user.id, async_db=self.db, project_id=project_id, conversation_id=conv.id)
+        ctx = ToolContext(user_id=self.user.id, async_db=self.db, project_id=project_id, conversation_id=conv.id, current_message=message)
 
         messages = _build_history_contents(recent_messages)
         _trim_incomplete_tail(messages, "handle")
@@ -266,7 +276,7 @@ class AgentService:
             logger.warning(f"event=max_tool_turns_hit turn_count={turn} conversation_id={conv.id}")
             logger.warning(f"Agent hit max turns ({MAX_TOOL_TURNS}) — attempting synthesis turn for conversation {conv.id}")
             try:
-                synthesis_config = GenerationConfig(system_instruction=gen_config.system_instruction, temperature=gen_config.temperature)
+                synthesis_config = GenerationConfig(system_instruction=gen_config.system_instruction, temperature=gen_config.temperature, max_output_tokens=gen_config.max_output_tokens)
                 _, synthesis_response = await _model_client.generate(messages, synthesis_config, tools=None, preferred_model=preferred_model)
                 reply_text = synthesis_response.content if synthesis_response and synthesis_response.content else "I reached my processing limit for this request. Please try a simpler or more specific question."
                 if synthesis_response and synthesis_response.usage:
@@ -415,10 +425,14 @@ class AgentService:
             context_string = await self._build_context_string(project_id, conv.id, context, message)
             system_prompt = await self.conversation_service.build_system_prompt(conv, message, context, summarizer, SYSTEM_PROMPT, context_string=context_string, recent_messages=recent_messages)
 
-            ctx = ToolContext(user_id=user_id, async_db=self.db, project_id=project_id, conversation_id=conv.id)
+            ctx = ToolContext(user_id=user_id, async_db=self.db, project_id=project_id, conversation_id=conv.id, current_message=message)
 
             tools = self.registry.get_provider_tools()
-            gen_config = GenerationConfig(system_instruction=system_prompt, temperature=temperature)
+            gen_config = GenerationConfig(
+                system_instruction=system_prompt,
+                temperature=temperature,
+                max_output_tokens=MAX_CHAT_OUTPUT_TOKENS,
+            )
 
             messages = _build_history_contents(recent_messages)
             _trim_incomplete_tail(messages, "streaming")
@@ -566,12 +580,40 @@ class AgentService:
                         # across `asyncio.gather` causes intermittent
                         # "another operation is in progress" / "Session is already
                         # flushing" failures once two handlers' awaits interleave.
-                        async with AsyncSessionLocal() as db:
+                        #
+                        # `AsyncSessionLocal` is `_AsyncSessionLocalProxy`
+                        # (database_async.py), not a plain `async_sessionmaker` —
+                        # calling it only builds the proxy; the real `AsyncSession`
+                        # comes back from `__aenter__()`. `db = AsyncSessionLocal()`
+                        # here (an earlier version of this fix) skipped that and
+                        # handed every tool a proxy with none of `AsyncSession`'s
+                        # methods — confirmed live, twice, as `AttributeError:
+                        # '_AsyncSessionLocalProxy' object has no attribute
+                        # 'scalars'` from inside the tool call and `... 'close'`
+                        # from the `finally` below once every parallel tool call in
+                        # the turn failed the same way.
+                        #
+                        # `db.close()` is shielded, not just wrapped in `finally` —
+                        # confirmed live, separately: the client disconnecting
+                        # mid-stream (the Mezon bot restarting mid-turn) cancels
+                        # this whole generator while it's awaiting `asyncio.gather`
+                        # below, and that cancellation reaching `db.close()` through
+                        # an `async with`'s implicit exit is what left a connection
+                        # needing Postgres's own garbage collector to force-close
+                        # it. `asyncio.shield` makes the close itself uncancellable;
+                        # the outer cancellation still propagates once it finishes.
+                        db = await AsyncSessionLocal().__aenter__()
+                        try:
                             call_ctx = ToolContext(
                                 user_id=ctx.user_id, async_db=db,
                                 project_id=ctx.project_id, conversation_id=ctx.conversation_id,
+                                # Session mới không thấy tin nhắn chưa commit
+                                # của lượt này — xem docstring ToolContext.
+                                current_message=ctx.current_message,
                             )
                             result = await self.tool_service.execute_single_tool(name, args, call_ctx)
+                        finally:
+                            await asyncio.shield(db.close())
                         return tc, name, args, result
 
                     exec_results = await asyncio.gather(
@@ -656,7 +698,7 @@ class AgentService:
             if turn >= MAX_TOOL_TURNS and not reply_text and not hard_error_occurred:
                 logger.warning(f"event=max_tool_turns_hit turn_count={turn} conversation_id={conv.id} streaming=true")
                 try:
-                    synthesis_config = GenerationConfig(system_instruction=gen_config.system_instruction, temperature=gen_config.temperature)
+                    synthesis_config = GenerationConfig(system_instruction=gen_config.system_instruction, temperature=gen_config.temperature, max_output_tokens=gen_config.max_output_tokens)
                     synthesis_text = ""
                     _synth_completion_before = total_usage.get("completion_tokens", 0)
                     async for chunk in _model_client.stream(messages, synthesis_config, tools=None, preferred_model=preferred_model):
