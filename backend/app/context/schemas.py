@@ -66,6 +66,19 @@ class ActiveProcedure(BaseModel):
     run_id: str = ""
 
 
+class InterventionLevels(BaseModel):
+    """Mức can thiệp hiệu dụng cho từng loại đề xuất, với **người này**.
+
+    Cùng thang, cùng dữ liệu mà Attention Gate dùng cho kênh thông báo —
+    catalog mức nền, cộng vòng học hạ bậc theo số lần người dùng đã bỏ qua,
+    cộng công tắc tắt hẳn theo loại. Trước khối này, agent trong chat quyết
+    định "nên hỏi hay nên làm" bằng 644 từ prompt và không biết gì về những
+    lần người dùng vừa bỏ qua ở bề mặt kia.
+    """
+    levels: dict[str, str] = Field(default_factory=dict)
+    guidance: dict[str, str] = Field(default_factory=dict)
+
+
 class UnifiedContext(BaseModel):
     """
     Everything Cortex knows about "what the user is doing right now".
@@ -89,6 +102,7 @@ class UnifiedContext(BaseModel):
         description="Long-term memories matching this turn's message",
     )
     active_procedure: Optional[ActiveProcedure] = None
+    intervention: Optional[InterventionLevels] = None
 
     def to_llm_string(self, max_items: int = 5) -> str:
         """
@@ -114,6 +128,9 @@ class UnifiedContext(BaseModel):
             )
             parts.append(f"Upcoming schedule (next 7 days):\n{sched_text}")
 
+        if self.intervention and self.intervention.levels:
+            parts.append(self._render_intervention())
+
         if self.active_procedure:
             parts.append(self._render_procedure())
 
@@ -124,6 +141,44 @@ class UnifiedContext(BaseModel):
             return ""
 
         return "User context:\n" + "\n\n".join(parts)
+
+    def _render_intervention(self) -> str:
+        """Giọng nào cho từng loại đề xuất, với riêng người dùng này.
+
+        Đây là bản dịch của thang `SILENT < INFORM < RECOMMEND < ASK < ACT`
+        sang hành vi hội thoại. Nó thay cho một đoạn prompt tĩnh dài, và
+        khác đoạn đó ở chỗ quan trọng nhất: nó **theo người**. Ai bỏ qua
+        một loại nhắc nhiều lần sẽ thấy agent tự bớt sốt sắng đúng loại đó,
+        chứ không phải nghe cùng một giọng như mọi người khác.
+
+        **Khối này chỉ an toàn khi prompt gọi nó là trần.** Đo được: cùng
+        đúng bảng mức này, với một prompt chỉ liệt kê mà không nói nó là
+        giới hạn trên, ba kịch bản eval quay ra tệ hơn hẳn — agent tạo task
+        người dùng không nhờ, tạo note không ai xin, và đặt lịch 19h bất
+        chấp ràng buộc "không họp sau 18h" mà nó vừa đọc thấy. Thêm vào
+        prompt câu "It is not advice — it is the upper bound… never raises
+        it" thì hai trong ba xanh lại ngay, không đổi một dòng dữ liệu nào.
+
+        Lý do đủ đơn giản để dễ tái phạm: một danh sách "được phép tới mức
+        ACT / ASK / RECOMMEND" đọc như *giấy phép*, không như *hạn mức*.
+        Ai sửa hàm này về sau, giữ nguyên phần dặn ở cuối, và giữ nguyên
+        đoạn "The intervention block is your ceiling" trong
+        `assistant_system.md` — hai thứ đó là một cặp, tách ra thì khối
+        này thành lời mời hành động.
+        """
+        lines = [
+            "Mức can thiệp cho người dùng này (tính từ hành vi của chính họ, "
+            "không phải quy tắc chung):"
+        ]
+        for reason, level in self.intervention.levels.items():
+            how = self.intervention.guidance.get(level, "")
+            lines.append(f"- {reason} → {level.upper()}: {how}")
+        lines.append(
+            "Mức đã hạ nghĩa là người dùng từng nhiều lần bỏ qua loại đó. "
+            "Tôn trọng nó — đừng đề xuất hăng hơn mức cho phép, và đừng hỏi "
+            "khi mức chỉ là INFORM."
+        )
+        return "\n".join(lines)
 
     def _render_procedure(self) -> str:
         """Quy trình đang chạy — và quan trọng nhất, **còn bước nào**.

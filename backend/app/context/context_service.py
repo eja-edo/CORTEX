@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.context.schemas import (
     ActiveProcedure,
     ContextPill,
+    InterventionLevels,
     ProjectContext,
     RecalledMemory,
     UnifiedContext,
@@ -31,6 +32,17 @@ from app.models import Note, Project, ProjectMember, Schedule
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# Những loại đề xuất chủ động mà agent hay đưa ra trong hội thoại. Khai ở
+# `app.services.attention_reason_catalog` cùng chỗ với reason của kênh thông
+# báo — cùng một câu hỏi thì cùng một bảng, xem docstring của
+# `app.services.intervention`.
+CHAT_REASON_KEYS = [
+    "chat.suggest_routine_tasks",
+    "chat.suggest_support",
+    "chat.suggest_schedule",
+    "chat.flag_conflict",
+]
 
 
 class ContextService:
@@ -82,6 +94,7 @@ class ContextService:
         recent_schedules = await self._get_upcoming_schedules(user_id, limit=5)
         recalled_memories = await self._recall_memories(user_id, message, limit=5)
         active_procedure = await self._match_procedure(user_id, message)
+        intervention = await self._intervention_levels(user_id)
 
         context = UnifiedContext(
             pills=pills,
@@ -92,6 +105,7 @@ class ContextService:
             recent_schedules=recent_schedules,
             recalled_memories=recalled_memories,
             active_procedure=active_procedure,
+            intervention=intervention,
         )
 
         if intent:
@@ -322,6 +336,38 @@ class ContextService:
             )
         except Exception as exc:
             logger.warning(f"Procedure matching failed (non-fatal): {exc}")
+            return None
+
+    async def _intervention_levels(self, user_id: UUID) -> Optional[InterventionLevels]:
+        """Giọng nào cho từng loại đề xuất, với riêng người dùng này.
+
+        Cùng thang và cùng dữ liệu mà Attention Gate dùng cho kênh thông
+        báo (xem `app.services.intervention`). Trước khối này, hai bề mặt
+        trả lời cùng một câu hỏi — "việc này có đáng làm phiền không, ở mức
+        nào" — bằng hai cách không liên quan gì nhau: một bên là code tất
+        định có học từ hành vi, một bên là 644 từ prompt không biết gì về
+        hành vi đó.
+
+        Không bao giờ ném lỗi: thiếu khối này thì agent hành xử như trước,
+        chứ không phải mất lượt chat.
+        """
+        try:
+            from app.services.intervention import LEVEL_GUIDANCE, levels_for
+
+            levels = await levels_for(self.db, user_id, CHAT_REASON_KEYS)
+            return InterventionLevels(
+                levels={key: level.value for key, level in levels.items()},
+                # Chỉ gửi hướng dẫn cho những mức thật sự xuất hiện — không
+                # tiêu prompt budget cho bốn mức còn lại mà lượt này không
+                # dùng tới.
+                guidance={
+                    level.value: LEVEL_GUIDANCE[level]
+                    for level in set(levels.values())
+                    if level in LEVEL_GUIDANCE
+                },
+            )
+        except Exception as exc:
+            logger.warning(f"Intervention levels failed (non-fatal): {exc}")
             return None
 
     def _filter_by_relevance(self, context: UnifiedContext, intent: str) -> UnifiedContext:
