@@ -7,6 +7,7 @@ Designed for a tiered memory architecture:
 """
 
 from app.ai.loaders.prompt_loader import load
+from app.services.memory_categories import categories_for_prompt
 from app.services.task_extraction_prompt import append_task_instructions
 
 MEMORY_EXTRACTION_SYSTEM_PROMPT = load("memory/semantic_extraction.md")
@@ -30,7 +31,7 @@ _RESPONSE_SHAPE = """Respond with a single JSON object:
   "episodic_summary": "markdown string",
   "semantic_memories": [
     {
-      "category": "routine" | "preference" | "policy" | "fact" | "decision",
+      "category": %s,
       "content": "one self-contained sentence",
       "confidence": 0.0-1.0,
       "expected_lifetime": "short" | "medium" | "long" | "permanent"
@@ -52,8 +53,15 @@ have found it."""
 
 
 def response_shape(extra_keys: str = "") -> str:
-    """The closing format instruction, optionally with extra top-level keys."""
-    return _RESPONSE_SHAPE % extra_keys
+    """The closing format instruction, optionally with extra top-level keys.
+
+    Danh sách `category` được **dẫn xuất** từ
+    `app.services.memory_categories`, không viết tay ở đây. Trước đó nó là
+    một literal, và literal đó là thứ model thật sự tuân theo (nó đứng cuối
+    lượt user) — nên khi nó lệch khỏi tài liệu trích xuất và khỏi comment
+    của migration, chính nó quyết định, im lặng, rằng DB sẽ chứa gì.
+    """
+    return _RESPONSE_SHAPE % (categories_for_prompt(), extra_keys)
 
 
 def build_extraction_messages(
