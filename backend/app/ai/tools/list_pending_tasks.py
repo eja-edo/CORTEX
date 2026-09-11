@@ -8,6 +8,7 @@ without the old direction/counterparty framing.
 
 from pydantic import BaseModel
 
+from app.ai.tools.empty_result import with_empty_note
 from app.ai.agents.tool_context import ToolContext
 from app.utils.logger import get_logger
 
@@ -28,7 +29,7 @@ async def list_pending_tasks_handler(args: dict, ctx: ToolContext) -> dict:
     async with ctx.async_db() as db:
         tasks = await TaskService(db).get_tasks(ctx.user_id, status=TaskStatus.PENDING_CONFIRM)
 
-        return {
+        payload = {
             "tasks": [
                 {
                     "id": str(t.id),
@@ -40,6 +41,9 @@ async def list_pending_tasks_handler(args: dict, ctx: ToolContext) -> dict:
             "count": len(tasks),
             "success": True,
         }
+        return with_empty_note(
+            payload, not tasks, "Không có việc nào đang chờ người dùng xác nhận"
+        )
 
 
 LIST_PENDING_TASKS_SCHEMA = {

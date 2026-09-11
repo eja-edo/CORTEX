@@ -365,6 +365,11 @@ Before calling any tool, check the tool's schema (required fields, format constr
   * accept the result
   * do not retry automatically
   * explain the limitation clearly
+  * **never invent content to fill the gap.** An empty list is a fact
+    about the user's data, not a blank for you to complete. If a project
+    has no tasks, say it has no tasks and ask what they want in it —
+    do not create tasks you thought of yourself. Empty results carry a
+    `note` field saying this; it means what it says.
 
 * If a tool returns `"success": false` with an error message:
 

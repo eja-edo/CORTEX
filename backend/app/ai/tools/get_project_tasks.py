@@ -13,6 +13,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
+from app.ai.tools.empty_result import with_empty_note
 from app.ai.agents.tool_context import ToolContext
 from app.ai.tools.project_ref import resolve_project_ref, unresolved_result
 from app.utils.logger import get_logger
@@ -60,7 +61,7 @@ async def get_project_tasks_handler(args: dict, ctx: ToolContext) -> dict:
         tasks = list((await db.scalars(stmt)).all())
         shown = tasks[:MAX_LISTED_TASKS]
 
-        return {
+        payload = {
             "project": {
                 "id": str(project.id),
                 "name": project.name,
@@ -80,6 +81,11 @@ async def get_project_tasks_handler(args: dict, ctx: ToolContext) -> dict:
             "truncated": len(tasks) > len(shown),
             "success": True,
         }
+        # Kết quả rỗng không được im lặng — xem app/ai/tools/empty_result.py
+        # cho phép đo đằng sau câu dặn này.
+        return with_empty_note(
+            payload, not shown, f"Dự án {project.name} chưa có việc nào đang mở"
+        )
 
 
 GET_PROJECT_TASKS_SCHEMA = {

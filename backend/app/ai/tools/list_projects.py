@@ -12,6 +12,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
+from app.ai.tools.empty_result import with_empty_note
 from app.ai.agents.tool_context import ToolContext
 from app.ai.tools.project_ref import MAX_LISTED_PROJECTS
 from app.utils.logger import get_logger
@@ -43,7 +44,7 @@ async def list_projects_handler(args: dict, ctx: ToolContext) -> dict:
         rows.sort(key=lambda pair: (-pair[1]["risk"], pair[0].name.lower()))
         shown = rows[:MAX_LISTED_PROJECTS]
 
-        return {
+        payload = {
             "projects": [
                 {
                     "id": str(p.id),
@@ -60,6 +61,9 @@ async def list_projects_handler(args: dict, ctx: ToolContext) -> dict:
             "truncated": len(rows) > len(shown),
             "success": True,
         }
+        return with_empty_note(
+            payload, not shown, "Người dùng chưa có dự án nào"
+        )
 
 
 LIST_PROJECTS_SCHEMA = {

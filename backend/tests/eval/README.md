@@ -80,3 +80,34 @@ Nghi phạm là độ dài prompt: `estimated_system_prompt_tokens` đo được
 cho một lượt, và chỉ dẫn càng dài thì model càng chọn lọc thứ nó tuân
 theo. Đó là việc của P2 (gọt `assistant_system.md` về một hiến pháp ngắn);
 con số 4/10 ở đây là mốc để so sánh sau khi gọt.
+
+## Kịch bản L3 và khoản nợ nó canh
+
+L3 ("deadline dự án sắp tới rồi, tôi hơi lo") là chỗ một lỗi ghi-dữ-liệu
+lộ ra, và nó lộ ra **muộn**: bộ eval xanh nhiều lần trước khi có ai để ý.
+
+Hiện tượng: agent gọi `get_project_tasks`, nhận danh sách rỗng, rồi tạo
+sáu task `"Create file a.txt with content 'a'"` bằng tiếng Anh. Không
+chuỗi nào trong đó có trong prompt, trong DB, hay trong bất kỳ kết quả
+tool nào — model gặp khoảng trống và lấp bằng một mẫu quen từ dữ liệu
+huấn luyện. Đã xác nhận bằng A/B rằng nó không do thang can thiệp, và có
+sẵn từ `d39fb91`.
+
+Số đo, tính theo số lượt agent **không** bịa:
+
+| Cấu hình | Kết quả |
+|---|---|
+| Không có câu dặn kèm kết quả rỗng | 0/6 |
+| Có câu dặn (cuối payload) | 2/3 |
+| Có câu dặn (đầu payload) | 3/4 |
+
+Có câu dặn thì khác hẳn không có. Vị trí thì **không** kết luận được ở cỡ
+mẫu này. Khoảng ~1/4 lượt còn lại vẫn bịa — đó là giới hạn của model, và
+L3 là chỗ theo dõi nó. Nếu con số này xấu đi, câu dặn trong
+`app/ai/tools/empty_result.py` hoặc quy tắc tương ứng trong
+`assistant_system.md` là nơi nhìn đầu tiên.
+
+**Bài học chung, áp cho mọi eval về sau:** với mỗi tool ghi dữ liệu, phải
+có ít nhất một kịch bản kiểm **trạng thái trong DB** sau lượt nói, không
+chỉ kiểm câu trả lời và tên tool được gọi. Bộ này từng xanh 5/5 trong khi
+một lỗi ghi sai xảy ra ở mọi lượt, đúng vì thiếu điều đó.

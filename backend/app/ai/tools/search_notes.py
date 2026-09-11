@@ -1,5 +1,6 @@
 """Search notes tool with semantic search support."""
 
+from app.ai.tools.empty_result import with_empty_note
 import logging
 import time
 from uuid import UUID
@@ -64,12 +65,15 @@ async def search_notes_handler(args: dict, ctx: ToolContext) -> dict:
         
         latency_ms = (time.time() - start_time) * 1000
         
-        return {
+        payload = {
             "count": search_result["count"],
             "method": search_result.get("method", "unknown"),  # "semantic", "keyword", or "none"
             "notes": formatted_notes,
             "latency_ms": latency_ms,
         }
+        return with_empty_note(
+            payload, not formatted_notes, "Không tìm thấy ghi chú nào khớp"
+        )
 
     except ValueError as exc:
         logger.error(f"search_notes validation error: {exc}")
