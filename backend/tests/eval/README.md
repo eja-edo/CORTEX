@@ -111,3 +111,20 @@ L3 là chỗ theo dõi nó. Nếu con số này xấu đi, câu dặn trong
 có ít nhất một kịch bản kiểm **trạng thái trong DB** sau lượt nói, không
 chỉ kiểm câu trả lời và tên tool được gọi. Bộ này từng xanh 5/5 trong khi
 một lỗi ghi sai xảy ra ở mọi lượt, đúng vì thiếu điều đó.
+
+## Rate limit của embedding API
+
+Chạy nhiều lần eval liên tiếp sẽ làm cạn quota của
+`gemini/gemini-embedding-2-preview` và gây `429 Resource exhausted`. Khi đó
+các test **tất định** cần embedding cũng đỏ theo — đo được: ba test trong
+`tests/integration/test_procedures.py` đỏ ngay sau một loạt eval, rồi xanh
+lại sau ~2 phút mà không sửa một dòng nào.
+
+Nên khi một test embedding đỏ ngay sau khi chạy eval, hãy nghi rate limit
+trước khi nghi code: `grep -c 429` trong log trả lời ngay. Quota reset
+trong vòng khoảng hai phút.
+
+Cũng vì vậy: **không chạy `pytest tests/unit tests/integration` song song
+với bộ eval.** Ngoài chuyện tranh quota, `tests/conftest.py` còn `FLUSHDB`
+đúng Redis database mà eval đang dùng làm cache embedding, nên hai bên vừa
+làm chậm vừa làm nhiễu nhau.

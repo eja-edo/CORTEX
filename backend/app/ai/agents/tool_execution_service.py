@@ -33,6 +33,55 @@ logger = get_logger(__name__)
 MAX_TOOL_TURNS = 30
 MAX_SAME_TOOL_CALLS = 20
 
+# Trần riêng cho các tool **tạo** dữ liệu, thấp hơn hẳn `MAX_SAME_TOOL_CALLS`.
+#
+# Lý do là một mẫu lỗi đo được, không phải lo xa. Model gateway hiện tại, khi
+# gặp tình huống mơ hồ, rơi vào một mẫu quen từ dữ liệu huấn luyện và tạo
+# hàng loạt việc "Create file a.txt with content 'a'" — không chuỗi nào
+# trong đó tồn tại ở prompt, ở DB, hay ở kết quả tool nào (đã kiểm tasks,
+# notes, conversations, memories, projects: tất cả rỗng).
+#
+# Phân bố số **lời gọi** `create_task` trong một lượt, đo trên 14 kịch bản
+# eval:
+#
+#     lượt lành   0 lời gọi
+#     lượt bịa    4 và 6 lời gọi
+#
+# Ngưỡng 3 nằm giữa hai nhóm đó. Nhưng đọc con số này cho đúng: số **bản
+# ghi tạo thành công** thì hai nhóm ngang nhau — ca bịa tạo ba task, ca hợp
+# lệ (một quy trình ba bước được xác nhận) cũng ba. Trần chỉ tách được hai
+# nhóm vì nó đếm *mọi lời gọi*, và ba lời gọi đầu của ca bịa đều bị
+# validation loại (thiếu `title`), nên chúng đã dùng hết trần trước khi
+# model kịp gọi lại cho đúng.
+#
+# **Chưa chứng minh được giá trị trên dữ liệu thật.** Sau khi sửa phạm vi
+# bộ đếm, không lượt eval nào còn gọi quá ba lần, nên trần chưa chạm lần
+# nào — những lượt xanh lại là nhờ câu dặn ở
+# `app/ai/tools/empty_result.py` (0/6 → 5/7) hoặc nhờ phương sai, không
+# nhờ trần. Giữ nó làm phòng tuyến cho ca cực đoan mà
+# `MAX_SAME_TOOL_CALLS = 20` không với tới, chứ không phải vì nó đã cứu
+# được một ca nào.
+MAX_CREATE_CALLS_PER_REQUEST = 3
+
+# Các tool sinh ra bản ghi mới. Cập nhật và xoá không nằm ở đây: chúng nhắm
+# vào một hàng người dùng đã biết, nên chúng không có kiểu hỏng "bịa ra N
+# thứ để lấp chỗ trống".
+CREATE_TOOLS = frozenset({"create_task", "create_schedule", "create_note"})
+
+# Đếm **gộp** mọi tool tạo, không đếm riêng từng cái: ba việc cộng ba lịch
+# cộng ba ghi chú trong một lượt cũng là tạo hàng loạt, dù không tool nào
+# vượt trần của riêng nó.
+#
+# Bộ đếm sống trên instance của service, **không** dùng `tool_call_counts`.
+# Dict đó bị xoá sau mỗi turn khi `AGENT_TOOL_CALL_COUNT_SCOPE == "turn"`
+# (mặc định), và bản đầu của trần này dựa vào nó nên chưa bao giờ chạm:
+# model gọi ba lần ở turn 1 (thiếu `title`, validation loại cả ba), rồi ba
+# lần nữa ở turn 2 — sáu lời gọi, không turn nào vượt ba.
+#
+# Đếm **mọi lời gọi**, kể cả lời gọi bị validation loại. Đếm riêng bản ghi
+# thành công thì trần vô dụng đúng ở ca nó sinh ra để chặn: ca đo được tạo
+# ba bản ghi, bằng y ca hợp lệ (một quy trình ba bước được xác nhận).
+
 
 def _sum_message_tokens(msgs: list[Message]) -> int:
     total = 0
@@ -234,6 +283,13 @@ class ToolExecutionService:
         self.store = store
         self.registry = registry
         self._event_bus = None  # Lazy init
+        # Trần tạo bản ghi, đếm trên **một request** — xem
+        # `MAX_CREATE_CALLS_PER_REQUEST`. Sống ở đây chứ không ở
+        # `tool_call_counts` vì dict đó bị xoá sau mỗi turn khi
+        # `AGENT_TOOL_CALL_COUNT_SCOPE == "turn"` (mặc định), và một trần
+        # reset giữa lượt thì không phải trần. `AgentService` dựng service
+        # này một lần cho mỗi request, nên phạm vi khớp đúng ý định.
+        self._create_calls_this_request = 0
 
     async def _get_event_bus(self):
         if self._event_bus is None:
@@ -290,12 +346,41 @@ class ToolExecutionService:
         current_turn_id = uuid7()
 
         execution_list = []
+        refused: list[tuple] = []
         for tc in tool_calls:
             tool_name = tc.name
             if not tool_name:
                 logger.warning(f"Skipping tool call with empty name (id={tc.id})")
                 continue
             tool_args = tc.args
+
+            # Trần cho tool tạo dữ liệu — xem `MAX_CREATE_CALLS_PER_REQUEST`.
+            #
+            # Từ chối **một lời gọi**, không cắt cả lượt: agent vẫn phải trả
+            # lời người dùng, và kết quả từ chối là chỗ nó đọc được vì sao.
+            if tool_name in CREATE_TOOLS:
+                created = self._create_calls_this_request
+                if created >= MAX_CREATE_CALLS_PER_REQUEST:
+                    logger.warning(
+                        "event=create_call_cap_hit tool_name=%s created=%d cap=%d "
+                        "conversation=%s",
+                        tool_name, created, MAX_CREATE_CALLS_PER_REQUEST, conv.id,
+                    )
+                    refused.append((tc, tool_name, {
+                        "success": False,
+                        "error": "too_many_new_records",
+                        "message": (
+                            f"Đã dùng {created} lượt tạo bản ghi cho yêu cầu này "
+                            "— đủ rồi. "
+                            "Nếu người dùng thật sự cần thêm, hãy LIỆT KÊ những "
+                            "thứ còn lại và hỏi họ xác nhận, đừng tạo tiếp. "
+                            "Nếu bạn đang tự nghĩ ra việc để lấp một danh sách "
+                            "rỗng thì dừng hẳn: hãy hỏi người dùng muốn gì."
+                        ),
+                    }))
+                    continue
+                self._create_calls_this_request = created + 1
+
             execution_list.append((tc, tool_name, tool_args))
 
         exec_results: list[tuple] = []
@@ -374,6 +459,8 @@ class ToolExecutionService:
                         error=result.get("error"),
                     )
                     exec_results.append((tc, tool_name, result))
+
+            exec_results.extend(refused)
 
             for tc, tool_name, result in exec_results:
                 source_id_counter += 1
