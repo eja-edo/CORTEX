@@ -171,6 +171,25 @@ REASON_CATALOG: dict[str, ReasonMeta] = {
             "Người dùng kể một sự việc có thời gian và chưa có lịch cho nó."
         ),
     ),
+    # Việc mà bộ trích xuất hội thoại *đoán* ra từ lời người dùng
+    # (`app.services.task_extraction`), chờ một cái yes/no.
+    #
+    # ASK vì bản chất nó là một câu hỏi: task vào `pending_confirm` và chỉ
+    # thành việc thật khi người dùng đồng ý. Và đây là reason **duy nhất**
+    # hiện có một tín hiệu phản hồi tất định: người dùng bấm từ chối thì
+    # `task.reject` chạy, không cần model diễn giải xem họ có đồng ý hay
+    # không. Xem `app.services.intervention.record_chat_dismissal`.
+    #
+    # Khi mức tụt tới SILENT, `task_extraction` thôi tạo candidate — đó là
+    # Cortex tự nhận ra người dùng không muốn tính năng này, từ hành vi chứ
+    # không từ một cái toggle.
+    "task.suggestion": ReasonMeta(
+        base_level=AttentionLevel.ASK,
+        description=(
+            "Một việc bộ trích xuất đoán ra từ hội thoại, đang chờ người "
+            "dùng xác nhận."
+        ),
+    ),
     "chat.flag_conflict": ReasonMeta(
         base_level=AttentionLevel.ASK,
         description=(

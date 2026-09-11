@@ -257,6 +257,45 @@ class TaskCandidateService:
         skipped_duplicate = 0
         skipped_previously_rejected = 0
 
+        # Vòng học khép ở đây, và đây là nửa khiến nửa kia có nghĩa.
+        #
+        # Mỗi lần người dùng từ chối một việc Cortex đoán ra,
+        # `task_commands.task_reject_handler` ghi một dismissal cho
+        # `task.suggestion`. Đủ số lần thì `feedback_loop` hạ mức xuống tới
+        # SILENT — và SILENT phải có tác dụng thật, nếu không việc ghi kia
+        # chỉ là thống kê.
+        #
+        # Khác cái lọc `skipped_previously_rejected` ngay bên dưới: cái đó
+        # chặn **đúng một** đề xuất đã bị từ chối khỏi quay lại. Cái này trả
+        # lời một câu khác và rộng hơn — "người này có muốn Cortex đoán việc
+        # cho họ nữa không" — và câu trả lời đến từ hành vi của chính họ,
+        # không từ một cái toggle trong settings.
+        if raw_candidates:
+            from app.services.intervention import conversational_level
+            from app.models import AttentionLevel
+
+            level = await conversational_level(
+                self.session, user_id, "task.suggestion"
+            )
+            if level is AttentionLevel.SILENT:
+                logger.info(
+                    "Bỏ qua %d đề xuất việc: người dùng %s đã từ chối loại này "
+                    "đủ nhiều để mức về SILENT",
+                    len(raw_candidates), user_id,
+                )
+                # Cùng shape với đường trả về bình thường ở cuối hàm —
+                # caller (`memory_extraction_service`) đọc theo khoá, và một
+                # nhánh sớm trả khoá khác là kiểu hỏng im lặng.
+                return {
+                    "created": [],
+                    "created_count": 0,
+                    "rejected_count": 0,
+                    "rejected_rules": [],
+                    "skipped_duplicate": 0,
+                    "skipped_previously_rejected": 0,
+                    "skipped_silenced": len(raw_candidates),
+                }
+
         for raw in raw_candidates or []:
             if not isinstance(raw, dict):
                 rejected.append(RejectedCandidate({"raw": str(raw)}, "not_an_object", ""))
@@ -307,6 +346,7 @@ class TaskCandidateService:
             "rejected_rules": [r.rule for r in rejected],
             "skipped_duplicate": skipped_duplicate,
             "skipped_previously_rejected": skipped_previously_rejected,
+            "skipped_silenced": 0,
         }
 
     async def _already_open(self, user_id: UUID, title: str) -> bool:

@@ -34,6 +34,8 @@ reason_key)` của một item cụ thể đang được nhắc, còn đây là c
 
 from __future__ import annotations
 
+from datetime import datetime
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,6 +45,9 @@ from app.services.attention_reason_catalog import base_level_for
 from app.services.feedback_loop import apply_downgrade, dismiss_count_async
 from app.services.user_preferences import get_preferences_async, is_reason_disabled
 from app.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from app.models import AttentionItemType
 
 logger = get_logger(__name__)
 
@@ -103,6 +108,75 @@ async def conversational_level(
             return base_level_for(reason_key)
         except Exception:
             return AttentionLevel.RECOMMEND
+
+
+async def record_chat_dismissal(
+    session: AsyncSession,
+    user_id: UUID,
+    *,
+    reason_key: str,
+    item_type: "AttentionItemType",
+    item_id: UUID,
+) -> bool:
+    """Ghi lại việc người dùng **từ chối** một đề xuất trong hội thoại.
+
+    Đây là nửa còn lại của vòng học, và nó từng thiếu hẳn. Trước hàm này,
+    `feedback_loop` chỉ ăn được tín hiệu từ nút dismiss trên một
+    notification — trong khi chat mới là nơi người dùng ở nhiều nhất. Hệ
+    quả: họ nói "thôi không cần" mười lần trong chat và không gì được ghi
+    lại, nên mức can thiệp không bao giờ hạ.
+
+    **Chỉ gọi từ một tín hiệu tất định.** Không suy ra "người dùng từ chối"
+    từ câu chữ, và không để model tự khai bằng một tool: đợt
+    `mark_procedure_step` đã đo được rằng model sẵn sàng khai một điều nó
+    suy diễn ra (nó đọc "quá giờ" thành "đã xong" rồi ghi vào DB). Một vòng
+    học ăn dữ liệu do model phán đoán sẽ học chính những phán đoán sai đó.
+
+    Tín hiệu đạt chuẩn đó hiện có một: `task.reject` — người dùng bấm/nói
+    "không" với một việc bộ trích xuất đoán ra, và trạng thái task chuyển
+    `pending_confirm → rejected`. Đó là hành động của con người, không phải
+    suy luận của model.
+
+    Ghi cả phần "đã đề xuất" lẫn phần "bị từ chối" trong một hàng, vì ở chat
+    không ai ghi phần đầu: agent nói ra đề xuất trong câu trả lời, không qua
+    `record_surface`. Cố tách thành hai hàng sẽ tạo ra một hàng
+    `no_response` vĩnh viễn không ai đóng.
+
+    Không bao giờ ném lỗi: đây là việc ghi nhận bên lề một thao tác người
+    dùng vừa làm thành công. Mất một điểm dữ liệu của vòng học còn hơn làm
+    thao tác đó thất bại.
+    """
+    from app.models import AttentionChannel, AttentionLog, AttentionResponse
+
+    try:
+        level = await conversational_level(session, user_id, reason_key)
+        session.add(
+            AttentionLog(
+                user_id=user_id,
+                item_type=item_type,
+                item_id=item_id,
+                reason_key=reason_key,
+                level=level,
+                # `IN_APP` là *bề mặt quyết định*, không phải đường giao —
+                # xem docstring của `AttentionChannel`. Hội thoại (web hay
+                # Mezon) đều là in-app theo nghĩa đó.
+                channel=AttentionChannel.IN_APP,
+                response=AttentionResponse.DISMISSED,
+                responded_at=datetime.utcnow(),
+            )
+        )
+        await session.flush()
+        logger.info(
+            "Ghi từ chối từ hội thoại: reason=%s item=%s level=%s",
+            reason_key, item_id, level.value,
+        )
+        return True
+    except Exception as exc:
+        logger.warning(
+            "Không ghi được phản hồi từ hội thoại cho %r (non-fatal): %s",
+            reason_key, exc,
+        )
+        return False
 
 
 async def levels_for(
