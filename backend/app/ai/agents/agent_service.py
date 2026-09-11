@@ -1,6 +1,7 @@
 """Main agent service — thin orchestrator delegating to ConversationService, ToolExecutionService, MemoryTriggerService."""
 
 import asyncio
+import os
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -29,17 +30,84 @@ from app.ai.agents.tool_registry import get_tool_registry
 from app.config import settings
 from app.utils.logger import get_logger
 from app.ai.agents import user_messages
-from app.ai.loaders.prompt_loader import load
+from app.ai.loaders.prompt_loader import load, render
 
 logger = get_logger(__name__)
 
-SYSTEM_PROMPT = load("system/assistant_system.md")
+def _build_system_prompt() -> str:
+    """Prompt hệ thống, với danh sách tool **sinh từ registry**.
+
+    Danh sách tool từng được viết tay trong file md, và nó trôi — đã đo hai
+    lần theo hai hướng:
+
+    * sau khi mục 11 đóng băng 13 tool, prompt vẫn liệt kê bảy tool không
+      còn tồn tại và **không** liệt kê một tool việc nào, kể cả
+      `create_task` (xem `tests/unit/test_prompt_matches_registry.py`);
+    * và ở lần đọc gần nhất, nó thiếu `mark_procedure_step` — một tool thêm
+      vào cùng ngày.
+
+    Cả hai hướng đều hỏng im lặng: agent gọi tool không có rồi bịa, hoặc
+    không biết mình *có* một tool và trả lời bằng phỏng đoán. Một danh sách
+    viết tay phải được nhớ cập nhật; một danh sách sinh ra thì không thể
+    lệch khỏi registry.
+    """
+    from app.ai.tools import LIVE_TOOLS
+
+    names = sorted(t["name"] for t in LIVE_TOOLS)
+    inventory = "Tools you have: " + ", ".join(f"`{n}`" for n in names) + "."
+    return render("system/assistant_system.md", tool_inventory=inventory)
+
+
+SYSTEM_PROMPT = _build_system_prompt()
 
 MAX_CONVERSATION_HISTORY = 10
 MAX_TOOL_TURNS = 30
 MAX_SAME_TOOL_CALLS = 20
 MAX_TOKENS_PER_DAY_PER_USER = 2_000_000
 MAX_TURN_RETRIES = 3
+
+# Số lần thử lại khi model trả về một câu trả lời rỗng hoặc lửng.
+#
+# Trước đây là 0 — gặp rỗng là bỏ luôn và đưa người dùng một câu xin lỗi.
+# Đo trên sáu cuộc trò chuyện mô phỏng: nó xảy ra **ba lần**, và cả ba lần
+# đều sau một câu người dùng gõ ngắn:
+#
+#     "Tuần sau nộp báo cáo."          → rỗng
+#     "đặt lịch họp team 10h thứ 5"    → rỗng
+#     "Đúng. Đặt lịch 19h tối mai."    → rỗng
+#
+# Mỗi lần người dùng phải gõ lại, dài hơn, và lần hai thì được. Tức hệ
+# thống đẩy việc sửa sang cho họ trong khi chính nó thử lại là xong — ngắn
+# gọn là cách người ta dùng app thật, không phải lỗi cần họ khắc phục.
+#
+# Một lần là đủ: lời gọi lại tốn một vòng độ trễ người dùng phải chờ.
+#
+# **Lần thử lại đổi sang một model khác**, và đó là kết luận sau bốn giả
+# thuyết sai — ghi lại cả bốn để không ai thử lại:
+#
+#   1. *Gọi lại y nguyên sẽ khác.* Sai: rỗng tiếp, 4/4 lần.
+#   2. *Prompt dài là nguyên nhân; bỏ skill sẽ cứu.* Sai: vẫn rỗng 7/7 dù
+#      prompt ngắn đi 10k ký tự.
+#   3. *`free_auto` là thủ phạm.* Sai: benchmark 8 model, tất cả 0% im.
+#   4. *Im lặng tăng theo độ dài prompt.* Sai: đo ở ba mức 11k/17k/23k
+#      token — im rải rác ~2%, không theo xu hướng nào.
+#
+# Nên nguyên nhân nằm ở model/gateway và không sửa được từ phía này. Thứ
+# sửa được là **hậu quả**: im lặng ngẫu nhiên ở mức ~2% mỗi model, nên xác
+# suất hai model khác nhau im cùng một lượt thấp hơn hẳn. Đổi model khi thử
+# lại biến một lỗi người-dùng-phải-gõ-lại thành một lần chậm thêm vài giây.
+#
+# Đây là xử lý triệu chứng, và nói thẳng ra như vậy: nguyên nhân gốc vẫn
+# chưa biết, còn 13% lượt phải gõ lại thì không chờ được.
+MAX_EMPTY_REPLY_RETRIES = 1
+
+# Model dùng cho lần thử lại. Chọn từ benchmark độ tin cậy
+# (`tests/eval/bench/bench_agent_reliability.py`): `kr/claude-haiku-4.5` là
+# model duy nhất im 0/6 ở **cả ba** mức prompt đã đo, và nhanh (3.6–6.1s).
+# Phải khác model chính — đó là cả điểm của việc đổi.
+EMPTY_REPLY_FALLBACK_MODEL = os.getenv(
+    "AGENT_FALLBACK_MODEL", "kr/claude-haiku-4.5"
+)
 # Neither `handle()` nor `handle_streaming_generator()` passed
 # `max_output_tokens` to the provider — confirmed live: a degenerate
 # response (garbled tokens repeating a single word) ran unbounded until
@@ -49,6 +117,26 @@ MAX_TURN_RETRIES = 3
 MAX_CHAT_OUTPUT_TOKENS = 4096
 
 _model_client = ModelClient()
+
+
+def _reply_looks_incomplete(text: str | None) -> bool:
+    """Câu trả lời dừng giữa đường, không phải một câu hoàn chỉnh.
+
+    Đo được hai lần trong cùng đợt eval, cả hai để người dùng treo lửng:
+
+        "Theo quy trình làm việc bạn đã thiết lập:"
+        "Thứ Năm, ngày 17/09/2026, bạn có một sự kiện duy nhất:"
+
+    Cả hai mở ra một danh sách rồi không liệt kê gì. Người dùng nhìn thấy
+    một câu bỏ dở, và không có cách nào biết đó là lỗi hay là hết.
+
+    Chỉ bắt ca rõ ràng: kết thúc bằng dấu mở danh sách. Không suy đoán thêm
+    — một câu trả lời ngắn vẫn có thể là câu trả lời đủ ("Đã xong.").
+    """
+    if not text:
+        return False
+    stripped = text.strip()
+    return stripped.endswith((":", "：", "-", "—", ","))
 
 
 # asyncio only holds a weak reference to a running task, so a fire-and-forget
@@ -149,6 +237,11 @@ class AgentService:
         await self.conversation_service.save_user_message(conv.id, message, context)
         await self.conversation_service.increment_message_count(conv.id)
 
+        # Bản gọn dùng cho lần thử lại khi model trả rỗng: cùng prompt gốc
+        # và cùng ngữ cảnh, trừ khối skill — phần lớn nhất có thể bỏ mà
+        # không mất dữ kiện nào về người dùng.
+        slim_prompt = SYSTEM_PROMPT + (f"\n\n{context_string}" if context_string else "")
+
         tools = self.registry.get_provider_tools()
         gen_config = GenerationConfig(system_instruction=system_prompt, max_output_tokens=MAX_CHAT_OUTPUT_TOKENS)
         logger.info(f"Available tools: {[t.name for t in tools] if tools else 'None'}")
@@ -171,6 +264,7 @@ class AgentService:
 
         total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "estimated_system_prompt_tokens": 0, "estimated_history_tokens": 0, "estimated_current_input_tokens": 0, "estimated_tool_results_tokens": 0}
         turn = 0
+        empty_retries = 0
         reply_text = None
         tool_call_counts = {}
         _last_assistant_completion = 0
@@ -211,7 +305,20 @@ class AgentService:
                 break
 
             if not response:
-                logger.warning("API returned empty response")
+                # Cùng chính sách với câu trả lời rỗng bên dưới: thử lại
+                # trước, xin lỗi là phương án cuối. Hai nhánh này khác nhau
+                # ở chỗ hỏng (không có `response` vs có nhưng trống), nhưng
+                # với người dùng thì giống hệt nhau — họ không nhận được gì.
+                if empty_retries < MAX_EMPTY_REPLY_RETRIES:
+                    empty_retries += 1
+                    preferred_model = EMPTY_REPLY_FALLBACK_MODEL
+                    logger.warning(
+                        "API không trả response — thử lại lần %d với %s",
+                        empty_retries, EMPTY_REPLY_FALLBACK_MODEL,
+                    )
+                    turn += 1
+                    continue
+                logger.warning("API returned empty response sau %d lần thử", empty_retries)
                 reply_text = user_messages.EMPTY_REPLY
                 break
 
@@ -228,14 +335,40 @@ class AgentService:
                 # rằng chẳng có gì cả, trong khi có (P7 nói bỏ khi nghi ngờ;
                 # đây không phải nghi ngờ — nội dung có thật, chỉ sai chỗ).
                 reply_text = response.content or response.reasoning
+
+                # Rỗng hoặc lửng thì **thử lại**, đừng đẩy việc sang người
+                # dùng — xem `MAX_EMPTY_REPLY_RETRIES`.
+                if (
+                    not reply_text or _reply_looks_incomplete(reply_text)
+                ) and empty_retries < MAX_EMPTY_REPLY_RETRIES:
+                    empty_retries += 1
+                    # Thử lại bằng **model khác** và prompt gọn hơn. Xem
+                    # `MAX_EMPTY_REPLY_RETRIES` cho bốn giả thuyết đã loại.
+                    preferred_model = EMPTY_REPLY_FALLBACK_MODEL
+                    gen_config = GenerationConfig(
+                        system_instruction=slim_prompt,
+                        max_output_tokens=MAX_CHAT_OUTPUT_TOKENS,
+                    )
+                    logger.warning(
+                        "Câu trả lời %s — thử lại lần %d với %s (prompt %d → %d "
+                        "ký tự) (finish_reason=%s, usage=%s)",
+                        "rỗng" if not reply_text else "lửng",
+                        empty_retries, EMPTY_REPLY_FALLBACK_MODEL,
+                        len(system_prompt), len(slim_prompt),
+                        response.finish_reason, response.usage,
+                    )
+                    reply_text = None
+                    turn += 1
+                    continue
+
                 if not reply_text:
                     # Không đổ lỗi cho tin nhắn của người dùng. Model không
                     # trả gì cả — với gateway này ca hay gặp là `choices`
                     # rỗng do lỗi phía dịch vụ, và "I couldn't process your
                     # request." khiến người dùng đi sửa câu hỏi của mình.
                     logger.warning(
-                        "Empty model reply (finish_reason=%s, usage=%s)",
-                        response.finish_reason, response.usage,
+                        "Empty model reply sau %d lần thử (finish_reason=%s, usage=%s)",
+                        empty_retries, response.finish_reason, response.usage,
                     )
                     reply_text = user_messages.EMPTY_REPLY
                 logger.info(f"Agent finished at turn {turn + 1} (no tool calls)")

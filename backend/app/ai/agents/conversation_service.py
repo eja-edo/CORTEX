@@ -97,6 +97,48 @@ def _message_full_text(msg) -> str:
     return _format_timestamp(ts) + enriched
 
 
+def _drop_skills_with_no_live_tools(selected: list) -> list:
+    """Bỏ skill mà mọi tool của nó đã bị gỡ khỏi registry.
+
+    `research` là ca cụ thể: cả `web_search` lẫn `web_fetch` đều nằm trong
+    `FROZEN_TOOLS` (app/ai/tools/__init__.py), nên skill đó dạy agent một
+    quy trình nó không có cách nào thực hiện — và tốn **3.589 token** mỗi
+    lượt để làm việc đó.
+
+    Hai cái giá, cái thứ hai đắt hơn:
+
+    * Token. Đo trên một lượt thật: prompt gốc 7.689 token, skills 7.971,
+      trong đó `research` chiếm gần một nửa. Và prompt dài có hậu quả đo
+      được — ba lượt trong vòng eval thứ bảy trả về `completion_tokens=0`
+      với `finish_reason=stop` ở mức 18–20k token đầu vào. Agent câm, người
+      dùng nhận một câu "mình chưa trả lời được".
+    * Nói sai về khả năng của mình. Prompt hệ thống nói thẳng web search
+      không có, rồi một skill được nạp vào lại mô tả chi tiết cách dùng nó.
+      Hai thứ mâu thuẫn trong cùng một prompt, và model phải chọn một.
+
+    Skill có `tools: []` (như `reasoning`) thì giữ: nó là chỉ dẫn cách suy
+    nghĩ, không cần tool nào.
+    """
+    try:
+        from app.ai.agents.tool_registry import get_tool_registry
+
+        live = {t.name for t in get_tool_registry().get_provider_tools()}
+    except Exception:
+        return selected
+
+    kept = []
+    for meta in selected:
+        tools = getattr(meta, "tools", None) or []
+        if tools and not any(t in live for t in tools):
+            logger.info(
+                "Bỏ skill %r: không tool nào của nó còn đăng ký (%s)",
+                meta.name, tools,
+            )
+            continue
+        kept.append(meta)
+    return kept
+
+
 def _trim_incomplete_tail(messages: list[Message], label: str) -> None:
     def _message_has_tool_calls(msg: Message) -> bool:
         return bool(msg.tool_calls)
@@ -481,6 +523,11 @@ Return ONLY the title, no quotes or explanation."""
         return " ".join(texts)
 
     def _build_skill_section(self, message: str, context: dict | None = None, recent_messages: list | None = None) -> str:
+        """Nạp phần chỉ dẫn theo tình huống vào system prompt.
+
+        Lọc bỏ skill mà **không một tool nào** của nó còn đăng ký — xem
+        `_drop_skills_with_no_live_tools`.
+        """
         try:
             retriever = get_skill_retriever()
             registry = get_skill_registry()
@@ -489,6 +536,7 @@ Return ONLY the title, no quotes or explanation."""
             retrieval_text = f"{history_text} {message}".strip() if history_text else message
 
             selected = retriever.select(retrieval_text, context, max_skills=4)
+            selected = _drop_skills_with_no_live_tools(selected)
             if not selected:
                 return ""
 

@@ -16,20 +16,25 @@ hỏi về dự án bằng phỏng đoán.
 Hai khẳng định dưới đây rẻ và bắt được đúng loại trôi đó.
 """
 
-from pathlib import Path
-
 import pytest
 
 from app.ai.tools import FROZEN_TOOLS, LIVE_TOOLS
 
-PROMPT_PATH = (
-    Path(__file__).resolve().parents[2] / "app" / "ai" / "prompts" / "system" / "assistant_system.md"
-)
-
 
 @pytest.fixture(scope="module")
 def prompt_text() -> str:
-    return PROMPT_PATH.read_text(encoding="utf-8")
+    """Prompt **đã dựng**, không phải file md thô.
+
+    File md giờ chứa placeholder `{tool_inventory}` và danh sách tool được
+    sinh từ registry lúc load (xem `agent_service._build_system_prompt`).
+    Đọc file thô sẽ không thấy tool nào và test đỏ oan — nhưng quan trọng
+    hơn: thứ cần kiểm là **prompt model thật sự nhận**, không phải bản
+    template. Cách này cũng làm hai khẳng định dưới đây không thể lạc hậu
+    nữa: danh sách sinh ra thì không thể lệch khỏi registry.
+    """
+    from app.ai.agents.agent_service import SYSTEM_PROMPT
+
+    return SYSTEM_PROMPT
 
 
 @pytest.mark.parametrize("tool", [t["name"] for t in FROZEN_TOOLS])
