@@ -25,6 +25,8 @@ from tests.integration.isolated_user import (
     ensure_isolated_user,
 )
 from app.models import (
+    Schedule,
+    ScheduleType,
     Task,
     TaskPriority,
     TaskStatus,
@@ -56,9 +58,11 @@ async def async_db():
         # suite's own (see isolated_user.py) — every row in it was created
         # by these tests.
         await db.execute(delete(Task).where(Task.user_id == TEST_USER_ID))
+        await db.execute(delete(Schedule).where(Schedule.user_id == TEST_USER_ID))
         await db.commit()
         yield db
         await db.execute(delete(Task).where(Task.user_id == TEST_USER_ID))
+        await db.execute(delete(Schedule).where(Schedule.user_id == TEST_USER_ID))
         await db.commit()
     await engine.dispose()
 
@@ -107,6 +111,25 @@ async def _pending_task(db, action: str, due_in_days: int | None = 2) -> Task:
         ),
         user_id=TEST_USER_ID,
     )
+
+
+async def _schedule_today(db, title: str, hour: int = 19) -> Schedule:
+    """A calendar event happening today, at a fixed UTC hour — matches
+    `TodayService._schedules_today`'s window, which is a plain calendar-day
+    bound in UTC (same known limitation as everywhere else in this schema
+    without a per-user timezone)."""
+    start = datetime(TODAY.year, TODAY.month, TODAY.day, hour, 0, tzinfo=timezone.utc)
+    schedule = Schedule(
+        user_id=TEST_USER_ID,
+        title=f"{MARKER} {title}",
+        type=ScheduleType.PERSONAL,
+        start_time=start,
+        end_time=start + timedelta(hours=1),
+    )
+    db.add(schedule)
+    await db.commit()
+    await db.refresh(schedule)
+    return schedule
 
 
 # ============================================================================
@@ -250,7 +273,7 @@ async def test_needs_confirmation_shows_even_when_task_list_is_quiet(async_db, s
     await _pending_task(async_db, "gửi báo cáo", due_in_days=-3)
 
     today = await service.get_today(TEST_USER_ID)
-    assert today.state in ("nothing_urgent", "all_clear", "onboarding")
+    assert today.state in ("nothing_urgent", "all_clear", "onboarding", "schedule_only")
     assert len(today.needs_confirmation) == 1
 
 
@@ -314,6 +337,51 @@ async def test_all_clear_state_when_nothing_is_open(async_db, service):
 
 
 @pytest.mark.asyncio
+async def test_schedule_only_state_when_event_today_but_no_open_task(async_db, service):
+    """A day with a meeting and no open task is not `all_clear` — that
+    state's client copy ("Nghỉ đi") would be false for someone about to sit
+    in a meeting, and it is not `onboarding` either if there is genuinely
+    something on today's calendar."""
+    await _schedule_today(async_db, "Nghe - Nói / Shadowing")
+
+    today = await service.get_today(TEST_USER_ID)
+
+    assert today.state == "schedule_only"
+    assert today.now_actions == []
+    assert len(today.schedules_today) == 1
+    assert "Nghe - Nói" in today.schedules_today[0].title
+
+
+@pytest.mark.asyncio
+async def test_open_work_outranks_a_schedule_for_state_purposes(async_db, service):
+    """A day with both open work and a calendar event is still ranked by
+    the work — `schedules_today` still reaches the response either way, it
+    just isn't what decides `state`."""
+    await _task(async_db, "gấp", due_in_days=0)
+    await _schedule_today(async_db, "họp nhóm")
+
+    today = await service.get_today(TEST_USER_ID)
+
+    assert today.state == "has_actions"
+    assert today.now_actions
+    assert len(today.schedules_today) == 1
+
+
+@pytest.mark.asyncio
+async def test_all_clear_still_requires_no_schedule_today_either(async_db, service):
+    """`all_clear` is earned twice over now: work has to have existed and
+    finished, *and* there has to be nothing on today's calendar."""
+    task = await _task(async_db, "xong rồi", due_in_days=-1)
+    await TaskService(async_db).complete_task(task.id, TEST_USER_ID)
+    await _schedule_today(async_db, "họp nhóm")
+
+    today = await service.get_today(TEST_USER_ID)
+
+    assert today.state == "schedule_only"
+    assert len(today.schedules_today) == 1
+
+
+@pytest.mark.asyncio
 async def test_has_actions_state_when_something_is_pressing(async_db, service):
     await _task(async_db, "gấp", due_in_days=0)
 
@@ -323,11 +391,13 @@ async def test_has_actions_state_when_something_is_pressing(async_db, service):
 
 
 @pytest.mark.asyncio
-async def test_state_is_always_one_of_the_three_designs(async_db, service):
+async def test_state_is_always_one_of_the_designs(async_db, service):
     """Served by the server so the client can never fall through to a
     default empty table."""
     today = await service.get_today(TEST_USER_ID)
-    assert today.state in ("onboarding", "nothing_urgent", "all_clear", "has_actions")
+    assert today.state in (
+        "onboarding", "nothing_urgent", "all_clear", "has_actions", "schedule_only",
+    )
 
 
 @pytest.mark.asyncio
@@ -378,10 +448,12 @@ async def test_api_today_shape(api_client, async_db):
     body = response.json()
 
     assert set(body.keys()) == {
-        "state", "status_line", "now_actions", "suggestions", "needs_confirmation"
+        "state", "status_line", "now_actions", "suggestions", "needs_confirmation",
+        "schedules_today",
     }
     assert body["state"] == "has_actions"
     assert len(body["needs_confirmation"]) == 1
+    assert body["schedules_today"] == []
 
     card = body["now_actions"][0]
     assert card["reason"]["impact"]

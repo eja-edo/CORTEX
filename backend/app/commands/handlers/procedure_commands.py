@@ -26,6 +26,27 @@ logger = get_logger(__name__)
 # một lần đánh dấu hôm nay.
 QUOTE_LOOKBACK_MESSAGES = 5
 
+# Dấu hiệu người dùng **cố ý bỏ** một bước, dùng riêng cho `status="skipped"`.
+#
+# Phép kiểm trích dẫn chỉ xác minh câu đó *có thật*, không xác minh nó *nói
+# về điều đang được ghi* — một lỗ hổng đã biết, và nó hiện ra đúng ở
+# `skipped`: đo được trong một cuộc trò chuyện mô phỏng, agent đánh dấu bước
+# "sync với team" là bỏ qua trong khi người dùng chưa hề nói tới việc bỏ bước
+# nào. Nó chỉ cần trích một câu thật bất kỳ là qua.
+#
+# Chặn bằng cách đòi câu trích mang một dấu hiệu từ chối. Thô, nhưng nó chặn
+# đúng kiểu hỏng đã quan sát: một câu bình thường không chứa từ nào ở đây.
+#
+# **Không** áp cùng phép kiểm cho `done`, và đó là chủ đích: người dùng xác
+# nhận đã làm xong bằng đủ kiểu ngắn gọn — "ok", "ừ", "rồi" — sau khi agent
+# hỏi "bạn làm xong chưa?". Đòi từ khoá ở đó sẽ chặn oan ca hợp lệ phổ biến
+# nhất. Bỏ qua thì khác: nó là một quyết định người dùng nêu ra chủ động, và
+# người ta nói nó ra thành lời.
+_SKIP_CUES = (
+    "bỏ", "khỏi", "thôi", "không cần", "ko cần", "hôm nay nghỉ",
+    "skip", "miễn", "để sau", "hoãn",
+)
+
 
 def _normalise_quote(text: str) -> str:
     """Chuẩn hoá vừa đủ để so khớp: thường hoá, gộp khoảng trắng.
@@ -114,6 +135,25 @@ async def procedure_mark_step_handler(command: Command, ctx: ToolContext) -> dic
                     "error": "no_conversation_context",
                     "message": "Không xác thực được lời người dùng ngoài hội thoại.",
                 }
+            if args.status == "skipped" and not any(
+                cue in _normalise_quote(args.user_said) for cue in _SKIP_CUES
+            ):
+                logger.warning(
+                    "Từ chối mark_step(skipped): %r không có dấu hiệu người "
+                    "dùng muốn bỏ bước (procedure=%s, bước %d)",
+                    args.user_said[:60], procedure.id, args.step_order,
+                )
+                return {
+                    "success": False,
+                    "error": "no_skip_intent",
+                    "message": (
+                        "Câu bạn trích không cho thấy người dùng muốn BỎ QUA "
+                        "bước này. Chỉ dùng `skipped` khi họ nói rõ là bỏ "
+                        '("thôi khỏi sync", "hôm nay bỏ bước đó"). Nếu họ chỉ '
+                        "chưa làm, cứ để nguyên — chưa làm không phải là bỏ."
+                    ),
+                }
+
             if not await _quote_is_real(
                 db, ctx.conversation_id, args.user_said,
                 getattr(ctx, "current_message", None),

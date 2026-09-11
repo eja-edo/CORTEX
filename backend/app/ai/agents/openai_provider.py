@@ -96,8 +96,17 @@ class OpenAIProvider(LLMProvider):
             )
 
             accumulated_tool_calls: dict[int, dict] = {}
+            # `model` here is often a router alias (e.g. `free_auto`, which
+            # the proxy itself reports as `owned_by: combo`) rather than the
+            # model that actually answered — every chunk carries the real
+            # one in `chunk.model`. Logged once so a bad reply (garbled
+            # tokens, degenerate repetition) can be traced to a specific
+            # backing model instead of just the alias every request shares.
+            actual_model: str | None = None
 
             async for chunk in stream:
+                if actual_model is None:
+                    actual_model = getattr(chunk, "model", None)
                 # Final usage-only chunk has no choices but carries `usage`
                 chunk_usage = getattr(chunk, "usage", None)
                 if chunk_usage:
@@ -170,6 +179,9 @@ class OpenAIProvider(LLMProvider):
 
             if accumulated_usage:
                 yield ProviderStreamChunk(usage=accumulated_usage)
+
+            if actual_model and actual_model != model:
+                logger.info(f"OpenAIProvider.generate_stream: requested={model} actual={actual_model}")
         except Exception as exc:
             logger.error(f"OpenAIProvider.generate_stream error on {model}: {exc}")
             raise

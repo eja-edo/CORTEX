@@ -28,6 +28,7 @@ from app.services.user_preferences import get_chat_model_async
 from app.ai.agents.tool_registry import get_tool_registry
 from app.config import settings
 from app.utils.logger import get_logger
+from app.ai.agents import user_messages
 from app.ai.loaders.prompt_loader import load
 
 logger = get_logger(__name__)
@@ -197,21 +198,21 @@ class AgentService:
                 error_str = str(api_error)
                 if is_fatal_error(api_error):
                     logger.error(f"Fatal API error: {error_str[:300]}", exc_info=True)
-                    reply_text = "Dịch vụ AI đang có lỗi cấu hình. Nếu tình trạng này lặp lại, bạn báo lại giúp mình nhé."
+                    reply_text = user_messages.MISCONFIGURED
                 elif is_quota_error(api_error):
                     logger.warning(f"Model rate-limited: {error_str[:200]}")
-                    reply_text = "Dịch vụ AI đang bị giới hạn tần suất. Bạn đợi một chút rồi thử lại nhé."
+                    reply_text = user_messages.RATE_LIMITED
                 elif is_connection_error(api_error):
                     logger.error(f"Cannot reach the model gateway: {error_str[:200]}")
-                    reply_text = "Mình không kết nối được tới dịch vụ AI. Bạn kiểm tra xem nó còn chạy không, rồi thử lại nhé."
+                    reply_text = user_messages.UNREACHABLE
                 else:
                     logger.error(f"API error after retries: {error_str[:300]}", exc_info=True)
-                    reply_text = "Mình gặp lỗi khi xử lý yêu cầu. Bạn thử lại nhé."
+                    reply_text = user_messages.UNEXPECTED
                 break
 
             if not response:
                 logger.warning("API returned empty response")
-                reply_text = "Mô hình không trả về nội dung nào. Bạn thử gửi lại sau ít phút nhé."
+                reply_text = user_messages.EMPTY_REPLY
                 break
 
             tool_calls = response.tool_calls or []
@@ -236,10 +237,7 @@ class AgentService:
                         "Empty model reply (finish_reason=%s, usage=%s)",
                         response.finish_reason, response.usage,
                     )
-                    reply_text = (
-                        "Mô hình không trả về nội dung nào. "
-                        "Bạn thử gửi lại sau ít phút nhé."
-                    )
+                    reply_text = user_messages.EMPTY_REPLY
                 logger.info(f"Agent finished at turn {turn + 1} (no tool calls)")
                 break
 
@@ -278,14 +276,14 @@ class AgentService:
             try:
                 synthesis_config = GenerationConfig(system_instruction=gen_config.system_instruction, temperature=gen_config.temperature, max_output_tokens=gen_config.max_output_tokens)
                 _, synthesis_response = await _model_client.generate(messages, synthesis_config, tools=None, preferred_model=preferred_model)
-                reply_text = synthesis_response.content if synthesis_response and synthesis_response.content else "I reached my processing limit for this request. Please try a simpler or more specific question."
+                reply_text = synthesis_response.content if synthesis_response and synthesis_response.content else user_messages.TOO_MANY_STEPS
                 if synthesis_response and synthesis_response.usage:
                     for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
                         total_usage[k] = total_usage.get(k, 0) + (synthesis_response.usage.get(k) or 0)
                     _last_assistant_completion = synthesis_response.usage.get("completion_tokens", 0)
             except Exception as synth_exc:
                 logger.warning(f"Synthesis turn failed (non-fatal): {synth_exc}")
-                reply_text = "I reached my processing limit for this request. Please try a simpler or more specific question."
+                reply_text = user_messages.TOO_MANY_STEPS
 
         # Model đôi khi mở câu trả lời bằng đúng tiền tố thời gian mà lịch
         # sử được chèn — xem `strip_injected_timestamp`. Cắt trước khi lưu,
@@ -529,13 +527,13 @@ class AgentService:
                     # gần đây nó còn không tới được họ (frontend không có
                     # nhánh nào cho sự kiện `error`).
                     if isinstance(stream_err, EmptyModelStreamError):
-                        user_msg = "Mô hình không trả về nội dung nào. Bạn thử gửi lại sau ít phút nhé."
+                        user_msg = user_messages.EMPTY_REPLY
                     elif is_fatal_error(stream_err):
-                        user_msg = "Dịch vụ AI đang có lỗi cấu hình. Nếu tình trạng này lặp lại, bạn báo lại giúp mình nhé."
+                        user_msg = user_messages.MISCONFIGURED
                     elif is_quota_error(stream_err):
-                        user_msg = "Dịch vụ AI đang bị giới hạn tần suất. Bạn đợi một chút rồi thử lại nhé."
+                        user_msg = user_messages.RATE_LIMITED
                     elif is_connection_error(stream_err):
-                        user_msg = "Mình không kết nối được tới dịch vụ AI. Bạn kiểm tra xem nó còn chạy không, rồi thử lại nhé."
+                        user_msg = user_messages.UNREACHABLE
                     elif is_model_incompatible_error(stream_err):
                         user_msg = "Không mô hình nào xử lý được yêu cầu này. Bạn thử diễn đạt lại ngắn gọn hơn xem sao."
                     elif partial_shown:
@@ -726,10 +724,10 @@ class AgentService:
                             for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
                                 total_usage[k] = total_usage.get(k, 0) + (chunk.usage.get(k) or 0)
                     _synth_completion = total_usage.get("completion_tokens", 0) - _synth_completion_before
-                    reply_text = synthesis_text or "I reached my processing limit for this request. Please try a simpler or more specific question."
+                    reply_text = synthesis_text or user_messages.TOO_MANY_STEPS
                 except Exception as synth_exc:
                     logger.warning(f"Streaming synthesis turn failed (non-fatal): {synth_exc}")
-                    limit_text = "I reached my processing limit for this request. Please try a simpler or more specific question."
+                    limit_text = user_messages.TOO_MANY_STEPS
                     reply_text = limit_text
                     yield {"event": "token", "text": limit_text}
                     _synth_completion = 0

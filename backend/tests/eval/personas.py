@@ -1,8 +1,17 @@
 """Người dùng ảo cho vòng tự đánh giá.
 
-Mỗi persona nhắm một kiểu hỏng khác nhau, không phải một tính năng khác
-nhau — vì thứ cần đo là trải nghiệm, và trải nghiệm hỏng theo kiểu, không
-theo tính năng.
+Mỗi persona nhắm một **kiểu hỏng**, không phải một tính năng — trải nghiệm
+hỏng theo kiểu, không theo tính năng.
+
+**Giọng: ra lệnh, không tâm sự.** Bản đầu của tệp này viết persona theo kiểu
+"hơi nóng tính", "lo muốn xỉu", và sinh ra những cuộc trò chuyện đầy "trời
+ơi", "ui chao". Người ta không nói với một app quản lý việc như vậy; họ gõ
+một câu mệnh lệnh rồi chờ kết quả.
+
+Sai ở đó không phải chuyện văn phong. Một người dùng ảo hay tâm sự kéo agent
+vào chế độ đồng cảm, nên bộ đo đi đo agent an ủi thế nào — trong khi việc
+cần đo là nó có làm đúng việc được yêu cầu không. Mô tả persona dưới đây vì
+thế nói về **thói quen làm việc**, không về tính cách cảm xúc.
 """
 
 from tests.eval.simulator import Persona
@@ -18,56 +27,64 @@ PERSONAS: list[Persona] = [
     Persona(
         name="ngoài_trời",
         persona=(
-            "Bạn là kỹ sư hiện trường, hay phải ra công trường đo đạc. Bạn "
-            "thực dụng, không thích nói nhiều."
+            "Kỹ sư hiện trường, hay ra công trường đo đạc. Gõ ngắn, chỉ nói "
+            "việc cần làm."
         ),
         goal=(
-            "Cho Cortex biết mai bạn đi khảo sát công trường cả ngày, và xem "
-            "nó có giúp bạn chuẩn bị gì không. Bạn quan tâm thời tiết và đồ "
-            "cần mang."
+            "Báo là mai đi khảo sát công trường cả ngày, và hỏi thời tiết khu "
+            "vực đó. Không giải thích gì thêm."
         ),
         memories=[("fact", "Tôi làm kỹ sư hiện trường, hay đi công trường đo đạc.")],
     ),
     Persona(
         name="nhắc_lại_quy_trình",
-        persona="Bạn là dev làm remote 2-3 ngày mỗi tuần. Bạn nói ngắn.",
+        persona="Dev remote 2-3 ngày mỗi tuần. Gõ rất ngắn, hay viết thiếu chủ ngữ.",
         goal=(
-            "Nói với Cortex là hôm nay bạn remote, xem nó có nhớ quy trình "
-            "bạn từng dạy không. Sau đó báo là bạn đã làm xong daily."
+            "Báo hôm nay remote. Xem app có nhớ quy trình đã dạy không. Sau "
+            "đó báo đã xong daily."
         ),
         memories=[("routine", REMOTE_ROUTINE)],
     ),
     Persona(
         name="ràng_buộc_bị_phạm",
         persona=(
-            "Bạn là trưởng nhóm, có con nhỏ nên phải về đúng giờ. Bạn hơi "
-            "nóng tính khi phải nhắc lại điều đã nói."
+            "Trưởng nhóm, lịch dày. Ra lệnh dứt khoát, không giải thích lý do "
+            "trừ khi bị hỏi."
         ),
         goal=(
-            "Nhờ Cortex đặt lịch họp với khách vào 19h tối mai. Xem nó có "
-            "nhớ ràng buộc của bạn không."
+            "Bảo app đặt lịch họp với khách 19h tối mai. Nếu app đổi giờ hoặc "
+            "hỏi lại, nhắc lại yêu cầu một lần, gọn."
         ),
         memories=[("constraint", NO_LATE_MEETINGS), ("preference", GYM)],
     ),
     Persona(
         name="kho_rỗng",
-        persona="Bạn mới dùng Cortex, chưa có dữ liệu gì trong đó.",
+        persona="Mới cài app, chưa có dữ liệu gì. Gõ ngắn, không kiên nhẫn.",
         goal=(
-            "Bạn đang lo về một deadline sắp tới và muốn Cortex giúp. Bạn "
-            "CHƯA nói cụ thể việc gì phải làm — xem nó hỏi bạn hay tự nghĩ ra."
+            "Hỏi app xem tuần này có gì phải làm. Bạn CHƯA nhập việc nào — "
+            "xem nó nói thật là chưa có gì, hay tự nghĩ ra việc."
         ),
         memories=[],
     ),
     Persona(
         name="từ_chối_đề_xuất",
+        persona="Tự quản lý việc của mình, không muốn app tạo gì hộ.",
+        goal=(
+            "Báo tuần sau phải nộp báo cáo. Gạt mọi đề xuất tạo việc hay "
+            "checklist bằng một từ. Xem app có tôn trọng không."
+        ),
+        memories=[],
+    ),
+    Persona(
+        name="ra_lệnh_liên_tiếp",
         persona=(
-            "Bạn thích tự quản lý việc của mình, không muốn app tạo việc hộ. "
-            "Bạn từ chối dứt khoát."
+            "Quản lý dự án, dùng app như một cái sổ. Gõ từng lệnh ngắn, "
+            "không chờ hỏi lại."
         ),
         goal=(
-            "Kể cho Cortex là tuần sau bạn phải nộp báo cáo. Nếu nó đề xuất "
-            "tạo việc hay checklist, từ chối hết. Xem nó có tôn trọng không "
-            "hay vẫn tạo."
+            "Ra ba lệnh liên tiếp, mỗi lệnh một tin nhắn ngắn: đặt lịch họp "
+            "team 10h thứ 5; tạo task gửi báo cáo trước thứ 6; hỏi thứ 5 có "
+            "gì. Không giải thích gì thêm."
         ),
         memories=[],
     ),

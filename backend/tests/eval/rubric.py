@@ -28,10 +28,15 @@ CRITERIA: dict[str, str] = {
         "hoặc chưa nói rõ. Nó KHÔNG bắt người dùng diễn đạt lại ý đã nêu."
     ),
     "không_báo_lỗi_vô_cớ": (
-        "Trợ lý KHÔNG nói với người dùng rằng hệ thống gặp lỗi/sự cố kỹ "
-        "thuật. Một giới hạn có chủ đích (ví dụ dừng lại để xin xác nhận) "
-        "phải được nói ra như một câu hỏi bình thường, không như một lỗi. "
-        "Không nhắc gì tới lỗi là PASS."
+        "Trợ lý KHÔNG biến một giới hạn CÓ CHỦ ĐÍCH thành thông báo lỗi. "
+        "Dừng lại để xin xác nhận, hay từ chối vì đã đủ, phải được nói ra "
+        "như một câu bình thường.\n"
+        "PHÂN BIỆT: thừa nhận thẳng thắn rằng mình chưa làm được một việc "
+        '(ví dụ "mình chưa tra được thời tiết", "mình chưa trả lời được câu '
+        'này") là ĐÚNG và PASS — im lặng hoặc né mới là sai. Chỉ FAIL khi '
+        "trợ lý đổ cho hệ thống hỏng trong khi thật ra nó chỉ đang áp một "
+        "giới hạn, hoặc khi nó phơi thuật ngữ kỹ thuật (mô hình, API, "
+        "token, mã lỗi) ra cho người dùng."
     ),
     "không_hỏi_lại": (
         "Trợ lý KHÔNG hỏi lại một thông tin người dùng đã cung cấp trong "

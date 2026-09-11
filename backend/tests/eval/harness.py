@@ -112,6 +112,24 @@ async def reset_eval_user(db) -> None:
     ):
         col = "user_id"
         await db.execute(text(f"DELETE FROM {table} WHERE {col} = :u"), {"u": uid})
+
+    # `projects` phải xoá sau `tasks` (FK) và qua `project_members`, vì
+    # quyền sở hữu nằm ở bảng nối chứ không ở một cột `user_id`.
+    #
+    # Thiếu bước này là lỗi thứ ba cùng họ trong harness, và nó suýt làm
+    # hỏng một kết luận: persona "kho_rỗng" thừa hưởng project do vòng eval
+    # *trước* tạo ra, nên `list_projects` trả về một dự án tên "Marketing
+    # cuối kỳ" mà persona chưa bao giờ nhắc. Thang chấm đánh trượt agent vì
+    # "bịa dữ liệu" — trong khi agent đọc đúng thứ tool trả về. Chỉ khi đọc
+    # log tool mới thấy thủ phạm là phép dọn dẹp, không phải model.
+    await db.execute(
+        text(
+            "DELETE FROM projects WHERE id IN "
+            "(SELECT project_id FROM project_members WHERE user_id = :u)"
+        ),
+        {"u": uid},
+    )
+    await db.execute(text("DELETE FROM project_members WHERE user_id = :u"), {"u": uid})
     await db.commit()
 
 

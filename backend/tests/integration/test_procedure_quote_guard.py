@@ -320,6 +320,50 @@ class TestGuardScope:
         )
         assert result.data.get("error") == "quote_not_found"
 
+    async def test_skipped_needs_a_skip_word_not_just_any_quote(self, guard_setup):
+        """Lỗ hổng đã biết của phép kiểm trích dẫn, chặn riêng cho `skipped`.
+
+        Phép kiểm chỉ xác minh câu trích *có thật*, không xác minh nó *nói
+        về điều đang được ghi*. Đo được: agent đánh dấu bước "sync với team"
+        là bỏ qua trong khi người dùng chưa hề nói tới việc bỏ bước nào — nó
+        chỉ cần trích một câu thật bất kỳ là qua.
+        """
+        uid, pid, _, conv_id = guard_setup
+        result = await _run_command(
+            uid, conv_id,
+            current_message="hôm nay tôi remote",
+            procedure_id=str(pid), step_order=2, status="skipped",
+            user_said="hôm nay tôi remote",
+        )
+        assert result.data.get("error") == "no_skip_intent"
+        assert await _done_orders(pid) == []
+
+    async def test_skipped_passes_with_a_real_skip(self, guard_setup):
+        uid, pid, _, conv_id = guard_setup
+        result = await _run_command(
+            uid, conv_id,
+            current_message="thôi khỏi check-in hôm nay",
+            procedure_id=str(pid), step_order=2, status="skipped",
+            user_said="thôi khỏi check-in",
+        )
+        _assert_applied(result)
+
+    async def test_done_does_not_need_a_skip_word(self, guard_setup):
+        """`done` cố ý KHÔNG chịu phép kiểm này.
+
+        Người dùng xác nhận đã làm xong bằng đủ kiểu ngắn gọn sau khi agent
+        hỏi — "ok", "ừ", "rồi". Đòi từ khoá ở đó sẽ chặn oan ca hợp lệ phổ
+        biến nhất.
+        """
+        uid, pid, _, conv_id = guard_setup
+        result = await _run_command(
+            uid, conv_id,
+            current_message="daily xong rồi",
+            procedure_id=str(pid), step_order=1, status="done",
+            user_said="daily xong rồi",
+        )
+        _assert_applied(result)
+
     async def test_another_users_procedure_is_not_found(self, guard_setup):
         """Không phải chủ sở hữu thì là 404, không phải 403."""
         _, pid, _, conv_id = guard_setup

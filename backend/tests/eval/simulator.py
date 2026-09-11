@@ -17,6 +17,19 @@ mà"), và đó là tín hiệu không kịch bản cố định nào tạo ra �
 
 Cố ý **không** mock: xem `README.md` — bộ này tồn tại để đo phương sai và
 độ trôi qua nhiều lượt, mà một mock thì không trôi.
+
+**Người dùng ảo phải nói như người dùng thật, không như một nhân vật.**
+
+Bản đầu của prompt đóng vai tạo ra những câu kiểu "lo muốn xỉu luôn", "ui
+chao", "trời ơi sao mà phức tạp dữ vậy" — vì nó dặn thẳng "hãy tỏ ra khó
+chịu đúng mức". Người ta không nói với một app quản lý việc như vậy. Họ ra
+lệnh: "đặt lịch họp 3h chiều mai", "hôm nay có gì".
+
+Khác biệt đó không phải chuyện văn phong. Một người dùng ảo hay tâm sự sẽ
+kéo agent vào chế độ đồng cảm và an ủi, nên bộ đo đi đo sai thứ: nó đo agent
+phản ứng thế nào với cảm xúc, trong khi việc cần đo là agent có làm đúng
+việc được yêu cầu không. Sự khó chịu của người thật thể hiện qua **độ ngắn**
+của câu, không qua dấu than.
 """
 
 from __future__ import annotations
@@ -33,25 +46,41 @@ logger = get_logger(__name__)
 
 _client = ModelClient()
 
-_USER_SYSTEM = """Bạn đang đóng vai một NGƯỜI DÙNG đang dùng app trợ lý
-Cortex. Bạn KHÔNG phải trợ lý.
+_USER_SYSTEM = """Bạn đang đóng vai một NGƯỜI DÙNG đang dùng app quản lý
+công việc Cortex. Bạn KHÔNG phải trợ lý.
 
 Persona của bạn:
 {persona}
 
-Mục tiêu của bạn trong cuộc trò chuyện này:
+Việc bạn cần làm trong cuộc trò chuyện này:
 {goal}
 
-Cách cư xử:
-- Viết như người thật nhắn tin: ngắn, tiếng Việt, không trang trọng.
+**Cách nói — phần này quan trọng nhất.**
+
+Người ta dùng app quản lý việc để *ra lệnh*, không để tâm sự. Nói như nhắn
+tin cho một cái app, không như kể chuyện với bạn bè:
+
+- **Ngắn.** Thường dưới 15 từ. Nhiều câu chỉ là một mệnh lệnh:
+  "đặt lịch họp 3h chiều mai", "hôm nay có gì", "tạo task nộp báo cáo".
+- **Không bộc lộ cảm xúc.** Không "trời ơi", "lo muốn xỉu", "ui chao",
+  không emoji, không kể bạn đang cảm thấy thế nào. Người ta gõ vào app để
+  xong việc.
+- **Không giải thích lý do** trừ khi cần thiết để app làm đúng. Không
+  "vì dạo này mình bận quá nên…".
+- Viết thoải mái như thật: thiếu chủ ngữ, viết tắt, không dấu câu đầy đủ
+  ("mai 9h họp khách", "xong daily rồi").
+
+Cư xử:
+
 - MỘT tin nhắn mỗi lượt. Không viết thay trợ lý, không giải thích bạn đang
   đóng vai.
 - Phản ứng với đúng những gì trợ lý vừa nói.
-- Nếu trợ lý hỏi một điều bạn ĐÃ nói rồi, hãy tỏ ra khó chịu đúng mức và
-  nói là bạn vừa nói rồi. Đừng nhắc lại một cách ngoan ngoãn.
-- Nếu trợ lý đề xuất thứ bạn không cần, từ chối thẳng ("thôi khỏi").
-- Khi mục tiêu của bạn đã xong, hoặc bạn thấy hết chuyện để nói, trả lời
-  đúng một từ: HẾT
+- Nếu trợ lý hỏi một điều bạn ĐÃ nói rồi, đừng nổi giận — người thật phản
+  ứng bằng cách **nói cụt hơn** và nhắc lại gọn ("đã nói 19h rồi"). Sự khó
+  chịu thể hiện qua độ ngắn, không qua dấu than.
+- Nếu trợ lý đề xuất thứ bạn không cần, gạt đi gọn: "khỏi", "không cần".
+- Nếu trợ lý làm sai điều bạn yêu cầu, nói lại yêu cầu đó một lần, ngắn.
+- Khi việc của bạn đã xong, hoặc hết chuyện để nói, trả lời đúng một từ: HẾT
 """
 
 
