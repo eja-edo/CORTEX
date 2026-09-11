@@ -82,31 +82,42 @@ MAX_TURN_RETRIES = 3
 #
 # Một lần là đủ: lời gọi lại tốn một vòng độ trễ người dùng phải chờ.
 #
-# **Lần thử lại đổi sang một model khác**, và đó là kết luận sau bốn giả
-# thuyết sai — ghi lại cả bốn để không ai thử lại:
+# **Lần thử lại đổi sang một model khác**, và model đó được chọn từ dữ liệu
+# thật của router (`~/.9router/db/data.sqlite`, bảng `usageHistory`) chứ
+# không từ một bài đo tự dựng.
 #
-#   1. *Gọi lại y nguyên sẽ khác.* Sai: rỗng tiếp, 4/4 lần.
-#   2. *Prompt dài là nguyên nhân; bỏ skill sẽ cứu.* Sai: vẫn rỗng 7/7 dù
-#      prompt ngắn đi 10k ký tự.
-#   3. *`free_auto` là thủ phạm.* Sai: benchmark 8 model, tất cả 0% im.
-#   4. *Im lặng tăng theo độ dài prompt.* Sai: đo ở ba mức 11k/17k/23k
-#      token — im rải rác ~2%, không theo xu hướng nào.
+# Chuyện đáng kể lại, vì nó là một lỗi phương pháp: tôi đã dựng benchmark
+# riêng và chạy **6 lần mỗi model**, rồi kết luận hai điều — cả hai đều sai:
 #
-# Nên nguyên nhân nằm ở model/gateway và không sửa được từ phía này. Thứ
-# sửa được là **hậu quả**: im lặng ngẫu nhiên ở mức ~2% mỗi model, nên xác
-# suất hai model khác nhau im cùng một lượt thấp hơn hẳn. Đổi model khi thử
-# lại biến một lỗi người-dùng-phải-gõ-lại thành một lần chậm thêm vài giây.
+#   * *"prompt dài không gây im lặng"* — 6 mẫu mỗi mức không thể thấy một
+#     hiệu ứng 4%;
+#   * *"`claude-haiku-4.5` tin cậy nhất"* — nó im 0/6 trong bài đo đó.
 #
-# Đây là xử lý triệu chứng, và nói thẳng ra như vậy: nguyên nhân gốc vẫn
-# chưa biết, còn 13% lượt phải gõ lại thì không chờ được.
+# Router đã có 2.678 mẫu sẵn suốt thời gian ấy. Đọc chúng (prompt > 10k):
+#
+#     big-pickle                      0/87    0.0%
+#     gemini-2.5-flash                0/58    0.0%
+#     nemotron-3-ultra-free           0/41    0.0%
+#     gemini-3.1-flash-lite-preview  25/918   2.7%
+#     claude-haiku-4.5               16/141  11.3%   ← từng chọn làm fallback
+#
+# Và im lặng **có** tăng theo độ dài prompt, rất rõ:
+#
+#     0–5k    0.2%      15–20k   4.2%
+#     5–10k   0.0%      20–30k  15.7%
+#     10–15k  0.9%
+#
+# Nên hai việc khác nhau: trần dưới 15k token là cách giảm *tần suất* (xem
+# `docs/` và mục gọt prompt), còn hằng số dưới đây giảm *hậu quả* của những
+# lần còn lại.
 MAX_EMPTY_REPLY_RETRIES = 1
 
-# Model dùng cho lần thử lại. Chọn từ benchmark độ tin cậy
-# (`tests/eval/bench/bench_agent_reliability.py`): `kr/claude-haiku-4.5` là
-# model duy nhất im 0/6 ở **cả ba** mức prompt đã đo, và nhanh (3.6–6.1s).
-# Phải khác model chính — đó là cả điểm của việc đổi.
+# Model cho lần thử lại: 0/58 lượt rỗng ở prompt > 10k trong dữ liệu router,
+# và là một trong các thành viên của combo `free_auto` nên đã được cấu hình
+# sẵn. `oc/big-pickle` có mẫu tốt hơn (0/87) nhưng trả lời bằng tiếng Anh
+# trong phép thử, còn đây trả lời tiếng Việt — đúng ngôn ngữ sản phẩm.
 EMPTY_REPLY_FALLBACK_MODEL = os.getenv(
-    "AGENT_FALLBACK_MODEL", "kr/claude-haiku-4.5"
+    "AGENT_FALLBACK_MODEL", "gemini/gemini-2.5-flash"
 )
 # Neither `handle()` nor `handle_streaming_generator()` passed
 # `max_output_tokens` to the provider — confirmed live: a degenerate

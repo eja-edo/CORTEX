@@ -126,11 +126,19 @@ class TestRetrySwitchesModel:
         default = os.getenv("OPENAI_DEFAULT_MODEL", "free_auto")
         assert EMPTY_REPLY_FALLBACK_MODEL != default
 
-    def test_fallback_was_measured_reliable(self):
-        """Model fallback là model duy nhất im 0/6 ở cả ba mức prompt đã đo."""
+    def test_fallback_comes_from_router_data_not_a_small_sample(self):
+        """Model fallback chọn từ 2.678 mẫu của router, không từ 6 mẫu tự đo.
+
+        Bài đo tự dựng (6 lần mỗi model) từng kết luận
+        `kr/claude-haiku-4.5` tin cậy nhất vì nó im 0/6. Dữ liệu router cho
+        thấy nó im **16/141 (11.3%)** ở prompt > 10k — tệ nhất trong các
+        model có đủ mẫu. Sáu mẫu không thể thấy một hiệu ứng 11%.
+        """
         from app.ai.agents.agent_service import EMPTY_REPLY_FALLBACK_MODEL
 
-        assert EMPTY_REPLY_FALLBACK_MODEL == "kr/claude-haiku-4.5"
+        assert EMPTY_REPLY_FALLBACK_MODEL != "kr/claude-haiku-4.5"
+        # 0/58 ở prompt > 10k, và trả lời tiếng Việt.
+        assert EMPTY_REPLY_FALLBACK_MODEL == "gemini/gemini-2.5-flash"
 
     def test_both_empty_branches_switch_model(self):
         """Hai nhánh "model không cho gì" phải xử lý giống nhau."""

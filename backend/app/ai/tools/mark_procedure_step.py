@@ -85,6 +85,13 @@ MARK_PROCEDURE_STEP_DEFINITION = {
     "schema": MARK_PROCEDURE_STEP_SCHEMA,
     "description": (
         "Đánh dấu một bước của quy trình đang chạy là đã xong (hoặc bỏ qua).\n\n"
+        "**Chỉ gọi được khi ngữ cảnh của bạn có khối \"Quy trình khớp hoàn "
+        "cảnh vừa nêu\" kèm một procedure_id.** Không có khối đó thì không có "
+        "quy trình nào đang chạy: hãy trả lời bình thường và TUYỆT ĐỐI KHÔNG "
+        "hỏi người dùng procedure_id, UUID, hay bất cứ id nào — đó là chuyện "
+        "nội bộ, người dùng không biết và không cần biết. Nếu họ báo vừa làm "
+        "xong một việc không có trong khối nào, coi đó là một việc bình "
+        "thường.\n\n"
         "Gọi khi người dùng BÁO họ vừa làm xong một bước có trong khối "
         '"Quy trình khớp hoàn cảnh vừa nêu" của ngữ cảnh — "daily xong rồi", '
         '"đã check-in", "gửi báo cáo rồi".\n\n'
