@@ -133,11 +133,29 @@ class TestRefusalIsInformative:
     def test_refusal_tells_the_agent_to_list_and_ask(self):
         src = self._refusal_source()
         assert "LIỆT KÊ" in src
-        assert "hỏi họ xác nhận" in src
+        assert "hỏi người dùng" in src
 
     def test_refusal_names_the_hallucination_case(self):
         """Nói thẳng ca đang được chặn, vì đó là ca agent đang mắc."""
         assert "danh sách" in self._refusal_source()
+
+    def test_refusal_does_not_read_as_a_system_error(self):
+        """Trần là một quyết định sản phẩm, không phải một sự cố.
+
+        Bản đầu trả `success: False` kèm khoá `error`, và model đọc đúng như
+        tên gọi: nó báo lại cho người dùng rằng hệ thống gặp lỗi kỹ thuật.
+        Đo được trong một cuộc trò chuyện mô phỏng — người dùng nói "cứ tạo
+        hết 5 task đó vào hệ thống đi", agent tạo ba cái, chạm trần, rồi trả
+        lời bằng một thông báo lỗi thay vì hỏi xác nhận hai cái còn lại.
+        """
+        src = self._refusal_source()
+        assert '"status": "needs_confirmation"' in src
+        assert "ĐÂY KHÔNG PHẢI LỖI" in src
+        assert '"error": "too_many_new_records"' not in src
+
+    def test_refusal_tells_the_agent_it_can_continue_next_turn(self):
+        """Không có câu này, agent tưởng yêu cầu đã chết hẳn."""
+        assert "lượt sau tạo tiếp" in self._refusal_source()
 
     def test_refusal_does_not_break_the_whole_turn(self):
         """Từ chối một lời gọi, không cắt cả lượt.

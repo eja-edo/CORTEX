@@ -10,7 +10,7 @@ from app.database_async import AsyncSessionLocal
 from app.ids import uuid7
 from app.models import User
 from app.schemas import AgentChatRequest as ChatRequest
-from app.ai.agents.conversation_service import ConversationService, _build_history_contents, _inject_context_into_text, _format_timestamp, _trim_incomplete_tail
+from app.ai.agents.conversation_service import ConversationService, _build_history_contents, _inject_context_into_text, _format_timestamp, _trim_incomplete_tail, strip_injected_timestamp
 from app.ai.agents.tool_execution_service import ToolExecutionService, _estimate_token_breakdown, _validate_contents_ordering, _log_contents_structure, MAX_TOOL_TURNS
 from app.ai.agents.memory_trigger_service import MemoryTriggerService
 from app.ai.agents.conversation_store import ConversationStore
@@ -287,6 +287,11 @@ class AgentService:
                 logger.warning(f"Synthesis turn failed (non-fatal): {synth_exc}")
                 reply_text = "I reached my processing limit for this request. Please try a simpler or more specific question."
 
+        # Model đôi khi mở câu trả lời bằng đúng tiền tố thời gian mà lịch
+        # sử được chèn — xem `strip_injected_timestamp`. Cắt trước khi lưu,
+        # để cả bản hiển thị lẫn bản trong lịch sử đều sạch.
+        reply_text = strip_injected_timestamp(reply_text) if reply_text else reply_text
+
         if reply_text:
             await self.conversation_service.store.save_message(conversation_id=conv.id, role="assistant", content=reply_text, token_count=_last_assistant_completion or None)
         await self.conversation_service.update_timestamp(conv.id)
@@ -494,6 +499,18 @@ class AgentService:
                                 total_usage[k] = total_usage.get(k, 0) + (chunk.usage.get(k) or 0)
 
                     _turn_completion = total_usage.get("completion_tokens", 0) - _turn_completion_before
+                    # Cắt tiền tố thời gian model có thể đã copy — xem
+                    # `strip_injected_timestamp`.
+                    #
+                    # Hạn chế đã biết: các chunk đã được `yield` ra client
+                    # ngay khi tới, nên với streaming, một tiền tố lọt ra sẽ
+                    # hiện trên màn hình trước khi tới được đây. Chặn cả chỗ
+                    # đó đòi giữ lại vài chục ký tự đầu của **mọi** câu trả
+                    # lời để chờ xem có phải tiền tố không — thêm độ trễ cho
+                    # token đầu tiên của mọi lượt, đổi lấy một lỗi hiếm.
+                    # Không đáng, nên ở đây chỉ đảm bảo thứ được *lưu* và
+                    # thứ đi vào lịch sử là sạch.
+                    turn_text = strip_injected_timestamp(turn_text)
                     reply_text += turn_text
 
                     # Ready yet? Never waited on — only collected.
@@ -739,7 +756,7 @@ class AgentService:
 
             if reply_text and saved_assistant_count == 0:
                 try:
-                    await self.conversation_service.store.save_message(conversation_id=conv.id, role="assistant", content=reply_text, token_count=_synth_completion or None, source=message_source)
+                    await self.conversation_service.store.save_message(conversation_id=conv.id, role="assistant", content=strip_injected_timestamp(reply_text), token_count=_synth_completion or None, source=message_source)
                 except Exception as save_err:
                     logger.warning(f"Could not save final reply (non-fatal): {save_err}")
 

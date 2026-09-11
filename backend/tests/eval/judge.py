@@ -22,14 +22,21 @@ from app.ai.agents.provider_types import GenerationConfig, Message
 
 _client = ModelClient()
 
-_JUDGE_SYSTEM = """You grade one assistant reply against one criterion.
+_JUDGE_SYSTEM = """You grade assistant output against one criterion.
 
 Answer with exactly one word on the first line: PASS or FAIL.
 On the second line, give a one-sentence reason.
 
 Judge ONLY the criterion given. Do not judge tone, length, formatting, or
-whether you would have answered differently. The reply is in Vietnamese;
-judge it in Vietnamese without translating."""
+whether you would have answered differently. The text is in Vietnamese;
+judge it in Vietnamese without translating.
+
+**A `=== BACKGROUND ===` section, when present, is NOT something the
+assistant said.** It is system state given to you so you can tell whether
+the assistant used what it knew. Never fault the assistant for the wording,
+the presence, or the contents of that section — it is invisible to the
+user. Judge only what appears under the section naming the assistant's own
+output."""
 
 
 @dataclass
@@ -44,13 +51,26 @@ class Verdict:
         return f"{'PASS' if self.passed else 'FAIL'}: {self.reason}"
 
 
-async def judge(reply: str, criterion: str) -> Verdict:
-    """`criterion` phải viết sao cho PASS là hành vi **mong muốn**."""
-    prompt = (
-        f"=== CRITERION ===\n{criterion}\n\n"
-        f"=== ASSISTANT REPLY ===\n{reply}\n\n"
-        "Does the reply satisfy the criterion? PASS or FAIL."
-    )
+async def judge(reply: str, criterion: str, background: str = "") -> Verdict:
+    """`criterion` phải viết sao cho PASS là hành vi **mong muốn**.
+
+    `background` là **trạng thái hệ thống**, không phải lời trợ lý: bộ nhớ
+    đã biết, tool đã chạy. Nó phải đi qua tham số riêng chứ không nối vào
+    `reply`, và lý do là một lỗi đo được: khi cả hai bị nối làm một chuỗi,
+    judge đọc phần metadata như thể trợ lý đã nói ra nó, rồi trượt với
+    những lý do kiểu *"trợ lý tự ý liệt kê danh sách tool đã chạy"* và
+    *"trợ lý nhắc tới Bộ nhớ hệ thống"* — đánh trượt 5/5 cuộc trò chuyện vì
+    một thứ người dùng không bao giờ nhìn thấy.
+    """
+    parts = [f"=== CRITERION ===\n{criterion}"]
+    if background:
+        parts.append(
+            "=== BACKGROUND (trạng thái hệ thống, KHÔNG phải lời trợ lý) ===\n"
+            + background
+        )
+    parts.append(f"=== ASSISTANT OUTPUT ===\n{reply}")
+    parts.append("Does the assistant output satisfy the criterion? PASS or FAIL.")
+    prompt = "\n\n".join(parts)
     _, response = await _client.generate(
         [Message(role="user", content=prompt)],
         GenerationConfig(

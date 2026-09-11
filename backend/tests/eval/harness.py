@@ -136,7 +136,15 @@ async def seed_memories(db, memories: list[tuple[str, str]]) -> None:
     await db.commit()
 
 
-async def _tool_calls_for(db, conv_id: UUID, since_id: UUID | None = None) -> list[str]:
+async def _tool_calls_for(db, conv_id: UUID, skip: int = 0) -> list[str]:
+    """Tool đã chạy trong hội thoại này, bỏ qua `skip` cái đầu.
+
+    `skip` là số tool message đã có **trước** lượt này. Không có nó, mỗi lượt
+    trả về lịch sử cộng dồn của cả hội thoại, và bất kỳ phép đếm nào trên
+    `TurnResult.tool_calls` đều phình theo số lượt — đo được: một cuộc trò
+    chuyện 5 lượt báo "25 bản ghi đã tạo" trong khi trần là 3 mỗi request.
+    Con số đó là cùng vài lời gọi được đếm lại năm lần.
+    """
     stmt = (
         select(AgentMessage.tool_name)
         .where(
@@ -146,7 +154,20 @@ async def _tool_calls_for(db, conv_id: UUID, since_id: UUID | None = None) -> li
         )
         .order_by(AgentMessage.created_at.asc())
     )
-    return [r for r in (await db.execute(stmt)).scalars().all() if r]
+    names = [r for r in (await db.execute(stmt)).scalars().all() if r]
+    return names[skip:]
+
+
+async def _tool_call_count(db, conv_id: UUID) -> int:
+    """Số tool message đã có trong hội thoại — mốc để cắt cho lượt kế tiếp."""
+    from sqlalchemy import func
+
+    stmt = select(func.count()).select_from(AgentMessage).where(
+        AgentMessage.conversation_id == conv_id,
+        AgentMessage.role == "tool",
+        AgentMessage.tool_name.isnot(None),
+    )
+    return (await db.execute(stmt)).scalar_one()
 
 
 async def run_turn(
@@ -167,6 +188,14 @@ async def run_turn(
                 await db.execute(select(User).where(User.id == EVAL_USER_ID))
             ).scalar_one()
 
+            # Mốc trước lượt này, để `tool_calls` chỉ chứa tool của **lượt
+            # này** thay vì cả lịch sử hội thoại.
+            before = (
+                await _tool_call_count(db, conversation_id)
+                if conversation_id is not None
+                else 0
+            )
+
             t0 = time.perf_counter()
             result = await AgentService(user, db).handle(
                 message=message,
@@ -176,7 +205,7 @@ async def run_turn(
             latency = (time.perf_counter() - t0) * 1000
 
             conv_id = result.get("conversation_id")
-            tools = await _tool_calls_for(db, UUID(conv_id)) if conv_id else []
+            tools = await _tool_calls_for(db, UUID(conv_id), skip=before) if conv_id else []
 
             return TurnResult(
                 reply=result.get("reply") or "",

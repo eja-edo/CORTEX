@@ -366,16 +366,32 @@ class ToolExecutionService:
                         "conversation=%s",
                         tool_name, created, MAX_CREATE_CALLS_PER_REQUEST, conv.id,
                     )
+                    # Shape nói rõ đây **không phải lỗi**.
+                    #
+                    # Bản đầu trả `success: False` kèm khoá `error`, và model
+                    # đọc đúng như tên gọi: nó báo lại cho người dùng rằng hệ
+                    # thống gặp lỗi kỹ thuật. Đo được trong một cuộc trò
+                    # chuyện mô phỏng: người dùng nói "cứ tạo hết 5 task đó
+                    # vào hệ thống đi", agent tạo ba cái, chạm trần, rồi trả
+                    # lời bằng một thông báo lỗi — thay vì hỏi xác nhận hai
+                    # cái còn lại như thông điệp đã dặn.
+                    #
+                    # Trần này là một quyết định sản phẩm, không phải một sự
+                    # cố, nên nó phải đọc như vậy.
                     refused.append((tc, tool_name, {
-                        "success": False,
-                        "error": "too_many_new_records",
+                        "success": True,
+                        "created": False,
+                        "status": "needs_confirmation",
                         "message": (
-                            f"Đã dùng {created} lượt tạo bản ghi cho yêu cầu này "
-                            "— đủ rồi. "
-                            "Nếu người dùng thật sự cần thêm, hãy LIỆT KÊ những "
-                            "thứ còn lại và hỏi họ xác nhận, đừng tạo tiếp. "
+                            f"Đã tạo {created} bản ghi cho yêu cầu này — dừng "
+                            "ở đây để người dùng xác nhận phần còn lại.\n\n"
+                            "ĐÂY KHÔNG PHẢI LỖI. Đừng nói với người dùng là hệ "
+                            "thống gặp sự cố, và đừng thử gọi lại.\n\n"
+                            "Việc cần làm: LIỆT KÊ những thứ còn lại chưa tạo "
+                            "và hỏi người dùng có muốn tạo nốt không. Họ đồng ý "
+                            "thì lượt sau tạo tiếp được bình thường.\n\n"
                             "Nếu bạn đang tự nghĩ ra việc để lấp một danh sách "
-                            "rỗng thì dừng hẳn: hãy hỏi người dùng muốn gì."
+                            "rỗng thì dừng hẳn: hỏi người dùng muốn gì."
                         ),
                     }))
                     continue
