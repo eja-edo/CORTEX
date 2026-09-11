@@ -128,3 +128,44 @@ Cũng vì vậy: **không chạy `pytest tests/unit tests/integration` song song
 với bộ eval.** Ngoài chuyện tranh quota, `tests/conftest.py` còn `FLUSHDB`
 đúng Redis database mà eval đang dùng làm cache embedding, nên hai bên vừa
 làm chậm vừa làm nhiễu nhau.
+
+## Chọn model cho từng vai trò
+
+Ba vai trò trong bộ eval cần ba thứ khác nhau, nên chúng không dùng chung
+một model:
+
+| Vai trò | Cần gì | Model | Vì sao |
+|---|---|---|---|
+| Agent | chính là thứ đang đo | `free_auto` (production) | đổi nó thì không còn đo sản phẩm thật |
+| Judge | **đoán được**, nhanh | `ollama/gpt-oss:120b` | xem bảng dưới |
+| Simulator | đóng vai tự nhiên, có ngẫu nhiên | mặc định, `temperature=0.8` | người thật không nói lại y một câu |
+
+Benchmark judge (`tests/eval/bench/`, 10 ca có đáp án chắc lấy từ transcript
+thật đã đọc — gồm cả ca mà thang chấm tự động từng chấm sai):
+
+```
+kr/claude-haiku-4.5            100%  2.6s/ca
+gh/gpt-4o-mini                 100%  3.0s/ca
+ollama/gpt-oss:120b            100%  3.1s/ca   ← chọn
+gemini/gemini-3.5-flash-lite   100%  3.3s/ca
+gh/gpt-5-mini                  100%  3.5s/ca
+free_auto                      100%  4.2s/ca
+gc/gemini-2.5-flash-lite        88%  4.8s/ca
+openrouter/gemma-4-26b:free      0%  13.7s/ca  (429 cả 10 ca)
+```
+
+Sáu model đạt 100% và không lật phán quyết lần nào, nên **chấm PASS/FAIL
+không cần model thông minh** — nó cần model đoán được.
+
+Chọn `ollama/gpt-oss:120b` không vì nhanh nhất (haiku nhanh hơn) mà vì nó
+chạy **local**: không quota, không 429. Rate limit đã một lần làm ba test
+tất định đỏ oan, và làm một ứng viên openrouter trượt cả 10 ca. Một bộ đo
+mà chính nó thỉnh thoảng hỏng vì hạ tầng thì mọi con số nó đưa ra đều phải
+nghi ngờ.
+
+Nó cũng thay `free_auto` — một combo **tự chọn** model giữa các lời gọi,
+tức thêm đúng thứ phương sai mà bộ đo sinh ra để loại bỏ. Với agent thì
+`free_auto` không sao (ta đang đo chính hành vi đó); với thước đo thì không.
+
+Đổi bằng `EVAL_JUDGE_MODEL=<model>`. Chạy lại benchmark:
+`venv/bin/python -m tests.eval.bench.bench_judge [số_lần_lặp]`

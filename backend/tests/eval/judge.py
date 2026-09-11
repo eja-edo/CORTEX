@@ -15,12 +15,40 @@ không trở thành nguồn phương sai mới trong một bộ đo phương sai
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 from app.ai.agents.model_client import ModelClient
 from app.ai.agents.provider_types import GenerationConfig, Message
 
 _client = ModelClient()
+
+# Model cố định cho vai trò judge, **không** dùng `free_auto` mặc định.
+#
+# Benchmark 10 ca có đáp án chắc (`tests/eval/bench/`), mỗi model một lần:
+#
+#     kr/claude-haiku-4.5            100%  2.6s/ca
+#     gh/gpt-4o-mini                 100%  3.0s/ca
+#     ollama/gpt-oss:120b            100%  3.1s/ca   ← chọn
+#     gemini/gemini-3.5-flash-lite   100%  3.3s/ca
+#     gh/gpt-5-mini                  100%  3.5s/ca
+#     free_auto                      100%  4.2s/ca
+#     gc/gemini-2.5-flash-lite        88%  4.8s/ca
+#     openrouter/gemma-4-26b:free      0%  13.7s/ca  (429 cả 10 ca)
+#
+# Sáu model đạt 100% và không lật phán quyết lần nào, nên việc chấm PASS/FAIL
+# ở đây **không cần model thông minh** — nó cần model *đoán được*.
+#
+# Chọn `ollama/gpt-oss:120b` không vì nó nhanh nhất (haiku nhanh hơn) mà vì
+# nó chạy **local**: không quota, không 429. Trong session đo này, rate limit
+# đã một lần làm ba test tất định đỏ oan (xem README) và làm một ứng viên
+# openrouter trượt cả 10 ca. Một bộ đo mà chính nó thỉnh thoảng hỏng vì hạ
+# tầng thì mọi con số nó đưa ra đều phải nghi ngờ.
+#
+# Và nó thay `free_auto` — một combo *tự chọn* model giữa các lời gọi, tức
+# thêm đúng thứ phương sai mà bộ đo này sinh ra để loại bỏ. Với agent thì
+# `free_auto` không sao (ta đang đo chính hành vi đó); với thước đo thì không.
+JUDGE_MODEL = os.getenv("EVAL_JUDGE_MODEL", "ollama/gpt-oss:120b")
 
 _JUDGE_SYSTEM = """You grade assistant output against one criterion.
 
@@ -79,6 +107,7 @@ async def judge(reply: str, criterion: str, background: str = "") -> Verdict:
             max_output_tokens=200,
         ),
         tools=None,
+        preferred_model=JUDGE_MODEL,
     )
     text = ((response.content if response else "") or "").strip()
     first, _, rest = text.partition("\n")
