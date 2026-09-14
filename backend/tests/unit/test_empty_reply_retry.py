@@ -92,18 +92,28 @@ class TestRetryPolicy:
 class TestRetrySwitchesModel:
     """Lần thử lại phải đổi model, không chỉ đổi prompt.
 
-    Bốn giả thuyết đã loại, ghi lại để không ai thử lại:
+    Chuỗi giả thuyết đầy đủ, mỗi bước bị chính phép đo sau nó bác bỏ:
 
     1. *Gọi lại y nguyên sẽ khác.* Sai — rỗng tiếp 4/4.
     2. *Prompt dài là nguyên nhân.* Sai — vẫn rỗng 7/7 dù ngắn đi 10k ký tự.
-    3. *`free_auto` là thủ phạm.* Sai — benchmark 8 model, tất cả 0% im.
-    4. *Im lặng tăng theo độ dài prompt.* Sai — đo ở 11k/17k/23k token, im
-       rải rác ~2% không theo xu hướng nào.
+    3. *`free_auto` là thủ phạm.* Sai — benchmark tự dựng, 6 lần/model, tất
+       cả 0% im.
+    4. *Im lặng tăng theo độ dài prompt, là đặc tính ổn định của model.*
+       Tưởng đúng sau khi đọc lại 2.678 mẫu của router — im lặng tăng rõ
+       theo độ dài trong dữ liệu ngày 11/9 (0.2% → 15.7%). Nhưng soát theo
+       NGÀY thì sai: cả tháng 8 tới 10/9 gần như 0% ở mọi độ dài, kể cả
+       10/9 với 455 lượt và có lượt tới 17.650 token. Hiện tượng chỉ tập
+       trung trong khung 08:06–10:17 ngày 11/9 — đúng lúc benchmark chạy.
+       Gọi lại 20 lần ngày 14/9 ở cùng model, cùng ~25k token (kịch bản đã
+       cho 25.6% hôm đó): 0/20 rỗng. Cũng loại luôn giả thuyết "hết ngân
+       sách token" — đổi `max_output_tokens` 500→16.000 không đổi kết quả,
+       và `finish_reason` luôn là `stop`, chưa từng là `length`.
 
-    Nguyên nhân nằm ở model/gateway, không sửa được từ phía này. Nhưng im
-    lặng ngẫu nhiên ~2% mỗi model thì xác suất **hai** model im cùng một
-    lượt thấp hơn hẳn — nên đổi model là cách duy nhất còn lại, và nó xử lý
-    hậu quả chứ không phải nguyên nhân.
+    Kết luận đứng vững nhất: một sự cố tạm thời phía backend trong vài giờ,
+    không phải quy luật theo độ dài và không sửa được từ cấu hình phía
+    chúng ta. Đổi model khi thử lại vẫn giữ vì rẻ và vô hại, không phải vì
+    đã xác định được model nào "tin cậy hơn" lâu dài — mẫu quá nhiễu bởi
+    sự cố đó để xếp hạng độ tin cậy dài hạn.
     """
 
     def _handle_source(self) -> str:
@@ -126,18 +136,19 @@ class TestRetrySwitchesModel:
         default = os.getenv("OPENAI_DEFAULT_MODEL", "free_auto")
         assert EMPTY_REPLY_FALLBACK_MODEL != default
 
-    def test_fallback_comes_from_router_data_not_a_small_sample(self):
-        """Model fallback chọn từ 2.678 mẫu của router, không từ 6 mẫu tự đo.
+    def test_fallback_is_not_the_model_once_picked_from_a_small_sample(self):
+        """`kr/claude-haiku-4.5` từng được chọn từ một mẫu quá nhỏ để tin.
 
-        Bài đo tự dựng (6 lần mỗi model) từng kết luận
-        `kr/claude-haiku-4.5` tin cậy nhất vì nó im 0/6. Dữ liệu router cho
-        thấy nó im **16/141 (11.3%)** ở prompt > 10k — tệ nhất trong các
-        model có đủ mẫu. Sáu mẫu không thể thấy một hiệu ứng 11%.
+        Benchmark tự dựng (6 lần/model) chọn nó vì im 0/6. Dữ liệu router
+        (2.678 mẫu) khi đó cho thấy nó im 16/141 (11.3%) ở prompt > 10k —
+        nhưng soát theo ngày thì cả hai con số đều là nhiễu từ một sự cố
+        tạm thời ngày 11/9, không phải đặc tính ổn định của bất kỳ model
+        nào (xem docstring lớp này). Test chỉ còn giữ được khẳng định
+        rẻ và chắc: fallback phải khác model chính, không phải "model X
+        đáng tin hơn model Y" — điều chưa ai đo được đáng tin cậy.
         """
         from app.ai.agents.agent_service import EMPTY_REPLY_FALLBACK_MODEL
 
-        assert EMPTY_REPLY_FALLBACK_MODEL != "kr/claude-haiku-4.5"
-        # 0/58 ở prompt > 10k, và trả lời tiếng Việt.
         assert EMPTY_REPLY_FALLBACK_MODEL == "gemini/gemini-2.5-flash"
 
     def test_both_empty_branches_switch_model(self):

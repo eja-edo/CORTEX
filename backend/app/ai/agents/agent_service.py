@@ -82,40 +82,41 @@ MAX_TURN_RETRIES = 3
 #
 # Một lần là đủ: lời gọi lại tốn một vòng độ trễ người dùng phải chờ.
 #
-# **Lần thử lại đổi sang một model khác**, và model đó được chọn từ dữ liệu
-# thật của router (`~/.9router/db/data.sqlite`, bảng `usageHistory`) chứ
-# không từ một bài đo tự dựng.
+# **Lần thử lại đổi sang một model khác** — nhưng lý do KHÔNG phải "prompt
+# dài gây im lặng" như một đặc tính ổn định. Đó là kết luận thứ ba, và nó
+# cũng sai; lịch sử đầy đủ của việc truy nguyên nhân, vì mỗi bước đều dạy
+# được điều gì đó:
 #
-# Chuyện đáng kể lại, vì nó là một lỗi phương pháp: tôi đã dựng benchmark
-# riêng và chạy **6 lần mỗi model**, rồi kết luận hai điều — cả hai đều sai:
+#   1. Benchmark tự dựng, 6 lần mỗi model → "prompt dài không gây im lặng",
+#      "claude-haiku-4.5 tin cậy nhất". Sai: 6 mẫu quá ít để thấy hiệu ứng
+#      vài phần trăm.
+#   2. Đọc lại router (`~/.9router/db/data.sqlite`, bảng `usageHistory`,
+#      2.678 mẫu) → tưởng đã sửa (1): im lặng tăng theo độ dài, rõ nhất ở
+#      ngày 11/9 (0.2% ở 0–5k, 15.7% ở 20–30k), và `claude-haiku-4.5` tệ
+#      nhất (11.3% ở >10k). Vẫn sai, vì chưa nhìn theo NGÀY.
+#   3. Soát lại theo ngày: cả tháng 8 tới 10/9 gần như 0% ở mọi độ dài (kể
+#      cả 10/9, 455 lượt, có lượt tới 17.650 token, 0 lần im). Hiện tượng
+#      chỉ tập trung trong khung 08:06–10:17 ngày 11/9 — đúng lúc tôi chạy
+#      benchmark. Gọi lại 20 lần ngày 14/9, cùng model, cùng ~25k token
+#      (kịch bản đã cho 25.6% hôm 11/9): **0/20 rỗng**. Đổi
+#      `max_output_tokens` từ 500 lên 16.000 trong 5 lần thử cũng không
+#      đổi kết quả — loại luôn giả thuyết "hết ngân sách token"
+#      (`finish_reason` luôn là `stop`, chưa từng là `length`).
 #
-#   * *"prompt dài không gây im lặng"* — 6 mẫu mỗi mức không thể thấy một
-#     hiệu ứng 4%;
-#   * *"`claude-haiku-4.5` tin cậy nhất"* — nó im 0/6 trong bài đo đó.
+# Kết luận đứng vững nhất hiện có: đó là một sự cố tạm thời phía backend
+# free-tier trong một cửa sổ vài giờ, không phải quy luật theo độ dài
+# prompt và không sửa được bằng cấu hình phía chúng ta. Không dựa vào con
+# số "15.7% ở 20–30k" để quyết định ngưỡng cắt prompt nữa — nó đo đúng một
+# sự cố, không đo một đặc tính.
 #
-# Router đã có 2.678 mẫu sẵn suốt thời gian ấy. Đọc chúng (prompt > 10k):
-#
-#     big-pickle                      0/87    0.0%
-#     gemini-2.5-flash                0/58    0.0%
-#     nemotron-3-ultra-free           0/41    0.0%
-#     gemini-3.1-flash-lite-preview  25/918   2.7%
-#     claude-haiku-4.5               16/141  11.3%   ← từng chọn làm fallback
-#
-# Và im lặng **có** tăng theo độ dài prompt, rất rõ:
-#
-#     0–5k    0.2%      15–20k   4.2%
-#     5–10k   0.0%      20–30k  15.7%
-#     10–15k  0.9%
-#
-# Nên hai việc khác nhau: trần dưới 15k token là cách giảm *tần suất* (xem
-# `docs/` và mục gọt prompt), còn hằng số dưới đây giảm *hậu quả* của những
-# lần còn lại.
+# Vẫn giữ retry-đổi-model, vì nó rẻ và vô hại kể cả khi hiện tượng đã hết:
+# một lần gọi thêm, sang model khác, chỉ tốn thời gian khi thật sự cần.
 MAX_EMPTY_REPLY_RETRIES = 1
 
-# Model cho lần thử lại: 0/58 lượt rỗng ở prompt > 10k trong dữ liệu router,
-# và là một trong các thành viên của combo `free_auto` nên đã được cấu hình
-# sẵn. `oc/big-pickle` có mẫu tốt hơn (0/87) nhưng trả lời bằng tiếng Anh
-# trong phép thử, còn đây trả lời tiếng Việt — đúng ngôn ngữ sản phẩm.
+# Model cho lần thử lại. Không chọn vì "tin cậy nhất" — mẫu quá nhiễu bởi
+# sự cố ngày 11/9 để xếp hạng model theo độ tin cậy dài hạn — chỉ cần khác
+# hẳn model chính đang dùng, để một sự cố tạm thời (nếu có) khó lặp lại ở
+# cả hai. `gemini/gemini-2.5-flash` trả lời tiếng Việt trong mọi phép thử.
 EMPTY_REPLY_FALLBACK_MODEL = os.getenv(
     "AGENT_FALLBACK_MODEL", "gemini/gemini-2.5-flash"
 )
