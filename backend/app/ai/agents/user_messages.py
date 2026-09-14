@@ -56,7 +56,18 @@ UNEXPECTED = (
 )
 
 # Đã chạy quá nhiều bước mà chưa xong — cắt để không chạy vô hạn.
+#
+# Trước đây câu này bảo người dùng "chia nhỏ ra, nói cụ thể hơn" — tức đổ
+# việc của hệ thống sang cho họ, và sai sự thật: câu hỏi không hề mơ hồ,
+# chỉ là nó cần nhiều bước hơn ngân sách một lượt của agent. Người dùng
+# không làm gì sai để phải sửa cách hỏi.
+#
+# Đây là lưới cuối, dùng khi cả lượt tổng hợp tiến độ (xem
+# `CONTINUATION_INSTRUCTION` trong agent_service.py) cũng hỏng, nên không
+# có gì cụ thể để nói đã xong tới đâu — nhưng vẫn phải mời tiếp tục, không
+# phải mời đổi cách hỏi.
 TOO_MANY_STEPS = (
-    "Câu này phức tạp hơn mình xử lý được trong một lần. Bạn thử chia nhỏ "
-    "ra, hoặc nói cụ thể hơn phần bạn cần trước nhé?"
+    "Việc này cần nhiều bước hơn mình xử lý được trong một lượt. Bạn gõ "
+    "\"tiếp tục\" để mình làm nốt nhé — mình sẽ tiếp tục đúng từ chỗ đang "
+    "dang dở, không cần bạn nhắc lại yêu cầu."
 )

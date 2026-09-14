@@ -66,6 +66,31 @@ MAX_SAME_TOOL_CALLS = 20
 MAX_TOKENS_PER_DAY_PER_USER = 2_000_000
 MAX_TURN_RETRIES = 3
 
+# Chỉ dẫn riêng cho lượt tổng hợp khi chạm `MAX_TOOL_TURNS` mà chưa xong.
+#
+# Không có nó, lượt tổng hợp dùng nguyên system prompt bình thường và model
+# tự đoán phải nói gì khi hết công cụ mà chưa xong việc — và nó hay đoán
+# thành "câu hỏi này khó/mơ hồ quá, bạn nói lại cho rõ đi", dù không có gì
+# mơ hồ cả, chỉ là việc cần nhiều bước hơn ngân sách một lượt. Người dùng
+# nhận lại yêu cầu tự sửa cách hỏi cho một giới hạn của hệ thống.
+#
+# Chỉ dẫn này ép đúng khung: tóm tắt đã làm gì / còn gì, và mời "tiếp tục"
+# — không mời sửa câu hỏi. Lời mời đó dùng được thật, không phải an ủi
+# suông: `_build_history_contents` (conversation_service.py) dựng lại đầy
+# đủ chuỗi tool đã gọi và kết quả từ DB theo `turn_id`, nên lượt kế tiếp
+# (bắt đầu lại từ `turn=0`, ngân sách `MAX_TOOL_TURNS` đầy) thấy được toàn
+# bộ những gì đã làm và tiếp tục đúng chỗ — người dùng không cần lặp lại
+# yêu cầu ban đầu.
+CONTINUATION_INSTRUCTION = (
+    "\n\n---\n"
+    "Bạn vừa hết lượt gọi công cụ cho phép trong một lần trả lời — đây là "
+    "giới hạn của hệ thống, không phải vì câu hỏi của người dùng mơ hồ hay "
+    "quá phức tạp. Đừng bảo họ hỏi lại cho rõ hơn hay chia nhỏ yêu cầu.\n\n"
+    "Viết một câu trả lời ngắn, gồm: (1) những gì đã làm xong, cụ thể; "
+    "(2) những gì còn lại, cụ thể; (3) một câu mời, ví dụ 'Bạn gõ \"tiếp "
+    "tục\" để mình làm nốt nhé.' Không lặp lại toàn bộ yêu cầu ban đầu."
+)
+
 # Số lần thử lại khi model trả về một câu trả lời rỗng hoặc lửng.
 #
 # Trước đây là 0 — gặp rỗng là bỏ luôn và đưa người dùng một câu xin lỗi.
@@ -419,7 +444,7 @@ class AgentService:
             logger.warning(f"event=max_tool_turns_hit turn_count={turn} conversation_id={conv.id}")
             logger.warning(f"Agent hit max turns ({MAX_TOOL_TURNS}) — attempting synthesis turn for conversation {conv.id}")
             try:
-                synthesis_config = GenerationConfig(system_instruction=gen_config.system_instruction, temperature=gen_config.temperature, max_output_tokens=gen_config.max_output_tokens)
+                synthesis_config = GenerationConfig(system_instruction=(gen_config.system_instruction or "") + CONTINUATION_INSTRUCTION, temperature=gen_config.temperature, max_output_tokens=gen_config.max_output_tokens)
                 _, synthesis_response = await _model_client.generate(messages, synthesis_config, tools=None, preferred_model=preferred_model)
                 reply_text = synthesis_response.content if synthesis_response and synthesis_response.content else user_messages.TOO_MANY_STEPS
                 if synthesis_response and synthesis_response.usage:
@@ -858,7 +883,7 @@ class AgentService:
             if turn >= MAX_TOOL_TURNS and not reply_text and not hard_error_occurred:
                 logger.warning(f"event=max_tool_turns_hit turn_count={turn} conversation_id={conv.id} streaming=true")
                 try:
-                    synthesis_config = GenerationConfig(system_instruction=gen_config.system_instruction, temperature=gen_config.temperature, max_output_tokens=gen_config.max_output_tokens)
+                    synthesis_config = GenerationConfig(system_instruction=(gen_config.system_instruction or "") + CONTINUATION_INSTRUCTION, temperature=gen_config.temperature, max_output_tokens=gen_config.max_output_tokens)
                     synthesis_text = ""
                     _synth_completion_before = total_usage.get("completion_tokens", 0)
                     async for chunk in _model_client.stream(messages, synthesis_config, tools=None, preferred_model=preferred_model):
