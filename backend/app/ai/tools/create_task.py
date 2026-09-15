@@ -9,9 +9,10 @@ thing that screen is built to display, so the whole loop stays empty.
 from datetime import date
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.ai.agents.tool_context import ToolContext
+from app.ai.tools.title_fallback import rescue_title
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -55,6 +56,17 @@ class CreateTaskInput(BaseModel):
             "didn't say — the server then applies the ladder in DESIGN 3.5."
         ),
     )
+
+    # Xem app/ai/tools/title_fallback.py cho phép đo đầy đủ. Tóm tắt: đo
+    # được model gọi tool này bỏ trống `title` mà điền đúng nội dung vào
+    # `description`, lặp lại nhiều lần, rồi cuối cùng báo lỗi kỹ thuật hoặc
+    # im lặng thay vì thử đúng cách. Cứu bằng cách dùng `description` làm
+    # `title` khi `title` trống — dữ liệu đã do model cung cấp, không phải
+    # bịa thêm.
+    @model_validator(mode="before")
+    @classmethod
+    def _rescue_title(cls, data):
+        return rescue_title(data)
 
 
 def _parse_due_date(value: Optional[str]) -> Optional[str]:

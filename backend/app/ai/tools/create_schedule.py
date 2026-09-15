@@ -2,9 +2,10 @@
 
 from datetime import datetime, timezone
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.ai.agents.tool_context import ToolContext
+from app.ai.tools.title_fallback import rescue_title
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -39,6 +40,16 @@ class CreateScheduleInput(BaseModel):
     location: Optional[str] = Field(None, max_length=255)
     description: Optional[str] = Field(None, max_length=1000)
     recurrence_rule: Optional[RecurrenceRuleInputData] = Field(None, description="Optional recurrence rule for repeating events")
+
+    # Đo được (xem app/ai/tools/title_fallback.py): model gọi tool này bỏ
+    # trống `title` mà điền đúng nội dung vào `description`, ba lần liên
+    # tiếp, rồi tuyên bố đã đặt lịch thành công trong khi cả ba lần đều
+    # thất bại — người dùng nhận một lời xác nhận cho một việc CHƯA HỀ được
+    # tạo. Cứu bằng cách dùng `description` làm `title` khi `title` trống.
+    @model_validator(mode="before")
+    @classmethod
+    def _rescue_title(cls, data):
+        return rescue_title(data)
 
 
 
