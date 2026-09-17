@@ -175,30 +175,10 @@ class MessageResponse(BaseModel):
     message: str
 
 
-class AuthorizeRequest(BaseModel):
-    """Request body for authorization code generation with PKCE."""
+class LoginRequest(BaseModel):
+    """Request body for email/password login."""
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=128)
-    client_id: str = Field(..., min_length=1, max_length=255)
-    redirect_uri: str = Field(..., min_length=1, max_length=1000)
-    code_challenge: str = Field(..., min_length=43, max_length=255)
-    code_challenge_method: str = Field(default="S256", pattern="^(S256|plain|PLAIN)$")
-    state: Optional[str] = Field(default=None, max_length=255)
-
-
-class AuthorizeResponse(BaseModel):
-    """Authorization code response."""
-    code: str
-    expires_in: int
-    state: Optional[str] = None
-
-
-class TokenExchangeRequest(BaseModel):
-    """Request body for exchanging authorization code + verifier for tokens."""
-    code: str
-    code_verifier: str = Field(..., min_length=43, max_length=128)
-    client_id: str = Field(..., min_length=1, max_length=255)
-    redirect_uri: str = Field(..., min_length=1, max_length=1000)
 
 
 class NoteCreate(BaseModel):

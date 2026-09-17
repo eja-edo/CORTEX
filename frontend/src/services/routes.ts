@@ -24,7 +24,6 @@ export const ROUTES = {
    * the handful ranked onto "Hôm nay". */
   TASKS: '/tasks',
   NOTIFICATIONS: '/notifications',
-  AUTH_CALLBACK: '/auth/callback',
 
   // Project routes (require projectId)
   PROJECT_BASE: '/p/:projectId',
@@ -53,7 +52,6 @@ export const GLOBAL_ROUTES: readonly string[] = [
   ROUTES.SCHEDULE,
   ROUTES.TASKS,
   ROUTES.NOTIFICATIONS,
-  ROUTES.AUTH_CALLBACK,
   // Not in ROUTES yet — it has no helper and no constant, but the app
   // does render it.
   '/settings',
@@ -163,7 +161,6 @@ export function isGlobalRoute(pathname: string): boolean {
     || pathname === '/today'
     || pathname === '/schedule'
     || pathname === '/tasks'
-    || pathname === '/auth/callback'
     || !pathname.startsWith('/p/')
 }
 
