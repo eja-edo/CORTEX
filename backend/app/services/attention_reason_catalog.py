@@ -117,6 +117,87 @@ REASON_CATALOG: dict[str, ReasonMeta] = {
         ),
         scope=ReasonScope.PROJECT,
     ),
+    "attention.bundle": ReasonMeta(
+        base_level=AttentionLevel.INFORM,
+        description=(
+            "Everything the Gate held back while the user was busy, released as one "
+            "notification per project once they are free."
+        ),
+        # `PERSONAL` là quyết định, không phải giá trị mặc định rơi vào.
+        # Từ DESIGN 7.2, cụm này được gộp **theo** dự án và mang tên dự án
+        # trong tiêu đề — nên nó trông rất giống một lời nhắc cấp dự án, và
+        # `scope` là thứ duy nhất ngăn nó đi về channel chung. Một cụm nhắc
+        # việc riêng của một người phát vào channel cả nhóm chính là lỗi
+        # cấu trúc đã giết hướng "bot nghe channel" (DESIGN 1.4).
+        #
+        # Trước đây `attention.bundle` không có trong catalog và chỉ *tình
+        # cờ* về DM nhờ giá trị mặc định của `scope_for`. Ghi hẳn ra đây để
+        # nó là một bất biến có chủ đích, và để `base_level_for` thôi log
+        # cảnh báo "unregistered reason_key" mỗi lần flush.
+        scope=ReasonScope.PERSONAL,
+    ),
+
+    # ── Đề xuất chủ động trong hội thoại ────────────────────────────────
+    #
+    # Những reason này không sinh ra notification nào. Chúng ở đây vì
+    # catalog là nơi khai "loại việc này đáng ồn tới mức nào", và câu hỏi
+    # đó giống hệt nhau ở cả hai bề mặt — chỉ khác là ở chat, mức được
+    # dịch thành *giọng* thay vì thành một hàng notification (xem
+    # `app.services.intervention`).
+    #
+    # Đưa chúng vào cùng bảng có ba cái lợi mà một bảng riêng cho chat
+    # không có: người dùng tắt một loại thì tắt ở cả hai nơi; Feedback
+    # Loop hạ bậc theo hành vi ở nơi này cũng áp cho nơi kia; và mức của
+    # một đề xuất tra được từ log thay vì phải đoán từ câu chữ.
+    "chat.suggest_routine_tasks": ReasonMeta(
+        base_level=AttentionLevel.ASK,
+        description=(
+            "Một quy trình khớp hoàn cảnh người dùng vừa nêu, và các bước "
+            "của nó có thể tạo thành task. ASK vì tạo năm task người dùng "
+            "không nhờ thì đắt để hoàn tác."
+        ),
+    ),
+    "chat.suggest_support": ReasonMeta(
+        base_level=AttentionLevel.RECOMMEND,
+        description=(
+            "Các hỗ trợ quanh một việc người dùng vừa kể — nhắc trước, "
+            "checklist, khối thời gian chuẩn bị. Hữu ích nhưng không ai "
+            "nhờ, nên đề xuất chứ không hỏi."
+        ),
+    ),
+    "chat.suggest_schedule": ReasonMeta(
+        base_level=AttentionLevel.RECOMMEND,
+        description=(
+            "Người dùng kể một sự việc có thời gian và chưa có lịch cho nó."
+        ),
+    ),
+    # Việc mà bộ trích xuất hội thoại *đoán* ra từ lời người dùng
+    # (`app.services.task_extraction`), chờ một cái yes/no.
+    #
+    # ASK vì bản chất nó là một câu hỏi: task vào `pending_confirm` và chỉ
+    # thành việc thật khi người dùng đồng ý. Và đây là reason **duy nhất**
+    # hiện có một tín hiệu phản hồi tất định: người dùng bấm từ chối thì
+    # `task.reject` chạy, không cần model diễn giải xem họ có đồng ý hay
+    # không. Xem `app.services.intervention.record_chat_dismissal`.
+    #
+    # Khi mức tụt tới SILENT, `task_extraction` thôi tạo candidate — đó là
+    # Cortex tự nhận ra người dùng không muốn tính năng này, từ hành vi chứ
+    # không từ một cái toggle.
+    "task.suggestion": ReasonMeta(
+        base_level=AttentionLevel.ASK,
+        description=(
+            "Một việc bộ trích xuất đoán ra từ hội thoại, đang chờ người "
+            "dùng xác nhận."
+        ),
+    ),
+    "chat.flag_conflict": ReasonMeta(
+        base_level=AttentionLevel.ASK,
+        description=(
+            "Việc người dùng vừa yêu cầu đụng một ràng buộc họ đã nêu "
+            '("không họp sau 18h"). Im lặng ở đây là để họ tự vấp — nên '
+            "mức này không nên bị hạ xuống dưới INFORM trong thực tế."
+        ),
+    ),
 }
 
 

@@ -24,7 +24,7 @@ deadlines, a user-set priority, task suggestions awaiting confirmation —
 with no scoring model and nothing inferred.
 """
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
     Project,
+    Schedule,
     Task,
     TaskPriority,
     TaskStatus,
@@ -41,6 +42,7 @@ from app.schemas import (
     TodayNowAction,
     TodayReason,
     TodayResponse,
+    TodayScheduleItem,
 )
 from app.utils.logger import get_logger
 
@@ -97,6 +99,7 @@ class TodayService:
     async def get_today(self, user_id: UUID) -> TodayResponse:
         open_tasks = await self._open_tasks(user_id)
         pending_tasks = await self._pending_confirmation_tasks(user_id)
+        schedules_today = await self._schedules_today(user_id)
 
         project_risks = await self._project_risks(open_tasks)
         actions = self._rank_actions(open_tasks, project_risks)
@@ -108,6 +111,7 @@ class TodayService:
             has_any_task=await self._has_any_task(user_id),
             has_open_work=bool(open_tasks),
             has_now_actions=bool(now_actions),
+            has_schedule_today=bool(schedules_today),
         )
 
         suggestions: list[TodayNowAction] = []
@@ -123,6 +127,7 @@ class TodayService:
             now_actions=now_actions,
             suggestions=suggestions,
             needs_confirmation=needs_confirmation,
+            schedules_today=[self._to_schedule_item(s) for s in schedules_today],
         )
 
     # ------------------------------------------------------------------
@@ -145,6 +150,39 @@ class TodayService:
             .order_by(Task.due_date.asc().nullslast(), Task.created_at.asc())
         )
         return list((await self.session.execute(stmt)).scalars().all())
+
+    async def _schedules_today(self, user_id: UUID) -> list[Schedule]:
+        """Calendar events happening today — unranked, informational.
+
+        Same window `state_evaluator.py`'s `_evaluate_day_plan` uses for
+        the `day.plan` notification, so the on-demand screen and the
+        once-a-day push agree on what "today" means; the two used to
+        disagree in a user-visible way — a day with a meeting but no open
+        task made this screen say "all_clear" ("Nghỉ đi") right after the
+        morning notification had told the person about that same meeting.
+        """
+        today = _today()
+        today_start = datetime(today.year, today.month, today.day, tzinfo=timezone.utc)
+        tomorrow_start = today_start + timedelta(days=1)
+        stmt = (
+            select(Schedule)
+            .where(
+                Schedule.user_id == user_id,
+                Schedule.is_cancelled.is_(False),
+                Schedule.start_time >= today_start,
+                Schedule.start_time < tomorrow_start,
+            )
+            .order_by(Schedule.start_time.asc())
+        )
+        return list((await self.session.execute(stmt)).scalars().all())
+
+    def _to_schedule_item(self, schedule: Schedule) -> TodayScheduleItem:
+        return TodayScheduleItem(
+            schedule_id=schedule.id,
+            title=schedule.title,
+            start_time=schedule.start_time,
+            location=schedule.location,
+        )
 
     async def _project_risks(self, open_tasks: list[Task]) -> dict[UUID, float]:
         """Điểm rủi ro của từng dự án đang có việc mở — DESIGN 7.1.
@@ -363,6 +401,7 @@ class TodayService:
         has_any_task: bool,
         has_open_work: bool,
         has_now_actions: bool,
+        has_schedule_today: bool,
     ) -> str:
         """Which design the screen shows.
 
@@ -376,9 +415,21 @@ class TodayService:
         `all_clear` same as anyone whose real work is done — correct, since
         nothing here is *actionable* yet. `needs_confirmation` still carries
         the suggestions themselves regardless of which state this returns.
+
+        `has_schedule_today` is checked before both `onboarding` and
+        `all_clear`, not folded into either: those two states' own client
+        copy ("Cortex chưa biết bạn đang làm gì" / "Nghỉ đi") is false for
+        someone with a calendar event today, task or no task. Checking it
+        after `has_open_work` rather than before costs nothing — a day
+        with open work already routes to `has_actions`/`nothing_urgent`
+        regardless of its calendar, and `schedules_today` still reaches
+        the response either way (`get_today` builds it independently of
+        `state`).
         """
-        if not has_any_task:
-            return "onboarding"        # nothing has ever existed
         if has_open_work:
             return "has_actions" if has_now_actions else "nothing_urgent"
+        if has_schedule_today:
+            return "schedule_only"     # nothing to do, but not an empty day
+        if not has_any_task:
+            return "onboarding"        # nothing has ever existed
         return "all_clear"             # there was work, and it is finished

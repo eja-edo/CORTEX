@@ -65,7 +65,9 @@ class AttentionBundleWorker:
                     async with self._session_maker() as db:
                         flushed = await flush_due_bundles(db)
                         if flushed:
-                            logger.info("AttentionBundleWorker flushed bundles for %d user(s)", flushed)
+                            # Số **cụm**, không phải số người: từ DESIGN 7.2
+                            # một người có việc ở ba dự án sinh ra ba cụm.
+                            logger.info("AttentionBundleWorker flushed %d bundle(s)", flushed)
                 except Exception as e:
                     logger.exception("Error in attention bundle worker loop: %s", e)
 

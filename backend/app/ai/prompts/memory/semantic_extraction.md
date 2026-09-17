@@ -62,10 +62,25 @@ A single string capturing the context needed to continue this conversation seaml
 ## 2. semantic_memories
 
 An array of memory objects. Each object has:
-- "category": one of "project", "preference", "constraint", "environment", "decision_pattern", "routine"
+- "category": one of "routine", "preference", "constraint", "goal", "fact", "decision"
 - "content": the memory text
 - "confidence": float 0.0-1.0
 - "expected_lifetime": "short" | "medium" | "long" | "permanent"
+
+What each category means:
+
+* `routine` — quy trình lặp lại, dạng "khi <hoàn cảnh> thì tôi phải <các bước>". Giữ nguyên cả trigger lẫn mọi bước trong MỘT entry.
+* `preference` — sở thích, thói quen, cách người dùng muốn được phục vụ ("thích họp buổi sáng", "muốn trả lời ngắn gọn").
+* `constraint` — ràng buộc cứng hoặc quy định phải tuân — của bản thân hoặc của tổ chức ("không họp sau 18h", "công ty cấm dùng Drive cá nhân").
+* `goal` — mục tiêu dài hạn người dùng đang theo đuổi ("giảm 5kg trong 3 tháng", "thi IELTS 7.0 tháng 12").
+* `fact` — sự thật ổn định về người dùng và môi trường làm việc ("làm ở team 5 người", "dự án Cortex deadline tháng 11").
+* `decision` — quyết định đã chốt kèm lý do, thứ định hướng các lượt sau ("chọn pgvector thay Zep vì Zep không trả về kết quả").
+
+This list is the canonical one — it is generated from
+`app.services.memory_categories`, the same module the closing JSON shape and
+the database write path both read. Any other name (e.g. "policy", "project",
+"environment", "decision_pattern") is an old spelling: it will be silently
+mapped onto the list above, so prefer a name from the list.
 
 Notes:
 * Only include memories with confidence >= 0.7.

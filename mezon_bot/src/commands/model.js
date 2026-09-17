@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * `*model` — switch which model answers in Mezon.
+ * `*switch_model` — switch which model answers in Mezon.
  *
  * Thin, per the registry's first rule: it fetches the catalogue and the
  * user's current choice, renders them, and stores nothing itself. The
@@ -18,9 +18,17 @@
 const { renderModelPicker } = require("../mezon/modelCard");
 
 const modelCommand = {
-  name: "model",
-  description: "Chọn model AI dùng trong Mezon",
-  usage: "*model",
+  // Named for the action, not the noun: `model` alone says what the command
+  // is *about*, `switch_model` says what it *does* — and a command list read
+  // as a row of clan icons has no room to explain the difference.
+  name: "switch_model",
+  // `model` stays reachable. It is what the name was for the whole life of
+  // the command so far, and silently breaking a command someone already has
+  // in their fingers buys nothing. `list()` collapses aliases, so `*help`
+  // shows only the new name.
+  aliases: ["model"],
+  description: "Đổi model AI dùng trong Mezon",
+  usage: "*switch_model",
   requiresLink: true,
 
   async run({ cortex, identity, pendingForms, reply }) {

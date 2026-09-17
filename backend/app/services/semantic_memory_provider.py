@@ -19,6 +19,56 @@ from sqlalchemy.ext.asyncio import AsyncSession
 logger = logging.getLogger(__name__)
 
 
+# Sàn chặn rác, **không phải** bộ lọc liên quan — và là ngưỡng chung cho
+# *mọi* đường đọc bộ nhớ (tool `extract_memory` và recall tự động của
+# `ContextService`). Hai ngưỡng khác nhau cho cùng một kho sẽ làm cùng một
+# câu hỏi cho hai câu trả lời tuỳ nó đi đường nào.
+#
+# Con số này nằm trên thang **cosine similarity**. Trước 2026-09-10 nó nằm
+# trên một thang khác mà không ai biết: truy vấn dùng toán tử khoảng cách
+# L2 kèm công thức `1 - d/2` của cosine, nên `0.55` khi đó thực chất là
+# cosine ≈ 0.595 — chặt hơn nhiều so với ý định. Đo được hậu quả: ràng buộc
+# "không bao giờ họp sau 18h" đạt 0.5611 với câu "đặt lịch họp lúc 19h tối
+# mai", tức là **bị loại**, và agent đặt lịch 19h mà không hề biết có xung
+# đột.
+#
+# Đo lại trên thang đúng (2026-09-10, `gemini-embedding-2-preview`, 4 bộ
+# nhớ: routine remote / preference gym / constraint không-họp-sau-18h /
+# goal IELTS):
+#
+#     câu hỏi                              bộ nhớ đúng   nhiễu cao nhất
+#     làm việc từ xa                       0.7316 ✓      0.5350
+#     hôm nay tôi remote                   0.6952 ✓      0.5139
+#     tôi học tiếng anh thế nào rồi        0.6675 ✓      0.6007
+#     mai tôi đi gym                       0.6452        0.6528 ✗ remote
+#     tối mai họp lúc 7 giờ tối được không 0.6297        0.6792 ✗ remote
+#     đặt lịch họp với khách lúc 19h       0.5611        0.6608 ✗ remote
+#     deadline dự án sắp tới rồi           (không có)    0.7130
+#     thời tiết hôm nay thế nào            (không có)    0.5320
+#     giá bitcoin bao nhiêu                (không có)    0.5389
+#
+# Hai điều rút ra, và cả hai đều định hình thiết kế quanh con số này:
+#
+# **Không ngưỡng nào tách được đúng khỏi sai.** Dải đúng [0.5611, 0.7316]
+# nằm gọn trong dải nhiễu [0.3878, 0.7130]. Bộ nhớ routine remote xếp hạng
+# nhất ở 8/9 truy vấn — kể cả "giá bitcoin bao nhiêu" — vì nó là văn bản
+# dài nhất và giàu từ nhất, không vì nó liên quan. Đây là hành vi đã biết
+# của embedding trên đoạn dài, không phải lỗi cấu hình.
+#
+# **Nên ngưỡng chỉ làm một việc khiêm tốn: cắt phần rõ ràng lạc đề** (~0.53
+# trở xuống — "thời tiết", "bitcoin"). Việc phán đoán "quy trình này có
+# thật sự nói về hoàn cảnh người dùng vừa nêu không" giao cho model: nó
+# *đọc* được vế "khi tôi remote" và thấy ngay "deadline dự án" không khớp,
+# thứ một phép so sánh số không làm được. Khối chỉ dẫn trong
+# `UnifiedContext._render_memories()` là nơi ra lệnh đó, và
+# `tests/eval/test_memory_recall_live.py` cấp 3 là nơi kiểm nó.
+#
+# Sửa gốc cho thứ hạng nằm ở tầng dữ liệu, không ở con số này: tách vế
+# trigger ("khi tôi remote") ra khỏi phần các bước rồi so khớp riêng nó,
+# thay vì embed cả đoạn dài làm một.
+MIN_RELEVANCE_SCORE = 0.55
+
+
 class SemanticMemoryUnavailable(Exception):
     """Raised when the semantic memory backend (e.g. Zep Cloud) is unreachable or errors."""
 

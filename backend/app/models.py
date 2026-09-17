@@ -1196,6 +1196,18 @@ class AttentionBundleQueue(Base):
         nullable=False,
     )
     item_id = Column(UUID(as_uuid=True), nullable=False)
+    # Khoá gộp thứ hai, cạnh `user_id` (DESIGN 7.2). Chốt **lúc xếp hàng**,
+    # cùng lý do với `title`/`payload` ở trên: nhãn gộp là một phần của
+    # điều được nói ra, nên nó phải là điều đã đúng lúc Cortex quyết định
+    # im. Đọc lại lúc flush thì một task bị xoá giữa chừng sẽ lặng lẽ rơi
+    # khỏi nhóm dự án của nó.
+    #
+    # `NULL` là giá trị hợp lệ và thường gặp, không phải dữ liệu thiếu:
+    # nhắc cấp người dùng (`day.review`, `day.plan`) không thuộc dự án nào,
+    # và phần lớn sự kiện lịch sẽ không bao giờ được gắn dự án (DESIGN 4.2).
+    project_id = Column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True
+    )
     reason_key = Column(String(100), nullable=False)
     title = Column(String(255), nullable=False)
     body = Column(Text, nullable=True)
@@ -1212,6 +1224,12 @@ class AttentionBundleQueue(Base):
 
     __table_args__ = (
         Index("ix_attention_bundle_queue_user_flushed", "user_id", "flushed_at"),
+        Index(
+            "ix_attention_bundle_queue_user_project",
+            "user_id",
+            "project_id",
+            postgresql_where=text("flushed_at IS NULL"),
+        ),
     )
 
     def __repr__(self):
@@ -1568,3 +1586,191 @@ class ActionHistory(Base):
 
     def __repr__(self):
         return f"<ActionHistory(action_id={self.action_id}, tool={self.tool_name}, reverted={self.is_reverted})>"
+
+
+class ProcedureSource(str, Enum):
+    """Quy trình này từ đâu ra."""
+
+    USER_STATED = "user_stated"          # người dùng nói thẳng ra
+    INFERRED_FROM_BEHAVIOR = "inferred_from_behavior"  # suy ra từ hành vi lặp
+
+
+class ProcedureRunStatus(str, Enum):
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    ABANDONED = "abandoned"
+
+
+class Procedure(Base):
+    """Một quy trình của người dùng: *"khi <hoàn cảnh> thì tôi phải <các bước>"*.
+
+    Vì sao nó là bảng riêng chứ không tiếp tục là một hàng `semantic_memories`:
+
+    **1. Trigger phải tách khỏi các bước.** Bộ nhớ ngữ nghĩa lưu cả câu làm
+    một chuỗi, rồi embed cả cụm. Đo được hậu quả (2026-09-10, 4 bộ nhớ, 9
+    truy vấn): quy trình remote — đoạn dài nhất trong kho — xếp **hạng nhất
+    ở 8/9 truy vấn**, kể cả "giá bitcoin bao nhiêu". Đoạn càng dài càng
+    "gần" mọi thứ, nên các bước lấn át chính vế điều kiện đáng lẽ phải
+    quyết định độ liên quan. `trigger_embedding` ở đây chỉ embed vế *"khi
+    tôi remote"*, không kèm bước nào.
+
+    **2. Bộ nhớ không có trạng thái.** Một chuỗi trả lời được "quy trình của
+    tôi là gì", nhưng không trả lời được "hôm nay tôi còn bước nào chưa
+    làm" — mà đó mới là câu người dùng thật sự hỏi khi họ nhắc lại hoàn
+    cảnh. Trạng thái đó sống ở `ProcedureRun`, không ở đây: quy trình là
+    định nghĩa, run là một lần thực hiện.
+
+    `semantic_memories` vẫn giữ nguyên hàng `routine` của nó. Hai thứ không
+    tranh nhau: hàng bộ nhớ là thứ trích xuất sinh ra và là nguồn của bảng
+    này (`source_memory_id`), bảng này là dạng đã cấu trúc hoá để dùng được.
+    """
+
+    __tablename__ = "procedures"
+
+    id = Column(
+        UUID(as_uuid=True), primary_key=True,
+        default=uuid7, server_default=text("uuid_generate_v7()"),
+    )
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+
+    title = Column(String(255), nullable=False)
+
+    # Vế điều kiện, tự nó — "remote, làm việc từ xa, làm ở nhà, wfh".
+    # Không bao gồm các bước: xem lý do 1 ở docstring.
+    #
+    # Đây là bản cho người đọc. Bản dùng để khớp nằm ở
+    # `ProcedureTriggerPhrase`, **một hàng cho mỗi cách nói** — gộp chúng
+    # vào một embedding làm điểm giảm, không tăng (xem docstring của lớp
+    # đó).
+    trigger_text = Column(Text, nullable=False)
+
+    # [{"order": 1, "title": "daily", "due_hint": "trước 9h sáng"}, …]
+    #
+    # JSONB chứ không phải bảng `procedure_steps` riêng: các bước luôn được
+    # đọc và ghi cả cụm (một quy trình cắt rời không trả lời được "còn bước
+    # nào" — nó đưa ra vài mảnh và người đọc phải đoán còn thiếu gì), không
+    # có FK nào trỏ tới một bước lẻ, và không truy vấn nào cần lọc theo
+    # bước. Một bảng nữa ở đây chỉ thêm join chứ không thêm khả năng.
+    steps = Column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+
+    source = Column(
+        SQLEnum(ProcedureSource, values_callable=_enum_values, name="proceduresource"),
+        nullable=False,
+        default=ProcedureSource.USER_STATED,
+        server_default=text("'user_stated'"),
+    )
+    confidence = Column(Numeric(3, 2), nullable=False, server_default=text("0.90"))
+    is_active = Column(Boolean, nullable=False, default=True, server_default=text("true"))
+
+    # Hàng `semantic_memories` đã sinh ra quy trình này, nếu có. SET NULL
+    # chứ không CASCADE: quy trình đã được cấu trúc hoá (và có thể đã được
+    # người dùng sửa) không nên biến mất cùng bộ nhớ thô sinh ra nó.
+    source_memory_id = Column(UUID(as_uuid=True), nullable=True)
+
+    # Lần gần nhất người dùng xác nhận quy trình này còn đúng. Một quy trình
+    # lâu không được xác nhận vẫn dùng được, chỉ là đáng hỏi lại — đó là
+    # thông tin để hỏi, không phải để tự xoá.
+    last_confirmed_at = Column(DateTime, nullable=True)
+
+    created_at = Column(DateTime, nullable=False, server_default=text("NOW()"))
+    updated_at = Column(DateTime, nullable=False, server_default=text("NOW()"), onupdate=_utcnow)
+
+    runs = relationship("ProcedureRun", back_populates="procedure", cascade="all, delete-orphan")
+    trigger_phrases = relationship(
+        "ProcedureTriggerPhrase", back_populates="procedure", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        Index("ix_procedures_user_active", "user_id", "is_active"),
+    )
+
+    def __repr__(self):
+        return f"<Procedure(title={self.title!r}, steps={len(self.steps or [])})>"
+
+
+class ProcedureTriggerPhrase(Base):
+    """Một cách nói của trigger, với embedding riêng của nó.
+
+    Vì sao không gộp mọi cách nói vào một chuỗi rồi embed một lần — đo
+    2026-09-10, cùng quy trình remote, cùng câu hỏi "hôm nay tôi remote":
+
+        trigger "khi tôi làm việc từ xa, remote"           0.7341  ✓ khớp
+        trigger "remote, làm việc từ xa, làm ở nhà, wfh"   0.6741  ✗ trượt
+
+    Thêm biến thể vào một chuỗi làm điểm **giảm**: embedding của một danh
+    sách từ khoá bị trung bình hoá, nên nó không còn nằm gần bất kỳ cách
+    nói cụ thể nào. Càng cố bao phủ nhiều cách nói, càng khớp kém — ngược
+    hẳn với ý định.
+
+    Tách hàng thì điểm của quy trình là **điểm cao nhất** trong các cách
+    nói của nó. Thêm một biến thể khi đó chỉ có thể tăng khả năng khớp,
+    không bao giờ làm hụt cái đã khớp được.
+    """
+
+    __tablename__ = "procedure_trigger_phrases"
+
+    id = Column(
+        UUID(as_uuid=True), primary_key=True,
+        default=uuid7, server_default=text("uuid_generate_v7()"),
+    )
+    procedure_id = Column(
+        UUID(as_uuid=True), ForeignKey("procedures.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    phrase = Column(Text, nullable=False)
+    embedding = Column(Vector(768), nullable=True)
+
+    procedure = relationship("Procedure", back_populates="trigger_phrases")
+
+    def __repr__(self):
+        return f"<ProcedureTriggerPhrase({self.phrase!r})>"
+
+
+class ProcedureRun(Base):
+    """Một lần thực hiện quy trình — nơi giữ "đã làm tới đâu".
+
+    Bất biến quan trọng: **mỗi quy trình có tối đa một run `active`.** Đó là
+    thứ khiến "hôm nay tôi remote" nói lần thứ hai không mở ra một danh sách
+    trắng thứ hai và xoá mất việc người dùng vừa báo là đã xong. Bất biến
+    này được ép ở tầng DB bằng một unique index bộ phận (xem migration), chứ
+    không chỉ bằng quy ước trong service — hai request gần nhau là chuyện
+    thường ở một bot chat.
+    """
+
+    __tablename__ = "procedure_runs"
+
+    id = Column(
+        UUID(as_uuid=True), primary_key=True,
+        default=uuid7, server_default=text("uuid_generate_v7()"),
+    )
+    procedure_id = Column(
+        UUID(as_uuid=True), ForeignKey("procedures.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+
+    status = Column(
+        SQLEnum(ProcedureRunStatus, values_callable=_enum_values, name="procedurerunstatus"),
+        nullable=False,
+        default=ProcedureRunStatus.ACTIVE,
+        server_default=text("'active'"),
+    )
+
+    # [{"order": 1, "status": "done"|"pending"|"skipped", "completed_at": "…"}]
+    # Gương của `Procedure.steps`, khoá theo `order`. Chép trạng thái ra
+    # đây thay vì ghi vào chính `steps` để một lần chạy không sửa được định
+    # nghĩa: quy trình đổi thì run cũ vẫn là bản ghi trung thực của cái đã
+    # xảy ra.
+    step_states = Column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+
+    started_at = Column(DateTime, nullable=False, server_default=text("NOW()"))
+    completed_at = Column(DateTime, nullable=True)
+
+    procedure = relationship("Procedure", back_populates="runs")
+
+    __table_args__ = (
+        Index("ix_procedure_runs_user_status", "user_id", "status"),
+    )
+
+    def __repr__(self):
+        return f"<ProcedureRun(procedure={self.procedure_id}, status={self.status})>"

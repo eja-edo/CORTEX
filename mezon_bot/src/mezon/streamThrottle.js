@@ -1,5 +1,7 @@
 "use strict";
 
+const { logger } = require("../logger");
+
 /**
  * Coalescing token buffer for R3 ("giả-realtime bằng message.update").
  *
@@ -29,6 +31,7 @@
 const DEFAULT_FIRST_EDIT_DELAY_MS = 500;
 const DEFAULT_INTERVAL_MS = 1000;
 const DEFAULT_CHAR_THRESHOLD = 80;
+const EDIT_RETRY_DELAY_MS = 300;
 
 class StreamThrottle {
   constructor({
@@ -54,7 +57,17 @@ class StreamThrottle {
   /** Serialises calls to `edit` — an SDK `message.update()` racing against
    *  itself is not a case worth risking, so a call that lands mid-edit is
    *  collapsed into "run once more after this one finishes" rather than
-   *  fired concurrently. */
+   *  fired concurrently.
+   *
+   * Never rejects. `edit` is `mezon-sdk`, which on failure throws a bare
+   * object rather than an `Error` (confirmed against a live crash: a
+   * `message.update()` that failed brought the whole bot process down
+   * with `UnhandledPromiseRejection: … "#<Object>"`). Three of this
+   * class's four call sites are `void this._doEdit()` — fire-and-forget,
+   * because they fire from a `setTimeout` callback with no caller left to
+   * await them — so a throw here has no catcher anywhere up the stack.
+   * One failed edit is a stream that stutters for one tick; letting it
+   * kill the process takes down every other user's conversation with it. */
   async _doEdit() {
     if (this._editing) {
       this._pendingRerun = true;
@@ -62,15 +75,30 @@ class StreamThrottle {
     }
     this._editing = true;
     try {
-      await this.edit(this.buffer);
+      await this._editWithRetry();
       this._lastEditedAt = Date.now();
       this._lastEditedLength = this.buffer.length;
+    } catch (err) {
+      logger.warn("StreamThrottle edit failed", { error: err?.message ?? String(err) });
     } finally {
       this._editing = false;
       if (this._pendingRerun) {
         this._pendingRerun = false;
         await this._doEdit();
       }
+    }
+  }
+
+  /** One retry after a short delay — covers a transient SDK/network blip
+   *  (the case most likely to hit the *last* edit of a turn, which nothing
+   *  else corrects afterward) without changing `_doEdit`'s "never rejects"
+   *  contract. A second failure still propagates to `_doEdit`'s catch. */
+  async _editWithRetry() {
+    try {
+      await this.edit(this.buffer);
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, EDIT_RETRY_DELAY_MS));
+      await this.edit(this.buffer);
     }
   }
 

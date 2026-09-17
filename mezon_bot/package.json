@@ -11,6 +11,7 @@
     "probe": "node probe.js",
     "dry-run": "node dry-run.js",
     "start": "node src/index.js",
+    "icons": "node make-icons.js",
     "test": "node --test test/*.test.js"
   },
   "dependencies": {

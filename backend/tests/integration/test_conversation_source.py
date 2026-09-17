@@ -154,6 +154,28 @@ def test_build_history_contents_dangling_system_note_is_dropped_not_erroring():
     assert all("Đã nhắc" not in (m.content or "") for m in messages)
 
 
+def test_build_history_contents_keeps_tool_calls_after_narrated_assistant_turn():
+    # A turn that both narrates and calls tools saves the narration as its
+    # own content row with no `turn_id` — `agent_service.py`'s streaming
+    # loop saves it, then only mints a `turn_id` afterwards for the tool
+    # rows, so the two rows can never be linked by id. Live incident: this
+    # made every tool row (and everything loaded after it) look
+    # out-of-order and get silently dropped, taking the model's own
+    # question to the user down with it. `turn_id=None` on the tool group
+    # here matches production for a single (non-parallel) tool call.
+    records = [
+        _Rec("user", content="tôi muốn học tiếng anh"),
+        _Rec("assistant", content="Để mình xem lịch của bạn nhé"),
+        _Rec("tool", tool_name="get_schedules", tool_input={}, tool_output={"count": 0}),
+        _Rec("assistant", content="Đây là gợi ý lộ trình của bạn"),
+    ]
+    messages = _build_history_contents(records)
+
+    assert [m.role for m in messages] == ["user", "assistant", "tool", "assistant"]
+    assert messages[1].tool_calls and messages[1].tool_calls[0].name == "get_schedules"
+    assert "Đây là gợi ý lộ trình của bạn" in messages[3].content
+
+
 @pytest.mark.asyncio
 async def test_get_or_create_mezon_conversation_creates_then_reuses(async_db, user_id):
     store = ConversationStore(async_db)

@@ -1,11 +1,21 @@
-# Cortex — hạ tầng dev.
+# Cortex — toàn bộ đường chính, chạy bằng Docker.
 #
-# **Mặc định chỉ dựng `db` + `redis`.** Mọi service khác nằm sau một
-# `profiles:` và không khởi động nếu không được gọi tên. Đây là cơ chế đóng
-# băng ở `docs/DESIGN.md` mục 11.2, và mục tiêu vận hành ở 11.3 là ≤ 5
-# container trên đường chính (`db`, `redis`, `backend`, `mezon_bot`, proxy).
+# **Mặc định dựng đúng 5 container:** `db`, `redis`, `backend`, `mezon_bot`,
+# `web` (Caddy: file tĩnh + reverse proxy). Đó là mục tiêu vận hành ở
+# `docs/DESIGN.md` mục 11.3, không phải một con số tình cờ. Mọi service khác
+# nằm sau một `profiles:` và không khởi động nếu không được gọi tên — cơ chế
+# đóng băng ở 11.2.
 #
 # Đóng băng không phải xoá: không dòng nào mất đi, và bật lại là một lệnh.
+#
+# **Tự lên sau khi mở máy:** mọi service đường chính mang
+# `restart: unless-stopped`, và `docker.service` đã enabled ở boot. Nghĩa là
+# một lần `up -d` là đủ cho mọi lần khởi động máy về sau. `unless-stopped`
+# chứ không phải `always` là có chủ ý: dừng tay bằng `docker compose stop`
+# thì nó phải ở yên đó, không sống dậy sau lần reboot kế tiếp.
+#
+#   http://localhost:5173   giao diện (Caddy, /api proxy về backend)
+#   http://localhost:8000   API trực tiếp — Swagger, và callback OAuth Google
 #
 #   docker compose up -d                        # đường chính
 #   docker compose --profile workflow up -d     # + Temporal + workflow_service
@@ -77,6 +87,110 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    networks:
+      - default
+      - cortex
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: cortex-backend
+    restart: unless-stopped
+    # Bí mật vẫn ở `backend/.env` như trước — không có bản sao thứ hai để
+    # quên đồng bộ. `environment:` bên dưới chỉ ghi đè đúng những dòng nói
+    # *chỗ nào*, vì trong mạng compose "localhost" là chính container này.
+    env_file:
+      - ../backend/.env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://cortex:cortex@db:5432/cortex_db
+      ASYNC_DATABASE_URL: postgresql+asyncpg://cortex:cortex@db:5432/cortex_db
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      # Cổng nội bộ của bot, không phải cổng publish — 8100 là cổng thật bên
+      # trong mạng, và nó không ra tới host.
+      MEZON_BOT_INTERNAL_URL: http://mezon_bot:8100
+      # Hai dòng dưới trỏ tới service đang đóng băng (profile `assets`). Để
+      # đúng tên service thay vì localhost để lúc bật `--profile assets` lên
+      # nó chạy được ngay; khi chưa bật thì "không có gì ở đó" — y hệt hiện
+      # trạng chạy trên host.
+      MONGODB_URL: mongodb://mongo:27017
+      MINIO_ENDPOINT: minio-cortex:9000
+      # 9Router — gateway LLM chạy trên HOST, không phải trong compose
+      # (trạng thái của nó ở ~/.9router, và nó có unit systemd riêng:
+      # `systemctl --user status 9router`). `localhost` trong container là
+      # chính container, nên phải đi vòng qua host-gateway. Đây là đường
+      # sống của agent chat, trích xuất task và mọi lượt chat qua DM —
+      # nhưng KHÔNG có healthcheck nào nhìn thấy nó: backend vẫn lên xanh
+      # khi 9Router chết.
+      OPENAI_BASE_URL: http://host.docker.internal:20128/v1
+      # KHÔNG đặt UNSEARCH_URL ở đây, dù mặc định `localhost:8009` trong
+      # config.py là sai bên trong container. Lý do: ba tool duy nhất đọc
+      # nó (`web_search`, `neural_search`, `deep_research`) đều nằm trong
+      # FROZEN_TOOLS, nên đây là cấu hình chết — và `unsearch-api:8000`
+      # cũng KHÔNG phải giá trị đúng để điền sẵn: unsearch dựng
+      # TrustedHostMiddleware chỉ nhận `localhost` và `*.unsearch.dev`
+      # (`infrastructure/unsearch/app/main.py:164`), nên tên service trả
+      # về 400 "Invalid host header". Lúc hồi sinh `--profile search` thì
+      # phải sửa allowlist bên đó trước, không phải thêm một dòng ở đây.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      # Publish ra host vì Google gọi thẳng vào callback OAuth ở đây, và vì
+      # Swagger là đường vào duy nhất để soi API bằng tay.
+      - "8000:8000"
+    mem_limit: 2g
+    cpus: 2.0
+    networks:
+      - default
+      - cortex
+
+  mezon_bot:
+    build:
+      context: ../mezon_bot
+      dockerfile: Dockerfile
+    container_name: cortex-mezon-bot
+    restart: unless-stopped
+    env_file:
+      - ../mezon_bot/.env
+    environment:
+      CORTEX_API_URL: http://backend:8000
+      # 127.0.0.1 là mặc định của bot và nó đúng khi chạy trên host — trong
+      # container thì đó là chỉ nghe chính mình, và backend gọi vào sẽ bị từ
+      # chối kết nối.
+      BOT_HOST: 0.0.0.0
+      BOT_PORT: "8100"
+      MINIO_ENDPOINT: minio-cortex:9000
+    depends_on:
+      backend:
+        condition: service_started
+    # Không publish 8100. Đường vào này mang INTERNAL_API_KEY, tức là hành
+    # động được với tư cách bất kỳ user nào — nó chỉ nên tới được từ trong
+    # mạng compose.
+    mem_limit: 512m
+    cpus: 0.5
+    networks:
+      - default
+      - cortex
+
+  web:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: cortex-web
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_started
+    ports:
+      - "5173:5173"
+    mem_limit: 256m
+    cpus: 0.5
     networks:
       - default
       - cortex

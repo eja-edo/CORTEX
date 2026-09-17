@@ -159,6 +159,53 @@ test("unknown routes are 404", async () => {
   });
 });
 
+test("a retried delivery with the same notification_id is answered 200 without sending a second message", async () => {
+  // Live incident: `DELIVERY_SEND_TIMEOUT_SECONDS` (backend) fired while
+  // `gateway.sendDirectMessage` was still in flight here, so the backend
+  // marked the delivery failed and retried on backoff — the user had
+  // already received the DM. Before this fix, the retry became a second
+  // (then third, then fourth) real Mezon message for the same "Kế hoạch
+  // hôm nay" notification.
+  const gateway = fakeGateway();
+  await withServer(gateway, async (base) => {
+    const first = await deliver(base, VALID);
+    assert.equal(first.status, 200);
+    const firstBody = await first.json();
+    assert.equal(firstBody.delivered, true);
+    assert.equal(firstBody.duplicate, undefined);
+
+    const retry = await deliver(base, VALID);
+    assert.equal(retry.status, 200);
+    const retryBody = await retry.json();
+    assert.equal(retryBody.delivered, true);
+    assert.equal(retryBody.duplicate, true);
+    // Same message id reported both times — the backend's retry logic
+    // reads this the same way a fresh send's 2xx reads.
+    assert.equal(retryBody.message_id, firstBody.message_id);
+
+    assert.equal(gateway.calls.length, 1);
+  });
+});
+
+test("deliveries with different notification_ids are never deduped against each other", async () => {
+  const gateway = fakeGateway();
+  await withServer(gateway, async (base) => {
+    await deliver(base, VALID);
+    await deliver(base, { ...VALID, notification_id: "notif-2" });
+    assert.equal(gateway.calls.length, 2);
+  });
+});
+
+test("a delivery with no notification_id is never deduped — nothing to key it on", async () => {
+  const gateway = fakeGateway();
+  await withServer(gateway, async (base) => {
+    const { notification_id, ...withoutId } = VALID;
+    await deliver(base, withoutId);
+    await deliver(base, withoutId);
+    assert.equal(gateway.calls.length, 2);
+  });
+});
+
 test("only recognised errors count as permanently unreachable", () => {
   assert.equal(isPermanentlyUnreachable(new Error("Can not get dmChannelId")), true);
   assert.equal(isPermanentlyUnreachable(new Error("user not found")), true);

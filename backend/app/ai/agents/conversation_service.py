@@ -1,6 +1,7 @@
 """ConversationService — manages conversation lifecycle, history loading, and system prompt construction."""
 
 import json
+import re
 from datetime import datetime
 from uuid import UUID
 
@@ -27,6 +28,31 @@ def _format_timestamp(dt: datetime | None) -> str:
     if dt is None:
         return ""
     return f"[{dt.strftime('%Y-%m-%d %H:%M:%S UTC')}] "
+
+
+# Dấu thời gian mà `_format_timestamp` chèn vào đầu **mọi** message lịch
+# sử, đúng như model nhìn thấy nó.
+_INJECTED_TS = re.compile(r"^\s*\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC\]\s*")
+
+
+def strip_injected_timestamp(text: str) -> str:
+    """Gỡ dấu thời gian hệ thống nếu model copy nó vào câu trả lời.
+
+    Mọi message trong lịch sử được chèn tiền tố `[YYYY-MM-DD HH:MM:SS UTC] `
+    để model biết mỗi lượt nói lúc nào. Model học mẫu đó và đôi khi mở câu
+    trả lời của chính nó bằng đúng tiền tố ấy — đo được trong một cuộc trò
+    chuyện mô phỏng, người dùng nhận nguyên văn:
+
+        [2026-09-11 04:45:15 UTC] Rõ. Nếu cần hỗ trợ gì khác…
+
+    Sửa ở đây chứ không chỉ dặn trong prompt: đây là thứ **luôn** sai khi
+    xuất hiện, và một phép cắt tất định thì không có ngày nghỉ. Chỉ cắt ở
+    đầu chuỗi — một dấu thời gian giữa câu có thể là nội dung thật mà người
+    dùng vừa hỏi.
+    """
+    if not text:
+        return text
+    return _INJECTED_TS.sub("", text, count=1)
 
 
 def _get_message_created_at(record) -> datetime | None:
@@ -69,6 +95,48 @@ def _message_full_text(msg) -> str:
     ts = _get_message_created_at(msg)
     enriched = _inject_context_into_text(content, ctx)
     return _format_timestamp(ts) + enriched
+
+
+def _drop_skills_with_no_live_tools(selected: list) -> list:
+    """Bỏ skill mà mọi tool của nó đã bị gỡ khỏi registry.
+
+    `research` là ca cụ thể: cả `web_search` lẫn `web_fetch` đều nằm trong
+    `FROZEN_TOOLS` (app/ai/tools/__init__.py), nên skill đó dạy agent một
+    quy trình nó không có cách nào thực hiện — và tốn **3.589 token** mỗi
+    lượt để làm việc đó.
+
+    Hai cái giá, cái thứ hai đắt hơn:
+
+    * Token. Đo trên một lượt thật: prompt gốc 7.689 token, skills 7.971,
+      trong đó `research` chiếm gần một nửa. Và prompt dài có hậu quả đo
+      được — ba lượt trong vòng eval thứ bảy trả về `completion_tokens=0`
+      với `finish_reason=stop` ở mức 18–20k token đầu vào. Agent câm, người
+      dùng nhận một câu "mình chưa trả lời được".
+    * Nói sai về khả năng của mình. Prompt hệ thống nói thẳng web search
+      không có, rồi một skill được nạp vào lại mô tả chi tiết cách dùng nó.
+      Hai thứ mâu thuẫn trong cùng một prompt, và model phải chọn một.
+
+    Skill có `tools: []` (như `reasoning`) thì giữ: nó là chỉ dẫn cách suy
+    nghĩ, không cần tool nào.
+    """
+    try:
+        from app.ai.agents.tool_registry import get_tool_registry
+
+        live = {t.name for t in get_tool_registry().get_provider_tools()}
+    except Exception:
+        return selected
+
+    kept = []
+    for meta in selected:
+        tools = getattr(meta, "tools", None) or []
+        if tools and not any(t in live for t in tools):
+            logger.info(
+                "Bỏ skill %r: không tool nào của nó còn đăng ký (%s)",
+                meta.name, tools,
+            )
+            continue
+        kept.append(meta)
+    return kept
 
 
 def _trim_incomplete_tail(messages: list[Message], label: str) -> None:
@@ -140,6 +208,26 @@ def _build_history_contents(records: list) -> list[Message]:
             raw_content = getattr(record, "content", None)
             if expected_role != "assistant":
                 logger.info(f"Skipping out-of-order assistant message (expected {expected_role})")
+                i += 1
+                continue
+            # A turn that both narrates ("Để mình xem lịch...") and calls
+            # tools saves that narration as its own content row with no
+            # `turn_id` (`agent_service.py`'s streaming loop saves it, then
+            # only mints `current_turn_id` afterwards for the tool rows —
+            # the two can never be linked by id). Confirmed live: this row
+            # is immediately followed by `tool` rows for the same model
+            # turn, and setting `expected_role = "user"` here — as if the
+            # turn had ended — made every one of those tool rows look
+            # out-of-order and get skipped, along with everything after
+            # them for the rest of this loaded window (one incident lost 6
+            # of 8 history rows this way, including the model's own
+            # question to the user). The live turn itself already drops
+            # this text once tool_calls exist (`if tool_calls: ... elif
+            # turn_text: ...` below) — replaying it here would show the
+            # model narration it never actually saw anyway, so the correct
+            # replay is to skip the row, not the rest of the conversation.
+            next_role = getattr(records[i + 1], "role", None) if i + 1 < n else None
+            if next_role == "tool":
                 i += 1
                 continue
             if not raw_content:
@@ -435,6 +523,11 @@ Return ONLY the title, no quotes or explanation."""
         return " ".join(texts)
 
     def _build_skill_section(self, message: str, context: dict | None = None, recent_messages: list | None = None) -> str:
+        """Nạp phần chỉ dẫn theo tình huống vào system prompt.
+
+        Lọc bỏ skill mà **không một tool nào** của nó còn đăng ký — xem
+        `_drop_skills_with_no_live_tools`.
+        """
         try:
             retriever = get_skill_retriever()
             registry = get_skill_registry()
@@ -443,6 +536,7 @@ Return ONLY the title, no quotes or explanation."""
             retrieval_text = f"{history_text} {message}".strip() if history_text else message
 
             selected = retriever.select(retrieval_text, context, max_skills=4)
+            selected = _drop_skills_with_no_live_tools(selected)
             if not selected:
                 return ""
 

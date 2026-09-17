@@ -785,3 +785,56 @@ test("an unlinked account cannot act on a card, however visible the buttons are"
   assert.equal(approved, false);
   assert.match(sent[sent.length - 1].content.t, /chưa liên kết/);
 });
+
+/**
+ * Messages that carry no text.
+ *
+ * Mezon delivers a sticker or an attachment-only message with an empty
+ * `content.t`. These used to open a full conversation turn: placeholder
+ * sent, empty string POSTed to the agent, 422 back, and the placeholder
+ * edited into "AI đang gặp sự cố" — blaming the model for a request it
+ * never received. Seen in production, not invented for a test.
+ */
+
+test("a message with no text is ignored, not turned into an error about the AI", async () => {
+    let called = false;
+    const cortex = {
+        resolveChannel: async () => ({ linked: true, user_id: "cortex-1" }),
+        streamChat: async () => { called = true; },
+    };
+    const { router, sent, edits } = makeRouter({ cortex });
+
+    await router.handleMessage(baseMessage({ text: "" }));
+
+    assert.equal(called, false, "must not open an agent turn for an empty message");
+    assert.equal(sent.length, 0, "no placeholder — nothing was asked");
+    assert.equal(edits.length, 0);
+});
+
+test("a whitespace-only message is treated the same as an empty one", async () => {
+    let called = false;
+    const cortex = {
+        resolveChannel: async () => ({ linked: true, user_id: "cortex-1" }),
+        streamChat: async () => { called = true; },
+    };
+    const { router, sent } = makeRouter({ cortex });
+
+    await router.handleMessage(baseMessage({ text: "   \n  " }));
+
+    assert.equal(called, false);
+    assert.equal(sent.length, 0);
+});
+
+test("a real message still goes through, so the guard is not swallowing turns", async () => {
+    const cortex = {
+        resolveChannel: async () => ({ linked: true, user_id: "cortex-1" }),
+        streamChat: async ({ onEvent }) => {
+            onEvent({ event: "token", text: "chào bạn" });
+        },
+    };
+    const { router, sent } = makeRouter({ cortex });
+
+    await router.handleMessage(baseMessage({ text: "xin chào" }));
+
+    assert.equal(sent.length, 1, "the placeholder must still be sent for a real message");
+});

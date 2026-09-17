@@ -333,3 +333,38 @@ class PlanProposeArgs(BaseModel):
 class ActionRevertArgs(BaseModel):
     """Arguments for action.revert command."""
     action_id: str = Field(..., description="Snapshot ID to revert")
+
+
+class ProcedureStepMarkArgs(BaseModel):
+    """Arguments for `procedure.mark_step` — đánh dấu một bước của quy trình.
+
+    Không nhận `run_id`: run đang chạy là duy nhất cho mỗi quy trình
+    (`uq_procedure_runs_one_active`), nên bắt agent mang một id nữa qua
+    prompt chỉ tạo thêm chỗ để nó bịa ra một UUID sai.
+    """
+    procedure_id: UUID
+    step_order: int = Field(..., ge=1, description="Số thứ tự bước, bắt đầu từ 1")
+    status: Literal["done", "skipped", "pending"] = "done"
+    user_said: str = Field(
+        default="", max_length=500,
+        description=(
+            "Câu của NGƯỜI DÙNG chứng minh họ đã làm bước này, copy nguyên "
+            "văn từ tin nhắn của họ. Được kiểm lại sau khi bạn trả lời."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _quote_required_unless_undoing(self):
+        """`done` và `skipped` là khẳng định về người dùng; `pending` không.
+
+        Đánh dấu xong hay cố ý bỏ qua đều là phát biểu rằng người dùng đã
+        làm hoặc đã quyết định điều gì đó — cả hai cần bằng chứng. Đưa một
+        bước về `pending` chỉ là hoàn tác một lần đánh dấu, nên nó không
+        khẳng định gì và không cần trích dẫn.
+        """
+        if self.status != "pending" and not (self.user_said or "").strip():
+            raise ValueError(
+                "user_said là bắt buộc khi đánh dấu done/skipped — trích "
+                "nguyên văn câu của người dùng"
+            )
+        return self

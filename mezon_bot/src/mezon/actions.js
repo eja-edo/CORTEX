@@ -48,6 +48,12 @@ const PREFIXES = {
   // outlives the answer to it is a question about nothing.
   "oc:": "occurrence_this",
   "oa:": "occurrence_all",
+  // Which project a just-ended meeting belongs to — see `roomWatchCards.js`.
+  // pendingForms-backed like `model_submit`: the answer only needs to name
+  // which project was picked, not survive a restart on its own (the
+  // *result* of answering is what has to survive, in `RoomWatchService`'s
+  // own map — see `roomWatch.js`).
+  "pj:": "project_pick",
 };
 
 const KINDS = Object.fromEntries(Object.entries(PREFIXES).map(([p, k]) => [k, p]));

@@ -471,15 +471,15 @@ export function useAgentStream(options: UseAgentStreamOptions) {
         const path = window.location.pathname
 
         if (path === '/') return { type: 'home', route: 'home' }
-        if (path === '/schedule' || /^\/w\/[^/]+\/schedule$/.test(path)) {
+        if (path === '/schedule' || /^\/p\/[^/]+\/schedule$/.test(path)) {
             return { type: 'schedule', route: 'schedule' }
         }
 
-        const wsMatch = path.match(/^\/w\/([^/]+)/)
+        const wsMatch = path.match(/^\/p\/([^/]+)/)
         if (!wsMatch) return undefined
         const wsId = wsMatch[1]
 
-        const noteMatch = path.match(/^\/w\/[^/]+\/notes\/([^/]+)$/)
+        const noteMatch = path.match(/^\/p\/[^/]+\/notes\/([^/]+)$/)
         if (noteMatch) {
             const page: PageContext = {
                 type: 'note',
@@ -490,15 +490,15 @@ export function useAgentStream(options: UseAgentStreamOptions) {
             return page
         }
 
-        if (path === `/w/${wsId}` || path === `/w/${wsId}/notes`) {
+        if (path === `/p/${wsId}` || path === `/p/${wsId}/notes`) {
             return { type: 'home', route: 'home' }
         }
 
-        if (path === `/w/${wsId}/records`) {
+        if (path === `/p/${wsId}/records`) {
             return { type: 'records', route: 'records' }
         }
 
-        const wfMatch = path.match(/^\/w\/[^/]+\/workflows(?:\/([^/]+))?$/)
+        const wfMatch = path.match(/^\/p\/[^/]+\/workflows(?:\/([^/]+))?$/)
         if (wfMatch) {
             return wfMatch[1]
                 ? { type: 'workflow', route: 'workflow_detail', workflow_id: wfMatch[1] }

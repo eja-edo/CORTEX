@@ -1,0 +1,129 @@
+"""Chấm phần không assert được bằng chuỗi — bằng chính một lời gọi LLM.
+
+Khi nào dùng judge, khi nào không:
+
+* **Không dùng** cho thứ đã là sự thật cứng. "Có gọi `create_task` không"
+  nằm trong `agent_messages`; hỏi model về nó là thay một phép kiểm chắc
+  chắn bằng một phép đoán.
+* **Dùng** cho thứ vốn là ngữ nghĩa: "câu trả lời này có đề xuất quy trình
+  làm-việc-từ-xa không?" Model diễn đạt điều đó bằng vô số cách, và một
+  danh sách từ khoá sẽ vừa bỏ sót vừa bắt nhầm.
+
+Judge chạy ở `temperature=0` và bị ép trả về đúng một từ, để bản thân nó
+không trở thành nguồn phương sai mới trong một bộ đo phương sai.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+
+from app.ai.agents.model_client import ModelClient
+from app.ai.agents.provider_types import GenerationConfig, Message
+
+_client = ModelClient()
+
+# Model cố định cho vai trò judge, **không** dùng `free_auto` mặc định.
+#
+# Benchmark 10 ca có đáp án chắc (`tests/eval/bench/`), mỗi model một lần:
+#
+#     kr/claude-haiku-4.5            100%  2.6s/ca
+#     gh/gpt-4o-mini                 100%  3.0s/ca
+#     ollama/gpt-oss:120b            100%  3.1s/ca   ← chọn
+#     gemini/gemini-3.5-flash-lite   100%  3.3s/ca
+#     gh/gpt-5-mini                  100%  3.5s/ca
+#     free_auto                      100%  4.2s/ca
+#     gc/gemini-2.5-flash-lite        88%  4.8s/ca
+#     openrouter/gemma-4-26b:free      0%  13.7s/ca  (429 cả 10 ca)
+#
+# Sáu model đạt 100% và không lật phán quyết lần nào, nên việc chấm PASS/FAIL
+# ở đây **không cần model thông minh** — nó cần model *đoán được*.
+#
+# Chọn `ollama/gpt-oss:120b` không vì nó nhanh nhất (haiku nhanh hơn) mà vì
+# nó chạy **local**: không quota, không 429. Trong session đo này, rate limit
+# đã một lần làm ba test tất định đỏ oan (xem README) và làm một ứng viên
+# openrouter trượt cả 10 ca. Một bộ đo mà chính nó thỉnh thoảng hỏng vì hạ
+# tầng thì mọi con số nó đưa ra đều phải nghi ngờ.
+#
+# Và nó thay `free_auto` — một combo *tự chọn* model giữa các lời gọi, tức
+# thêm đúng thứ phương sai mà bộ đo này sinh ra để loại bỏ. Với agent thì
+# `free_auto` không sao (ta đang đo chính hành vi đó); với thước đo thì không.
+JUDGE_MODEL = os.getenv("EVAL_JUDGE_MODEL", "ollama/gpt-oss:120b")
+
+_JUDGE_SYSTEM = """You grade assistant output against one criterion.
+
+Answer with exactly one word on the first line: PASS or FAIL.
+On the second line, give a one-sentence reason.
+
+Judge ONLY the criterion given. Do not judge tone, length, formatting, or
+whether you would have answered differently. The text is in Vietnamese;
+judge it in Vietnamese without translating.
+
+**A `=== BACKGROUND ===` section, when present, is NOT something the
+assistant said.** It is system state given to you so you can tell whether
+the assistant used what it knew. Never fault the assistant for the wording,
+the presence, or the contents of that section — it is invisible to the
+user. Judge only what appears under the section naming the assistant's own
+output."""
+
+
+@dataclass
+class Verdict:
+    passed: bool
+    reason: str
+
+    def __bool__(self) -> bool:
+        return self.passed
+
+    def __repr__(self) -> str:  # pragma: no cover - chỉ để đọc log khi đỏ
+        return f"{'PASS' if self.passed else 'FAIL'}: {self.reason}"
+
+
+async def judge(reply: str, criterion: str, background: str = "") -> Verdict:
+    """`criterion` phải viết sao cho PASS là hành vi **mong muốn**.
+
+    `background` là **trạng thái hệ thống**, không phải lời trợ lý: bộ nhớ
+    đã biết, tool đã chạy. Nó phải đi qua tham số riêng chứ không nối vào
+    `reply`, và lý do là một lỗi đo được: khi cả hai bị nối làm một chuỗi,
+    judge đọc phần metadata như thể trợ lý đã nói ra nó, rồi trượt với
+    những lý do kiểu *"trợ lý tự ý liệt kê danh sách tool đã chạy"* và
+    *"trợ lý nhắc tới Bộ nhớ hệ thống"* — đánh trượt 5/5 cuộc trò chuyện vì
+    một thứ người dùng không bao giờ nhìn thấy.
+    """
+    parts = [f"=== CRITERION ===\n{criterion}"]
+    if background:
+        parts.append(
+            "=== BACKGROUND (trạng thái hệ thống, KHÔNG phải lời trợ lý) ===\n"
+            + background
+        )
+    parts.append(f"=== ASSISTANT OUTPUT ===\n{reply}")
+    parts.append("Does the assistant output satisfy the criterion? PASS or FAIL.")
+    prompt = "\n\n".join(parts)
+    _, response = await _client.generate(
+        [Message(role="user", content=prompt)],
+        GenerationConfig(
+            system_instruction=_JUDGE_SYSTEM,
+            temperature=0.0,
+            max_output_tokens=200,
+        ),
+        tools=None,
+        preferred_model=JUDGE_MODEL,
+    )
+    text = ((response.content if response else "") or "").strip()
+    first, _, rest = text.partition("\n")
+    verdict = first.strip().upper()
+
+    # Model suy luận đôi khi trả lời dài dòng bất chấp chỉ dẫn. Rơi về quét
+    # cả câu chứ không coi là FAIL — một judge hỏng phải lộ ra là hỏng, chứ
+    # không được giả trang thành "bài test trượt".
+    if verdict not in ("PASS", "FAIL"):
+        upper = text.upper()
+        if "PASS" in upper and "FAIL" not in upper:
+            return Verdict(True, text[:300])
+        if "FAIL" in upper and "PASS" not in upper:
+            return Verdict(False, text[:300])
+        raise AssertionError(
+            f"Judge không trả về PASS/FAIL mà trả: {text[:300]!r}"
+        )
+
+    return Verdict(verdict == "PASS", rest.strip() or text)

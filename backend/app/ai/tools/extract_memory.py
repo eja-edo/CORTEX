@@ -9,34 +9,18 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.ai.agents.tool_context import ToolContext
-from app.services.semantic_memory_provider import get_semantic_memory_provider
+from app.services.semantic_memory_provider import (
+    MIN_RELEVANCE_SCORE,
+    get_semantic_memory_provider,
+)
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Sàn chặn rác, **không phải** bộ lọc liên quan.
-#
-# Đo tại 2026-08-27 với `gemini-embedding-2-preview`, trên bộ nhớ "khi tôi
-# remote thì phải check-in Slack…":
-#
-#     làm việc từ xa      0.6285   ✓ đúng
-#     hôm nay tôi remote  0.5966   ✓ đúng
-#     deadline dự án      0.5835   ✗ SAI
-#     remote              0.5810   ✓ đúng
-#     thời tiết hôm nay   0.5232   ✗ sai
-#
-# `deadline dự án` xếp **trên** `remote` — một dương tính thật. Hai dải
-# chồng nhau, nên không con số nào tách được chúng: đặt ngưỡng ở 0.59 để
-# chặn `deadline` thì mất luôn `remote`, mà 0.581 với 0.5835 chỉ cách nhau
-# bằng nhiễu.
-#
-# Nên ngưỡng ở đây chỉ làm một việc khiêm tốn: cắt phần rõ ràng không liên
-# quan (~0.50–0.52). Việc phán đoán "quy trình này có thật sự nói về hoàn
-# cảnh người dùng vừa nêu không" giao cho model — nó *đọc* được điều kiện
-# "khi tôi remote" và biết ngay `deadline dự án` không khớp, thứ mà một
-# phép so sánh số không làm được. Prompt hệ thống ra lệnh kiểm điều đó
-# trước khi đề xuất bất cứ gì.
-MIN_RELEVANCE_SCORE = 0.55
+# Ngưỡng sống ở tầng provider, không phải ở tool: recall tự động của
+# `ContextService` đọc cùng kho này và phải dùng cùng một sàn. Phần đo
+# đạc giải thích con số nằm cạnh chỗ khai, trong
+# `app/services/semantic_memory_provider.py`.
 
 
 class ExtractMemoryInput(BaseModel):
@@ -168,25 +152,21 @@ EXTRACT_MEMORY_DEFINITION = {
     "input_model": ExtractMemoryInput,
     "schema": EXTRACT_MEMORY_SCHEMA,
     "description": (
-        "Retrieve stored long-term memory about the current workspace. "
-        "Searches the semantic memory graph for relevant information "
-        "about projects, preferences, decisions, and environment. "
-        "Optionally includes episodic summary from a specific conversation. "
-        "\n\n"
-        "MUST be called when the user:\n"
-        "- references a prior conversation, decision, or preference with relative "
-        "time phrases (e.g. 'last time', 'yesterday', 'as I mentioned', 'as we discussed', "
-        "'như đã nói', 'lần trước', 'hôm trước', 'tuần trước')\n"
-        "- asks about a preference/setting they may have stated before that is not "
-        "present in the current message\n"
-        "- references an entity (project, note, task) without re-explaining what it "
-        "is, expecting you to remember it\n"
-        "- asks for personalized suggestions that depend on 'habits' or 'preferences' "
-        "you may already know about them\n"
-        "\n"
-        "The recent-message window only covers the last 10 messages and may NOT contain "
-        "what the user is referring to. Do not skip this check just because the recent "
-        "context seems sufficient — past decisions and preferences live in long-term "
-        "memory, not in the sliding window."
+        "Search this user's long-term memory for something OTHER than what "
+        "they just said.\n\n"
+        "Memories matching the current message are already retrieved for you "
+        "every turn and appear in your context under \"What you already know "
+        "about this user\". Calling this tool to fetch those again returns the "
+        "same rows one round trip later — don't.\n\n"
+        "Call it when the thing to look up is different from the current "
+        "message:\n"
+        "- the user asks what was decided about a specific topic "
+        "('lần trước mình chốt gì về giá?') — search that topic, not their "
+        "sentence\n"
+        "- you need a preference the current message doesn't hint at, so the "
+        "automatic recall had no reason to surface it\n"
+        "- you want the episodic summary of a specific conversation "
+        "(pass conversation_id)\n\n"
+        "If the answer is already in your context section, answer from there."
     ),
 }

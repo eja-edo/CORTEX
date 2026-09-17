@@ -275,6 +275,28 @@ async def task_reject_handler(command: Command, ctx: ToolContext) -> dict:
 
         logger.info(f"Task rejected: {rejected.id}")
 
+        # Nửa ghi của vòng học — xem
+        # `app.services.intervention.record_chat_dismissal`.
+        #
+        # Đây là tín hiệu phản hồi **tất định** duy nhất hiện có từ phía hội
+        # thoại: người dùng vừa nói "không" với một việc Cortex đoán ra, và
+        # đó là hành động của con người, không phải suy luận của model. Trước
+        # đây nó bị bỏ đi, nên `feedback_loop` chỉ học được từ nút dismiss
+        # trên notification — bề mặt người dùng ít ở hơn hẳn.
+        #
+        # Chỉ ghi cho task *do Cortex đoán*: một việc người dùng tự gõ rồi
+        # tự xoá không nói gì về chất lượng đề xuất của Cortex.
+        if rejected.source_conversation_id is not None:
+            from app.models import AttentionItemType
+            from app.services.intervention import record_chat_dismissal
+
+            await record_chat_dismissal(
+                db, ctx.user_id,
+                reason_key="task.suggestion",
+                item_type=AttentionItemType.TASK,
+                item_id=rejected.id,
+            )
+
         return {
             "id": str(rejected.id),
             "title": rejected.title,

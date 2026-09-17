@@ -185,3 +185,37 @@ test("a stream that never responds times out as a CortexError", async () => {
     );
   });
 });
+
+test("the connection closing cleanly without a done/error frame is a CortexError, not a silent success", async () => {
+  // Live incident: real content streamed (narration, a tool call and its
+  // result), then the connection ended with neither `done` nor `error` —
+  // no timeout involved, well inside the idle window. Before this fix,
+  // `streamChat` returned as if the turn had completed normally, so the
+  // caller in router.js never knew to append its "bị ngắt giữa chừng"
+  // note, and the user was left staring at a conversation that looked
+  // finished but wasn't.
+  const handler = async (req, res) => {
+    res.writeHead(200, { "Content-Type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({ event: "token", text: "I'll check for any existing" })}\n\n`);
+    res.write(`data: ${JSON.stringify({ event: "tool_start", tool_name: "list_projects" })}\n\n`);
+    res.write(`data: ${JSON.stringify({ event: "tool_result", tool_name: "list_projects", success: true })}\n\n`);
+    res.end();
+  };
+  const received = [];
+
+  await withServer(handler, async (baseUrl) => {
+    const client = new CortexClient({ baseUrl, internalApiKey: "test-key-123", timeoutMs: 2000 });
+    await assert.rejects(
+      client.streamChat({ userId: "u-1", message: "hi", onEvent: (e) => received.push(e) }),
+      (err) => {
+        assert.ok(err instanceof CortexError);
+        assert.equal(err.status, 502);
+        return true;
+      }
+    );
+  });
+
+  // The events that did arrive before the drop must still reach the
+  // caller — they are a real partial answer, not garbage to discard.
+  assert.equal(received.length, 3);
+});

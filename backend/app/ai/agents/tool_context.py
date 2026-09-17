@@ -34,6 +34,7 @@ class ToolContext:
         async_db: AsyncSession,
         conversation_id: Optional[UUID] = None,
         project_id: Optional[UUID] = None,
+        current_message: Optional[str] = None,
     ):
         """Initialize tool context with user and database access.
 
@@ -43,10 +44,19 @@ class ToolContext:
         Mezon không có dự án nào đang mở, và một tool từ chối chạy vì thiếu
         ngữ cảnh sẽ chết đúng ở bề mặt hay dùng nhất. Tool nào cần một dự án
         cụ thể thì hỏi tên qua `project_ref` (9.2), không đọc ngầm ở đây.
+
+        `current_message` là lượt nói **của lượt này**, và nó phải đi qua
+        đây chứ không được đọc lại từ DB. `ConversationStore.save_message`
+        chỉ `flush()`, không commit, nên tin nhắn vừa lưu còn nằm trong
+        transaction chưa xong của session agent — mà mọi tool đều chạy trên
+        session riêng, nên không tool nào nhìn thấy nó. Tool nào cần đối
+        chiếu với lời người dùng vừa nói mà đi đọc `agent_messages` sẽ chỉ
+        thấy các lượt *trước*, và luôn kết luận sai rằng họ chưa nói gì.
         """
         self.user_id = user_id
         self.project_id = project_id
         self.conversation_id = conversation_id
+        self.current_message = current_message
         self._async_db = async_db
         self._sync_db: Optional[Session] = None
 

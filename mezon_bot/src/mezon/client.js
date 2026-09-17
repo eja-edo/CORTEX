@@ -136,7 +136,11 @@ class MezonGateway {
       return originalEmit(eventName, ...args);
     };
 
+    let lastLoggedTally = "";
     this._tallyTimer = setInterval(() => {
+      const snapshot = JSON.stringify(this.eventCounts);
+      if (snapshot === lastLoggedTally) return;
+      lastLoggedTally = snapshot;
       logger.info("mezon event tally", this.eventCounts);
     }, 60_000);
     this._tallyTimer.unref?.();

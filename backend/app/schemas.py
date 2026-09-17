@@ -533,14 +533,35 @@ class TodayNeedsConfirmationItem(BaseModel):
     due_date: datetime | None = None
 
 
+class TodayScheduleItem(BaseModel):
+    """One calendar event happening today.
+
+    Deliberately not `TodayNowAction`: an event isn't a "should do now"
+    decision with a reason attached — it happens at a fixed time whether
+    or not the user acts, so it has no `impact` sentence to compose. Same
+    shape as `ScheduleDigestItem` (`app.events.payloads`), duplicated
+    rather than imported — that module belongs to the event bus, this one
+    to the API response layer, and every other item type here
+    (`TodayNowAction`, `TodayNeedsConfirmationItem`) is already local for
+    the same reason.
+    """
+    schedule_id: UUID
+    title: str
+    start_time: datetime
+    location: str | None = None
+
+
 class TodayResponse(BaseModel):
     """Everything the "Hôm nay" screen renders."""
     state: Literal[
-        "onboarding", "nothing_urgent", "all_clear", "has_actions"
+        "onboarding", "nothing_urgent", "all_clear", "has_actions", "schedule_only"
     ] = Field(
         ...,
         description="Which design the screen shows. Served, not inferred, so no state "
-                    "falls through to a default empty table.",
+                    "falls through to a default empty table. `schedule_only`: no open task "
+                    "exists, but a calendar event is happening today — distinct from "
+                    "`all_clear`, whose own client copy ('Nghỉ đi') would otherwise tell a "
+                    "user with a meeting today that there is nothing on their day.",
     )
     status_line: str | None = Field(
         None,
@@ -554,6 +575,12 @@ class TodayResponse(BaseModel):
                     "Never urgency invented to fill the screen.",
     )
     needs_confirmation: list[TodayNeedsConfirmationItem] = Field(default_factory=list)
+    schedules_today: list[TodayScheduleItem] = Field(
+        default_factory=list,
+        description="Calendar events today, unranked — informational, not a decision list. "
+                    "Never merged into `now_actions`: an event has no 'should I do this' "
+                    "reason to compose (see `TodayScheduleItem`).",
+    )
 
 
 class NextActionAtRisk(BaseModel):

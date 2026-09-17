@@ -37,7 +37,7 @@ import { useNotifications } from './hooks/useNotifications'
 import { usePreferences } from './hooks/usePreferences'
 import { requestWithAuth, getCurrentTokens, setCurrentTokens } from './services/api'
 import { strings } from './i18n/strings'
-import { ROUTES, extractProjectId, isKnownRoute, noteRoute, knowledgeRoute, notificationsRoute, scheduleRoute, tasksRoute, todayRoute, projectRoute, workflowRoute } from './services/routes'
+import { ROUTES, extractProjectId, isKnownRoute, legacyProjectRoute, noteRoute, knowledgeRoute, notificationsRoute, scheduleRoute, tasksRoute, todayRoute, projectRoute, workflowRoute } from './services/routes'
 import { TasksPage } from './components/TasksPage'
 import { NotificationsPage } from './components/NotificationsPage'
 
@@ -66,7 +66,7 @@ function getRouteState(pathname: string): {
     return { view: 'schedule', projectId: null, noteId: null, assetId: null, workflowId: null }
   }
 
-  if (matchPath('/w/:projectId/schedule', pathname)) {
+  if (matchPath('/p/:projectId/schedule', pathname)) {
     const wsId = extractProjectId(pathname)
     return { view: 'schedule', projectId: wsId, noteId: null, assetId: null, workflowId: null }
   }
@@ -86,7 +86,7 @@ function getRouteState(pathname: string): {
   const projectId = extractProjectId(pathname)
 
   if (projectId) {
-    const workflowMatch = matchPath('/w/:projectId/workflows/:workflowId', pathname)
+    const workflowMatch = matchPath('/p/:projectId/workflows/:workflowId', pathname)
     if (workflowMatch?.params.workflowId) {
       return {
         view: 'workflow',
@@ -97,11 +97,11 @@ function getRouteState(pathname: string): {
       }
     }
 
-    if (matchPath('/w/:projectId/workflows', pathname)) {
+    if (matchPath('/p/:projectId/workflows', pathname)) {
       return { view: 'workflow', projectId, noteId: null, assetId: null, workflowId: null }
     }
 
-    const knowledgeMatch = matchPath('/w/:projectId/records/:assetId/knowledge', pathname)
+    const knowledgeMatch = matchPath('/p/:projectId/records/:assetId/knowledge', pathname)
     if (knowledgeMatch?.params.assetId) {
       return {
         view: 'knowledge',
@@ -112,7 +112,7 @@ function getRouteState(pathname: string): {
       }
     }
 
-    const noteMatch = matchPath('/w/:projectId/notes/:noteId', pathname)
+    const noteMatch = matchPath('/p/:projectId/notes/:noteId', pathname)
     if (noteMatch?.params.noteId) {
       return {
         view: 'note',
@@ -123,11 +123,11 @@ function getRouteState(pathname: string): {
       }
     }
 
-    if (matchPath('/w/:projectId/records', pathname)) {
+    if (matchPath('/p/:projectId/records', pathname)) {
       return { view: 'records', projectId, noteId: null, assetId: null, workflowId: null }
     }
 
-    if (matchPath('/w/:projectId', pathname) || matchPath('/w/:projectId/notes', pathname)) {
+    if (matchPath('/p/:projectId', pathname) || matchPath('/p/:projectId/notes', pathname)) {
       return { view: 'dashboard', projectId, noteId: null, assetId: null, workflowId: null }
     }
   }
@@ -336,11 +336,20 @@ useEffect(() => {
 
   useEffect(() => {
     if (isKnownRoute(location.pathname)) return
+    // A `/w/...` link predates the workspace→project rename; send it to the
+    // page it meant rather than to the unknown-route fallback. Both cases
+    // live in one effect on purpose: as two, they would both fire on the
+    // same pathname and the fallback's `/` would win the replace.
+    const legacy = legacyProjectRoute(location.pathname)
+    if (legacy) {
+      navigate(`${legacy}${location.search}${location.hash}`, { replace: true })
+      return
+    }
     navigate('/', { replace: true })
-  }, [location.pathname, navigate])
+  }, [location.pathname, location.search, location.hash, navigate])
 
   useEffect(() => {
-    if (matchPath('/w/:projectId', location.pathname) || matchPath('/w/:projectId/schedule', location.pathname)) {
+    if (matchPath('/p/:projectId', location.pathname) || matchPath('/p/:projectId/schedule', location.pathname)) {
       navigate(scheduleRoute(), { replace: true })
     }
   }, [location.pathname, navigate])

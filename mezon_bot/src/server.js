@@ -94,7 +94,29 @@ function isPermanentlyUnreachable(err) {
   );
 }
 
+// How long a `notification_id` is remembered after a successful send, so a
+// backend retry of the *same* delivery — its own request timed out even
+// though this process had already sent the message — is answered without
+// sending it again. Confirmed live: `DELIVERY_SEND_TIMEOUT_SECONDS` (30s)
+// can fire while `gateway.sendDirectMessage` is still in flight, so the
+// backend marks the delivery failed and retries on backoff while the user
+// already has the message; without this, every retry became a second real
+// Mezon DM. 20 minutes comfortably covers `DELIVERY_MAX_ATTEMPTS`'s full
+// backoff schedule (30s·2^0…2^4 ≈ 15.5 minutes) for one delivery. Scoped to
+// one `createServer` call, not module-level, so tests reusing the same
+// fake `notification_id` across cases don't see each other's sends — in
+// production there is only ever one server instance anyway.
+const DEDUP_TTL_MS = 20 * 60 * 1000;
+
 function createServer({ gateway }) {
+  const recentDeliveries = new Map(); // notification_id -> { messageId, at }
+
+  function pruneRecentDeliveries(now) {
+    for (const [id, entry] of recentDeliveries) {
+      if (now - entry.at > DEDUP_TTL_MS) recentDeliveries.delete(id);
+    }
+  }
+
   return http.createServer(async (req, res) => {
     // Liveness for a process manager. Intentionally before auth: a health
     // probe that needs the internal key would mean shipping the key to
@@ -138,6 +160,19 @@ function createServer({ gateway }) {
       return send(res, 400, { detail: "mezon_user_id and title are required" });
     }
 
+    if (notificationId && recentDeliveries.has(notificationId)) {
+      const prior = recentDeliveries.get(notificationId);
+      logger.info("duplicate delivery request ignored", {
+        notification_id: notificationId,
+        mezon_user_id: mezonUserId,
+        message_id: prior.messageId,
+      });
+      // Same 2xx contract as a fresh send — the backend's retry is exactly
+      // what it looks like from here, a delivery it already thinks failed,
+      // and it must be told "done", not sent a second real message.
+      return send(res, 200, { delivered: true, message_id: prior.messageId, duplicate: true });
+    }
+
     try {
       // Dự án đăng vào channel chung; việc cá nhân vào DM. Đây là chỗ duy
       // nhất trong bot phân biệt hai loại, và nó phân biệt bằng dữ liệu
@@ -153,6 +188,10 @@ function createServer({ gateway }) {
         reason_key: payload.reason_key,
         message_id: sent?.id ?? null,
       });
+      if (notificationId) {
+        pruneRecentDeliveries(Date.now());
+        recentDeliveries.set(notificationId, { messageId: sent?.id ?? null, at: Date.now() });
+      }
       return send(res, 200, { delivered: true, message_id: sent?.id ?? null });
     } catch (err) {
       const permanent = isPermanentlyUnreachable(err);

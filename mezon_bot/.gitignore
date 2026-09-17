@@ -19,3 +19,8 @@ probe.err
 
 # SQLite cache của mezon-sdk — dựng lại được, và chứa nội dung tin nhắn.
 /mezon-cache
+
+# Icon lệnh sinh từ make-icons.js. Dựng lại bằng một lệnh, và màu của chúng
+# đổi khi thêm lệnh mới — bản commit sẽ lệch với bản sinh ra mà không ai
+# biết. Cái phải khớp với Mezon là *tên file*, và tên đến từ registry.
+/icons

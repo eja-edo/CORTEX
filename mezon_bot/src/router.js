@@ -42,6 +42,7 @@ const {
   renderPlanRejected,
   renderPlanAlreadyDecided,
 } = require("./mezon/planCard");
+const { renderProjectPickConfirmed, PROJECT_FIELD_ID, NO_PROJECT_VALUE } = require("./mezon/roomWatchCards");
 
 // Message scopes this bot answers in. See `MezonGateway._normalise` for
 // how a scope is derived, and why `mode` is the only field that can
@@ -60,6 +61,17 @@ const SERVED_SCOPES = new Set(["dm"]);
 // it is not the thing users hit in normal use.
 const AGENT_STREAM_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
 
+// Backstop for `_syncMultiMessage`, independent of the backend's own
+// `max_output_tokens` cap (`agent_service.MAX_CHAT_OUTPUT_TOKENS`) — a
+// live incident had a degenerate, unbounded reply spin that function into
+// creating one Mezon message after another (~3500 chars each) until the
+// SDK rejected a send and took the whole bot process down with it. The
+// backend cap makes this unreachable in the normal case; this is what
+// stops a turn here too if some future path ever loses that cap again.
+// 8 messages is ~28,000 chars — well past any real answer, including a
+// long one broken up by headings and code blocks.
+const MAX_MESSAGES_PER_TURN = 8;
+
 class MessageRouter {
   constructor({
     gateway,
@@ -69,12 +81,24 @@ class MessageRouter {
     prefix,
     keepThinking = true,
     timezone = DEFAULT_TIMEZONE,
+    // Undefined when orchestrator_service isn't configured
+    // (`config.orchestrator.baseUrl` unset) — the room-summary feature is
+    // additive, so `handleButton`'s `project_pick` branch below no-ops
+    // rather than throwing when this is missing.
+    roomWatch,
+    // Injectable so `index.js` can hand the *same* store to `RoomWatchService`
+    // — a project picker's answer has to be readable back here, in
+    // `_handleProjectPick`. Defaults to a fresh one so every existing caller
+    // (and every test) that builds a router without the room-watch feature
+    // keeps working unchanged.
+    pendingForms,
   }) {
     this.gateway = gateway;
     this.registry = registry;
     this.cortex = cortex;
     this.storage = storage;
     this.prefix = prefix;
+    this.roomWatch = roomWatch;
     // Which wall clock times are shown in and "tomorrow" is measured
     // against — see `mezon/clock.js`. A shared default, not a per-user
     // setting, because the schema has nowhere to put one yet.
@@ -86,7 +110,7 @@ class MessageRouter {
 
     // Questions waiting to be answered, keyed by the id on their submit
     // button — see `mezon/pendingForms.js` for why this is in memory.
-    this.pendingForms = new PendingForms();
+    this.pendingForms = pendingForms ?? new PendingForms();
 
     // Plan decisions currently mid-flight, so a double-click cannot get
     // two approvals past the status check at once. The check itself is
@@ -132,6 +156,30 @@ class MessageRouter {
       return;
     }
 
+    // A message with no text is not a turn. Mezon delivers stickers and
+    // attachment-only messages with an empty `content.t`, and nothing in
+    // this bot reads an incoming attachment — `reply(content, attachments)`
+    // only ever sends them outward.
+    //
+    // Without this the empty string reached `POST /api/agent/stream/chat`,
+    // which rejects it with 422 `string_too_short`, and the failure landed
+    // in the generic catch: the user watched "⏳ đang nghĩ…" turn into
+    // "⚠️ AI đang gặp sự cố" — a sentence blaming the model for a request
+    // it never saw. Observed on live traffic, not hypothetical.
+    //
+    // Ignored rather than answered with an explanation. They sent a
+    // sticker, they did not ask anything; a bot that replies to every
+    // sticker is doing exactly the thing DESIGN 1.2 counts as failure —
+    // saying one more sentence that was not worth saying. Placed before
+    // `_identify` so it also stops a pointless round trip to the backend.
+    if (!message.text?.trim()) {
+      logger.debug("ignoring message with no text", {
+        channel_id: message.channelId,
+        scope: message.scope,
+      });
+      return;
+    }
+
     const reply = async (content, attachments) => {
       const payload = typeof content === "string" ? text(content) : content;
       return this.gateway.sendToChannel(message.channelId, payload, attachments);
@@ -153,7 +201,7 @@ class MessageRouter {
         storage: this.storage,
         registry: this.registry,
         prefix: this.prefix,
-        // `*model` renders a form whose submission comes back as a button
+        // `*switch_model` renders a form whose submission comes back as a button
         // click, so it needs the same store the agent's `ask_choice`
         // cards use — see `mezon/pendingForms.js`.
         pendingForms: this.pendingForms,
@@ -193,6 +241,21 @@ class MessageRouter {
     const chunks = splitMezonContent(body);
     for (let i = 0; i < chunks.length; i++) {
       if (i < state.settledCount) continue;
+      // A backstop, not the normal path — `MAX_CHAT_OUTPUT_TOKENS` on the
+      // backend keeps a turn well under this in practice. If a buffer
+      // still grows past it (a bad model response, or that cap missing on
+      // some future path), stop creating messages rather than following
+      // it up unboundedly; log once so it's visible, not once per tick.
+      if (i >= messageIds.length && messageIds.length >= MAX_MESSAGES_PER_TURN) {
+        if (!state.truncated) {
+          state.truncated = true;
+          logger.warn("turn exceeded MAX_MESSAGES_PER_TURN, stopped creating further messages", {
+            channelId,
+            messageCount: messageIds.length,
+          });
+        }
+        return;
+      }
       const isLast = i === chunks.length - 1;
 
       const content = chunks[i];
@@ -539,6 +602,8 @@ class MessageRouter {
         await this._handleReviewSubmit({ action, parsed, identity, reply });
       } else if (action.kind === "occurrence_this" || action.kind === "occurrence_all") {
         await this._handleOccurrenceDecision({ action, parsed, identity, reply });
+      } else if (action.kind === "project_pick") {
+        await this._handleProjectPick({ action, parsed, identity, reply });
       }
     } catch (err) {
       logger.warn("button action failed", { kind: action.kind, error: err?.message });
@@ -915,7 +980,7 @@ class MessageRouter {
   }
 
   /**
-   * Lưu on the `*model` picker.
+   * Lưu on the `*switch_model` picker.
    *
    * The backend is what validates the id — it rejects anything outside
    * the catalogue rather than storing it (see `update_chat_model`), which
@@ -927,7 +992,7 @@ class MessageRouter {
   async _handleModelSubmit({ action, parsed, identity, reply }) {
     const pending = this.pendingForms.get(action.targetId);
     if (!pending) {
-      await reply(`Form này đã hết hạn. Gõ lại \`${this.prefix}model\` để chọn.`);
+      await reply(`Form này đã hết hạn. Gõ lại \`${this.prefix}switch_model\` để chọn.`);
       return;
     }
 
@@ -943,6 +1008,47 @@ class MessageRouter {
 
     await this._replaceCard(parsed, renderModelSaved(model), reply);
     logger.info("chat model changed from Mezon", { model: chosenId, actor: parsed.actorId });
+  }
+
+  /**
+   * Xác nhận on the project picker sent after a meeting room ends — see
+   * `roomWatch.js`. `pending.projects` (stashed alongside `roomId`/
+   * `roomName` when the card was sent) is what names the choice back;
+   * `roomWatch.recordProjectPick` is the only writer of the map that
+   * `handleSummaryDone` reads once the meeting's summary is ready.
+   */
+  async _handleProjectPick({ action, parsed, identity, reply }) {
+    const pending = this.pendingForms.get(action.targetId);
+    if (!pending) {
+      await reply("Form này đã hết hạn — cuộc họp có thể đã được xử lý hoặc bỏ lỡ.");
+      return;
+    }
+
+    const chosenValue = getText(parsed.extra.values, PROJECT_FIELD_ID);
+    if (!chosenValue) {
+      await reply("Chưa chọn dự án nào — chọn một cái rồi bấm Xác nhận.");
+      return;
+    }
+
+    const isNone = chosenValue === NO_PROJECT_VALUE;
+    const project = isNone ? null : pending.projects.find((p) => p.id === chosenValue);
+    const label = isNone ? "Không gắn dự án nào" : project?.name ?? chosenValue;
+
+    this.roomWatch?.recordProjectPick({
+      roomId: pending.roomId,
+      roomName: pending.roomName,
+      mezonUserId: parsed.actorId,
+      cortexUserId: identity.userId,
+      projectId: isNone ? null : chosenValue,
+    });
+    this.pendingForms.delete(action.targetId);
+
+    await this._replaceCard(parsed, renderProjectPickConfirmed(pending.roomName, label), reply);
+    logger.info("project picked for meeting room", {
+      room_id: pending.roomId,
+      project: isNone ? null : chosenValue,
+      actor: parsed.actorId,
+    });
   }
 
   /**

@@ -1,6 +1,7 @@
 """Main agent service — thin orchestrator delegating to ConversationService, ToolExecutionService, MemoryTriggerService."""
 
 import asyncio
+import os
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -10,7 +11,7 @@ from app.database_async import AsyncSessionLocal
 from app.ids import uuid7
 from app.models import User
 from app.schemas import AgentChatRequest as ChatRequest
-from app.ai.agents.conversation_service import ConversationService, _build_history_contents, _inject_context_into_text, _format_timestamp, _trim_incomplete_tail
+from app.ai.agents.conversation_service import ConversationService, _build_history_contents, _inject_context_into_text, _format_timestamp, _trim_incomplete_tail, strip_injected_timestamp
 from app.ai.agents.tool_execution_service import ToolExecutionService, _estimate_token_breakdown, _validate_contents_ordering, _log_contents_structure, MAX_TOOL_TURNS
 from app.ai.agents.memory_trigger_service import MemoryTriggerService
 from app.ai.agents.conversation_store import ConversationStore
@@ -28,11 +29,36 @@ from app.services.user_preferences import get_chat_model_async
 from app.ai.agents.tool_registry import get_tool_registry
 from app.config import settings
 from app.utils.logger import get_logger
-from app.ai.loaders.prompt_loader import load
+from app.ai.agents import user_messages
+from app.ai.loaders.prompt_loader import load, render
 
 logger = get_logger(__name__)
 
-SYSTEM_PROMPT = load("system/assistant_system.md")
+def _build_system_prompt() -> str:
+    """Prompt hệ thống, với danh sách tool **sinh từ registry**.
+
+    Danh sách tool từng được viết tay trong file md, và nó trôi — đã đo hai
+    lần theo hai hướng:
+
+    * sau khi mục 11 đóng băng 13 tool, prompt vẫn liệt kê bảy tool không
+      còn tồn tại và **không** liệt kê một tool việc nào, kể cả
+      `create_task` (xem `tests/unit/test_prompt_matches_registry.py`);
+    * và ở lần đọc gần nhất, nó thiếu `mark_procedure_step` — một tool thêm
+      vào cùng ngày.
+
+    Cả hai hướng đều hỏng im lặng: agent gọi tool không có rồi bịa, hoặc
+    không biết mình *có* một tool và trả lời bằng phỏng đoán. Một danh sách
+    viết tay phải được nhớ cập nhật; một danh sách sinh ra thì không thể
+    lệch khỏi registry.
+    """
+    from app.ai.tools import LIVE_TOOLS
+
+    names = sorted(t["name"] for t in LIVE_TOOLS)
+    inventory = "Tools you have: " + ", ".join(f"`{n}`" for n in names) + "."
+    return render("system/assistant_system.md", tool_inventory=inventory)
+
+
+SYSTEM_PROMPT = _build_system_prompt()
 
 MAX_CONVERSATION_HISTORY = 10
 MAX_TOOL_TURNS = 30
@@ -40,7 +66,114 @@ MAX_SAME_TOOL_CALLS = 20
 MAX_TOKENS_PER_DAY_PER_USER = 2_000_000
 MAX_TURN_RETRIES = 3
 
+# Chỉ dẫn riêng cho lượt tổng hợp khi chạm `MAX_TOOL_TURNS` mà chưa xong.
+#
+# Không có nó, lượt tổng hợp dùng nguyên system prompt bình thường và model
+# tự đoán phải nói gì khi hết công cụ mà chưa xong việc — và nó hay đoán
+# thành "câu hỏi này khó/mơ hồ quá, bạn nói lại cho rõ đi", dù không có gì
+# mơ hồ cả, chỉ là việc cần nhiều bước hơn ngân sách một lượt. Người dùng
+# nhận lại yêu cầu tự sửa cách hỏi cho một giới hạn của hệ thống.
+#
+# Chỉ dẫn này ép đúng khung: tóm tắt đã làm gì / còn gì, và mời "tiếp tục"
+# — không mời sửa câu hỏi. Lời mời đó dùng được thật, không phải an ủi
+# suông: `_build_history_contents` (conversation_service.py) dựng lại đầy
+# đủ chuỗi tool đã gọi và kết quả từ DB theo `turn_id`, nên lượt kế tiếp
+# (bắt đầu lại từ `turn=0`, ngân sách `MAX_TOOL_TURNS` đầy) thấy được toàn
+# bộ những gì đã làm và tiếp tục đúng chỗ — người dùng không cần lặp lại
+# yêu cầu ban đầu.
+CONTINUATION_INSTRUCTION = (
+    "\n\n---\n"
+    "Bạn vừa hết lượt gọi công cụ cho phép trong một lần trả lời — đây là "
+    "giới hạn của hệ thống, không phải vì câu hỏi của người dùng mơ hồ hay "
+    "quá phức tạp. Đừng bảo họ hỏi lại cho rõ hơn hay chia nhỏ yêu cầu.\n\n"
+    "Viết một câu trả lời ngắn, gồm: (1) những gì đã làm xong, cụ thể; "
+    "(2) những gì còn lại, cụ thể; (3) một câu mời, ví dụ 'Bạn gõ \"tiếp "
+    "tục\" để mình làm nốt nhé.' Không lặp lại toàn bộ yêu cầu ban đầu."
+)
+
+# Số lần thử lại khi model trả về một câu trả lời rỗng hoặc lửng.
+#
+# Trước đây là 0 — gặp rỗng là bỏ luôn và đưa người dùng một câu xin lỗi.
+# Đo trên sáu cuộc trò chuyện mô phỏng: nó xảy ra **ba lần**, và cả ba lần
+# đều sau một câu người dùng gõ ngắn:
+#
+#     "Tuần sau nộp báo cáo."          → rỗng
+#     "đặt lịch họp team 10h thứ 5"    → rỗng
+#     "Đúng. Đặt lịch 19h tối mai."    → rỗng
+#
+# Mỗi lần người dùng phải gõ lại, dài hơn, và lần hai thì được. Tức hệ
+# thống đẩy việc sửa sang cho họ trong khi chính nó thử lại là xong — ngắn
+# gọn là cách người ta dùng app thật, không phải lỗi cần họ khắc phục.
+#
+# Một lần là đủ: lời gọi lại tốn một vòng độ trễ người dùng phải chờ.
+#
+# **Lần thử lại đổi sang một model khác** — nhưng lý do KHÔNG phải "prompt
+# dài gây im lặng" như một đặc tính ổn định. Đó là kết luận thứ ba, và nó
+# cũng sai; lịch sử đầy đủ của việc truy nguyên nhân, vì mỗi bước đều dạy
+# được điều gì đó:
+#
+#   1. Benchmark tự dựng, 6 lần mỗi model → "prompt dài không gây im lặng",
+#      "claude-haiku-4.5 tin cậy nhất". Sai: 6 mẫu quá ít để thấy hiệu ứng
+#      vài phần trăm.
+#   2. Đọc lại router (`~/.9router/db/data.sqlite`, bảng `usageHistory`,
+#      2.678 mẫu) → tưởng đã sửa (1): im lặng tăng theo độ dài, rõ nhất ở
+#      ngày 11/9 (0.2% ở 0–5k, 15.7% ở 20–30k), và `claude-haiku-4.5` tệ
+#      nhất (11.3% ở >10k). Vẫn sai, vì chưa nhìn theo NGÀY.
+#   3. Soát lại theo ngày: cả tháng 8 tới 10/9 gần như 0% ở mọi độ dài (kể
+#      cả 10/9, 455 lượt, có lượt tới 17.650 token, 0 lần im). Hiện tượng
+#      chỉ tập trung trong khung 08:06–10:17 ngày 11/9 — đúng lúc tôi chạy
+#      benchmark. Gọi lại 20 lần ngày 14/9, cùng model, cùng ~25k token
+#      (kịch bản đã cho 25.6% hôm 11/9): **0/20 rỗng**. Đổi
+#      `max_output_tokens` từ 500 lên 16.000 trong 5 lần thử cũng không
+#      đổi kết quả — loại luôn giả thuyết "hết ngân sách token"
+#      (`finish_reason` luôn là `stop`, chưa từng là `length`).
+#
+# Kết luận đứng vững nhất hiện có: đó là một sự cố tạm thời phía backend
+# free-tier trong một cửa sổ vài giờ, không phải quy luật theo độ dài
+# prompt và không sửa được bằng cấu hình phía chúng ta. Không dựa vào con
+# số "15.7% ở 20–30k" để quyết định ngưỡng cắt prompt nữa — nó đo đúng một
+# sự cố, không đo một đặc tính.
+#
+# Vẫn giữ retry-đổi-model, vì nó rẻ và vô hại kể cả khi hiện tượng đã hết:
+# một lần gọi thêm, sang model khác, chỉ tốn thời gian khi thật sự cần.
+MAX_EMPTY_REPLY_RETRIES = 1
+
+# Model cho lần thử lại. Không chọn vì "tin cậy nhất" — mẫu quá nhiễu bởi
+# sự cố ngày 11/9 để xếp hạng model theo độ tin cậy dài hạn — chỉ cần khác
+# hẳn model chính đang dùng, để một sự cố tạm thời (nếu có) khó lặp lại ở
+# cả hai. `gemini/gemini-2.5-flash` trả lời tiếng Việt trong mọi phép thử.
+EMPTY_REPLY_FALLBACK_MODEL = os.getenv(
+    "AGENT_FALLBACK_MODEL", "gemini/gemini-2.5-flash"
+)
+# Neither `handle()` nor `handle_streaming_generator()` passed
+# `max_output_tokens` to the provider — confirmed live: a degenerate
+# response (garbled tokens repeating a single word) ran unbounded until
+# the Mezon bot's own edit-retry loop crashed the process trying to keep
+# up with it. This is the floor that failure mode needs, not a quality
+# tuning knob — 4096 tokens is already generous for a chat reply.
+MAX_CHAT_OUTPUT_TOKENS = 4096
+
 _model_client = ModelClient()
+
+
+def _reply_looks_incomplete(text: str | None) -> bool:
+    """Câu trả lời dừng giữa đường, không phải một câu hoàn chỉnh.
+
+    Đo được hai lần trong cùng đợt eval, cả hai để người dùng treo lửng:
+
+        "Theo quy trình làm việc bạn đã thiết lập:"
+        "Thứ Năm, ngày 17/09/2026, bạn có một sự kiện duy nhất:"
+
+    Cả hai mở ra một danh sách rồi không liệt kê gì. Người dùng nhìn thấy
+    một câu bỏ dở, và không có cách nào biết đó là lỗi hay là hết.
+
+    Chỉ bắt ca rõ ràng: kết thúc bằng dấu mở danh sách. Không suy đoán thêm
+    — một câu trả lời ngắn vẫn có thể là câu trả lời đủ ("Đã xong.").
+    """
+    if not text:
+        return False
+    stripped = text.strip()
+    return stripped.endswith((":", "：", "-", "—", ","))
 
 
 # asyncio only holds a weak reference to a running task, so a fire-and-forget
@@ -112,6 +245,9 @@ class AgentService:
                 conversation_id=conv_id,
                 runtime_context=context,
                 intent=self._detect_intent(message),
+                # Recall bộ nhớ dài hạn dùng chính lượt nói này làm truy vấn
+                # — trước đây `message` chỉ tới đây để lọc độ liên quan.
+                message=message,
             )
             return unified_context.to_llm_string()
         except Exception as exc:
@@ -138,11 +274,16 @@ class AgentService:
         await self.conversation_service.save_user_message(conv.id, message, context)
         await self.conversation_service.increment_message_count(conv.id)
 
+        # Bản gọn dùng cho lần thử lại khi model trả rỗng: cùng prompt gốc
+        # và cùng ngữ cảnh, trừ khối skill — phần lớn nhất có thể bỏ mà
+        # không mất dữ kiện nào về người dùng.
+        slim_prompt = SYSTEM_PROMPT + (f"\n\n{context_string}" if context_string else "")
+
         tools = self.registry.get_provider_tools()
-        gen_config = GenerationConfig(system_instruction=system_prompt)
+        gen_config = GenerationConfig(system_instruction=system_prompt, max_output_tokens=MAX_CHAT_OUTPUT_TOKENS)
         logger.info(f"Available tools: {[t.name for t in tools] if tools else 'None'}")
 
-        ctx = ToolContext(user_id=self.user.id, async_db=self.db, project_id=project_id, conversation_id=conv.id)
+        ctx = ToolContext(user_id=self.user.id, async_db=self.db, project_id=project_id, conversation_id=conv.id, current_message=message)
 
         messages = _build_history_contents(recent_messages)
         _trim_incomplete_tail(messages, "handle")
@@ -160,6 +301,7 @@ class AgentService:
 
         total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "estimated_system_prompt_tokens": 0, "estimated_history_tokens": 0, "estimated_current_input_tokens": 0, "estimated_tool_results_tokens": 0}
         turn = 0
+        empty_retries = 0
         reply_text = None
         tool_call_counts = {}
         _last_assistant_completion = 0
@@ -187,21 +329,34 @@ class AgentService:
                 error_str = str(api_error)
                 if is_fatal_error(api_error):
                     logger.error(f"Fatal API error: {error_str[:300]}", exc_info=True)
-                    reply_text = "Dịch vụ AI đang có lỗi cấu hình. Nếu tình trạng này lặp lại, bạn báo lại giúp mình nhé."
+                    reply_text = user_messages.MISCONFIGURED
                 elif is_quota_error(api_error):
                     logger.warning(f"Model rate-limited: {error_str[:200]}")
-                    reply_text = "Dịch vụ AI đang bị giới hạn tần suất. Bạn đợi một chút rồi thử lại nhé."
+                    reply_text = user_messages.RATE_LIMITED
                 elif is_connection_error(api_error):
                     logger.error(f"Cannot reach the model gateway: {error_str[:200]}")
-                    reply_text = "Mình không kết nối được tới dịch vụ AI. Bạn kiểm tra xem nó còn chạy không, rồi thử lại nhé."
+                    reply_text = user_messages.UNREACHABLE
                 else:
                     logger.error(f"API error after retries: {error_str[:300]}", exc_info=True)
-                    reply_text = "Mình gặp lỗi khi xử lý yêu cầu. Bạn thử lại nhé."
+                    reply_text = user_messages.UNEXPECTED
                 break
 
             if not response:
-                logger.warning("API returned empty response")
-                reply_text = "Mô hình không trả về nội dung nào. Bạn thử gửi lại sau ít phút nhé."
+                # Cùng chính sách với câu trả lời rỗng bên dưới: thử lại
+                # trước, xin lỗi là phương án cuối. Hai nhánh này khác nhau
+                # ở chỗ hỏng (không có `response` vs có nhưng trống), nhưng
+                # với người dùng thì giống hệt nhau — họ không nhận được gì.
+                if empty_retries < MAX_EMPTY_REPLY_RETRIES:
+                    empty_retries += 1
+                    preferred_model = EMPTY_REPLY_FALLBACK_MODEL
+                    logger.warning(
+                        "API không trả response — thử lại lần %d với %s",
+                        empty_retries, EMPTY_REPLY_FALLBACK_MODEL,
+                    )
+                    turn += 1
+                    continue
+                logger.warning("API returned empty response sau %d lần thử", empty_retries)
+                reply_text = user_messages.EMPTY_REPLY
                 break
 
             tool_calls = response.tool_calls or []
@@ -217,19 +372,42 @@ class AgentService:
                 # rằng chẳng có gì cả, trong khi có (P7 nói bỏ khi nghi ngờ;
                 # đây không phải nghi ngờ — nội dung có thật, chỉ sai chỗ).
                 reply_text = response.content or response.reasoning
+
+                # Rỗng hoặc lửng thì **thử lại**, đừng đẩy việc sang người
+                # dùng — xem `MAX_EMPTY_REPLY_RETRIES`.
+                if (
+                    not reply_text or _reply_looks_incomplete(reply_text)
+                ) and empty_retries < MAX_EMPTY_REPLY_RETRIES:
+                    empty_retries += 1
+                    # Thử lại bằng **model khác** và prompt gọn hơn. Xem
+                    # `MAX_EMPTY_REPLY_RETRIES` cho bốn giả thuyết đã loại.
+                    preferred_model = EMPTY_REPLY_FALLBACK_MODEL
+                    gen_config = GenerationConfig(
+                        system_instruction=slim_prompt,
+                        max_output_tokens=MAX_CHAT_OUTPUT_TOKENS,
+                    )
+                    logger.warning(
+                        "Câu trả lời %s — thử lại lần %d với %s (prompt %d → %d "
+                        "ký tự) (finish_reason=%s, usage=%s)",
+                        "rỗng" if not reply_text else "lửng",
+                        empty_retries, EMPTY_REPLY_FALLBACK_MODEL,
+                        len(system_prompt), len(slim_prompt),
+                        response.finish_reason, response.usage,
+                    )
+                    reply_text = None
+                    turn += 1
+                    continue
+
                 if not reply_text:
                     # Không đổ lỗi cho tin nhắn của người dùng. Model không
                     # trả gì cả — với gateway này ca hay gặp là `choices`
                     # rỗng do lỗi phía dịch vụ, và "I couldn't process your
                     # request." khiến người dùng đi sửa câu hỏi của mình.
                     logger.warning(
-                        "Empty model reply (finish_reason=%s, usage=%s)",
-                        response.finish_reason, response.usage,
+                        "Empty model reply sau %d lần thử (finish_reason=%s, usage=%s)",
+                        empty_retries, response.finish_reason, response.usage,
                     )
-                    reply_text = (
-                        "Mô hình không trả về nội dung nào. "
-                        "Bạn thử gửi lại sau ít phút nhé."
-                    )
+                    reply_text = user_messages.EMPTY_REPLY
                 logger.info(f"Agent finished at turn {turn + 1} (no tool calls)")
                 break
 
@@ -266,16 +444,21 @@ class AgentService:
             logger.warning(f"event=max_tool_turns_hit turn_count={turn} conversation_id={conv.id}")
             logger.warning(f"Agent hit max turns ({MAX_TOOL_TURNS}) — attempting synthesis turn for conversation {conv.id}")
             try:
-                synthesis_config = GenerationConfig(system_instruction=gen_config.system_instruction, temperature=gen_config.temperature)
+                synthesis_config = GenerationConfig(system_instruction=(gen_config.system_instruction or "") + CONTINUATION_INSTRUCTION, temperature=gen_config.temperature, max_output_tokens=gen_config.max_output_tokens)
                 _, synthesis_response = await _model_client.generate(messages, synthesis_config, tools=None, preferred_model=preferred_model)
-                reply_text = synthesis_response.content if synthesis_response and synthesis_response.content else "I reached my processing limit for this request. Please try a simpler or more specific question."
+                reply_text = synthesis_response.content if synthesis_response and synthesis_response.content else user_messages.TOO_MANY_STEPS
                 if synthesis_response and synthesis_response.usage:
                     for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
                         total_usage[k] = total_usage.get(k, 0) + (synthesis_response.usage.get(k) or 0)
                     _last_assistant_completion = synthesis_response.usage.get("completion_tokens", 0)
             except Exception as synth_exc:
                 logger.warning(f"Synthesis turn failed (non-fatal): {synth_exc}")
-                reply_text = "I reached my processing limit for this request. Please try a simpler or more specific question."
+                reply_text = user_messages.TOO_MANY_STEPS
+
+        # Model đôi khi mở câu trả lời bằng đúng tiền tố thời gian mà lịch
+        # sử được chèn — xem `strip_injected_timestamp`. Cắt trước khi lưu,
+        # để cả bản hiển thị lẫn bản trong lịch sử đều sạch.
+        reply_text = strip_injected_timestamp(reply_text) if reply_text else reply_text
 
         if reply_text:
             await self.conversation_service.store.save_message(conversation_id=conv.id, role="assistant", content=reply_text, token_count=_last_assistant_completion or None)
@@ -415,10 +598,14 @@ class AgentService:
             context_string = await self._build_context_string(project_id, conv.id, context, message)
             system_prompt = await self.conversation_service.build_system_prompt(conv, message, context, summarizer, SYSTEM_PROMPT, context_string=context_string, recent_messages=recent_messages)
 
-            ctx = ToolContext(user_id=user_id, async_db=self.db, project_id=project_id, conversation_id=conv.id)
+            ctx = ToolContext(user_id=user_id, async_db=self.db, project_id=project_id, conversation_id=conv.id, current_message=message)
 
             tools = self.registry.get_provider_tools()
-            gen_config = GenerationConfig(system_instruction=system_prompt, temperature=temperature)
+            gen_config = GenerationConfig(
+                system_instruction=system_prompt,
+                temperature=temperature,
+                max_output_tokens=MAX_CHAT_OUTPUT_TOKENS,
+            )
 
             messages = _build_history_contents(recent_messages)
             _trim_incomplete_tail(messages, "streaming")
@@ -480,6 +667,18 @@ class AgentService:
                                 total_usage[k] = total_usage.get(k, 0) + (chunk.usage.get(k) or 0)
 
                     _turn_completion = total_usage.get("completion_tokens", 0) - _turn_completion_before
+                    # Cắt tiền tố thời gian model có thể đã copy — xem
+                    # `strip_injected_timestamp`.
+                    #
+                    # Hạn chế đã biết: các chunk đã được `yield` ra client
+                    # ngay khi tới, nên với streaming, một tiền tố lọt ra sẽ
+                    # hiện trên màn hình trước khi tới được đây. Chặn cả chỗ
+                    # đó đòi giữ lại vài chục ký tự đầu của **mọi** câu trả
+                    # lời để chờ xem có phải tiền tố không — thêm độ trễ cho
+                    # token đầu tiên của mọi lượt, đổi lấy một lỗi hiếm.
+                    # Không đáng, nên ở đây chỉ đảm bảo thứ được *lưu* và
+                    # thứ đi vào lịch sử là sạch.
+                    turn_text = strip_injected_timestamp(turn_text)
                     reply_text += turn_text
 
                     # Ready yet? Never waited on — only collected.
@@ -498,13 +697,13 @@ class AgentService:
                     # gần đây nó còn không tới được họ (frontend không có
                     # nhánh nào cho sự kiện `error`).
                     if isinstance(stream_err, EmptyModelStreamError):
-                        user_msg = "Mô hình không trả về nội dung nào. Bạn thử gửi lại sau ít phút nhé."
+                        user_msg = user_messages.EMPTY_REPLY
                     elif is_fatal_error(stream_err):
-                        user_msg = "Dịch vụ AI đang có lỗi cấu hình. Nếu tình trạng này lặp lại, bạn báo lại giúp mình nhé."
+                        user_msg = user_messages.MISCONFIGURED
                     elif is_quota_error(stream_err):
-                        user_msg = "Dịch vụ AI đang bị giới hạn tần suất. Bạn đợi một chút rồi thử lại nhé."
+                        user_msg = user_messages.RATE_LIMITED
                     elif is_connection_error(stream_err):
-                        user_msg = "Mình không kết nối được tới dịch vụ AI. Bạn kiểm tra xem nó còn chạy không, rồi thử lại nhé."
+                        user_msg = user_messages.UNREACHABLE
                     elif is_model_incompatible_error(stream_err):
                         user_msg = "Không mô hình nào xử lý được yêu cầu này. Bạn thử diễn đạt lại ngắn gọn hơn xem sao."
                     elif partial_shown:
@@ -566,12 +765,40 @@ class AgentService:
                         # across `asyncio.gather` causes intermittent
                         # "another operation is in progress" / "Session is already
                         # flushing" failures once two handlers' awaits interleave.
-                        async with AsyncSessionLocal() as db:
+                        #
+                        # `AsyncSessionLocal` is `_AsyncSessionLocalProxy`
+                        # (database_async.py), not a plain `async_sessionmaker` —
+                        # calling it only builds the proxy; the real `AsyncSession`
+                        # comes back from `__aenter__()`. `db = AsyncSessionLocal()`
+                        # here (an earlier version of this fix) skipped that and
+                        # handed every tool a proxy with none of `AsyncSession`'s
+                        # methods — confirmed live, twice, as `AttributeError:
+                        # '_AsyncSessionLocalProxy' object has no attribute
+                        # 'scalars'` from inside the tool call and `... 'close'`
+                        # from the `finally` below once every parallel tool call in
+                        # the turn failed the same way.
+                        #
+                        # `db.close()` is shielded, not just wrapped in `finally` —
+                        # confirmed live, separately: the client disconnecting
+                        # mid-stream (the Mezon bot restarting mid-turn) cancels
+                        # this whole generator while it's awaiting `asyncio.gather`
+                        # below, and that cancellation reaching `db.close()` through
+                        # an `async with`'s implicit exit is what left a connection
+                        # needing Postgres's own garbage collector to force-close
+                        # it. `asyncio.shield` makes the close itself uncancellable;
+                        # the outer cancellation still propagates once it finishes.
+                        db = await AsyncSessionLocal().__aenter__()
+                        try:
                             call_ctx = ToolContext(
                                 user_id=ctx.user_id, async_db=db,
                                 project_id=ctx.project_id, conversation_id=ctx.conversation_id,
+                                # Session mới không thấy tin nhắn chưa commit
+                                # của lượt này — xem docstring ToolContext.
+                                current_message=ctx.current_message,
                             )
                             result = await self.tool_service.execute_single_tool(name, args, call_ctx)
+                        finally:
+                            await asyncio.shield(db.close())
                         return tc, name, args, result
 
                     exec_results = await asyncio.gather(
@@ -656,7 +883,7 @@ class AgentService:
             if turn >= MAX_TOOL_TURNS and not reply_text and not hard_error_occurred:
                 logger.warning(f"event=max_tool_turns_hit turn_count={turn} conversation_id={conv.id} streaming=true")
                 try:
-                    synthesis_config = GenerationConfig(system_instruction=gen_config.system_instruction, temperature=gen_config.temperature)
+                    synthesis_config = GenerationConfig(system_instruction=(gen_config.system_instruction or "") + CONTINUATION_INSTRUCTION, temperature=gen_config.temperature, max_output_tokens=gen_config.max_output_tokens)
                     synthesis_text = ""
                     _synth_completion_before = total_usage.get("completion_tokens", 0)
                     async for chunk in _model_client.stream(messages, synthesis_config, tools=None, preferred_model=preferred_model):
@@ -667,10 +894,10 @@ class AgentService:
                             for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
                                 total_usage[k] = total_usage.get(k, 0) + (chunk.usage.get(k) or 0)
                     _synth_completion = total_usage.get("completion_tokens", 0) - _synth_completion_before
-                    reply_text = synthesis_text or "I reached my processing limit for this request. Please try a simpler or more specific question."
+                    reply_text = synthesis_text or user_messages.TOO_MANY_STEPS
                 except Exception as synth_exc:
                     logger.warning(f"Streaming synthesis turn failed (non-fatal): {synth_exc}")
-                    limit_text = "I reached my processing limit for this request. Please try a simpler or more specific question."
+                    limit_text = user_messages.TOO_MANY_STEPS
                     reply_text = limit_text
                     yield {"event": "token", "text": limit_text}
                     _synth_completion = 0
@@ -697,7 +924,7 @@ class AgentService:
 
             if reply_text and saved_assistant_count == 0:
                 try:
-                    await self.conversation_service.store.save_message(conversation_id=conv.id, role="assistant", content=reply_text, token_count=_synth_completion or None, source=message_source)
+                    await self.conversation_service.store.save_message(conversation_id=conv.id, role="assistant", content=strip_injected_timestamp(reply_text), token_count=_synth_completion or None, source=message_source)
                 except Exception as save_err:
                     logger.warning(f"Could not save final reply (non-fatal): {save_err}")
 

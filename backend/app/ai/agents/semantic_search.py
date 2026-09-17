@@ -70,8 +70,14 @@ async def semantic_search_notes(
             SELECT 
                 n.id,
                 n.content,
-                (n.embedding <-> CAST(:query_embedding AS vector)) as distance,
-                (1 - (n.embedding <-> CAST(:query_embedding AS vector)) / 2) as similarity_score
+                -- Toán tử cosine: index của cột này là
+                -- `vector_cosine_ops` (006_add_hnsw_indexes), nên toán tử
+                -- L2 khiến planner bỏ qua index và quét tuần tự.
+                -- Embedding đã chuẩn hoá nên thứ hạng không đổi khi sửa;
+                -- chỉ `similarity_score` đổi thang, và không có ngưỡng nào
+                -- lọc theo nó — nó chỉ được trả ra để hiển thị.
+                (n.embedding <=> CAST(:query_embedding AS vector)) as distance,
+                (1 - (n.embedding <=> CAST(:query_embedding AS vector))) as similarity_score
             FROM notes n
             WHERE 
                 n.user_id = :user_id 

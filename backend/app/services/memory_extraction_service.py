@@ -25,6 +25,7 @@ from app.models import AgentConversation, AgentMessage
 from app.ai.agents.conversation_store import ConversationStore
 from app.ai.agents.model_client import ModelClient
 from app.ai.agents.provider_types import Message, GenerationConfig
+from app.services.memory_categories import normalize_category
 from app.services.memory_extraction_prompt import build_extraction_messages
 from app.services.semantic_memory_provider import get_semantic_memory_provider
 from app.utils.logger import get_logger
@@ -209,6 +210,32 @@ async def extract_and_store(
         except Exception as exc:
             logger.error(f"Task candidate storage failed: {exc}", exc_info=True)
 
+    # ── 4. Cấu trúc hoá routine thành Procedure ──
+    #
+    # Chỉ chạy khi lô này thật sự có bộ nhớ `routine` — `sync_from_memories`
+    # trả về ngay nếu không có, nên vòng trích xuất thường (không routine)
+    # không tốn thêm lời gọi model nào.
+    #
+    # Hỏng ở đây không được làm hỏng vòng trích xuất: bộ nhớ đã được lưu an
+    # toàn ở bước 2, và bộ nhớ `routine` thô vẫn dùng được như trước khi
+    # bảng `procedures` tồn tại. Mất một quy trình, không mất cả bản tóm
+    # tắt.
+    procedure_ids = []
+    if semantic_memories:
+        try:
+            from app.services.procedure_extraction import sync_from_memories
+
+            procedure_ids = await sync_from_memories(
+                db, conv.user_id, semantic_memories
+            )
+            if procedure_ids:
+                logger.info(
+                    "Dựng %d procedure từ routine | conversation=%s",
+                    len(procedure_ids), conversation_id,
+                )
+        except Exception as exc:
+            logger.error(f"Procedure sync failed (non-fatal): {exc}", exc_info=True)
+
     await db.commit()
 
     return {
@@ -219,6 +246,7 @@ async def extract_and_store(
         "title": title,
         "new_messages": len(new_messages),
         "tasks": task_result,
+        "procedures_created": len(procedure_ids),
     }
 
 
@@ -274,11 +302,15 @@ def _parse_extraction_response(content: str) -> dict | None:
             degraded += 1
             normalized.append({
                 "content": m,
-                "category": "unknown",
+                # `normalize_category(None)` chứ không phải chuỗi "unknown"
+                # viết tay: `unknown` từng chảy thẳng xuống DB thành một
+                # danh mục thứ bảy mà không truy vấn nào biết hỏi.
+                "category": normalize_category(None),
                 "confidence": 0.8,
                 "expected_lifetime": "medium",
             })
         elif isinstance(m, dict) and m.get("confidence", 0) >= 0.7:
+            m["category"] = normalize_category(m.get("category"))
             normalized.append(m)
     if degraded:
         logger.warning(

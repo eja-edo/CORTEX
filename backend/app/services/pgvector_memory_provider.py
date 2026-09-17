@@ -29,6 +29,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.agents.embedding_service import EmbeddingService, get_embedding_service
+from app.services.memory_categories import normalize_category
 from app.services.semantic_memory_provider import (
     SemanticMemoryProvider,
     SemanticMemoryResult,
@@ -104,6 +105,12 @@ class PgVectorMemoryProvider(SemanticMemoryProvider):
     ) -> bool:
         if not content:
             return False
+
+        # Chuẩn hoá ở đây, không tin người gọi. Đây là điểm ghi thật sự
+        # duy nhất vào `semantic_memories`, nên nó là chỗ cuối cùng còn có
+        # thể ngăn một danh mục lạ nằm vĩnh viễn trong DB — và DB dev đã
+        # tích được sáu tên khác nhau trước khi ai đó nhìn vào.
+        category = normalize_category(category)
 
         if _already_seen(user_id, content):
             logger.debug(
@@ -199,7 +206,7 @@ class PgVectorMemoryProvider(SemanticMemoryProvider):
                 "limit": limit,
             }
             if min_score is not None:
-                score_filter = " AND (1 - (m.embedding <-> CAST(:query_embedding AS vector)) / 2) >= :min_score"
+                score_filter = " AND (1 - (m.embedding <=> CAST(:query_embedding AS vector))) >= :min_score"
                 params["min_score"] = min_score
 
             stmt = text(f"""
@@ -208,7 +215,27 @@ class PgVectorMemoryProvider(SemanticMemoryProvider):
                     m.content,
                     m.category,
                     m.confidence,
-                    (1 - (m.embedding <-> CAST(:query_embedding AS vector)) / 2) as score,
+                    -- Cosine similarity thuần, dải [-1, 1], với toán
+                    -- tử cosine của pgvector.
+                    --
+                    -- Trước đây chỗ này dùng toán tử khoảng cách L2 kèm
+                    -- công thức `1 - d/2` — vốn là công thức dành cho
+                    -- cosine distance. Hai sai lệch cùng lúc:
+                    --
+                    --   1. Mọi index HNSW của cột này tạo bằng
+                    --      `vector_cosine_ops`; planner chỉ dùng index khi
+                    --      toán tử khớp opclass, nên không truy vấn nào
+                    --      từng chạm index — tất cả là seq scan. Ở 12 hàng
+                    --      không ai thấy, ở 100k hàng thì thấy.
+                    --   2. Điểm trả về nằm trên một thang không phải thang
+                    --      nó tưởng, mà `MIN_RELEVANCE_SCORE` lại được
+                    --      chọn từ chính những con số đó.
+                    --
+                    -- Embedding ở đây đã chuẩn hoá (norm đo được = 1.0000)
+                    -- nên L2 và cosine đơn điệu với nhau: thứ hạng vẫn
+                    -- đúng suốt thời gian qua. Đó là lý do lỗi này sống
+                    -- lâu — nó bóp méo con số chứ không đảo thứ tự.
+                    (1 - (m.embedding <=> CAST(:query_embedding AS vector))) as score,
                     m.created_at::text as created_at
                 FROM semantic_memories m
                 WHERE
@@ -245,7 +272,7 @@ class PgVectorMemoryProvider(SemanticMemoryProvider):
         try:
             embedding_str = _serialize_embedding(embedding)
             stmt = text("""
-                SELECT (1 - (m.embedding <-> CAST(:embedding AS vector)) / 2) as sim
+                SELECT (1 - (m.embedding <=> CAST(:embedding AS vector))) as sim
                 FROM semantic_memories m
                 WHERE
                     m.user_id = :user_id

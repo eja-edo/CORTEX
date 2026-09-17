@@ -36,6 +36,7 @@ from app.ai.tools.update_schedule import UPDATE_SCHEDULE_DEFINITION
 from app.ai.tools.create_note import CREATE_NOTE_DEFINITION
 from app.ai.tools.deep_research import DEEP_RESEARCH_DEFINITION
 from app.ai.tools.extract_memory import EXTRACT_MEMORY_DEFINITION
+from app.ai.tools.mark_procedure_step import MARK_PROCEDURE_STEP_DEFINITION
 from app.ai.tools.get_notifications import GET_NOTIFICATIONS_DEFINITION
 from app.ai.tools.neural_search import NEURAL_SEARCH_DEFINITION
 from app.ai.tools.propose_plan import PROPOSE_PLAN_DEFINITION
@@ -99,6 +100,7 @@ LIVE_TOOLS = [
     # đọc lại. Người dùng dạy một quy trình hôm nay, hôm sau hỏi thì agent
     # không biết gì.
     EXTRACT_MEMORY_DEFINITION,
+    MARK_PROCEDURE_STEP_DEFINITION,
 ]
 
 # Mỗi mục dưới đây phục vụ một bề mặt đã gỡ khỏi nav hoặc một service đã gỡ

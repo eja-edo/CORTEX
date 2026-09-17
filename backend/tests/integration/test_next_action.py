@@ -9,13 +9,13 @@ and that `at_risk` surfaces a task even when it didn't make the top of
 `now_actions`.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import delete
 
-from app.models import Task, TaskPriority, TaskStatus
+from app.models import Schedule, ScheduleType, Task, TaskPriority, TaskStatus
 from app.schemas import TaskCreate
 from app.services.next_action import NextActionService
 from app.services.tasks import TaskService
@@ -35,9 +35,11 @@ async def async_db():
     async with session_maker() as db:
         await ensure_isolated_user(db)
         await db.execute(delete(Task).where(Task.user_id == TEST_USER_ID))
+        await db.execute(delete(Schedule).where(Schedule.user_id == TEST_USER_ID))
         await db.commit()
         yield db
         await db.execute(delete(Task).where(Task.user_id == TEST_USER_ID))
+        await db.execute(delete(Schedule).where(Schedule.user_id == TEST_USER_ID))
         await db.commit()
     await engine.dispose()
 
@@ -99,3 +101,29 @@ async def test_mildly_overdue_task_is_in_now_actions_but_not_at_risk(async_db):
 
     assert task.id in {a.task_id for a in result.now_actions}
     assert result.at_risk == []
+
+
+@pytest.mark.asyncio
+async def test_a_schedule_only_day_does_not_crash_next_action(async_db):
+    """`TodayResponse.state` can be `schedule_only` (2.7's follow-up: a
+    calendar event today, no open task) — a value `NextActionResponse.state`
+    does not carry in its own `Literal`. Before mapping it down in
+    `NextActionService`, this raised a Pydantic validation error the first
+    time a user had an event on their calendar but nothing to do — `*next`
+    would 500 on exactly the day the notification worked fine."""
+    today = utc_now().date()
+    start = datetime(today.year, today.month, today.day, 19, 0, tzinfo=timezone.utc)
+    schedule = Schedule(
+        user_id=TEST_USER_ID,
+        title="[test-3.5] họp nhóm",
+        type=ScheduleType.PERSONAL,
+        start_time=start,
+        end_time=start + timedelta(hours=1),
+    )
+    async_db.add(schedule)
+    await async_db.commit()
+
+    result = await NextActionService(async_db).get_next_action(TEST_USER_ID)
+
+    assert result.state == "nothing_urgent"
+    assert result.now_actions == []
