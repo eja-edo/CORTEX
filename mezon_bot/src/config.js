@@ -65,6 +65,21 @@ const config = {
     host: optional("BOT_HOST", "127.0.0.1"),
   },
 
+  // `orchestrator_service` (meeting rooms, summaries) — a separate, external
+  // service, not part of this monorepo. Optional, unlike `cortex.baseUrl`:
+  // the room-summary feature is additive, so a bot deployed before this was
+  // wired up (or in an environment without orchestrator_service) must still
+  // start rather than refuse to boot over a feature it doesn't need yet.
+  orchestrator: {
+    // The `/api/v2`-suffixed base, e.g. `http://localhost:8002/api/v2` —
+    // matches the "Base URL (v2)" convention in docs/API_REFERENCE.md, so
+    // every path built against it in `orchestrator.js` stays relative
+    // (`/sse/metadata`, `/rooms/id/{id}`, …) the same way `cortex.js`'s
+    // paths are relative to `CORTEX_API_URL`.
+    baseUrl: optional("ORCHESTRATOR_API_URL", null)?.replace(/\/$/, "") ?? null,
+    timeoutMs: number("ORCHESTRATOR_TIMEOUT_MS", 30000),
+  },
+
   bot: {
     commandPrefix: optional("BOT_COMMAND_PREFIX", "*"),
     // Leave the "🧠 Đã suy nghĩ" transcript message standing once the

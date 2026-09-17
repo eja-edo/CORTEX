@@ -11,26 +11,19 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
-# libglib2.0-0: opencv-python-headless vẫn liên kết tới nó. Và `cv2` được
-# nạp ngay lúc khởi động chứ không phải lúc dùng — `app/services/ocr/__init__.py`
-# import `video_pipeline_service` ở mức module. Thiếu gói này thì backend
-# không lên nổi, dù OCR đang đóng băng.
-# curl: cho HEALTHCHECK bên dưới.
+# curl: cho HEALTHCHECK bên dưới. Không còn libglib2.0-0 — đó là lib runtime
+# của opencv-python-headless, và gói đó giờ bị lọc khỏi ảnh (xem bên dưới).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends curl libglib2.0-0 \
+ && apt-get install -y --no-install-recommends curl \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY requirements.txt ./
-# easyocr bị loại khỏi **ảnh**, không bị loại khỏi requirements.txt. Trong
-# backend nó chỉ tồn tại dưới dạng *tên engine* trong payload gửi sang
-# ocr_service (`app/services/redis/ocr_processor_task.py`) — không dòng nào
-# trong `backend/app` import gói này. Nó kéo theo torch, khoảng 2.5GB.
-#
+
 # Lọc bằng grep tại đây thay vì duy trì một requirements thứ hai: hai file sẽ
 # trôi khỏi nhau và không ai biết lúc nào, một dòng grep thì không.
-RUN grep -v '^easyocr' requirements.txt > /tmp/requirements.docker.txt \
+RUN grep -vE '^(easyocr|opencv-python-headless|scikit-image|numpy)' requirements.txt > /tmp/requirements.docker.txt \
  && pip install --no-cache-dir -r /tmp/requirements.docker.txt
 
 # Nướng sẵn bảng BPE của tiktoken vào ảnh.

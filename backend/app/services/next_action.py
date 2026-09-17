@@ -37,6 +37,20 @@ class NextActionService:
 
     async def get_next_action(self, user_id: UUID) -> NextActionResponse:
         today_response = await self._today_service.get_today(user_id)
+        # `TodayResponse.state` can be `schedule_only` (2.7's follow-up: a
+        # calendar event today with no open task) — a state that answers
+        # "what does today look like", not "what should I do next". This
+        # endpoint answers the second question, where a scheduled event
+        # carries the same "nothing to act on" answer as `nothing_urgent`
+        # — `NextActionResponse.state` keeps its own narrower `Literal`
+        # deliberately (see its docstring) rather than absorbing every
+        # state `TodayResponse` grows, so this maps down instead of
+        # passing the new value straight through, which would otherwise
+        # fail Pydantic validation the first time a user had an event but
+        # no open task.
+        next_action_state = (
+            "nothing_urgent" if today_response.state == "schedule_only" else today_response.state
+        )
         # Same bar `task.at_risk` uses to interrupt the user proactively
         # (settings.STATE_EVALUATOR_RISK_THRESHOLD) — not
         # `list_at_risk_tasks`'s own lower default, which is meant for a
@@ -58,7 +72,7 @@ class NextActionService:
         ]
 
         return NextActionResponse(
-            state=today_response.state,
+            state=next_action_state,
             now_actions=today_response.now_actions,
             suggestions=today_response.suggestions,
             needs_confirmation=today_response.needs_confirmation,

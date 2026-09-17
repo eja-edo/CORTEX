@@ -211,6 +211,18 @@ class CortexClient {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    // Set only by an actual `done`/`error` frame, never by the connection
+    // merely closing — `reader.read()` returning `{done: true}` means
+    // exactly that either way, so on its own it cannot tell "the backend
+    // finished and said so" apart from "something reset the connection
+    // partway through a real answer". Confirmed live: a turn that had
+    // already streamed real content (narration, a tool call and its
+    // result) went silent with no `done`, no `error`, and — because
+    // nothing here noticed — no error on the bot's side either. The
+    // caller already knows how to recover a partial answer with a "bị
+    // ngắt giữa chừng" note (see its catch block); it only runs if this
+    // throws instead of returning as if the turn had completed.
+    let sawTerminalEvent = false;
     try {
       while (true) {
         const { done, value } = await reader.read();
@@ -230,7 +242,9 @@ class CortexClient {
             const jsonText = line.slice(5).trim();
             if (!jsonText) continue;
             try {
-              onEvent(JSON.parse(jsonText));
+              const parsed = JSON.parse(jsonText);
+              if (parsed?.event === "done" || parsed?.event === "error") sawTerminalEvent = true;
+              onEvent(parsed);
             } catch (parseErr) {
               logger.warn("could not parse stream frame", {
                 error: parseErr?.message,
@@ -247,6 +261,14 @@ class CortexClient {
       throw new CortexError(`Stream bị ngắt: ${err?.message}`, 503, null);
     } finally {
       clearTimeout(timer);
+    }
+
+    if (!sawTerminalEvent) {
+      throw new CortexError(
+        "Cortex đóng kết nối mà không báo hoàn tất — có thể đã bị ngắt giữa chừng",
+        502,
+        null
+      );
     }
   }
 
@@ -366,6 +388,19 @@ class CortexClient {
 
   getPreferences(userId) {
     return this._request("GET", "/api/preferences", { userId });
+  }
+
+  /**
+   * This user's active projects, to pick from — for example, which project
+   * a finished meeting's summary and action items belong to.
+   *
+   * Fetched, never hard-coded, for the same reason `listModels` is: a
+   * project list is per-user and changes on its own schedule, so nothing
+   * about it belongs baked into the bot. Returns a bare
+   * `ProjectResponse[]` (`GET /api/projects`), not wrapped in `{data: …}`.
+   */
+  listProjects(userId) {
+    return this._request("GET", "/api/projects", { userId });
   }
 
   /** Record which model this user's turns run on. `null` clears the

@@ -38,6 +38,21 @@ function formatDay(value) {
   return formatted ? formatted.slice(0, 5) : null;
 }
 
+/** The bare "HH:MM" off a same-day event's `start_time` — the date half
+ *  of `formatWhen`'s output is redundant next to a section already
+ *  labelled "Lịch hôm nay". */
+function formatEventTime(value) {
+  const formatted = formatWhen(value);
+  return formatted ? formatted.slice(-5) : null;
+}
+
+/** "19:00 Nghe - Nói / Shadowing — Phòng 101" */
+function scheduleLine(schedule) {
+  const time = formatEventTime(schedule.start_time);
+  const where = schedule.location ? ` — ${schedule.location}` : "";
+  return `• ${time ? `${time} ` : ""}${schedule.title}${where}`;
+}
+
 /** "21/08 · 🟠 high" — whichever of the two the item actually has. */
 function actionMeta(action) {
   const parts = [];
@@ -79,7 +94,15 @@ function renderAgenda(data, { title }) {
   const suggestions = data?.suggestions ?? [];
   const needsConfirmation = data?.needs_confirmation ?? [];
   const atRisk = data?.at_risk ?? [];
+  // `*next`'s `NextActionResponse` carries no `schedules_today` (2.7's
+  // follow-up deliberately kept it `*today`-only — see `next_action.py`),
+  // so this is always `[]` there and the field below never renders.
+  const schedulesToday = data?.schedules_today ?? [];
 
+  // `schedule_only` (a calendar event today, no open task) is deliberately
+  // absent from `EMPTY_STATE`: unlike `onboarding`/`all_clear`, it has real
+  // content to show — the schedules field below — so it must fall through
+  // to the normal card instead of a canned notice.
   const empty = EMPTY_STATE[state];
   if (empty && nowActions.length === 0 && suggestions.length === 0) {
     return notice(empty.title, empty.body, { color: "#2ea043" });
@@ -104,6 +127,16 @@ function renderAgenda(data, { title }) {
       const f = actionField(a, i);
       form.field(f.name, f.value);
     });
+  }
+
+  if (schedulesToday.length) {
+    // Unranked and never merged into `nowActions`/`suggestions`: an event
+    // isn't a "should I do this" decision — it happens at a fixed time
+    // whether or not the user acts (see `TodayScheduleItem`'s docstring).
+    form.field(
+      "📅 Lịch hôm nay",
+      schedulesToday.slice(0, MAX_ROWS).map(scheduleLine).join("\n")
+    );
   }
 
   if (atRisk.length) {
@@ -132,4 +165,4 @@ function renderAgenda(data, { title }) {
   return form.build();
 }
 
-module.exports = { renderAgenda, actionMeta, formatDay, MAX_ROWS };
+module.exports = { renderAgenda, actionMeta, formatDay, formatEventTime, scheduleLine, MAX_ROWS };
