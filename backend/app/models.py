@@ -318,21 +318,6 @@ class RefreshToken(Base):
     revoked_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=_utcnow)
 
-class AuthorizationCode(Base):
-    """One-time authorization code for OAuth2 Authorization Code + PKCE."""
-    __tablename__ = "authorization_codes"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
-    code_hash = Column(String(255), nullable=False, unique=True, index=True)
-    client_id = Column(String(255), nullable=False)
-    redirect_uri = Column(String(1000), nullable=False)
-    code_challenge = Column(String(255), nullable=False)
-    code_challenge_method = Column(String(10), nullable=False, default="S256")
-    expires_at = Column(DateTime, nullable=False)
-    used_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=_utcnow)
-
 class Schedule(Base):
     """Schedule/Event model"""
     __tablename__ = "schedules"

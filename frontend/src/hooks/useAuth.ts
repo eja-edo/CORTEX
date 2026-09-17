@@ -2,27 +2,6 @@ import { useCallback, useState } from 'react'
 import type { TokenPair, User } from '../types'
 import { API_BASE_URL, requestJson, setCurrentTokens } from '../services/api'
 
-const PKCE_CLIENT_ID = 'cortex-web'
-const PKCE_REDIRECT_URI = window.location.origin + '/auth/callback'
-
-function randomUrlSafeString(byteLength: number): string {
-    const bytes = new Uint8Array(byteLength)
-    window.crypto.getRandomValues(bytes)
-    let output = ''
-    for (const byte of bytes) output += String.fromCharCode(byte)
-    return btoa(output).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
-}
-
-async function createCodeChallenge(verifier: string): Promise<string> {
-    const encoder = new TextEncoder()
-    const data = encoder.encode(verifier)
-    const hashBuffer = await window.crypto.subtle.digest('SHA-256', data)
-    const bytes = new Uint8Array(hashBuffer)
-    let output = ''
-    for (const byte of bytes) output += String.fromCharCode(byte)
-    return btoa(output).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
-}
-
 export function useAuth() {
     const [tokens, setTokensState] = useState<TokenPair | null>(() => {
         const raw = window.localStorage.getItem('cortex_tokens')
@@ -87,15 +66,9 @@ export function useAuth() {
     const handleLogin = useCallback(async (email: string, pass: string): Promise<void> => {
         setErrorMessage(''); setStatusMessage(''); setIsBusy(true)
         try {
-            const codeVerifier = randomUrlSafeString(64).slice(0, 96)
-            const codeChallenge = await createCodeChallenge(codeVerifier)
-            const authorize = await requestJson<{ code: string }>(`${API_BASE_URL}/auth/authorize`, {
+            const tokenPair = await requestJson<{ access_token: string; refresh_token: string; token_type: string }>(`${API_BASE_URL}/auth/login`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email, password: pass, client_id: PKCE_CLIENT_ID, redirect_uri: PKCE_REDIRECT_URI, code_challenge: codeChallenge, code_challenge_method: 'S256', state: randomUrlSafeString(24) }),
-            })
-            const tokenPair = await requestJson<{ access_token: string; refresh_token: string; token_type: string }>(`${API_BASE_URL}/auth/token`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ code: authorize.code, code_verifier: codeVerifier, client_id: PKCE_CLIENT_ID, redirect_uri: PKCE_REDIRECT_URI }),
+                body: JSON.stringify({ email, password: pass }),
             })
             const newTokens = { accessToken: tokenPair.access_token, refreshToken: tokenPair.refresh_token }
             setTokens(newTokens)

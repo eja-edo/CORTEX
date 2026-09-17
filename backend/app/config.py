@@ -61,9 +61,12 @@ class Settings:
     
     # CORS
     BACKEND_CORS_ORIGINS: list = [
-        "http://localhost",
-        "http://localhost:3000",
-        "http://localhost:5173",
+        origin.strip()
+        for origin in os.getenv(
+            "BACKEND_CORS_ORIGINS",
+            "http://localhost,http://localhost:3000,http://localhost:5173",
+        ).split(",")
+        if origin.strip()
     ]
 
     # Google Calendar OAuth
