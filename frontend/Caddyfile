@@ -21,8 +21,27 @@
 		}
 	}
 
+	# `/assets/*` mang content hash trong tên file (Vite) — nội dung đổi thì
+	# tên đổi theo, nên cache dài hạn ở đây không bao giờ trả nhầm bản cũ.
+	# Tách thành `handle_path` riêng (loại trừ với handler bên dưới) thay vì
+	# hai `header` cùng khớp một request trên cùng một `handle` — thử cách
+	# đó trước và bị chồng lẫn, request nào cũng ra `no-cache` bất kể
+	# matcher nào khai sau, dấu hiệu cho thấy hai `header` cùng khớp không
+	# override nhau theo thứ tự viết như tưởng.
+	handle_path /assets/* {
+		root * /srv/assets
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
+
 	handle {
 		root * /srv
+		# Phần còn lại (chính là SPA shell HTML) thì ngược lại `/assets/*`:
+		# tên file không đổi qua mọi lần build, nên nó **phải** luôn
+		# revalidate — thiếu dòng này là lý do một build mới lên rồi mà
+		# trình duyệt vẫn tự phục vụ index.html cũ trỏ tới asset đã bị xoá,
+		# mà không có tín hiệu lỗi nào để nhận ra.
+		header Cache-Control "no-cache"
 		# SPA: mọi đường không phải file thật đều trả index.html, để
 		# `/p/:id/notes/:id` gõ thẳng vào thanh địa chỉ không thành 404.
 		try_files {path} /index.html

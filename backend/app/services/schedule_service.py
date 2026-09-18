@@ -21,6 +21,7 @@ from app.events.payloads import ScheduleCompletedPayload, ScheduleCreatedPayload
 from app.events.schemas import EventEnvelope
 from app.models import (
     CalendarProvider,
+    ReminderStatus,
     Schedule,
     ScheduleExternalMap,
     ScheduleType,
@@ -32,7 +33,7 @@ from app.schemas import (
     ScheduleUpdate,
 )
 from app.services.recurrence import RecurrenceService
-from app.services.reminder_service import ReminderService
+from app.services.reminder_service import DEFAULT_REMINDER_CONFIGS, ReminderService
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -175,6 +176,29 @@ class ScheduleService:
         self._recurrence_svc = RecurrenceService()
         self._reminder_svc = ReminderService()
 
+    def _recompute_reminders_for_reschedule(self, schedule: Schedule) -> None:
+        """Re-derive each pending reminder's `scheduled_at` from the
+        schedule's (just-changed) `start_time`.
+
+        Reminders are computed once, at creation time, as `start_time -
+        minutes_before` — a frozen offset, not something that tracks the
+        schedule live the way the old `schedule.starts_soon` State Evaluator
+        predicate did. Without this, moving a meeting leaves its reminders
+        pointed at the old time, firing early/late or missing their window
+        entirely. Only runs when the caller didn't already pass an explicit
+        `reminders` list for this update (that path recreates them anyway).
+        """
+        pending = [r for r in schedule.reminders if r.status == ReminderStatus.PENDING]
+        if not pending:
+            return
+        self._reminder_svc.create_reminders_for_schedule(
+            schedule=schedule,
+            reminder_configs=[
+                {"minutes_before": r.minutes_before, "method": r.method} for r in pending
+            ],
+            db=self.db,
+        )
+
     # ------------------------------------------------------------------
     # CREATE
     # ------------------------------------------------------------------
@@ -198,12 +222,16 @@ class ScheduleService:
         self.db.add(db_schedule)
         self.db.flush()
 
-        if data.reminders:
-            self._reminder_svc.create_reminders_for_schedule(
-                schedule=db_schedule,
-                reminder_configs=[r.model_dump() for r in data.reminders],
-                db=self.db,
-            )
+        reminder_configs = (
+            [r.model_dump() for r in data.reminders]
+            if data.reminders
+            else DEFAULT_REMINDER_CONFIGS
+        )
+        self._reminder_svc.create_reminders_for_schedule(
+            schedule=db_schedule,
+            reminder_configs=reminder_configs,
+            db=self.db,
+        )
 
         self.db.commit()
         self.db.refresh(db_schedule)
@@ -423,6 +451,8 @@ class ScheduleService:
                 reminder_configs=[r.model_dump() for r in data.reminders],
                 db=self.db,
             )
+        elif "start_time" in update_data:
+            self._recompute_reminders_for_reschedule(schedule)
 
         schedule.version += 1
         schedule.updated_by = "INTERNAL"
@@ -493,6 +523,9 @@ class ScheduleService:
 
         if schedule.start_time >= schedule.end_time:
             raise ValueError("start_time must be before end_time")
+
+        if "start_time" in fields_changed:
+            self._recompute_reminders_for_reschedule(schedule)
 
         schedule.version += 1
         schedule.updated_at = datetime.utcnow()
@@ -713,6 +746,8 @@ class ScheduleService:
                 ],
                 db=self.db,
             )
+        elif "start_time" in update_data:
+            self._recompute_reminders_for_reschedule(exception)
 
         exception.version += 1
         self.db.commit()
@@ -772,6 +807,8 @@ class ScheduleService:
                 ],
                 db=self.db,
             )
+        elif "start_time" in update_data:
+            self._recompute_reminders_for_reschedule(root)
 
         root.version += 1
         self.db.commit()

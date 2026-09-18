@@ -14,7 +14,7 @@
  * `POST /tasks` takes the same body the web sends.
  */
 
-const { FormBuilder, STYLE, notice } = require("./embed");
+const { FormBuilder, STYLE, notice, plainCard } = require("./embed");
 const { actionId } = require("./actions");
 const { formatDay } = require("./agendaCard");
 
@@ -66,17 +66,19 @@ function renderNoTasks() {
 }
 
 function renderTaskCompleted(task) {
-  return notice("✅ Đã xong", `**${task.title}**`, { color: "#2ea043" });
+  return plainCard(`✅ Đã xong: ${task.title}`);
 }
 
-/** The other half of acting on a nudge. Prints the new deadline rather
- *  than just "đã dời": "tomorrow" is only unambiguous while you are
- *  reading the message it was sent in. */
-function renderTaskSnoozed(task, dueDate) {
-  const day = formatDay(dueDate);
-  return notice("⏰ Đã dời sang mai", `**${task.title}**${day ? ` — hạn mới ${day}` : ""}`, {
-    color: "#f0a020",
-  });
+/** The other half of acting on a nudge. Prints old → new deadline rather
+ *  than just the new one: "hạn mới 19/09" is only unambiguous while you
+ *  are reading the message it was sent in — the card the notification
+ *  becomes has to stand on its own days later, on scrollback. */
+function renderTaskSnoozed(task, dueDate, oldDueDate) {
+  const newDay = formatDay(dueDate);
+  const oldDay = formatDay(oldDueDate);
+  const subtitle =
+    oldDay && newDay ? `${oldDay} → ${newDay}` : newDay ? `Hạn mới ${newDay}` : "";
+  return plainCard(`⏰ Đã dời sang mai: ${task.title}`, subtitle);
 }
 
 /**

@@ -199,11 +199,6 @@ def build_events(rows: dict, *, same_task: bool) -> list[tuple[str, dict]]:
             "created_at": rows["stale"].created_at.isoformat(),
             "days_since_update": 12, "priority": "low",
         }),
-        ("schedule.starts_soon", {
-            "schedule_id": str(meeting.id), "title": meeting.title,
-            "start_time": start.isoformat(), "minutes_until_start": 25,
-            "location": meeting.location,
-        }),
         ("schedule.reminder.due", {
             "reminder_id": str(uuid4()), "schedule_id": str(meeting.id),
             "schedule_title": meeting.title,
@@ -211,7 +206,8 @@ def build_events(rows: dict, *, same_task: bool) -> list[tuple[str, dict]]:
             # before the event, and must print the event's time, not its own.
             "scheduled_at": (start - timedelta(minutes=15)).isoformat(),
             "start_time": start.isoformat(),
-            "location": meeting.location, "reminder_offset_minutes": 15, "method": "push",
+            "location": meeting.location, "description": meeting.description,
+            "checklist": [], "reminder_offset_minutes": 15, "method": "push",
         }),
         ("day.plan", {
             "due_today_count": 1, "carried_over_count": 3, "schedule_count": 1,

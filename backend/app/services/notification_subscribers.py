@@ -72,6 +72,16 @@ async def handle_schedule_reminder_due(event: EventEnvelope) -> None:
 
     schedule_id = event.payload.get("schedule_id")
 
+    # Same content the retired `schedule.starts_soon` predicate used to
+    # carry — this event is now the only lead-time nudge a schedule gets,
+    # so the prep checklist travels with it instead of being dropped.
+    description = event.payload.get("description")
+    checklist = event.payload.get("checklist") or []
+    lines = [body]
+    if description:
+        lines.append(description)
+    lines.extend(_listed(checklist, len(checklist), heading="Việc cần chuẩn bị:"))
+
     async with AsyncSessionLocal() as db:
         await request_attention_async(
             db,
@@ -79,10 +89,13 @@ async def handle_schedule_reminder_due(event: EventEnvelope) -> None:
             type="reminder",
             title=f"Nhắc lịch: {schedule_title}",
             body=body,
+            content=text_blocks(lines),
             actions=[{"label": "Xem", "action": "navigate", "url": "/schedule"}],
             payload={
                 "schedule_id": schedule_id,
                 "start_time": start_time,
+                "description": description,
+                "checklist": checklist,
             },
             item_type=AttentionItemType.SCHEDULE,
             item_id=UUID(schedule_id) if schedule_id else None,
@@ -333,50 +346,6 @@ async def handle_task_at_risk(event: EventEnvelope) -> None:
             item_type=AttentionItemType.TASK,
             item_id=UUID(task_id),
             reason_key="task.at_risk",
-        )
-
-
-async def handle_schedule_starts_soon(event: EventEnvelope) -> None:
-    """Detection→delivery for `schedule.starts_soon` (A1) — separate from
-    `schedule.reminder.due` (a reminder the user explicitly set): this
-    fires from the schedule itself, with no reminder configuration needed,
-    and doubles as the lead time the Gate needs to go quiet *before* the
-    meeting starts (step 3, `should_stay_quiet`)."""
-    if event.user_id is None:
-        logger.warning("schedule.starts_soon event missing user_id, skipping: %s", event.event_id)
-        return
-
-    schedule_id = event.payload.get("schedule_id")
-    if not schedule_id:
-        logger.warning("schedule.starts_soon event missing schedule_id, skipping: %s", event.event_id)
-        return
-
-    title = event.payload.get("title", "")
-    minutes_until_start = event.payload.get("minutes_until_start", 0)
-    clock = local_clock(event.payload.get("start_time"))
-    body = join_facts(
-        f"Còn {minutes_until_start} phút",
-        f"bắt đầu {clock}" if clock else None,
-        event.payload.get("location") or None,
-    )
-
-    async with AsyncSessionLocal() as db:
-        await request_attention_async(
-            db,
-            user_id=event.user_id,
-            type="schedule_starts_soon",
-            title=f"Sắp bắt đầu: {title}",
-            body=body,
-            actions=[{"label": "Xem", "action": "navigate", "url": "/schedule"}],
-            payload={
-                "schedule_id": schedule_id,
-                "minutes_until_start": minutes_until_start,
-                "start_time": event.payload.get("start_time"),
-                "location": event.payload.get("location"),
-            },
-            item_type=AttentionItemType.SCHEDULE,
-            item_id=UUID(schedule_id),
-            reason_key="schedule.starts_soon",
         )
 
 
@@ -640,7 +609,6 @@ DIRECT_DELIVERY_HANDLERS = {
     "task.stale": handle_task_stale,
     "task.blocked_cascade": handle_task_blocked_cascade,
     "task.at_risk": handle_task_at_risk,
-    "schedule.starts_soon": handle_schedule_starts_soon,
     "day.review": handle_day_review,
     "day.plan": handle_day_plan,
     "project.slipping": handle_project_slipping,

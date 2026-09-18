@@ -12,6 +12,12 @@ VI/A1 for why each one exists — the short version is Detection had almost
 nothing for the Attention Gate to gate, so this is where content comes
 from before more Delivery machinery gets built.
 
+`schedule.starts_soon` was later retired in favor of `ScheduleReminder` +
+`ReminderWorker` (app.services.reminder_worker) — a default reminder is
+now created with every schedule (app.services.reminder_service.
+DEFAULT_REMINDER_CONFIGS), so a poll-and-diff predicate here was doing the
+same job a second time, on a second loop.
+
 `task.at_risk` (6.8/4.4) is a seventh, added later: `risk_detection.
 compute_risk` scores every overdue task, and this publishes when that
 score crosses `settings.STATE_EVALUATOR_RISK_THRESHOLD` — an escalation
@@ -58,7 +64,6 @@ from app.events.payloads import (
     ProjectWillMissPayload,
     DayReviewPayload,
     ScheduleDigestItem,
-    ScheduleStartsSoonPayload,
     TaskAtRiskPayload,
     TaskBlockedCascadePayload,
     TaskDigestItem,
@@ -89,7 +94,6 @@ OVERDUE_FLAG_KEY = "overdue"
 DUE_SOON_FLAG_KEY = "due_soon"
 STALE_FLAG_KEY = "stale"
 BLOCKED_CASCADE_FLAG_KEY = "blocked_cascade"
-STARTS_SOON_FLAG_KEY = "starts_soon"
 DAY_REVIEW_FLAG_KEY = "day_review"
 DAY_PLAN_FLAG_KEY = "day_plan"
 AT_RISK_FLAG_KEY = "at_risk"
@@ -235,7 +239,6 @@ class StateEvaluator:
             self._evaluate_task_overdue,
             self._evaluate_task_due_soon,
             self._evaluate_task_stale,
-            self._evaluate_schedule_starts_soon,
             self._evaluate_day_plan,
             self._evaluate_day_review,
             # Sau cùng: hai predicate này đọc `tasks` của cả dự án, nên chạy
@@ -934,55 +937,6 @@ class StateEvaluator:
             payloads=confirmed,
             owner_by_project=owner_by_project,
         )
-
-    # ------------------------------------------------------------------
-    # schedule.starts_soon — event bắt đầu trong [MIN, MAX] phút
-    # ------------------------------------------------------------------
-
-    async def _evaluate_schedule_starts_soon(self):
-        async with self._session_maker() as db:
-            now = _utcnow()
-            window_start = now + timedelta(minutes=settings.STATE_EVALUATOR_SCHEDULE_STARTS_SOON_MIN_MINUTES)
-            window_end = now + timedelta(minutes=settings.STATE_EVALUATOR_SCHEDULE_STARTS_SOON_MAX_MINUTES)
-
-            result = await db.execute(
-                select(Schedule).where(
-                    Schedule.is_cancelled.is_(False),
-                    Schedule.start_time >= window_start,
-                    Schedule.start_time <= window_end,
-                )
-            )
-            starting_soon = {s.id: s for s in result.scalars().all()}
-
-            to_publish, _ = await self._diff_flags(
-                db,
-                item_type=AttentionItemType.SCHEDULE,
-                flag_key=STARTS_SOON_FLAG_KEY,
-                current_ids=set(starting_soon),
-                user_id_by_item={sid: s.user_id for sid, s in starting_soon.items()},
-            )
-
-            for schedule_id in to_publish:
-                await self._publish_schedule_starts_soon(starting_soon[schedule_id], now)
-
-    async def _publish_schedule_starts_soon(self, schedule: Schedule, now: datetime) -> None:
-        try:
-            minutes_until_start = max(0, int((schedule.start_time - now).total_seconds() // 60))
-            event_bus = await self._get_event_bus()
-            await event_bus.publish(EventEnvelope(
-                type="schedule.starts_soon",
-                source="StateEvaluator",
-                user_id=schedule.user_id,
-                payload=ScheduleStartsSoonPayload(
-                    schedule_id=schedule.id,
-                    title=schedule.title,
-                    start_time=schedule.start_time,
-                    minutes_until_start=minutes_until_start,
-                    location=schedule.location,
-                ).model_dump(),
-            ))
-        except Exception as exc:
-            logger.warning(f"Failed to publish schedule.starts_soon event for schedule {schedule.id}: {exc}")
 
     # ------------------------------------------------------------------
     # day.review — cuối ngày, còn việc chưa xong

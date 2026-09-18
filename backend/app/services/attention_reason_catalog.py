@@ -89,10 +89,6 @@ REASON_CATALOG: dict[str, ReasonMeta] = {
             "threshold — worse than a plain overdue nudge accounts for."
         ),
     ),
-    "schedule.starts_soon": ReasonMeta(
-        base_level=AttentionLevel.INFORM,
-        description="A scheduled event is about to start.",
-    ),
     "day.review": ReasonMeta(
         base_level=AttentionLevel.INFORM,
         description="The day is winding down and work is still open.",

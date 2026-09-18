@@ -9,12 +9,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database_async import make_async_sessionmaker
 from app.events.event_bus import get_event_bus
-from app.events.payloads import ReminderDuePayload
+from app.events.payloads import ReminderDuePayload, TaskDigestItem
 from app.events.schemas import EventEnvelope
 from app.models import ScheduleReminder, Schedule, ReminderStatus
+from app.services.calendar_items import CalendarItemService
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# Mirrors `MAX_DIGEST_ITEMS` in state_evaluator.py — a notification only
+# gets one chance to say what's still undone before the meeting starts.
+MAX_CHECKLIST_ITEMS = 10
 
 
 class ReminderWorker:
@@ -151,7 +156,7 @@ class ReminderWorker:
                         logger.info("Reminder %s sent successfully", reminder.id)
 
                         if schedule is not None:
-                            await self._publish_reminder_due(reminder, schedule)
+                            await self._publish_reminder_due(reminder, schedule, db)
 
                     except Exception as e:
                         logger.exception("Failed to send reminder %s", reminder.id)
@@ -187,8 +192,17 @@ class ReminderWorker:
                 logger.exception("Error processing due reminders")
                 await db.rollback()
 
-    async def _publish_reminder_due(self, reminder: ScheduleReminder, schedule: Schedule) -> None:
+    async def _publish_reminder_due(
+        self, reminder: ScheduleReminder, schedule: Schedule, db: AsyncSession
+    ) -> None:
         try:
+            # Same snapshot the old `schedule.starts_soon` predicate carried
+            # (state_evaluator.py's `_publish_schedule_starts_soon`) — this
+            # event is now the only lead-time nudge a schedule gets, so it
+            # needs the checklist too, not just the bare reminder facts.
+            checklist = await CalendarItemService(db).get_event_checklist(
+                schedule.user_id, schedule.id, occurrence_start_time=schedule.start_time,
+            )
             event_bus = await self._get_event_bus()
             await event_bus.publish(EventEnvelope(
                 type="schedule.reminder.due",
@@ -201,6 +215,16 @@ class ReminderWorker:
                     scheduled_at=reminder.scheduled_at,
                     start_time=schedule.start_time,
                     location=schedule.location,
+                    description=schedule.description,
+                    checklist=[
+                        TaskDigestItem(
+                            task_id=t.id,
+                            title=t.title,
+                            due_date=t.due_date,
+                            priority=t.priority.value if t.priority else None,
+                        )
+                        for t in checklist[:MAX_CHECKLIST_ITEMS]
+                    ],
                     reminder_offset_minutes=reminder.minutes_before,
                     method=reminder.method,
                 ).model_dump(),

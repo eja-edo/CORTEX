@@ -20,6 +20,7 @@ const {
   InteractiveBuilder,
   ButtonBuilder,
   EButtonMessageStyle,
+  EMarkdownType,
 } = require("mezon-sdk");
 
 const { actionId } = require("./actions");
@@ -28,6 +29,11 @@ const STYLE = EButtonMessageStyle;
 
 /** Cortex brand-ish accent so bot messages are recognisable at a glance. */
 const DEFAULT_COLOR = "#7c5cff";
+
+/** Top/bottom rule for the plain-text notification path (`notification()`,
+ *  no-taskId branch) — the card path doesn't need one, its embed border
+ *  already marks where it starts and ends. */
+const DIVIDER = "_".repeat(32);
 
 class FormBuilder {
   constructor(title) {
@@ -119,10 +125,38 @@ class FormBuilder {
   }
 }
 
-/** Plain text message. Kept here so no call site constructs `{ t }` by
- *  hand — the day that shape changes, it changes once. */
-function text(body) {
-  return { t: body };
+/**
+ * Plain text message. Kept here so no call site constructs `{ t }` by
+ * hand — the day that shape changes, it changes once.
+ *
+ * `mk` is optional: `{s, e}` ranges into `body` (JS string-index, i.e.
+ * UTF-16 code units — same units `body.length`/`slice` use) that get a
+ * style. Plain chat text does not parse Markdown on its own — `**x**`
+ * and `` `x` `` show up as literal asterisks/backticks — unlike an embed
+ * field's value, which the client does parse. `mk` is the only way to
+ * bold or code-style part of a `t` message.
+ */
+function text(body, mk) {
+  return mk && mk.length ? { t: body, mk } : { t: body };
+}
+
+/**
+ * Heading + an optional `mk`-CODE subtitle line, closed by a `DIVIDER` —
+ * the plain-chat shape `notification()`'s no-embed path uses, factored
+ * out so a one-off confirmation (a task just completed/snoozed from a
+ * button) can match it without re-deriving the heading-flush-against-
+ * subtitle mechanics documented on `notification()`.
+ */
+function plainCard(headingText, subtitle) {
+  let out = `# ${headingText}`;
+  const mk = [];
+  if (subtitle) {
+    const start = out.length;
+    out += subtitle;
+    mk.push({ type: EMarkdownType.CODE, s: start, e: out.length });
+  }
+  out += `\n${DIVIDER}`;
+  return text(out, mk);
 }
 
 /**
@@ -247,20 +281,82 @@ function notification({
   }
 
   const style = LEVEL_STYLE[level] ?? LEVEL_STYLE.inform;
-  const form = new FormBuilder(`${style.icon} ${title}`);
-  const description = [body, ...contentLines(content, body)].filter(Boolean).join("\n");
-  if (description) form.description(description);
-  form.color = style.color;
-  if (reasonKey) {
-    form.field("Loại nhắc", `\`${reasonKey}\` — tắt được trong Cortex → Settings`);
+  const detailLines = contentLines(content, body);
+  const taskId = payload?.task_id;
+
+  // Every notification — task-linked or not — renders as plain chat text,
+  // never the `InteractiveBuilder` embed card: the card's only reason to
+  // exist here was to host the ✅/⏰ buttons, but `components` (the button
+  // row) is its own field on `ChannelMessageContent`, independent of
+  // `embed` — so buttons don't actually need the embed, the card, or its
+  // "Powered by Mezon" footer chrome the SDK gives no way to turn off
+  // (see `InteractiveMessage.d.ts`).
+  //
+  // Title as a Markdown `# heading` line — confirmed live that Mezon's
+  // client parses a leading `# ` into an actual heading, even though the
+  // SDK's own `mk` type list (`EMarkdownType`) has no heading entry (only
+  // b/code/link) — this is the client's own chat-message Markdown, a
+  // different parser from `mk` ranges.
+  //
+  // `body` (the one-line fact summary — "Còn 28 phút · bắt đầu 18:00
+  // 18/09", "Trễ 3 ngày · hạn ...") gets `mk` CODE styling and sits right
+  // after the title with no separator at all — confirmed live that even
+  // one `\n` there still read as a line break (the heading block's own
+  // bottom margin), so the only way to get body flush against the title
+  // was zero newlines between them.
+  //
+  // `detailLines` (description/subtask list, then — task-linked or not —
+  // any `_listed` heading + items) gets a blank line before it as a
+  // whole, plus another blank line before each `heading:`-style line
+  // inside it, so a digest's several lists stay visually separate.
+  //
+  // `DIVIDER` at the end is what actually separates this notification
+  // from the DM's other messages — Mezon has no per-message visual
+  // boundary of its own (unlike the framed card this replaced), so
+  // nothing else marks where one nudge ends and the next chat message
+  // begins.
+  let out = `# ${style.icon} ${title}`;
+  const mk = [];
+
+  if (body) {
+    const bodyStart = out.length;
+    out += body;
+    mk.push({ type: EMarkdownType.CODE, s: bodyStart, e: out.length });
   }
 
-  const taskId = payload?.task_id;
-  if (taskId) {
-    form.button(actionId("notif_task_done", taskId), "✅ Xong", STYLE.SUCCESS);
-    form.button(actionId("notif_task_snooze", taskId), "⏰ Dời sang mai", STYLE.SECONDARY);
+  if (detailLines.length) {
+    out += "\n\n";
+    out += detailLines
+      .map((line, i) => (i > 0 && line.endsWith(":") ? `\n${line}` : line))
+      .join("\n");
   }
-  return form.build();
+
+  // reason_key/mute only for a task-linked nudge — dropped from the rest
+  // at the user's request (`*mute <reason_key>` and Cortex → Settings
+  // still work; this just stops naming the exact key on every single
+  // quiet, no-button nudge). A task-linked one keeps it: it's the only
+  // place `*mute task.overdue`'s exact spelling is printed anywhere in
+  // the DM, so losing it here would be a real regression, not tidying.
+  if (taskId && reasonKey) {
+    out += "\n\n";
+    const reasonStart = out.length;
+    out += reasonKey;
+    mk.push({ type: EMarkdownType.CODE, s: reasonStart, e: out.length });
+    out += " — tắt được trong Cortex → Settings";
+  }
+
+  out += `\n${DIVIDER}`;
+
+  const rendered = text(out, mk);
+
+  if (taskId) {
+    const buttons = new ButtonBuilder();
+    buttons.addButton(actionId("notif_task_done", taskId), "✅ Xong", STYLE.SUCCESS);
+    buttons.addButton(actionId("notif_task_snooze", taskId), "⏰ Dời sang mai", STYLE.SECONDARY);
+    rendered.components = [{ components: buttons.build() }];
+  }
+
+  return rendered;
 }
 
 /** A notice with no form: title, body, optional key/value lines. */
@@ -278,6 +374,7 @@ module.exports = {
   text,
   notice,
   notification,
+  plainCard,
   contentLines,
   LEVEL_STYLE,
   DEFAULT_COLOR,

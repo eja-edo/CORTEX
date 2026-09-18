@@ -11,6 +11,11 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Applied when a schedule is created without explicit reminders — replaces
+# the old `schedule.starts_soon` State Evaluator predicate, which used to
+# nudge every schedule automatically with no configuration needed.
+DEFAULT_REMINDER_CONFIGS: List[dict] = [{"minutes_before": 10, "method": "push"}]
+
 
 class ReminderService:
     """Service for creating and managing schedule reminders."""

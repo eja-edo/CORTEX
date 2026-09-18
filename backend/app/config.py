@@ -179,12 +179,6 @@ class Settings:
     # above: the right thresholds are an empirical question, not a law.
     STATE_EVALUATOR_DUE_SOON_HOURS: int = int(os.getenv("STATE_EVALUATOR_DUE_SOON_HOURS", "24"))
     STATE_EVALUATOR_STALE_DAYS: int = int(os.getenv("STATE_EVALUATOR_STALE_DAYS", "7"))
-    STATE_EVALUATOR_SCHEDULE_STARTS_SOON_MIN_MINUTES: int = int(
-        os.getenv("STATE_EVALUATOR_SCHEDULE_STARTS_SOON_MIN_MINUTES", "15")
-    )
-    STATE_EVALUATOR_SCHEDULE_STARTS_SOON_MAX_MINUTES: int = int(
-        os.getenv("STATE_EVALUATOR_SCHEDULE_STARTS_SOON_MAX_MINUTES", "30")
-    )
     # No per-user timezone exists anywhere in this schema (see
     # UserPreferences' docstring) — "end of day" is a fixed UTC hour, the
     # same convention-with-a-known-limitation as quiet hours.

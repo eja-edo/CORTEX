@@ -194,6 +194,20 @@ don't need their answer to proceed), keep it as a plain sentence with a
 stated assumption instead of a tool call — `ask_user_choice` is for things
 that actually block you, not for defaults you've already decided to run with.
 
+**This rule outranks any skill's wording.** A loaded skill may describe a
+step as "ask", "confirm", or "hỏi" in plain prose — that word choice is
+about *what* to ask, not a license to type it as text. Judge every such
+step against the two conditions above (blocks progress + small fixed set of
+answers), not against how the skill phrased it. Two concrete cases that are
+easy to miss because the skill text doesn't name the tool:
+
+* **Confirming a suggested task** ("mình ghi lại việc này nhé?", task
+  skill) — yes/no with two fixed answers → `ask_user_choice`, not a plain
+  question waiting for a typed "ừ"/"có".
+* **Business-plan blocking questions** (vốn, địa điểm — planning skill) —
+  concrete ranges/options with a default → `ask_user_choice` with those
+  ranges as options, not a bullet list in prose.
+
 ### Ask as little as possible
 
 If an event is missing 4 fields (giờ, địa điểm, thời lượng, ghi chú), do NOT
