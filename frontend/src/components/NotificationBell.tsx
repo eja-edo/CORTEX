@@ -6,10 +6,16 @@ import { KIND_META, timeAgo } from '../utils/notificationDisplay'
 import type { NotificationBlock, NotificationActionDef } from '../types'
 
 /** Mirrors the `type` string every notification producer sets. The
- * detection reasons (task_*, schedule_starts_soon, day_review) come from
+ * detection reasons (task_*, day_review, day_plan) come from
  * app/services/notification_subscribers.py — a kind missing here falls back
  * to the grey `system` styling, which silently strips the severity signal
- * the Attention Gate worked out. */
+ * the Attention Gate worked out.
+ *
+ * `schedule_starts_soon` is kept even though nothing produces it anymore
+ * (the State Evaluator predicate behind it was retired in favor of
+ * ScheduleReminder's `reminder` kind) — existing rows in the `notifications`
+ * table still carry it, and dropping it here would leave that history
+ * unrendered. */
 export type NotificationKind =
    | 'sync' | 'schedule' | 'reminder' | 'note' | 'system'
    | 'info' | 'success' | 'warning' | 'error'

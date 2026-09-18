@@ -66,7 +66,7 @@ def test_an_unregistered_reason_defaults_to_personal_not_project():
 
 @pytest.mark.parametrize(
     "reason_key",
-    ["task.overdue", "task.at_risk", "task.stale", "day.plan", "schedule.starts_soon"],
+    ["task.overdue", "task.at_risk", "task.stale", "day.plan", "schedule.reminder.due"],
 )
 def test_every_task_level_reason_stays_personal(reason_key):
     assert scope_for(reason_key) is ReasonScope.PERSONAL

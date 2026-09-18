@@ -65,7 +65,12 @@ export function ScheduleForm({ onCreate, initialTimes, onClose }: ScheduleFormPr
   const [description, setDescription] = useState('')
 
   const [recurrence, setRecurrence] = useState<RecurrenceRule | null>(null)
-  const [reminders, setReminders] = useState<ReminderConfig[]>([])
+  // Khớp default của backend khi tạo lịch không kèm reminders
+  // (app/services/reminder_service.DEFAULT_REMINDER_CONFIGS) — form này gửi
+  // reminders tường minh, nên tự áp cùng mặc định để hai đường không lệch nhau.
+  const [reminders, setReminders] = useState<ReminderConfig[]>([
+    { minutes_before: 10, method: 'push' },
+  ])
 
   const [showRecurrence, setShowRecurrence] = useState(false)
   const [showReminders, setShowReminders] = useState(false)

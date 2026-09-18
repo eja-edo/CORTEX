@@ -320,7 +320,7 @@ async def test_occurrence_of_a_series_inherits_the_template_project(async_db, us
 
     await enqueue_async(
         async_db, user_id=user_id, item_type=AttentionItemType.SCHEDULE, item_id=occurrence.id,
-        reason_key="schedule.starts_soon", title=occurrence.title, body=None,
+        reason_key="schedule.reminder.due", title=occurrence.title, body=None,
         payload={}, actions=[], attention_log_id=None,
     )
 

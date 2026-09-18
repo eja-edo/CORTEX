@@ -15,22 +15,14 @@
 /* --------------------------------------------------------------------------
    1. Focus
 
-   Two problems this fixes:
+   A visible keyboard focus ring for buttons, links and other non-text
+   controls — Chrome's default (`outline: auto 1px #0b57d0`) measures
+   2.1–2.9:1 against the dark themes' surfaces, under the 3:1 WCAG 2.2 needs
+   for a focus indicator, and is invisible on the accent-coloured buttons it
+   most often lands on.
 
-   (a) Buttons and links were falling back to Chrome's default ring
-       (`outline: auto 1px #0b57d0`). It exists, but it is a fixed blue that
-       measures 2.1–2.9:1 against the dark themes' surfaces — under the 3:1
-       WCAG 2.2 needs for a focus indicator — and it is invisible on the
-       accent-coloured buttons it most often lands on.
-
-   (b) 43 rules across the stylesheets set `outline: none` on inputs,
-       textareas, selects and contenteditable surfaces. Only 6 of them
-       replaced it with a box-shadow. The other 37 fields had no focus
-       indicator at all.
-
-   `:focus-visible` (not `:focus`) means a mouse click on a text field does
-   not draw a ring, which is the behaviour those `outline: none` rules were
-   reaching for in the first place.
+   `:focus-visible` (not `:focus`) means a mouse click does not draw a ring —
+   only keyboard navigation does.
    -------------------------------------------------------------------------- */
 
 :focus-visible {
@@ -38,26 +30,22 @@
   outline-offset: 2px;
 }
 
-/* The 37 fields that explicitly killed their outline.
-
-   The `:root:root` prefix is a deliberate specificity bump, not a typo. The
-   rules being overridden range from `.foo` (0,1,0) to
-   `.recurrence-group select:focus` (0,2,1), and App.tsx loads three
-   stylesheets *after* App.css — so source order alone cannot be relied on.
-   `:root:root` + `:focus-visible` lands at (0,3,0), which clears all of them
-   without reaching for `!important`. `:where()` itself adds nothing, so the
-   long list below stays free. */
+/* Product decision: text inputs, textareas, selects and contenteditable
+   surfaces stay ring-free — no blue border on focus or click. Most of them
+   already set their own `outline: none`, but that alone isn't reliable: it
+   ties in specificity with the plain `:focus-visible` above, and which one
+   wins on a tie depends on CSS load order, which Vite doesn't keep stable
+   across code-split chunks. `:root:root` + `:focus-visible` lands at
+   (0,3,0) — the same boost this list used when it used to *add* a ring
+   instead — so this wins deterministically regardless of load order.
+   `:where()` itself adds nothing, so the list stays free. */
 :root:root :where(
   .ws-search-input,
-  .ask-ai-model-trigger,
-  .ask-ai-model-option,
   .ask-ai-input,
-  .plan-proposal-item-title,
   .ask-choice-custom-input,
   .form-input,
   .topbar-search-input,
   .datetime-filter input[type='datetime-local'],
-  .rbc-btn-group button,
   .recurrence-group select,
   .recurrence-group input,
   .conversation-search-input,
@@ -91,13 +79,13 @@
   .ws-people-search input,
   .ws-role-select
 ):focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
+  outline: none;
 }
 
 /* One `!important` earns its place: react-big-calendar ships
    `outline: none !important` in its own vendor stylesheet, and we cannot
-   lower the specificity of a rule we do not own. */
+   lower the specificity of a rule we do not own. Calendar buttons/cells
+   aren't text fields, so they keep the ring. */
 .rbc-btn-group button:focus-visible,
 .rbc-event:focus-visible,
 .rbc-day-bg:focus-visible {
@@ -105,16 +93,17 @@
   outline-offset: -2px !important;
 }
 
-/* Editor surfaces are full-bleed; an offset ring would sit outside the
-   scroll container and get clipped. Tuck it inside instead. */
+/* Buttons/dropdowns that sit in the same areas as the ring-free list above
+   but aren't text fields — they keep the ring, at the same deterministic
+   specificity, so click-vs-load-order can't flip it off for them too. */
 :root:root :where(
-  .editor-block-content,
-  .block-editable,
-  .wne-textarea,
-  .note-md-textarea,
-  .markdown-field-textarea
+  .ask-ai-model-trigger,
+  .ask-ai-model-option,
+  .plan-proposal-item-title,
+  .rbc-btn-group button
 ):focus-visible {
-  outline-offset: -2px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 /* Skip link — the keyboard route past the sidebar into page content. */

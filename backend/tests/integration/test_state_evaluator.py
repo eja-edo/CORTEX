@@ -1,10 +1,11 @@
 """
 Integration tests for Milestone 4.6 — State Evaluator: the original
-`task.overdue` predicate plus the five A1 added it (`task.due_soon`,
-`task.stale`, `task.blocked_cascade`, `schedule.starts_soon`,
-`day.review`). See app/services/state_evaluator.py's module docstring for
-why `goal.at_risk`/`commitment.*` are still out of scope: neither model
-exists.
+`task.overdue` predicate plus the ones A1 added (`task.due_soon`,
+`task.stale`, `task.blocked_cascade`, `day.review`). `schedule.starts_soon`
+was retired in favor of `ScheduleReminder` + `ReminderWorker` — see
+app/services/state_evaluator.py's module docstring. See that module's
+docstring too for why `goal.at_risk`/`commitment.*` are still out of
+scope: neither model exists.
 
 Runs against the real dev Postgres + Redis, reusing the seeded user (same
 pattern as tests/integration/test_tasks.py). Every row created here is
@@ -123,7 +124,6 @@ ALL_EVENT_TYPES = (
     "task.stale",
     "task.blocked_cascade",
     "task.at_risk",
-    "schedule.starts_soon",
     "day.review",
     "day.plan",
 )
@@ -478,69 +478,6 @@ async def test_at_risk_clears_when_score_drops_back_below_threshold(async_db, ev
 
     await evaluator._evaluate_task_at_risk()
     assert await _flag(async_db, parent.id, flag_key="at_risk") is None
-
-
-# ---------------------------------------------------------------------------
-# schedule.starts_soon (A1)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_schedule_starts_soon_lifecycle_publishes_once_per_transition(async_db, evaluator, event_subscriber):
-    now = _utcnow()
-    minutes = (
-        settings.STATE_EVALUATOR_SCHEDULE_STARTS_SOON_MIN_MINUTES
-        + settings.STATE_EVALUATOR_SCHEDULE_STARTS_SOON_MAX_MINUTES
-    ) // 2
-    start = now + timedelta(minutes=minutes)
-    schedule = await _make_schedule(
-        async_db, title_suffix="starts_soon", start_time=start, end_time=start + timedelta(hours=1),
-    )
-
-    await evaluator._evaluate_schedule_starts_soon()
-    events = _events_of_type(event_subscriber, "schedule.starts_soon")
-    assert len(events) == 1
-    assert events[0].payload["schedule_id"] == schedule.id
-    assert await _flag(async_db, schedule.id, item_type=AttentionItemType.SCHEDULE, flag_key="starts_soon") is not None
-
-    # Second scan, nothing changed: must not republish.
-    await evaluator._evaluate_schedule_starts_soon()
-    assert len(_events_of_type(event_subscriber, "schedule.starts_soon")) == 1
-
-    # Cancelled: flag clears.
-    schedule.is_cancelled = True
-    async_db.add(schedule)
-    await async_db.commit()
-    await evaluator._evaluate_schedule_starts_soon()
-    assert await _flag(async_db, schedule.id, item_type=AttentionItemType.SCHEDULE, flag_key="starts_soon") is None
-
-
-@pytest.mark.asyncio
-async def test_schedule_starts_soon_excludes_cancelled(async_db, evaluator, event_subscriber):
-    now = _utcnow()
-    start = now + timedelta(minutes=20)
-    schedule = await _make_schedule(
-        async_db, title_suffix="cancelled", start_time=start, end_time=start + timedelta(hours=1), is_cancelled=True,
-    )
-
-    await evaluator._evaluate_schedule_starts_soon()
-
-    assert len(_events_of_type(event_subscriber, "schedule.starts_soon")) == 0
-    assert await _flag(async_db, schedule.id, item_type=AttentionItemType.SCHEDULE, flag_key="starts_soon") is None
-
-
-@pytest.mark.asyncio
-async def test_schedule_starts_soon_excludes_outside_window(async_db, evaluator, event_subscriber):
-    now = _utcnow()
-    start = now + timedelta(minutes=settings.STATE_EVALUATOR_SCHEDULE_STARTS_SOON_MAX_MINUTES + 30)
-    schedule = await _make_schedule(
-        async_db, title_suffix="too_far", start_time=start, end_time=start + timedelta(hours=1),
-    )
-
-    await evaluator._evaluate_schedule_starts_soon()
-
-    assert len(_events_of_type(event_subscriber, "schedule.starts_soon")) == 0
-    assert await _flag(async_db, schedule.id, item_type=AttentionItemType.SCHEDULE, flag_key="starts_soon") is None
 
 
 # ---------------------------------------------------------------------------

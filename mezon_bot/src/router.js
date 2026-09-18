@@ -742,7 +742,7 @@ class MessageRouter {
     const task = written.task ?? { title: action.targetId };
     const card =
       intent === INTENT.SNOOZE
-        ? renderTaskSnoozed(task, written.dueDate)
+        ? renderTaskSnoozed(task, written.dueDate, written.oldDueDate)
         : renderTaskCompleted(task);
     await this._replaceCard(parsed, card, reply);
     logger.info("notification acted on from Mezon", {
@@ -859,7 +859,15 @@ class MessageRouter {
     // response doesn't carry one. The card exists to tell the user *which*
     // thing just happened, and "Đã xong" with no title says less than
     // nothing.
-    return { ...result, task: result.task?.title ? result.task : prepared.task };
+    //
+    // `oldDueDate` is `prepared.task`'s due date — read *before*
+    // `applyTaskWrite` overwrote it — so a snooze confirmation can show
+    // old → new instead of just the new date on its own.
+    return {
+      ...result,
+      task: result.task?.title ? result.task : prepared.task,
+      oldDueDate: prepared.task?.due_date ?? null,
+    };
   }
 
   /** Chỉ buổi này / Tất cả các buổi on the occurrence picker. */

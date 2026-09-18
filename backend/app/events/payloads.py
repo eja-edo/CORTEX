@@ -70,6 +70,21 @@ class ScheduleCompletedPayload(BaseModel):
     completed_at: datetime
 
 
+class TaskDigestItem(BaseModel):
+    """One task as it appears inside a digest event's list.
+
+    A snapshot, not a reference: a subscriber that only got `task_id` would
+    have to go back to the database to say anything useful, and events are
+    also read by workflow_service across a process boundary where that
+    lookup isn't available at all. Kept to what notification text actually
+    prints — see `app.services.notification_format.task_line`.
+    """
+    task_id: UUID
+    title: str
+    due_date: Optional[datetime] = None
+    priority: Optional[str] = Field(None, description="low, medium, high, or urgent")
+
+
 class ReminderDuePayload(BaseModel):
     """Payload for schedule.reminder.due event.
 
@@ -87,6 +102,11 @@ class ReminderDuePayload(BaseModel):
     scheduled_at: datetime = Field(..., description="When the reminder fires (start_time - offset)")
     start_time: datetime = Field(..., description="When the schedule itself begins")
     location: Optional[str] = None
+    description: Optional[str] = None
+    # Carried the same way `ScheduleStartsSoonPayload.checklist` used to —
+    # a snapshot, not a reference, since the subscriber only gets one
+    # chance to say what's still undone before the meeting starts.
+    checklist: list[TaskDigestItem] = Field(default_factory=list)
     reminder_offset_minutes: Optional[int] = None
     method: str = "push"
 
@@ -134,21 +154,6 @@ class TaskDeletedPayload(BaseModel):
     """Payload for task.deleted event (hard delete)."""
     task_id: UUID
     status: str
-
-
-class TaskDigestItem(BaseModel):
-    """One task as it appears inside a digest event's list.
-
-    A snapshot, not a reference: a subscriber that only got `task_id` would
-    have to go back to the database to say anything useful, and events are
-    also read by workflow_service across a process boundary where that
-    lookup isn't available at all. Kept to what notification text actually
-    prints — see `app.services.notification_format.task_line`.
-    """
-    task_id: UUID
-    title: str
-    due_date: Optional[datetime] = None
-    priority: Optional[str] = Field(None, description="low, medium, high, or urgent")
 
 
 class ScheduleDigestItem(BaseModel):
@@ -204,15 +209,6 @@ class TaskBlockedCascadePayload(BaseModel):
     # The whole point of this reason is *which* work is stuck behind the
     # parent. A bare count named nothing the user could go act on.
     open_subtasks: list[TaskDigestItem] = Field(default_factory=list)
-
-
-class ScheduleStartsSoonPayload(BaseModel):
-    """Payload for schedule.starts_soon event (Milestone 4.6 / A1)."""
-    schedule_id: UUID
-    title: str
-    start_time: datetime
-    minutes_until_start: int
-    location: Optional[str] = None
 
 
 class TaskAtRiskPayload(BaseModel):
@@ -386,7 +382,6 @@ EVENT_PAYLOAD_REGISTRY: dict[str, type[BaseModel]] = {
     "task.due_soon": TaskDueSoonPayload,
     "task.stale": TaskStalePayload,
     "task.blocked_cascade": TaskBlockedCascadePayload,
-    "schedule.starts_soon": ScheduleStartsSoonPayload,
     "task.at_risk": TaskAtRiskPayload,
     "day.review": DayReviewPayload,
     "day.plan": DayPlanPayload,

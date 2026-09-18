@@ -68,6 +68,10 @@ const VALID = {
   body: "Nộp báo cáo tuần",
   attention_level: "ask",
   reason_key: "task.overdue",
+  // A real task.overdue always carries task_id (notification_subscribers.py
+  // puts it on every task-shaped reason) — it's what gives the DM its
+  // ✅/⏰ buttons.
+  payload: { task_id: "task-1" },
 };
 
 test("a valid delivery is sent and answered 200", async () => {
@@ -78,11 +82,12 @@ test("a valid delivery is sent and answered 200", async () => {
     assert.equal((await res.json()).delivered, true);
     assert.equal(gateway.calls.length, 1);
     assert.equal(gateway.calls[0].userId, "user-42");
-    // The rendered embed, not raw text — the level and reason have to
-    // survive the trip or the Gate's judgement is lost at the last step.
-    const embed = gateway.calls[0].content.embed[0];
-    assert.match(embed.title, /Task quá hạn/);
-    assert.equal(embed.description, "Nộp báo cáo tuần");
+    // Plain text now, not an embed — the level and reason have to survive
+    // the trip or the Gate's judgement is lost at the last step.
+    const { t, components } = gateway.calls[0].content;
+    assert.match(t, /Task quá hạn/);
+    assert.match(t, /Nộp báo cáo tuần/);
+    assert.ok(components?.[0]?.components?.length, "task_id must still carry the ✅/⏰ buttons");
   });
 });
 

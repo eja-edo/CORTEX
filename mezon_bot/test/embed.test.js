@@ -125,7 +125,10 @@ test("notification puts body and its detail lines in one description", () => {
 
   const rendered = JSON.stringify(built);
   assert.ok(rendered.includes("Nộp hồ sơ thầu"), "detail line must reach the DM");
-  assert.ok(rendered.includes("day.plan"), "reason_key stays visible so it can be switched off");
+  // No task_id → the no-button/plain-text path, which (at the user's
+  // request) does not print reason_key — only the button-card path
+  // (a real task.overdue, which always carries task_id) still names it.
+  assert.ok(!rendered.includes("day.plan"), "plain-text path must not print reason_key");
 });
 
 test("notification still renders when only body is present", () => {

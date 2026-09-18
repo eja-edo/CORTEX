@@ -17,7 +17,7 @@ backoff machinery F0 was built to provide, at the last hop.
 `default_min_level = RECOMMEND` rather than INFORM: a DM is more intrusive
 than a badge in a tab the user may not have open. `task.at_risk` (ASK) and
 `task.overdue`/`task.blocked_cascade` (RECOMMEND) get through; `task.stale`,
-`day.review` and `schedule.starts_soon` (INFORM) stay in-app. A user who
+`day.review` and `schedule.reminder.due` (INFORM) stay in-app. A user who
 wants everything can lower their own floor — the default is the quiet one,
 matching boundary #2.
 """
