@@ -23,6 +23,7 @@ either direction; the calendar queries both tables and merges in memory.
 import asyncio
 from datetime import date, datetime, time, timezone
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,6 +31,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Schedule, Task
 from app.schemas import CalendarItem
 from app.services.recurrence import RecurrenceService
+from app.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def _schedule_status(schedule: Schedule) -> str:
@@ -139,8 +143,36 @@ def _as_occurrence_view(template: Task, exception: Task) -> Task:
         source_message_id=exception.source_message_id,
         completed_at=exception.completed_at,
         is_exception=False,
+        is_cancelled=False,
         created_at=exception.created_at,
         updated_at=exception.updated_at,
+    )
+
+
+def _with_default_due_date(row: Task, due_date: datetime) -> Task:
+    """`row`, with `due_date` filled in — a transient copy, never added to
+    the session (same reasoning as `_as_occurrence_view`: this must never be
+    mistaken for a real write). Used when a checklist item never had its own
+    due date set (`due_date IS NULL`, template or exception) and is being
+    viewed for a specific occurrence — see `get_event_checklist`."""
+    return Task(
+        id=row.id,
+        user_id=row.user_id,
+        project_id=row.project_id,
+        title=row.title,
+        status=row.status,
+        due_date=due_date,
+        priority=row.priority,
+        description=row.description,
+        related_event_id=row.related_event_id,
+        parent_task_id=row.parent_task_id,
+        source_conversation_id=row.source_conversation_id,
+        source_message_id=row.source_message_id,
+        completed_at=row.completed_at,
+        is_exception=row.is_exception,
+        is_cancelled=row.is_cancelled,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
     )
 
 
@@ -282,16 +314,45 @@ class CalendarItemService:
         orphan task that the Attention Gate will then nag about.
 
         `occurrence_start_time` matters only when the linked event is
-        recurring: every template task (`related_event_id == event_id`,
-        `recurrence_id IS NULL`) is swapped for its per-occurrence exception
-        row if one exists for this occurrence (created lazily by
-        `TaskService.complete_task_occurrence`/`update_task_occurrence`),
-        exactly mirroring how `RecurrenceService.generate_instances` resolves
-        a `Schedule` exception for one occurrence. No exception yet ->
-        the template itself is returned unchanged, same as an
-        un-overridden `Schedule` occurrence still reads the root's
-        `is_completed` — so an `all`-scope edit (which writes the template)
-        keeps showing on every occurrence that hasn't diverged.
+        recurring, in three ways:
+
+        1. A plain template (`related_event_id == event_id`,
+           `recurrence_id IS NULL`, `original_start_time IS NULL`) is
+           swapped for its per-occurrence exception row if one exists for
+           this occurrence (created lazily by
+           `TaskService.complete_task_occurrence`/`update_task_occurrence`),
+           exactly mirroring how `RecurrenceService.generate_instances`
+           resolves a `Schedule` exception for one occurrence. No exception
+           yet -> the template itself is returned unchanged, same as an
+           un-overridden `Schedule` occurrence still reads the root's
+           `is_completed` — so an `all`-scope edit (which writes the
+           template) keeps showing on every occurrence that hasn't diverged.
+        2. That exception is skipped entirely (not substituted, not shown)
+           when it's `is_cancelled` — a `this_only` *delete* on the
+           template: this one occurrence loses the item, every other
+           occurrence keeps reading the still-intact template. Mirrors
+           `RecurrenceService.generate_instances` dropping a cancelled
+           `Schedule` instance the same way.
+        3. A row created with `edit_scope=this_only` (`original_start_time`
+           set, `recurrence_id` NULL — see `Task.original_start_time`'s
+           docstring) only appears when it matches the occurrence being
+           asked for; it's invisible to every other occurrence and to a
+           caller not viewing any specific occurrence at all.
+        4. A checklist item with no due date of its own (`due_date IS
+           NULL` — never explicitly set, on either a template or an
+           exception) shows this occurrence's own end time instead of no
+           date at all. A series-wide item's "+ Add" panel doesn't ask
+           which day it's for (there is no single day — it's every
+           occurrence), so it can't write a real `due_date` at creation the
+           way a one-off or `this_only` item's does (see `TaskService
+           .create_task`'s `scoped_to_one_occurrence`, and `useEventChecklist
+           .addTask` on the frontend). Without this, every occurrence showed
+           whichever single date happened to be baked in at creation time —
+           every newly-added series-wide item landing on the same day
+           regardless of which occurrence's checklist you actually opened
+           it from. An item with a real `due_date` (the user set one
+           explicitly, `all`-scope) is never touched here — explicit beats
+           default, on every occurrence.
 
         The id an exception is substituted under is always the *template's*
         — never the exception row's own id — so a caller writing back
@@ -302,7 +363,7 @@ class CalendarItemService:
         transient, session-detached `Task` — never `session.add()`ed, so it
         can't be flushed and can't collide with the exception's real row.
         """
-        templates = list(
+        rows = list(
             (
                 await self.session.execute(
                     select(Task)
@@ -317,21 +378,77 @@ class CalendarItemService:
             .scalars()
             .all()
         )
+        # An occurrence-scoped row (case 3 above) only belongs to the
+        # occurrence it names — everywhere else, and when no occurrence is
+        # specified at all, it doesn't exist.
+        templates = [
+            t for t in rows
+            if t.original_start_time is None or t.original_start_time == occurrence_start_time
+        ]
         if occurrence_start_time is None or not templates:
             return templates
 
+        occurrence_end_time = await self._event_occurrence_end_time(event_id, occurrence_start_time)
+
+        plain_templates = [t for t in templates if t.original_start_time is None]
+        if not plain_templates:
+            return self._with_default_due_dates(templates, occurrence_end_time)
+
         exceptions_stmt = select(Task).where(
             Task.user_id == user_id,
-            Task.recurrence_id.in_([t.id for t in templates]),
+            Task.recurrence_id.in_([t.id for t in plain_templates]),
             Task.original_start_time == occurrence_start_time,
         )
         exceptions_by_template = {
             e.recurrence_id: e
             for e in (await self.session.execute(exceptions_stmt)).scalars().all()
         }
+        results = []
+        for t in templates:
+            exception = exceptions_by_template.get(t.id)
+            if exception is None:
+                results.append(t)
+            elif not exception.is_cancelled:
+                results.append(_as_occurrence_view(t, exception))
+            # else: cancelled for this occurrence — omitted.
+        return self._with_default_due_dates(results, occurrence_end_time)
+
+    async def _event_occurrence_end_time(
+        self, event_id: UUID, occurrence_start_time: datetime,
+    ) -> datetime | None:
+        """This occurrence's own end time — `occurrence_start_time` plus the
+        event's duration — for point 4 of `get_event_checklist`'s docstring.
+        `None` if the event can't be found (nothing sensible to fall back
+        to; case 4 then just doesn't apply).
+
+        Naive on the way out, in the *event's own* `tzid` (its
+        `recurrence_rule`, same default `RecurrenceService` itself falls
+        back to): `Task.due_date` is deliberately a naive local-wall-clock
+        column (see its own docstring), and every real `due_date` sitting
+        next to this one in the same result list was written as the
+        browser's local time — stripping tzinfo off a UTC value directly
+        would silently shift it by the user's offset (the exact bug
+        `recurrence.py`'s `_wire_utc` exists to dodge on the `Schedule`
+        side), and could even land it on the wrong day.
+        """
+        event = (
+            await self.session.execute(select(Schedule).where(Schedule.id == event_id))
+        ).scalar_one_or_none()
+        if event is None or event.start_time is None or event.end_time is None:
+            return None
+        result = occurrence_start_time + (event.end_time - event.start_time)
+        tzid = (event.recurrence_rule or {}).get("tzid", "UTC")
+        try:
+            result = result.astimezone(ZoneInfo(tzid))
+        except Exception:
+            logger.warning("Unknown tzid %r on schedule %s; treating as UTC", tzid, event_id)
+        return result.replace(tzinfo=None)
+
+    @staticmethod
+    def _with_default_due_dates(rows: list[Task], occurrence_end_time: datetime | None) -> list[Task]:
+        if occurrence_end_time is None:
+            return rows
         return [
-            _as_occurrence_view(t, exceptions_by_template[t.id])
-            if t.id in exceptions_by_template
-            else t
-            for t in templates
+            _with_default_due_date(t, occurrence_end_time) if t.due_date is None else t
+            for t in rows
         ]

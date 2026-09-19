@@ -5,6 +5,7 @@ import { strings } from '../i18n/strings'
 import { ChannelsCard } from './ChannelsCard'
 import type { AppTheme } from '../utils/theme'
 import { THEME_OPTIONS } from '../utils/theme'
+import { clearRememberedEditScope, getRememberedEditScope, setRememberedEditScope } from '../utils/editScopePreference'
 
 const THEME_ICONS: Record<AppTheme, React.ElementType> = {
   light: Sun,
@@ -73,6 +74,25 @@ export function SettingsPanel({
   const [quietStart, setQuietStart] = useState(() => toTimeInputValue(quietHours?.quiet_hours_start ?? null))
   const [quietEnd, setQuietEnd] = useState(() => toTimeInputValue(quietHours?.quiet_hours_end ?? null))
   const [savingQuietHours, setSavingQuietHours] = useState(false)
+
+  // Purely local (localStorage) — see utils/editScopePreference.ts. Not
+  // wired through UserPreferencesResponse because it isn't a server-side
+  // preference: it's "don't ask again" from the recurring-event dialog
+  // itself (EditScopeDialog), and this toggle just mirrors/clears it.
+  const [askEditScopeEveryTime, setAskEditScopeEveryTime] = useState(() => getRememberedEditScope() === null)
+
+  const handleAskEditScopeEveryTimeChange = (checked: boolean) => {
+    setAskEditScopeEveryTime(checked)
+    if (checked) {
+      clearRememberedEditScope()
+    } else if (getRememberedEditScope() === null) {
+      // Turned off from here directly (never picked "don't ask again" in
+      // the dialog itself) — nothing remembered yet to silence future
+      // prompts with. `this_only` is the safer default: it never touches
+      // occurrences the user didn't look at.
+      setRememberedEditScope('this_only')
+    }
+  }
 
   // Re-sync local inputs whenever fresh data arrives (e.g. on first load —
   // quietHours starts null before the settings view's fetch resolves).
@@ -160,7 +180,29 @@ export function SettingsPanel({
           />
         </label>
       </div>
-      
+
+      {/* Recurring-event edit-scope prompt — see EditScopeDialog/useEditScopeDialog */}
+      <div className="settings-card">
+        <div className="settings-card-title">{strings.settings.recurringScope.title}</div>
+        <div className="settings-card-subtitle">
+          {strings.settings.recurringScope.desc}
+        </div>
+        <label className="settings-toggle-row">
+          <div className="settings-toggle-info">
+            <span className="settings-toggle-label">{strings.settings.recurringScope.askEveryTime.label}</span>
+            <span className="settings-toggle-desc">
+              {strings.settings.recurringScope.askEveryTime.desc}
+            </span>
+          </div>
+          <input
+            type="checkbox"
+            className="settings-toggle"
+            checked={askEditScopeEveryTime}
+            onChange={(e) => handleAskEditScopeEveryTimeChange(e.target.checked)}
+          />
+        </label>
+      </div>
+
       {/* Notifications Card — Milestone 6.2 (quiet hours) + redesigned 4.5 (reason toggles) */}
       <div className="settings-card">
         <div className="settings-card-title">{strings.settings.notifications.title}</div>

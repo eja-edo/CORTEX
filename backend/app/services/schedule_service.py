@@ -76,7 +76,26 @@ def _fire_event(event: EventEnvelope) -> None:
 # ---------------------------------------------------------------------------
 
 def _attach_google_sync_flags(schedules: list[Schedule], db: Session) -> None:
-    """Gán thuộc tính `google_synced` cho mỗi schedule object."""
+    """Gán thuộc tính `google_synced`, `is_recurring` và `recurrence` cho
+    mỗi schedule object.
+
+    `Schedule` (ORM) chỉ có cột `recurrence_rule` — không có thuộc tính
+    `is_recurring`/`recurrence` nào cả. Mọi endpoint trả `ScheduleResponse`
+    trực tiếp từ một `Schedule` ORM object (get một cái, create, update,
+    instance update — tất cả các nơi gọi hàm này) dựa vào Pydantic
+    `from_attributes` đọc đúng 2 tên đó; không có thì nó lặng lẽ rơi về
+    default của field (`False`/`None`) chứ không báo lỗi gì — nghĩa là
+    trước bản vá này, MỌI response đơn lẻ kiểu vậy cho một sự kiện lặp lại
+    đều báo sai `is_recurring: false, recurrence: null`, dù DB có rule thật.
+    Bug cụ thể bị lộ ra: mezon bot's `taskActions.prepareTaskWrite` gọi
+    `cortex.getSchedule()` để hỏi "sự kiện này có lặp không" trước khi
+    quyết định có cần hỏi buổi hay không — luôn nhận `false`, nên không bao
+    giờ hỏi, rồi việc hoàn thành/dời checklist task bị backend từ chối
+    (422) vì thiếu `occurrence_start_time`/`edit_scope`.
+
+    Chỉ endpoint LIST (`list_schedules`/`generate_instances`) tính đúng 2
+    trường này từ trước — vì nó tự dựng dict, không đi qua ORM object.
+    """
     if not schedules:
         return
     schedule_ids = [s.id for s in schedules]
@@ -91,6 +110,8 @@ def _attach_google_sync_flags(schedules: list[Schedule], db: Session) -> None:
     }
     for s in schedules:
         setattr(s, "google_synced", s.id in mapped_ids)
+        setattr(s, "is_recurring", RecurrenceService().is_recurring(s.recurrence_rule))
+        setattr(s, "recurrence", s.recurrence_rule)
 
 
 def _attach_google_sync_flags_to_dicts(
@@ -424,10 +445,28 @@ class ScheduleService:
     def update_schedule(
         self, schedule_id: UUID, user_id: UUID, data: ScheduleUpdate
     ) -> Schedule:
-        """Cập nhật schedule theo Pydantic schema. Dùng cho API layer."""
+        """Cập nhật schedule theo Pydantic schema. Dùng cho API layer.
+
+        Every occurrence of a recurring schedule without its own exception
+        reports the *root*'s id (see `RecurrenceService.generate_instances`),
+        so `schedule_id` here can't be trusted to mean "just this occurrence"
+        — a plain update would silently mutate the whole series. The
+        command-layer path (`schedule.update`) already refuses this and
+        routes through `update_instance()` instead; this raw API entry point
+        had no equivalent guard, so it stayed a way to bulk-edit a series by
+        accident. Reject it here too, rather than fixing it only where the
+        UI happens to call in from.
+        """
         schedule = self.get_schedule_by_id(schedule_id, user_id)
         if not schedule:
             raise ValueError("Schedule not found")
+        if self._recurrence_svc.is_recurring(schedule.recurrence_rule):
+            raise ValueError(
+                "Schedule is recurring — use PUT /schedules/{id}/instances/"
+                "{original_start_time} with an edit_scope instead, so the "
+                "update targets the right occurrence(s) rather than the "
+                "whole series."
+            )
 
         update_data = data.model_dump(exclude_unset=True)
         fields_changed = list(update_data.keys())

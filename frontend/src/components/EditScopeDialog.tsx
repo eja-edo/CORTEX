@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { EditScope } from '../types'
 
 /**
@@ -18,11 +18,16 @@ export function EditScopeDialog({
     title: string
     message: string
     options: { scope: EditScope; label: string }[]
-    onChoose: (scope: EditScope) => void
+    /** `remember`: the "đừng hỏi lại" checkbox was checked when this option
+     * was picked — the caller (`useEditScopeDialog`) persists the choice and
+     * skips this dialog entirely next time. Settings has a toggle to turn
+     * asking back on. */
+    onChoose: (scope: EditScope, remember: boolean) => void
     onCancel: () => void
 }) {
     const dialogRef = useRef<HTMLDivElement>(null)
     const firstOptionRef = useRef<HTMLButtonElement>(null)
+    const [remember, setRemember] = useState(false)
 
     useEffect(() => {
         const previouslyFocused = document.activeElement as HTMLElement | null
@@ -77,6 +82,14 @@ export function EditScopeDialog({
                 </div>
                 <div className="modal-body">
                     <p className="confirm-dialog-message" id="edit-scope-dialog-message">{message}</p>
+                    <label className="edit-scope-dialog-remember">
+                        <input
+                            type="checkbox"
+                            checked={remember}
+                            onChange={(e) => setRemember(e.target.checked)}
+                        />
+                        <span>Không hỏi lại lần sau — luôn dùng lựa chọn này (đổi lại trong Cài đặt)</span>
+                    </label>
                 </div>
                 <div className="modal-footer">
                     <button type="button" className="btn btn-ghost" onClick={onCancel}>
@@ -88,7 +101,7 @@ export function EditScopeDialog({
                             ref={i === 0 ? firstOptionRef : undefined}
                             type="button"
                             className="btn btn-primary"
-                            onClick={() => onChoose(opt.scope)}
+                            onClick={() => onChoose(opt.scope, remember)}
                         >
                             {opt.label}
                         </button>

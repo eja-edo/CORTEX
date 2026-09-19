@@ -394,3 +394,321 @@ async def test_task_command_linked_to_non_recurring_event_needs_no_scope(async_d
 
     complete_result = await _run(ctx, "task.complete", {"task_id": task_result.data["id"]})
     assert complete_result.success is True, complete_result.error
+
+
+# ============================================================================
+# Task: task.create / task.delete scoping on a recurring event's checklist
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_task_create_without_scope_shows_on_every_occurrence(
+    async_db, ctx, recurring_schedule
+):
+    """Today's default, unchanged: a plain create is series-wide."""
+    occ1 = recurring_schedule.start_time
+    occ2 = occ1 + timedelta(weeks=1)
+
+    result = await _run(ctx, "task.create", {
+        "title": f"{TITLE_PREFIX}Series-wide item", "related_event_id": str(recurring_schedule.id),
+    })
+    assert result.success is True, result.error
+
+    checklist_svc = CalendarItemService(async_db)
+    occ1_view = await checklist_svc.get_event_checklist(TEST_USER_ID, recurring_schedule.id, occurrence_start_time=occ1)
+    occ2_view = await checklist_svc.get_event_checklist(TEST_USER_ID, recurring_schedule.id, occurrence_start_time=occ2)
+    assert [t.title for t in occ1_view] == [f"{TITLE_PREFIX}Series-wide item"]
+    assert [t.title for t in occ2_view] == [f"{TITLE_PREFIX}Series-wide item"]
+
+
+@pytest.mark.asyncio
+async def test_task_create_this_only_shows_on_just_that_occurrence(
+    async_db, ctx, recurring_schedule
+):
+    occ1 = recurring_schedule.start_time
+    occ2 = occ1 + timedelta(weeks=1)
+
+    result = await _run(ctx, "task.create", {
+        "title": f"{TITLE_PREFIX}Occurrence-only item",
+        "related_event_id": str(recurring_schedule.id),
+        "occurrence_start_time": occ1.isoformat(),
+        "edit_scope": "this_only",
+    })
+    assert result.success is True, result.error
+
+    checklist_svc = CalendarItemService(async_db)
+    occ1_view = await checklist_svc.get_event_checklist(TEST_USER_ID, recurring_schedule.id, occurrence_start_time=occ1)
+    occ2_view = await checklist_svc.get_event_checklist(TEST_USER_ID, recurring_schedule.id, occurrence_start_time=occ2)
+    assert [t.title for t in occ1_view] == [f"{TITLE_PREFIX}Occurrence-only item"]
+    assert [t.title for t in occ2_view] == []
+
+    # Deleting it needs no scope — there's only ever one occurrence it could mean.
+    delete_result = await _run(ctx, "task.delete", {"task_id": result.data["id"]})
+    assert delete_result.success is True, delete_result.error
+    assert delete_result.data["deleted"] is True
+
+
+@pytest.mark.asyncio
+async def test_task_delete_command_requires_scope_for_recurring_template(
+    ctx, recurring_schedule
+):
+    task_result = await _run(ctx, "task.create", {
+        "title": f"{TITLE_PREFIX}Delete-needs-scope", "related_event_id": str(recurring_schedule.id),
+    })
+    result = await _run(ctx, "task.delete", {"task_id": task_result.data["id"]})
+    assert result.success is False
+    assert "recurring" in result.error.lower()
+    assert "edit_scope" in result.error
+
+
+@pytest.mark.asyncio
+async def test_task_delete_this_only_hides_from_one_occurrence_keeps_template(
+    async_db, ctx, recurring_schedule
+):
+    occ1 = recurring_schedule.start_time
+    occ2 = occ1 + timedelta(weeks=1)
+
+    task_result = await _run(ctx, "task.create", {
+        "title": f"{TITLE_PREFIX}Delete this_only", "related_event_id": str(recurring_schedule.id),
+    })
+    task_id = task_result.data["id"]
+
+    delete_result = await _run(ctx, "task.delete", {
+        "task_id": task_id, "occurrence_start_time": occ1.isoformat(), "edit_scope": "this_only",
+    })
+    assert delete_result.success is True, delete_result.error
+    assert delete_result.data["deleted"] is False
+
+    checklist_svc = CalendarItemService(async_db)
+    occ1_view = await checklist_svc.get_event_checklist(TEST_USER_ID, recurring_schedule.id, occurrence_start_time=occ1)
+    occ2_view = await checklist_svc.get_event_checklist(TEST_USER_ID, recurring_schedule.id, occurrence_start_time=occ2)
+    assert occ1_view == []
+    assert [t.title for t in occ2_view] == [f"{TITLE_PREFIX}Delete this_only"]
+
+    # The template itself is untouched — a plain fetch (no occurrence) still
+    # finds it, and task.complete still works on the other occurrence.
+    complete_result = await _run(ctx, "task.complete", {
+        "task_id": task_id, "occurrence_start_time": occ2.isoformat(),
+    })
+    assert complete_result.success is True, complete_result.error
+
+
+@pytest.mark.asyncio
+async def test_task_delete_all_removes_from_every_occurrence(
+    async_db, ctx, recurring_schedule
+):
+    occ1 = recurring_schedule.start_time
+    occ2 = occ1 + timedelta(weeks=1)
+
+    task_result = await _run(ctx, "task.create", {
+        "title": f"{TITLE_PREFIX}Delete all", "related_event_id": str(recurring_schedule.id),
+    })
+    task_id = task_result.data["id"]
+
+    delete_result = await _run(ctx, "task.delete", {
+        "task_id": task_id, "occurrence_start_time": occ1.isoformat(), "edit_scope": "all",
+    })
+    assert delete_result.success is True, delete_result.error
+    assert delete_result.data["deleted"] is True
+
+    checklist_svc = CalendarItemService(async_db)
+    occ1_view = await checklist_svc.get_event_checklist(TEST_USER_ID, recurring_schedule.id, occurrence_start_time=occ1)
+    occ2_view = await checklist_svc.get_event_checklist(TEST_USER_ID, recurring_schedule.id, occurrence_start_time=occ2)
+    assert occ1_view == []
+    assert occ2_view == []
+
+
+@pytest.mark.asyncio
+async def test_task_delete_this_only_revert_restores_the_occurrence(
+    async_db, ctx, recurring_schedule
+):
+    occ1 = recurring_schedule.start_time
+
+    task_result = await _run(ctx, "task.create", {
+        "title": f"{TITLE_PREFIX}Delete then undo", "related_event_id": str(recurring_schedule.id),
+    })
+    task_id = task_result.data["id"]
+
+    delete_result = await _run(ctx, "task.delete", {
+        "task_id": task_id, "occurrence_start_time": occ1.isoformat(), "edit_scope": "this_only",
+    })
+    assert delete_result.success is True, delete_result.error
+
+    revert_result = await get_command_registry().revert_command(delete_result.action_id, ctx)
+    assert revert_result.success is True, revert_result.error
+
+    checklist_svc = CalendarItemService(async_db)
+    occ1_view = await checklist_svc.get_event_checklist(TEST_USER_ID, recurring_schedule.id, occurrence_start_time=occ1)
+    assert [t.title for t in occ1_view] == [f"{TITLE_PREFIX}Delete then undo"]
+
+
+@pytest.mark.asyncio
+async def test_task_this_only_created_item_can_be_toggled_repeatedly(
+    async_db, ctx, recurring_schedule
+):
+    """Regression: `_resolve_occurrence_target`'s `this_only` branch used to
+    assume `task_id` always named a plain template, and looked for an
+    exception keyed on `recurrence_id == task_id`. For a row already scoped
+    to one occurrence at creation (`original_start_time` set, no
+    `recurrence_id` of its own), that lookup can never match — every
+    complete/un-complete created a fresh, unreachable exception instead of
+    ever landing back on the row the checklist actually reads, so the
+    checkbox silently reset the instant you refetched."""
+    occ1 = recurring_schedule.start_time
+
+    task_result = await _run(ctx, "task.create", {
+        "title": f"{TITLE_PREFIX}Toggle this-only item",
+        "related_event_id": str(recurring_schedule.id),
+        "occurrence_start_time": occ1.isoformat(),
+        "edit_scope": "this_only",
+    })
+    assert task_result.success is True, task_result.error
+    task_id = task_result.data["id"]
+
+    checklist_svc = CalendarItemService(async_db)
+
+    complete_result = await _run(ctx, "task.complete", {
+        "task_id": task_id, "occurrence_start_time": occ1.isoformat(),
+    })
+    assert complete_result.success is True, complete_result.error
+    # Completing an already-occurrence-scoped row must land on that same
+    # row, never a new one.
+    assert complete_result.data["id"] == task_id
+
+    occ1_view = await checklist_svc.get_event_checklist(TEST_USER_ID, recurring_schedule.id, occurrence_start_time=occ1)
+    assert len(occ1_view) == 1
+    assert occ1_view[0].status.value == "done"
+
+    # Un-tick: task.update with status=todo, same occurrence scope.
+    uncomplete_result = await _run(ctx, "task.update", {
+        "task_id": task_id, "status": "todo", "occurrence_start_time": occ1.isoformat(),
+    })
+    assert uncomplete_result.success is True, uncomplete_result.error
+    assert uncomplete_result.data["id"] == task_id
+
+    occ1_view = await checklist_svc.get_event_checklist(TEST_USER_ID, recurring_schedule.id, occurrence_start_time=occ1)
+    assert len(occ1_view) == 1
+    assert occ1_view[0].status.value == "todo"
+
+
+# ============================================================================
+# Task: a series-wide checklist item's due date tracks the occurrence being
+# viewed, instead of freezing whichever occurrence it was created from.
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_series_wide_item_without_due_date_tracks_each_occurrence(
+    async_db, ctx, recurring_schedule
+):
+    """Regression: `useEventChecklist.addTask` used to always send
+    `due_date = <the currently-open occurrence's end time>` for a
+    series-wide item too — a single DB column, so every occurrence showed
+    that same frozen date forever, no matter which occurrence's checklist
+    was actually open. The frontend fix stops defaulting a series-wide
+    item's due_date at all; this is the backend half — filling it in fresh,
+    per occurrence, on read."""
+    occ1 = recurring_schedule.start_time
+    occ2 = occ1 + timedelta(weeks=1)
+    duration = recurring_schedule.end_time - recurring_schedule.start_time
+
+    task_result = await _run(ctx, "task.create", {
+        "title": f"{TITLE_PREFIX}No frozen date", "related_event_id": str(recurring_schedule.id),
+    })
+    assert task_result.success is True, task_result.error
+
+    checklist_svc = CalendarItemService(async_db)
+    occ1_view = await checklist_svc.get_event_checklist(TEST_USER_ID, recurring_schedule.id, occurrence_start_time=occ1)
+    occ2_view = await checklist_svc.get_event_checklist(TEST_USER_ID, recurring_schedule.id, occurrence_start_time=occ2)
+
+    # due_date comes back naive (local wall-clock, matching every other
+    # due_date — see _event_occurrence_end_time); the fixture's tzid is
+    # UTC, so the naive value is numerically identical to the aware one.
+    assert occ1_view[0].due_date == (occ1 + duration).replace(tzinfo=None)
+    assert occ2_view[0].due_date == (occ2 + duration).replace(tzinfo=None)
+    assert occ1_view[0].due_date != occ2_view[0].due_date
+
+
+@pytest.mark.asyncio
+async def test_series_wide_item_with_explicit_due_date_is_never_overridden(
+    async_db, ctx, recurring_schedule
+):
+    """The per-occurrence default (previous test) only fills in a *missing*
+    due date — an explicit one, set on purpose, must read back identically
+    on every occurrence."""
+    occ1 = recurring_schedule.start_time
+    occ2 = occ1 + timedelta(weeks=1)
+    explicit_due = (occ1 + timedelta(days=30)).date().isoformat()
+
+    task_result = await _run(ctx, "task.create", {
+        "title": f"{TITLE_PREFIX}Explicit due date",
+        "related_event_id": str(recurring_schedule.id),
+        "due_date": explicit_due,
+    })
+    assert task_result.success is True, task_result.error
+
+    checklist_svc = CalendarItemService(async_db)
+    occ1_view = await checklist_svc.get_event_checklist(TEST_USER_ID, recurring_schedule.id, occurrence_start_time=occ1)
+    occ2_view = await checklist_svc.get_event_checklist(TEST_USER_ID, recurring_schedule.id, occurrence_start_time=occ2)
+
+    assert occ1_view[0].due_date == occ2_view[0].due_date
+    assert occ1_view[0].due_date.date().isoformat() == explicit_due
+
+
+# ============================================================================
+# ScheduleService.get_schedule_by_id must report is_recurring/recurrence
+# correctly — every single-schedule endpoint (and the mezon bot's
+# taskActions.prepareTaskWrite, via cortex.getSchedule) depends on it to
+# decide whether a checklist write needs an occurrence/scope at all.
+# ============================================================================
+
+def test_get_schedule_by_id_reports_is_recurring(recurring_schedule):
+    """Regression: `Schedule` (the ORM model) has no `is_recurring`/
+    `recurrence` attribute — only `recurrence_rule`. Every endpoint that
+    returns a single `Schedule` straight through `ScheduleResponse`
+    (GET/POST/PUT `/schedules/*`, all going through `get_schedule_by_id` or
+    a sibling that shares `_attach_google_sync_flags`) used to silently
+    default those two fields to `False`/`None` via Pydantic's
+    `from_attributes` fallback — never an error, just wrong, for every
+    recurring schedule. The mezon bot's `taskActions.prepareTaskWrite`
+    calls exactly this endpoint (`cortex.getSchedule`) to decide whether a
+    checklist task's event recurs before asking which occurrence; reading
+    `false` here meant it never asked, and the backend then rejected the
+    bare completion/snooze write with a 422 for missing
+    `occurrence_start_time`/`edit_scope`."""
+    from app.database import SessionLocal
+    from app.services.schedule_service import ScheduleService
+
+    db = SessionLocal()
+    try:
+        fetched = ScheduleService(db).get_schedule_by_id(recurring_schedule.id, TEST_USER_ID)
+        assert fetched is not None
+        assert fetched.is_recurring is True
+        assert fetched.recurrence == recurring_schedule.recurrence_rule
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_schedule_update_command_response_reports_is_recurring(
+    async_db, ctx, recurring_schedule
+):
+    """Same bug, on the write side: `update_instance`'s `all`/`this_and_after`
+    branches return a raw `Schedule` too (`_update_instance_all`'s `root`,
+    `_update_instance_this_and_after`'s `new_root`) — both go through
+    `_attach_google_sync_flags`, so both get the same fix."""
+    result = await _run(ctx, "schedule.update", {
+        "schedule_id": str(recurring_schedule.id),
+        "description": "still recurring after an all-scope edit",
+        "original_start_time": recurring_schedule.start_time.isoformat(),
+        "edit_scope": "all",
+    })
+    assert result.success is True, result.error
+
+    from app.database import SessionLocal
+    from app.services.schedule_service import ScheduleService
+
+    db = SessionLocal()
+    try:
+        fetched = ScheduleService(db).get_schedule_by_id(recurring_schedule.id, TEST_USER_ID)
+        assert fetched.is_recurring is True
+    finally:
+        db.close()

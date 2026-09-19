@@ -51,6 +51,10 @@ interface EventDetailModalProps {
   // events (none currently) doesn't have to wire it.
   onUpdateInstance?: (item: Schedule, editScope: EditScope, patch: Partial<Schedule>) => Promise<boolean>
   onRemove: (id: string) => Promise<void>
+  // Same reasoning as onUpdateInstance: deleting a recurring event by its
+  // shared root id would delete the whole series with no way to remove
+  // just the occurrence being viewed. Optional for the same reason.
+  onRemoveInstance?: (item: Schedule, editScope: EditScope) => Promise<boolean>
   onClose: () => void
 }
 
@@ -69,6 +73,7 @@ export function EventDetailModal({
   onToggleComplete,
   onUpdateInstance,
   onRemove,
+  onRemoveInstance,
   onClose,
 }: EventDetailModalProps) {
   useEscapeToClose(onClose)
@@ -130,6 +135,27 @@ export function EventDetailModal({
     void onToggleComplete(schedule)
   }
 
+  // Deleting a recurring event asks the same "this occurrence, or all?"
+  // question a field edit does (see `patch`) — without it, the trash
+  // button always deleted the whole series (every occurrence shares the
+  // root's id; see onRemoveInstance's docstring).
+  const handleRemove = async () => {
+    if (!schedule.id) return
+    if (draft.is_recurring && onRemoveInstance) {
+      const scope = await promptEditScope({
+        title: 'Sự kiện lặp lại',
+        message: 'Xoá sự kiện này cho buổi nào?',
+        options: EDIT_SCOPE_OPTIONS,
+      })
+      if (!scope) return
+      const ok = await onRemoveInstance(draft, scope)
+      if (ok) onClose()
+      return
+    }
+    await onRemove(schedule.id)
+    onClose()
+  }
+
   const commitTitle = async () => {
     const trimmed = titleInput.trim()
     if (trimmed && trimmed !== draft.title) {
@@ -167,7 +193,7 @@ export function EventDetailModal({
           <button
             type="button"
             className="modal-close"
-            onClick={async () => { if (schedule.id) { await onRemove(schedule.id) } onClose() }}
+            onClick={() => void handleRemove()}
             aria-label="Xoá"
             title="Xoá"
           >

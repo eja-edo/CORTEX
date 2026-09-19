@@ -137,7 +137,22 @@ class TaskService:
         except Exception as exc:
             logger.warning(f"Failed to publish {event_type} event: {exc}")
 
-    async def create_task(self, payload: TaskCreate, user_id: UUID) -> Task:
+    async def create_task(
+        self,
+        payload: TaskCreate,
+        user_id: UUID,
+        occurrence_start_time: datetime | None = None,
+        edit_scope: str | None = None,
+    ) -> Task:
+        """`occurrence_start_time`/`edit_scope` are optional, unlike the
+        update/complete paths' hard requirement — an existing caller
+        (the AI tool, conversation extraction) attaching `related_event_id`
+        to a recurring event with neither set keeps today's behavior
+        unchanged: a plain template, shown on every occurrence. Only
+        `edit_scope="this_only"` (with `occurrence_start_time` given) does
+        anything different — see `Task.original_start_time`'s docstring for
+        what that row means. The event checklist UI is the one caller that
+        always passes both, asking the user first."""
         # Resolved before the row is built, not after: `project_id` is
         # NOT NULL, so there is no valid intermediate state where a task
         # exists without a project (DESIGN 3.3/3.5).
@@ -145,6 +160,12 @@ class TaskService:
             user_id=user_id,
             explicit_project_id=payload.project_id,
             related_event_id=payload.related_event_id,
+        )
+        scoped_to_one_occurrence = (
+            edit_scope == "this_only"
+            and occurrence_start_time is not None
+            and payload.related_event_id is not None
+            and await self._event_is_recurring(payload.related_event_id)
         )
         task = Task(
             user_id=user_id,
@@ -164,6 +185,7 @@ class TaskService:
             # otherwise it would never age out of a "done today" list. Naive
             # UTC, same as `due_date`/`created_at`: this column has no tz.
             completed_at=datetime.utcnow() if payload.status is TaskStatus.DONE else None,
+            original_start_time=occurrence_start_time if scoped_to_one_occurrence else None,
         )
         try:
             created = await self.repository.create(task)
@@ -281,8 +303,13 @@ class TaskService:
         through the occurrence-scoped variants below)."""
         if task.related_event_id is None:
             return False
+        return await self._event_is_recurring(task.related_event_id)
+
+    async def _event_is_recurring(self, event_id: UUID) -> bool:
+        """Same check as `is_linked_to_recurring_event`, from a bare event
+        id — used by `create_task` (there's no `Task` row yet)."""
         result = await self.session.execute(
-            select(Schedule).where(Schedule.id == task.related_event_id)
+            select(Schedule).where(Schedule.id == event_id)
         )
         event = result.scalar_one_or_none()
         if event is None:
@@ -311,11 +338,23 @@ class TaskService:
         `original_start_time`/`is_exception` set), then target that. Created
         lazily, on first write — exactly `ScheduleService
         ._update_instance_this_only`'s pattern.
+
+        `task_id` can also already name a row scoped to one occurrence at
+        creation (`original_start_time` set, `recurrence_id` unset — an
+        `edit_scope=this_only` create; see `Task.original_start_time`'s
+        docstring). That row has nothing else a write could mean, for
+        either scope — targeting it directly instead of running the
+        `this_only` branch below matters: that branch's `get_exception`
+        lookup filters on `recurrence_id == template.id`, which is never
+        true for this row's own children, so every call would create a
+        fresh, unreachable exception instead of ever landing back on the
+        row `get_event_checklist` actually shows — a checkbox that resets
+        itself the moment you look away.
         """
         template = await self.repository.get_by_id_and_user(task_id, user_id)
         if template is None:
             return None
-        if edit_scope == "all":
+        if edit_scope == "all" or template.original_start_time is not None:
             return template.id
 
         exception = await self.repository.get_exception(template.id, user_id, occurrence_start_time)
@@ -378,6 +417,79 @@ class TaskService:
         if target_id is None:
             return None
         return await self.update_task(target_id, user_id, payload)
+
+    async def cancel_task_occurrence(
+        self, task_id: UUID, user_id: UUID, occurrence_start_time: datetime,
+    ) -> Task | None:
+        """A `this_only` delete on a checklist item that's still a plain
+        series-wide template: the template can't be removed (every other
+        occurrence still reads it), so this hides it from just the one
+        occurrence instead. Mirrors `ScheduleService.cancel_instance`
+        exactly — find-or-create the occurrence's exception row and mark it
+        `is_cancelled`; `CalendarItemService.get_event_checklist` then
+        omits it for that occurrence only.
+
+        Returns the exception row (never the template) so the caller has
+        something to snapshot for undo — see `restore_task_occurrence`.
+        """
+        template = await self.repository.get_by_id_and_user(task_id, user_id)
+        if template is None:
+            return None
+
+        exception = await self.repository.get_exception(template.id, user_id, occurrence_start_time)
+        if exception is not None:
+            exception.is_cancelled = True
+        else:
+            exception = Task(
+                user_id=user_id,
+                project_id=template.project_id,
+                title=template.title,
+                status=template.status,
+                due_date=template.due_date,
+                priority=template.priority,
+                description=template.description,
+                related_event_id=template.related_event_id,
+                parent_task_id=template.parent_task_id,
+                recurrence_id=template.id,
+                original_start_time=occurrence_start_time,
+                is_exception=True,
+                is_cancelled=True,
+            )
+            self.session.add(exception)
+
+        try:
+            await self.session.commit()
+            await self.session.refresh(exception)
+        except Exception:
+            await self.session.rollback()
+            raise
+
+        await self._publish_event(
+            "task.updated",
+            user_id=user_id,
+            payload=TaskUpdatedPayload(
+                task_id=template.id, status=exception.status.value, fields_changed=["is_cancelled"],
+            ).model_dump(mode="json"),
+        )
+        return exception
+
+    async def restore_task_occurrence(
+        self, task_id: UUID, user_id: UUID, occurrence_start_time: datetime,
+    ) -> Task | None:
+        """Undo `cancel_task_occurrence` — the `task.delete` revert path for
+        a `this_only` delete. `task_id` is the *template's* id, same
+        convention as everywhere else here."""
+        exception = await self.repository.get_exception(task_id, user_id, occurrence_start_time)
+        if exception is None:
+            return None
+        exception.is_cancelled = False
+        try:
+            await self.session.commit()
+            await self.session.refresh(exception)
+        except Exception:
+            await self.session.rollback()
+            raise
+        return exception
 
     async def complete_task_cascade(self, task_id: UUID, user_id: UUID) -> list[Task] | None:
         """Complete a task and every sub-task beneath it, however deep.

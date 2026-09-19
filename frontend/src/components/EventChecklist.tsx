@@ -77,8 +77,11 @@ export function EventChecklist({
                 <SubtaskCreatePanel
                     onCancel={() => setAddingItem(false)}
                     onCreate={async (input) => {
-                        await addTask(input)
-                        setAddingItem(false)
+                        // If the user cancelled the "this occurrence or
+                        // all?" prompt, leave the panel open with what they
+                        // typed rather than silently discarding it.
+                        const created = await addTask(input)
+                        if (created) setAddingItem(false)
                     }}
                 />
             ) : (
