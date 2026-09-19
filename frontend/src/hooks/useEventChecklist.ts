@@ -50,7 +50,7 @@ export function useEventChecklist(
     }, [eventId, occurrenceStartTime])
 
     useEffect(() => {
-        void fetchTasks()
+        void Promise.resolve().then(() => fetchTasks())
     }, [fetchTasks])
 
     /** "+ Add a checklist item" panel submit → task.create. Always creates

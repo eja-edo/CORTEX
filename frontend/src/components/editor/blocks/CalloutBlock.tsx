@@ -2,7 +2,7 @@ import { useRef, useEffect, useCallback, useContext } from 'react'
 import { Info, AlertTriangle, Lightbulb, AlertCircle, Ban } from 'lucide-react'
 import type { BlockNode } from '../../../types/editor'
 import { useEditorStore } from '../../../stores/editorStore'
-import { ReadOnlyCtx } from '../EditorSurface'
+import { ReadOnlyCtx } from '../ReadOnlyContext'
 
 interface CalloutBlockProps {
   block: BlockNode

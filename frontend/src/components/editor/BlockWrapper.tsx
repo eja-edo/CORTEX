@@ -2,7 +2,7 @@ import { useCallback, useContext, type ReactNode } from 'react'
 import { useEditorStore } from '../../stores/editorStore'
 import { GripVertical, Plus } from 'lucide-react'
 import type { BlockNode, SyntheticListenerMap } from '../../types/editor'
-import { ReadOnlyCtx } from './EditorSurface'
+import { ReadOnlyCtx } from './ReadOnlyContext'
 
 interface BlockWrapperProps {
   block: BlockNode

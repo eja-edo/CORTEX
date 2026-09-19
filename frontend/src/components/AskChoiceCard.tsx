@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { Check } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { AskChoiceQuestion } from '../services/api'
@@ -18,23 +18,23 @@ interface Props {
 }
 
 export function AskChoiceCard({ step, disabled, onSubmit }: Props) {
-    const questions = step.questions ?? []
+    const questions = useMemo(() => step.questions ?? [], [step.questions])
     const [activeTab, setActiveTab] = useState(0)
     const [selected, setSelected] = useState<Record<string, string[]>>({})
     const [customText, setCustomText] = useState<Record<string, string>>({})
 
     const answered = step.answers
 
-    const isQuestionAnswered = (q: AskChoiceQuestion) => {
+    const isQuestionAnswered = useCallback((q: AskChoiceQuestion) => {
         const picks = selected[q.id] ?? []
         const hasCustom = picks.includes(CUSTOM_KEY) && (customText[q.id] ?? '').trim().length > 0
         const hasOption = picks.some(p => p !== CUSTOM_KEY)
         return hasCustom || hasOption
-    }
+    }, [selected, customText])
 
     const allAnswered = useMemo(
         () => questions.length > 0 && questions.every(isQuestionAnswered),
-        [questions, selected, customText],
+        [questions, isQuestionAnswered],
     )
 
     const toggleOption = (q: AskChoiceQuestion, key: string) => {

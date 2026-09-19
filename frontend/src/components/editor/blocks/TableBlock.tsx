@@ -1,7 +1,7 @@
 import { useRef, useEffect, useCallback, useMemo, useContext } from 'react'
 import type { BlockNode } from '../../../types/editor'
 import { useEditorStore } from '../../../stores/editorStore'
-import { ReadOnlyCtx } from '../EditorSurface'
+import { ReadOnlyCtx } from '../ReadOnlyContext'
 
 interface TableBlockProps {
   block: BlockNode

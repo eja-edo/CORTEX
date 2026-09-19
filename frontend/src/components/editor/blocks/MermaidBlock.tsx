@@ -1,7 +1,7 @@
 import { useRef, useEffect, useState, useCallback, useContext } from 'react'
 import type { BlockNode } from '../../../types/editor'
 import { useEditorStore } from '../../../stores/editorStore'
-import { ReadOnlyCtx } from '../EditorSurface'
+import { ReadOnlyCtx } from '../ReadOnlyContext'
 
 interface MermaidBlockProps {
   block: BlockNode

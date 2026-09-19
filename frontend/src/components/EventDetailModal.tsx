@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Calendar, CheckCircle2, Circle, Clock3, Layers, MapPin, Repeat, Trash2, X } from 'lucide-react'
 import type { EditScope, Schedule, ScheduleType } from '../types'
 import { parseServerDateTime } from '../utils/calendarItems'
@@ -89,12 +89,14 @@ export function EventDetailModal({
   // re-fire constantly and stomp `draft` back to the pre-edit snapshot —
   // a field could save successfully and still visibly "revert" on blur,
   // only showing the real value after closing and reopening the modal.
-  useEffect(() => {
+  const [prevSchedule, setPrevSchedule] = useState(schedule)
+  if (schedule !== prevSchedule) {
+    setPrevSchedule(schedule)
     setDraft(schedule)
     setTitleInput(schedule.title)
     setStartLocal(toLocalInputDateTime(parseServerDateTime(schedule.start_time)))
     setEndLocal(toLocalInputDateTime(parseServerDateTime(schedule.end_time)))
-  }, [schedule])
+  }
 
   const patch = async (changes: Partial<Schedule>): Promise<boolean> => {
     if (!canEdit) return false

@@ -63,7 +63,7 @@ export function ListBlock({ block, order }: ListBlockProps) {
         document.execCommand('italic', false)
       }
     }
-  }, [block.id, splitBlock, mergeBlockBackward, exitListOnEmpty])
+  }, [block.id, splitBlock, mergeBlockBackward, exitListOnEmpty, readOnly])
 
   const handleToggle = useCallback((e: React.MouseEvent) => {
     if (!isTask) return

@@ -61,12 +61,14 @@ export function PlanProposalCard({ proposalId, onClose, onApproved }: Props) {
     const [actionLoading, setActionLoading] = useState<'approve' | 'reject' | null>(null)
 
     useEffect(() => {
-        setLoading(true)
-        setError(null)
-        fetchProposal(proposalId)
-            .then((proposal) => setItems(proposal.items.map((item) => ({ ...item, included: true }))))
-            .catch((err) => setError(err instanceof Error ? err.message : 'Không tải được đề xuất'))
-            .finally(() => setLoading(false))
+        void Promise.resolve().then(() => {
+            setLoading(true)
+            setError(null)
+            return fetchProposal(proposalId)
+                .then((proposal) => setItems(proposal.items.map((item) => ({ ...item, included: true }))))
+                .catch((err) => setError(err instanceof Error ? err.message : 'Không tải được đề xuất'))
+                .finally(() => setLoading(false))
+        })
     }, [proposalId, fetchProposal])
 
     const byKey = useMemo(() => {
@@ -84,7 +86,11 @@ export function PlanProposalCard({ proposalId, onClose, onApproved }: Props) {
         setActionLoading('approve')
         setError(null)
         try {
-            const included = items.filter((item) => item.included).map(({ included: _included, ...rest }) => rest)
+            const included = items.filter((item) => item.included).map((item) => {
+                const { included, ...rest } = item
+                void included
+                return rest
+            })
             await approveProposal(proposalId, included)
             onApproved()
         } catch (err) {

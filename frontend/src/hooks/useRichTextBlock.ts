@@ -1,7 +1,7 @@
 import { useRef, useEffect, useCallback, useContext } from 'react'
 import { useEditorStore } from '../stores/editorStore'
 import type { BlockNode } from '../types/editor'
-import { ReadOnlyCtx } from '../components/editor/EditorSurface'
+import { ReadOnlyCtx } from '../components/editor/ReadOnlyContext'
 import { renderInlineMarkdownToHtml } from '../utils/markdown/renderToHtml'
 
 // ── Markdown ↔ HTML conversion ──────────────────────────────────────────────

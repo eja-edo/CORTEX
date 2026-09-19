@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { BellOff, Check, ChevronLeft, ChevronRight, RefreshCw, Trash2 } from 'lucide-react'
 import { NotificationDetailModal } from './NotificationDetailModal'
 import { KIND_META, timeAgo } from '../utils/notificationDisplay'
+import { parseServerDateTime } from '../utils/calendarItems'
 import { useConfirmDialog } from '../hooks/useConfirmDialog'
 import type { NotificationKind } from './NotificationBell'
 import {
@@ -63,7 +64,7 @@ export function NotificationsPage({ onNavigate, onNotificationsChanged }: Notifi
     }, [])
 
     useEffect(() => {
-        void fetchPage(0)
+        void Promise.resolve().then(() => fetchPage(0))
     }, [fetchPage])
 
     const goToPage = useCallback((target: number) => {
@@ -312,7 +313,7 @@ export function NotificationsPage({ onNavigate, onNotificationsChanged }: Notifi
                                     <span className="notifications-row-title">{n.title}</span>
                                     {n.body && <span className="notifications-row-snippet">{n.body}</span>}
                                 </div>
-                                <span className="notifications-row-time">{timeAgo(new Date(n.created_at))}</span>
+                                <span className="notifications-row-time">{timeAgo(parseServerDateTime(n.created_at))}</span>
                                 <button
                                     type="button"
                                     className="notifications-row-delete"
@@ -372,7 +373,7 @@ export function NotificationsPage({ onNavigate, onNotificationsChanged }: Notifi
             {detail && (
                 <NotificationDetailModal
                     title={detail.title}
-                    timestamp={new Date(detail.created_at)}
+                    timestamp={parseServerDateTime(detail.created_at)}
                     body={detail.body}
                     content={detail.content}
                     actions={detail.actions}

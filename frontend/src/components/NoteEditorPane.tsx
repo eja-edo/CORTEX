@@ -64,11 +64,13 @@ export function NoteEditorPane({
     }, [localMd])
 
     // Force sync on view mode change if blocks pane will show
-    useEffect(() => {
+    const [prevViewMode, setPrevViewMode] = useState<ViewMode>(viewMode)
+    if (viewMode !== prevViewMode) {
+        setPrevViewMode(viewMode)
         if (viewMode !== 'edit') {
             syncBlocks()
         }
-    }, [viewMode, syncBlocks])
+    }
 
     const wordCount = useMemo(() => {
         const text = plainTextFromMarkdown(localMd)

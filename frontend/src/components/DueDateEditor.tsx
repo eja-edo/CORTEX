@@ -1,16 +1,6 @@
 import { useState } from 'react'
 import { Clock, X } from 'lucide-react'
-import { dateOnly } from '../utils/taskDateBuckets'
-
-/**
- * A day and time carry no meaning: midnight is what every date-only task
- * already has, so it never counts as "a time was set" here.
- */
-export function timePartOf(dueDate: string | null): string {
-    if (!dueDate) return ''
-    const match = dueDate.match(/T(\d{2}:\d{2})/)
-    return match && match[1] !== '00:00' ? match[1] : ''
-}
+import { dateOnly, timePartOf } from '../utils/taskDateBuckets'
 
 /**
  * A due date is a bare day by default (2.5) — this keeps that the common

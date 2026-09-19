@@ -317,13 +317,23 @@ function App() {
   const [activeKnowledgeAssetId, setActiveKnowledgeAssetId] = useState<string | null>(routeState.assetId)
   const [activeWorkflowId, setActiveWorkflowId] = useState<string | null>(routeState.workflowId)
 
-useEffect(() => {
-     setActiveAssetId(routeState.assetId)
-     setActiveWorkflowId(routeState.workflowId)
-     if (routeState.view === 'knowledge') {
-       setActiveKnowledgeAssetId(routeState.assetId)
-     }
-   }, [routeState.assetId, routeState.view, routeState.workflowId])
+  const [prevRouteState, setPrevRouteState] = useState({
+    assetId: routeState.assetId,
+    view: routeState.view,
+    workflowId: routeState.workflowId,
+  })
+  if (
+    routeState.assetId !== prevRouteState.assetId ||
+    routeState.view !== prevRouteState.view ||
+    routeState.workflowId !== prevRouteState.workflowId
+  ) {
+    setPrevRouteState({ assetId: routeState.assetId, view: routeState.view, workflowId: routeState.workflowId })
+    setActiveAssetId(routeState.assetId)
+    setActiveWorkflowId(routeState.workflowId)
+    if (routeState.view === 'knowledge') {
+      setActiveKnowledgeAssetId(routeState.assetId)
+    }
+  }
 
   useEffect(() => {
     applyThemeToDocument(theme)
@@ -516,7 +526,7 @@ const showSyncToast = useCallback((message: string): void => {
     } else {
       auth.setErrorMessage('Cannot delete note')
     }
-  }, [notes, activeView, navigate, projects.currentProject, auth, routeState.noteId, noteRoute])
+  }, [notes, activeView, navigate, projects.currentProject, auth, routeState.noteId])
 
   const handleProjectSidebarDrop = useCallback(async (targetParentId: string | null): Promise<void> => {
     await notes.handleProjectSidebarDrop(targetParentId)

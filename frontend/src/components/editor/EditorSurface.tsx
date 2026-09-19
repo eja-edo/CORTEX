@@ -1,4 +1,4 @@
-import { createContext, useEffect, useCallback, useRef, useMemo, useLayoutEffect } from 'react'
+import { useEffect, useCallback, useRef, useMemo, useLayoutEffect, useState } from 'react'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
@@ -7,8 +7,7 @@ import type { BlockNode, SyntheticListenerMap } from '../../types/editor'
 import { BlockRenderer } from './BlockRenderer'
 import { SlashMenu } from './SlashMenu'
 import { BubbleToolbar } from './BubbleToolbar'
-
-export const ReadOnlyCtx = createContext(false)
+import { ReadOnlyCtx } from './ReadOnlyContext'
 
 interface EditorSurfaceProps {
   initialMd: string
@@ -52,6 +51,9 @@ export function EditorSurface({ initialMd, noteId, onSave, readOnly = false }: E
   const prevMdRef = useRef<string | null>(null)
   const lastSerializedMdRef = useRef<string | null>(null)
   const suppressAutoSaveRef = useRef(false)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [lastSavedSerialized, setLastSavedSerialized] = useState('')
+  const serializedBlocks = useMemo(() => JSON.stringify(blocks), [blocks])
 
   // Initialize blocks from markdown when content changes externally
   useEffect(() => {
@@ -90,7 +92,7 @@ export function EditorSurface({ initialMd, noteId, onSave, readOnly = false }: E
       }
       // Mark the current blocks as already saved so the auto-save effect
       // skips the next re-run.
-      prevBlocksRef.current = currentSerialized
+      setLastSavedSerialized(currentSerialized)
     }
     useEditorStore.getState().registerSaveCallback(cb)
     return () => {
@@ -115,30 +117,26 @@ export function EditorSurface({ initialMd, noteId, onSave, readOnly = false }: E
   }, [serializeAndNotify, readOnly])
 
   // Debounced auto-save when blocks change
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const prevBlocksRef = useRef<string>('')
-
   useEffect(() => {
-    if (suppressAutoSaveRef.current) {
-      suppressAutoSaveRef.current = false
-      return
-    }
+    void Promise.resolve().then(() => {
+      if (suppressAutoSaveRef.current) {
+        suppressAutoSaveRef.current = false
+        return
+      }
+      if (serializedBlocks === lastSavedSerialized) return
+      setLastSavedSerialized(serializedBlocks)
 
-    const serialized = JSON.stringify(blocks)
-    if (serialized === prevBlocksRef.current) return
-    prevBlocksRef.current = serialized
-
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    saveTimerRef.current = setTimeout(() => {
-      serializeAndNotify((md) => {
-        lastSerializedMdRef.current = md
-        onSaveRef.current(md)
-      })
-    }, 2000)
+      saveTimerRef.current = setTimeout(() => {
+        serializeAndNotify((md) => {
+          lastSerializedMdRef.current = md
+          onSaveRef.current(md)
+        })
+      }, 2000)
+    })
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     }
-  }, [blocks, serializeAndNotify])
+  }, [serializedBlocks, lastSavedSerialized, serializeAndNotify])
 
   const sensors = useSensors(
     useSensor(PointerSensor, {

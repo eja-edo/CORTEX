@@ -41,7 +41,7 @@ export function useCalendarItems(startDate: string, endDate: string) {
     }, [startDate, endDate])
 
     useEffect(() => {
-        void fetchItems()
+        void Promise.resolve().then(() => fetchItems())
     }, [fetchItems])
 
     return { items, isLoading, fetchItems }

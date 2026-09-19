@@ -128,6 +128,16 @@ export function dateOnly(dueDate: string): string {
 }
 
 /**
+ * A day and time carry no meaning: midnight is what every date-only task
+ * already has, so it never counts as "a time was set" here.
+ */
+export function timePartOf(dueDate: string | null): string {
+    if (!dueDate) return ''
+    const match = dueDate.match(/T(\d{2}:\d{2})/)
+    return match && match[1] !== '00:00' ? match[1] : ''
+}
+
+/**
  * The local calendar day a UTC instant field (`completed_at`, `updated_at`
  * — a real moment in time, unlike `due_date`'s bare wall-clock string) falls
  * on in this browser's timezone. `dateOnly` must NOT be used for these: the
