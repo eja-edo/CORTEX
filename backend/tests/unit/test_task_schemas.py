@@ -156,6 +156,10 @@ def test_tasks_table_has_exactly_the_agreed_columns():
     `related_event_id`. `recurrence_id`/`original_start_time`/`is_exception`
     are the per-occurrence completion mechanism for a checklist task tied to
     a recurring event — mirrors `Schedule`'s own exception-row columns.
+    `is_cancelled` extends that mechanism to a `this_only` *delete*: it
+    marks one occurrence's exception row as hidden without touching the
+    shared template, the same role `Schedule.is_cancelled` already plays
+    for a cancelled event instance (migration `s2345678901t`).
 
     `project_id` is NOT NULL and `related_event_id` is nullable, on purpose:
     every task belongs to exactly one project, while belonging to a meeting
@@ -186,6 +190,7 @@ def test_tasks_table_has_exactly_the_agreed_columns():
         "recurrence_id",
         "original_start_time",
         "is_exception",
+        "is_cancelled",
         "created_at",
         "updated_at",
     }
