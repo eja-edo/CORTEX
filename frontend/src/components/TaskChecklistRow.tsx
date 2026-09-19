@@ -7,8 +7,8 @@ import { PriorityMenu } from './PriorityMenu'
 import { TaskDetailModal } from './TaskDetailModal'
 import type { TaskDetailPatch } from './TaskDetailPopover'
 import { priorityLabel } from '../utils/taskPriority'
-import { dateOnly, formatCompactDate, isTaskOverdue } from '../utils/taskDateBuckets'
-import { DueDateEditor, timePartOf } from './DueDateEditor'
+import { dateOnly, formatCompactDate, isTaskOverdue, timePartOf } from '../utils/taskDateBuckets'
+import { DueDateEditor } from './DueDateEditor'
 
 /**
  * One checklist line: tick to complete (dims + strikes through), click the

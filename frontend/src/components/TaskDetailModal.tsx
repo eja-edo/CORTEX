@@ -55,6 +55,12 @@ export function TaskDetailModal({
 }) {
     const [draft, setDraft] = useState(task)
     const [titleInput, setTitleInput] = useState(task.title)
+    const [prevTask, setPrevTask] = useState(task)
+    if (task !== prevTask) {
+        setPrevTask(task)
+        setDraft(task)
+        setTitleInput(task.title)
+    }
     const [priorityMenuOpen, setPriorityMenuOpen] = useState(false)
     const [addingSubtask, setAddingSubtask] = useState(false)
     const priorityBtnRef = useRef<HTMLButtonElement | null>(null)
@@ -98,11 +104,6 @@ export function TaskDetailModal({
             setMovingProject(false)
         }
     }
-
-    useEffect(() => {
-        setDraft(task)
-        setTitleInput(task.title)
-    }, [task])
 
     const commitTitle = async () => {
         const trimmed = titleInput.trim()

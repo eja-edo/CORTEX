@@ -217,7 +217,7 @@ function WorkflowBuilderInner({ projectId, workflowId, onBack, onNavigate, onWor
     setNodes(flowNodes)
     setEdges(flowEdges)
     setView('editor')
-  }, [wf, setNodes, setEdges])
+  }, [wf, setNodes, setEdges, injectExecuteNode])
 
   useEffect(() => {
     if (projectId) {

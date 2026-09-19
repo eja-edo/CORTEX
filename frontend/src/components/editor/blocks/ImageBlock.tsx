@@ -2,7 +2,7 @@ import { useRef, useEffect, useCallback, useMemo, useState, useContext } from 'r
 import type { BlockNode } from '../../../types/editor'
 import { useEditorStore } from '../../../stores/editorStore'
 import { uploadNoteImage } from '../../../services/api'
-import { ReadOnlyCtx } from '../EditorSurface'
+import { ReadOnlyCtx } from '../ReadOnlyContext'
 
 interface ImageBlockProps {
   block: BlockNode

@@ -71,12 +71,14 @@ export function DiffReviewPanel({ noteId, proposalId, onClose, onApproved }: Pro
     const { fetchProposal, approveProposal, rejectProposal } = useNoteProposals()
 
     useEffect(() => {
-        setLoading(true)
-        setError(null)
-        fetchProposal(proposalId)
-            .then(setProposal)
-            .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load proposal'))
-            .finally(() => setLoading(false))
+        void Promise.resolve().then(() => {
+            setLoading(true)
+            setError(null)
+            return fetchProposal(proposalId)
+                .then(setProposal)
+                .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load proposal'))
+                .finally(() => setLoading(false))
+        })
     }, [proposalId, fetchProposal])
 
     const diffLines = useMemo(() => {

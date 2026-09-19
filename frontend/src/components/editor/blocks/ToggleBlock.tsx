@@ -3,7 +3,7 @@ import { ChevronRight } from 'lucide-react'
 import type { BlockNode } from '../../../types/editor'
 import { useEditorStore } from '../../../stores/editorStore'
 import { BlockRenderer } from '../BlockRenderer'
-import { ReadOnlyCtx } from '../EditorSurface'
+import { ReadOnlyCtx } from '../ReadOnlyContext'
 
 interface ToggleBlockProps {
   block: BlockNode

@@ -127,7 +127,6 @@ export function MarkdownField({
       {isEmpty ? (
         <span className="markdown-field-placeholder">{placeholder}</span>
       ) : (
-        // eslint-disable-next-line react/no-danger
         <div dangerouslySetInnerHTML={{ __html: renderedHtml }} />
       )}
     </div>

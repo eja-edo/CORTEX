@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react'
 import type { NotificationListResponse, NotificationResponse } from '../types'
 import { listNotifications, markNotificationRead, markAllNotificationsRead, deleteNotification, recordAttentionResponse } from '../services/api'
 import type { AppNotification, NotificationKind } from '../components/NotificationBell'
+import { parseServerDateTime } from '../utils/calendarItems'
 
 function mapApiNotification(apiNotif: NotificationResponse): AppNotification {
    return {
@@ -9,7 +10,7 @@ function mapApiNotification(apiNotif: NotificationResponse): AppNotification {
        kind: (apiNotif.type as NotificationKind) || 'system',
        title: apiNotif.title,
        body: apiNotif.body || '',
-       timestamp: new Date(apiNotif.created_at),
+       timestamp: parseServerDateTime(apiNotif.created_at),
        read: apiNotif.read_at !== null,
        payload: apiNotif.payload || {},
        content: apiNotif.content || undefined,

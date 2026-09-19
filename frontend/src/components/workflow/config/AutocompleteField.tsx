@@ -15,7 +15,7 @@ type Props = {
 
 export function AutocompleteField({ value, onChange, variables, placeholder, multiline }: Props) {
   const ref = useRef<HTMLTextAreaElement | HTMLInputElement>(null)
-  const [acState, setAcState] = useState<{ start: number } | null>(null)
+  const [acState, setAcState] = useState<{ start: number; filter: string } | null>(null)
   const [activeIdx, setActiveIdx] = useState(0)
   const [measuredOffset, setMeasuredOffset] = useState<{ top: number; left: number } | null>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
@@ -58,7 +58,7 @@ export function AutocompleteField({ value, onChange, variables, placeholder, mul
     if (lastOpen !== -1) {
       const afterOpen = before.slice(lastOpen + 2)
       if (!afterOpen.includes('}}')) {
-        setAcState({ start: lastOpen })
+        setAcState({ start: lastOpen, filter: afterOpen })
         setActiveIdx(0)
         setMeasuredOffset(measureCursor(el))
         return
@@ -94,14 +94,7 @@ export function AutocompleteField({ value, onChange, variables, placeholder, mul
     })
   }, [onChange])
 
-  const cursorFilter = (() => {
-    if (!acState || !ref.current) return ''
-    const pos = ref.current.selectionStart ?? 0
-    const before = ref.current.value.slice(0, pos)
-    const lastOpen = before.lastIndexOf('{{')
-    if (lastOpen === -1) return ''
-    return before.slice(lastOpen + 2)
-  })()
+  const cursorFilter = acState?.filter ?? ''
 
   const filtered = cursorFilter
     ? variables.filter(v => v.value.toLowerCase().includes(cursorFilter.toLowerCase()))
