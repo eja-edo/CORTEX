@@ -41,6 +41,10 @@ jobs:
       ASYNC_DATABASE_URL: postgresql+asyncpg://${{ secrets.CI_POSTGRES_USER }}:${{ secrets.CI_POSTGRES_PASSWORD }}@localhost:5434/${{ secrets.CI_POSTGRES_DB }}
       REDIS_HOST: localhost
       REDIS_PORT: 6379
+      # Backend->backend auth for internal endpoints (task_ingest webhook).
+      # Only needs to be non-empty and match what the tests read back from
+      # settings — it's not a real production credential.
+      INTERNAL_API_KEY: ${{ secrets.CI_INTERNAL_API_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -57,7 +61,20 @@ jobs:
         run: python -m alembic upgrade head
 
       - name: Run tests
-        run: python -m pytest
+        # These 5 call the real embedding gateway (app/ai/agents/embedding_service.py,
+        # OPENAI_BASE_URL) that only exists on the maintainer's own infra — not
+        # reachable from a GitHub-hosted runner, so they fail on ConnectError here
+        # regardless of code correctness. They're intentionally not under the
+        # `live_llm` marker (that's for the paid model; this is a free internal
+        # service assumed always-on in normal dev), so they're deselected here
+        # instead of skipped via a marker.
+        run: >-
+          python -m pytest
+          --deselect tests/integration/test_procedures.py::TestDefinition::test_trigger_is_embedded_separately_from_steps
+          --deselect tests/integration/test_procedures.py::TestDefinition::test_any_phrase_can_match
+          --deselect tests/integration/test_procedures.py::TestTriggerMatching::test_matches_the_situation_it_describes
+          --deselect tests/integration/test_memory_recall.py::TestRecallReachesContext::test_matching_message_surfaces_the_memory
+          --deselect tests/integration/test_memory_recall.py::TestRecallReachesContext::test_memory_reaches_the_system_prompt_string
 
   frontend:
     name: Frontend lint, build & tests
