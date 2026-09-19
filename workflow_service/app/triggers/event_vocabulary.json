@@ -101,13 +101,6 @@
       "label_vi": "\u0110\u1ebfn gi\u1edd nh\u1eafc l\u1ecbch"
     },
     {
-      "event_type": "schedule.starts_soon",
-      "description": "A schedule entered its starts-soon lookahead window (polled)",
-      "has_payload_schema": true,
-      "has_direct_backend_delivery": true,
-      "label_vi": "L\u1ecbch s\u1eafp b\u1eaft \u0111\u1ea7u"
-    },
-    {
       "event_type": "schedule.updated",
       "description": "A schedule was updated",
       "has_payload_schema": true,

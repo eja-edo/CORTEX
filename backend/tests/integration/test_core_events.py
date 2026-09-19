@@ -367,7 +367,7 @@ async def test_reminder_due_event(async_db, sync_db, event_subscriber):
         worker = ReminderWorker()
         fetched_schedule = await worker._send_notification(reminder, async_db)
         assert fetched_schedule is not None
-        await worker._publish_reminder_due(reminder, fetched_schedule)
+        await worker._publish_reminder_due(reminder, fetched_schedule, async_db)
         await asyncio.sleep(0.05)
 
         events = _events_of_type(event_subscriber, "schedule.reminder.due")
