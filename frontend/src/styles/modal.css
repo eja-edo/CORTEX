@@ -127,6 +127,22 @@
     color: var(--text-secondary);
 }
 
+.edit-scope-dialog-remember {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-top: 14px;
+    font-size: 12.5px;
+    line-height: 1.4;
+    color: var(--text-tertiary);
+    cursor: pointer;
+}
+
+.edit-scope-dialog-remember input {
+    margin-top: 2px;
+    flex-shrink: 0;
+}
+
 /* ── Task detail modal ─────────────────────────────────────────────────────
    A Linear issue page, not the event modal's date/type/location form: big
    borderless title + description on the left, a slim "Properties" list on

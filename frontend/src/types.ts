@@ -133,6 +133,17 @@ export type Task = {
    * that tells "finished today" from "finished on some earlier day"; see
    * `isVisibleToday` in `utils/taskDateBuckets`. */
   completed_at: string | null
+  /** Per-occurrence state for a checklist item tied to a *recurring* event
+   * (`related_event_id` pointing at a `Schedule` with a recurrence rule) —
+   * see the backend's `Task.original_start_time` docstring for the full
+   * picture. `recurrence_id` set means this row is an exception overriding
+   * a template for one occurrence; `original_start_time` set with
+   * `recurrence_id` unset means this row was created with
+   * `edit_scope: 'this_only'` and belongs to exactly that one occurrence,
+   * never any other. Unset on an ordinary task. */
+  recurrence_id?: string | null
+  original_start_time?: string | null
+  is_exception?: boolean
   created_at: string
   updated_at: string
 }

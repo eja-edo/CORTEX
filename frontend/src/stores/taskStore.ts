@@ -71,7 +71,10 @@ interface TaskStore {
     error: string | null
 
     fetchAll: () => Promise<void>
-    createTask: (input: CreateTaskInput) => Promise<Task>
+    /** `occurrence` with `editScope: 'this_only'` scopes a checklist item on
+     * a recurring event to just that occurrence — see `Task.original_start_time`'s
+     * backend docstring. Omit for today's default: a plain, series-wide item. */
+    createTask: (input: CreateTaskInput, occurrence?: TaskOccurrence) => Promise<Task>
     updateTask: (taskId: string, patch: UpdateTaskInput, occurrence?: TaskOccurrence) => Promise<Task>
     completeTask: (taskId: string, occurrence?: TaskOccurrence) => Promise<Task>
     /** Completes a task and every sub-task beneath it, however deep — the
@@ -81,7 +84,10 @@ interface TaskStore {
     completeTaskCascade: (taskId: string) => Promise<Task[]>
     confirmTask: (taskId: string) => Promise<Task>
     rejectTask: (taskId: string) => Promise<Task>
-    deleteTask: (taskId: string) => Promise<void>
+    /** `occurrence` with `editScope: 'this_only'` hides a checklist item
+     * from just that occurrence instead of deleting the shared template —
+     * the template (and this local list, which mirrors it) is left alone. */
+    deleteTask: (taskId: string, occurrence?: TaskOccurrence) => Promise<void>
 }
 
 export const useTaskStore = create<TaskStore>((set) => ({
@@ -100,8 +106,8 @@ export const useTaskStore = create<TaskStore>((set) => ({
         }
     },
 
-    createTask: async (input) => {
-        const created = await requestWithAuth<Task>('/tasks', {
+    createTask: async (input, occurrence) => {
+        const created = await requestWithAuth<Task>(`/tasks${occurrenceQuery(occurrence)}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(input),
@@ -163,8 +169,13 @@ export const useTaskStore = create<TaskStore>((set) => ({
         return updated
     },
 
-    deleteTask: async (taskId) => {
-        await requestWithAuth<void>(`/tasks/${taskId}`, { method: 'DELETE' })
-        set((state) => ({ tasks: state.tasks.filter((task) => task.id !== taskId) }))
+    deleteTask: async (taskId, occurrence) => {
+        await requestWithAuth<void>(`/tasks/${taskId}${occurrenceQuery(occurrence)}`, { method: 'DELETE' })
+        // A `this_only` delete hides the item for one occurrence but leaves
+        // the shared template row (this list's own copy of it) intact —
+        // nothing to remove here in that case.
+        if (occurrence?.editScope !== 'this_only') {
+            set((state) => ({ tasks: state.tasks.filter((task) => task.id !== taskId) }))
+        }
     },
 }))

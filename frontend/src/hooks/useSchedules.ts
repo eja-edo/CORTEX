@@ -195,6 +195,39 @@ export function useSchedules() {
         }
     }, [fetchSchedules])
 
+    // Same problem `handleUpdateScheduleInstance` exists for: every
+    // occurrence without its own exception reports the root's id, so a
+    // plain DELETE on a recurring schedule always removed the whole
+    // series — there was no way to delete just the occurrence being
+    // viewed. `all` is the previous behavior (delete the root, which
+    // cascades every exception with it); `this_only` hits
+    // `DELETE /schedules/{id}/instances/{time}`
+    // (`ScheduleService.cancel_instance`), which marks just this
+    // occurrence cancelled and leaves the series — and every other
+    // occurrence — intact.
+    const handleRemoveScheduleInstance = useCallback(async (
+        item: Schedule,
+        editScope: EditScope,
+    ): Promise<boolean> => {
+        if (!item.id) return false
+        try {
+            if (editScope === 'all') {
+                await requestWithAuth<void>(`/schedules/${item.id}`, { method: 'DELETE' })
+            } else {
+                const originalStartTime = item.original_start_time ?? item.start_time
+                await requestWithAuth<void>(
+                    `/schedules/${item.id}/instances/${encodeURIComponent(originalStartTime)}`,
+                    { method: 'DELETE' },
+                )
+            }
+            await fetchSchedules()
+            return true
+        } catch (error) {
+            console.error('Cannot delete schedule instance:', error)
+            return false
+        }
+    }, [fetchSchedules])
+
     return {
         schedules,
         setSchedules,
@@ -216,5 +249,6 @@ export function useSchedules() {
         handleUpdateSchedule,
         handleUpdateScheduleInstance,
         handleRemoveSchedule,
+        handleRemoveScheduleInstance,
     }
 }

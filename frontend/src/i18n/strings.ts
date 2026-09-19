@@ -138,6 +138,14 @@ export const strings = {
       channelExpires: 'Kênh hết hạn',
       lastError: 'Lỗi cuối cùng',
     },
+    recurringScope: {
+      title: 'Sự kiện lặp lại',
+      desc: 'Khi sửa hoặc xoá một mục thuộc chuỗi lặp lại (sự kiện hoặc mục checklist), ứng dụng hỏi áp dụng cho buổi này hay cả chuỗi.',
+      askEveryTime: {
+        label: 'Luôn hỏi khi sửa mục lặp lại',
+        desc: 'Tắt nếu bạn đã chọn "Không hỏi lại lần sau" trong hộp thoại đó. Bật lại để được hỏi từ lần sửa tiếp theo.',
+      },
+    },
   },
 
   // ── App navigation ──

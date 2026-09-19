@@ -1027,8 +1027,26 @@ class Task(Base):
     recurrence_id = Column(
         UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=True, index=True
     )
+    # Two distinct meanings depending on `recurrence_id`:
+    #   - set + `recurrence_id` set: an exception row, see above — this is
+    #     the occurrence it overrides.
+    #   - set + `recurrence_id` NULL: a checklist item created with
+    #     `edit_scope=this_only` — a first-class row (no template) that
+    #     belongs to exactly this one occurrence, never shown on any other
+    #     (`CalendarItemService.get_event_checklist` filters on it). A
+    #     `this_only` *create* has nothing to diverge from, so it can't be
+    #     an exception; this is the only way to represent "just this
+    #     occurrence" for a brand-new item.
+    #   - unset: an ordinary template, shown on every occurrence.
     original_start_time = Column(DateTime(timezone=True), nullable=True)
     is_exception = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    # A `this_only` delete on a checklist item that's a plain series-wide
+    # template: the template must survive (other occurrences still need it),
+    # so this hides it from just the one occurrence instead — an
+    # exception row with `is_cancelled=True`. Mirrors `Schedule.is_cancelled`
+    # exactly. Unset on every other row (a template is never cancelled
+    # itself; deleting one for real is a hard delete, not this flag).
+    is_cancelled = Column(Boolean, nullable=False, default=False, server_default=text("false"))
     created_at = Column(DateTime, default=_utcnow, nullable=False, server_default=text("NOW()"))
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False, server_default=text("NOW()"))
 

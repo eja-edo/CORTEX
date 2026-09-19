@@ -66,6 +66,8 @@ async def task_create_handler(command: Command, ctx: ToolContext) -> dict:
                 parent_task_id=args.parent_task_id,
             ),
             user_id=ctx.user_id,
+            occurrence_start_time=args.occurrence_start_time,
+            edit_scope=args.edit_scope,
         )
 
         logger.info(f"Task created: {task.id}")
@@ -308,8 +310,18 @@ async def task_reject_handler(command: Command, ctx: ToolContext) -> dict:
 async def task_delete_handler(command: Command, ctx: ToolContext) -> dict:
     """Delete task command handler — the checklist's "remove this line" (2.6).
 
-    A hard delete: `cancelled` is the "not doing this, but keep the record"
-    state, so an actual delete means the line shouldn't exist at all.
+    A hard delete removes the row outright: `cancelled` is the "not doing
+    this, but keep the record" *status*, unrelated to this. But a plain
+    series-wide template on a recurring event can't always mean that —
+    "delete" on it is ambiguous the same way an unscoped field edit is
+    (every other occurrence still needs the template to exist), so it takes
+    the same `occurrence_start_time`/`edit_scope` treatment as
+    `task_update_handler`: `this_only` hides the item from just that
+    occurrence (`TaskService.cancel_task_occurrence`, template untouched),
+    `all` is the hard delete. A row already scoped to one occurrence (its
+    own `original_start_time` set — see `Task.original_start_time`) has
+    nothing else "delete" could mean, so it's always a hard delete
+    regardless of what's passed.
     """
     args = TaskDeleteArgs(**command.args)
 
@@ -321,6 +333,34 @@ async def task_delete_handler(command: Command, ctx: ToolContext) -> dict:
             raise ValueError(f"Task not found: {args.task_id}")
 
         prev_state = _task_snapshot(current)
+        is_occurrence_scoped_row = current.original_start_time is not None
+
+        if not is_occurrence_scoped_row and await service.is_linked_to_recurring_event(current):
+            if not args.occurrence_start_time or not args.edit_scope:
+                raise ValueError(
+                    "This task is a checklist item on a recurring event — "
+                    "specify occurrence_start_time and edit_scope (this_only "
+                    "or all) so delete targets the right occurrence(s)."
+                )
+            if args.edit_scope == "this_only":
+                cancelled = await service.cancel_task_occurrence(
+                    task_id=args.task_id,
+                    user_id=ctx.user_id,
+                    occurrence_start_time=args.occurrence_start_time,
+                )
+                if cancelled is None:
+                    raise ValueError(f"Task not found: {args.task_id}")
+
+                logger.info(f"Task {args.task_id} cancelled for occurrence {args.occurrence_start_time}")
+
+                prev_state["cancelled_occurrence_start_time"] = args.occurrence_start_time.isoformat()
+                return {
+                    "task_id": str(args.task_id),
+                    "deleted": False,
+                    "cancelled_occurrence": args.occurrence_start_time.isoformat(),
+                    "prev_state": prev_state,
+                }
+            # edit_scope == "all" falls through to the hard delete below.
 
         deleted = await service.delete_task(args.task_id, ctx.user_id)
         if not deleted:
@@ -393,10 +433,27 @@ async def task_delete_revert_handler(snapshot: ActionSnapshot, ctx: ToolContext)
     The new task gets a **fresh id** (same caveat as schedule.delete's
     revert): anything holding the old id — an open checklist widget — will
     not be re-pointed at it.
+
+    A `this_only` delete never reached the hard-delete branch though — the
+    template is still there, just cancelled for one occurrence
+    (`cancelled_occurrence_start_time` in the snapshot says which). Undoing
+    that means un-cancelling the exception, not recreating anything.
     """
     prev_state = snapshot.snapshot
     if not prev_state.get("task_id"):
         raise ValueError("Cannot revert task.delete: snapshot missing task_id")
+
+    cancelled_occurrence = prev_state.get("cancelled_occurrence_start_time")
+    if cancelled_occurrence:
+        async with ctx.async_db() as db:
+            restored = await TaskService(db).restore_task_occurrence(
+                task_id=UUID(prev_state["task_id"]),
+                user_id=ctx.user_id,
+                occurrence_start_time=datetime.fromisoformat(cancelled_occurrence),
+            )
+            if restored is None:
+                raise ValueError(f"Task {prev_state['task_id']} not found")
+        return
 
     async with ctx.async_db() as db:
         # Snapshot cũ (ghi trước khi `projects` tồn tại) không có trường

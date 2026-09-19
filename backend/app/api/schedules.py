@@ -147,7 +147,8 @@ async def update_schedule(
             data=schedule_update,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        status_code = 404 if str(exc) == "Schedule not found" else 400
+        raise HTTPException(status_code=status_code, detail=str(exc))
     await _enqueue_google_sync(schedule, SyncOperation.UPSERT)
     return schedule
 

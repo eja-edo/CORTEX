@@ -688,6 +688,15 @@ const renderSidebarNoteTree = useCallback((parentId: string | null, depth: numbe
     await calendarItems.fetchItems()
   }, [schedules, calendarItems])
 
+  const handleRemoveScheduleInstance = useCallback(async (
+    item: Schedule,
+    editScope: EditScope,
+  ): Promise<boolean> => {
+    const ok = await schedules.handleRemoveScheduleInstance(item, editScope)
+    if (ok) await calendarItems.fetchItems()
+    return ok
+  }, [schedules, calendarItems])
+
 // SSE for calendar sync
    useEffect(() => {
      if (!auth.tokens?.accessToken) return
@@ -1439,6 +1448,7 @@ const processNotificationChunk = (chunk: string): void => {
                     onUpdate={handleUpdateSchedule}
                     onUpdateInstance={handleUpdateScheduleInstance}
                     onRemove={handleRemoveSchedule}
+                    onRemoveInstance={handleRemoveScheduleInstance}
                   />
                 </div>
               </section>

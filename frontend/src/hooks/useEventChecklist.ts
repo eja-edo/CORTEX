@@ -53,27 +53,6 @@ export function useEventChecklist(
         void Promise.resolve().then(() => fetchTasks())
     }, [fetchTasks])
 
-    /** "+ Add a checklist item" panel submit → task.create. Always creates
-     * the template — a recurring event's checklist item is created once,
-     * never once per occurrence (see the `task`/`schedule` skills). */
-    const addTask = useCallback(async (input: {
-        title: string
-        description?: string | null
-        priority?: TaskPriority | null
-    }): Promise<void> => {
-        if (!eventId) return
-        const title = input.title.trim()
-        if (!title) return
-        await storeCreateTask({
-            title,
-            description: input.description ?? null,
-            priority: input.priority ?? null,
-            related_event_id: eventId,
-            due_date: eventEndTime ? toLocalDateTimeIso(new Date(eventEndTime)) : null,
-        })
-        await fetchTasks()
-    }, [eventId, eventEndTime, storeCreateTask, fetchTasks])
-
     /** Asks "just this occurrence, or all?" for a field edit (title, due
      * date, priority, description) on a recurring event's checklist item —
      * completion never asks (see `toggleTask`). Returns null if the user
@@ -97,6 +76,47 @@ export function useEventChecklist(
         return scope === 'all' ? 'all' : 'this_only'
     }, [isRecurring, occurrenceStartTime, promptEditScope])
 
+    /** "+ Add a checklist item" panel submit → task.create. On a recurring
+     * event this asks the same "this occurrence, or all?" question a field
+     * edit does (see `resolveOccurrenceScope`) before creating — `all`
+     * (or a non-recurring event) creates the usual series-wide template;
+     * `this_only` creates a row that only ever shows up here (see
+     * `Task.original_start_time`'s backend docstring). Returns whether it
+     * actually created something, so the caller can leave the "+ Add" panel
+     * open (with what the user typed still in it) if they cancelled the
+     * prompt instead of silently discarding it. */
+    const addTask = useCallback(async (input: {
+        title: string
+        description?: string | null
+        priority?: TaskPriority | null
+    }): Promise<boolean> => {
+        if (!eventId) return false
+        const title = input.title.trim()
+        if (!title) return false
+
+        const scope = await resolveOccurrenceScope('Áp dụng mục checklist này cho buổi nào?')
+        if (isRecurring && occurrenceStartTime && !scope) return false
+        const occurrence = scope && occurrenceStartTime ? { startTime: occurrenceStartTime, editScope: scope } : undefined
+
+        // A series-wide item (recurring event, scope 'all') has no single
+        // day to default to — every occurrence has its own. Leave due_date
+        // unset here; the backend fills in *this occurrence's* end time on
+        // read instead of freezing whichever occurrence happened to be open
+        // at creation (see CalendarItemService.get_event_checklist point 4).
+        // `this_only`, and a non-recurring event, still default to the one
+        // real end time they actually have.
+        const defaultsToOneRealDate = !isRecurring || scope === 'this_only'
+        await storeCreateTask({
+            title,
+            description: input.description ?? null,
+            priority: input.priority ?? null,
+            related_event_id: eventId,
+            due_date: defaultsToOneRealDate && eventEndTime ? toLocalDateTimeIso(new Date(eventEndTime)) : null,
+        }, occurrence)
+        await fetchTasks()
+        return true
+    }, [eventId, eventEndTime, storeCreateTask, fetchTasks, resolveOccurrenceScope, isRecurring, occurrenceStartTime])
+
     /** Ticking the box → task.complete (or back to todo when un-ticking).
      * Never asks — always scoped to the occurrence being viewed, silently.
      * Only a field edit (title, due date, priority, description) asks
@@ -116,12 +136,28 @@ export function useEventChecklist(
         await fetchTasks()
     }, [storeUpdateTask, storeCompleteTask, isRecurring, occurrenceStartTime, fetchTasks])
 
-    /** Deleting a line → task.delete. Always deletes the template — an
-     * occurrence exception has nothing of its own worth keeping without it. */
+    /** Deleting a line → task.delete. A row already scoped to one occurrence
+     * (created via `addTask`'s `this_only`, or an event that isn't
+     * recurring at all) has nothing else "delete" could mean and just
+     * deletes outright. A plain series-wide template on a recurring event
+     * asks first: `this_only` hides it from just this occurrence (the
+     * template, and every other occurrence, is untouched); `all` deletes
+     * the template for real. */
     const removeTask = useCallback(async (taskId: string): Promise<void> => {
-        await storeDeleteTask(taskId)
+        const target = tasks.find((t) => t.id === taskId)
+        if (target?.original_start_time) {
+            await storeDeleteTask(taskId)
+            await fetchTasks()
+            return
+        }
+
+        const scope = await resolveOccurrenceScope('Xoá mục checklist này cho buổi nào?')
+        if (isRecurring && occurrenceStartTime && !scope) return
+        const occurrence = scope && occurrenceStartTime ? { startTime: occurrenceStartTime, editScope: scope } : undefined
+
+        await storeDeleteTask(taskId, occurrence)
         await fetchTasks()
-    }, [storeDeleteTask, fetchTasks])
+    }, [tasks, storeDeleteTask, fetchTasks, resolveOccurrenceScope, isRecurring, occurrenceStartTime])
 
     /** Clicking a line → the popover's edits (due date, priority, description) */
     const updateTask = useCallback(async (

@@ -152,6 +152,13 @@ class TaskCreateArgs(BaseModel):
     project_id: Optional[UUID] = None
     related_event_id: Optional[UUID] = None
     parent_task_id: Optional[UUID] = None
+    # Optional, unlike task.update/task.delete's hard requirement on a
+    # recurring target — see `TaskService.create_task`'s docstring for why:
+    # existing callers (AI tool, conversation extraction) that don't set
+    # these keep creating a plain series-wide template. Only the event
+    # checklist UI passes `edit_scope="this_only"`, after asking.
+    occurrence_start_time: Optional[datetime] = None
+    edit_scope: Optional[Literal["this_only", "all"]] = None
 
     @field_validator("title")
     @classmethod
@@ -210,8 +217,17 @@ class TaskDeleteArgs(BaseModel):
 
     Deleting a line from an event's checklist (2.6) is a task deletion, not
     a text edit — the checklist has no text of its own to edit.
+
+    `occurrence_start_time`/`edit_scope` are required only when `task_id`
+    names a plain series-wide template on a recurring event — same
+    ambiguous-write rule as `TaskUpdateArgs`. A row already scoped to one
+    occurrence (its own `original_start_time` set) has only one thing
+    "delete" could mean, so it's a hard delete regardless of what's passed
+    here — see `TaskService`/`task_delete_handler`.
     """
     task_id: UUID
+    occurrence_start_time: Optional[datetime] = None
+    edit_scope: Optional[Literal["this_only", "all"]] = None
 
 
 class TaskConfirmArgs(BaseModel):

@@ -34,11 +34,29 @@ router = APIRouter(prefix="/tasks", tags=["tasks"])
 @router.post("", response_model=TaskResponse, status_code=status.HTTP_201_CREATED)
 async def create_task(
     payload: TaskCreate,
+    occurrence_start_time: datetime | None = Query(
+        None,
+        description=(
+            "Only meaningful together with edit_scope=this_only, for a "
+            "checklist item on a recurring event: scopes the new item to "
+            "just this occurrence instead of the whole series. Optional — "
+            "omit both to create a plain series-wide item (today's default)."
+        ),
+    ),
+    edit_scope: Literal["this_only", "all"] | None = Query(
+        None,
+        description="this_only + occurrence_start_time scopes the new item to one occurrence. Omit for a series-wide item.",
+    ),
     current_user = Depends(get_current_user_or_internal),
     db: AsyncSession = Depends(get_async_db),
 ):
     service = TaskService(db)
-    created = await service.create_task(payload=payload, user_id=current_user.id)
+    created = await service.create_task(
+        payload=payload,
+        user_id=current_user.id,
+        occurrence_start_time=occurrence_start_time,
+        edit_scope=edit_scope,
+    )
     return service.to_response(created)
 
 
@@ -240,10 +258,44 @@ async def reject_task(
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_task(
     task_id: UUID,
+    occurrence_start_time: datetime | None = Query(None, description=_OCCURRENCE_START_TIME_DESC),
+    edit_scope: Literal["this_only", "all"] | None = Query(
+        None,
+        description=(
+            "this_only: hide this item from just this occurrence (the "
+            "template, and every other occurrence, is untouched). all: "
+            "delete the template outright. Required together with "
+            "occurrence_start_time when task_id names a plain series-wide "
+            "template on a recurring event — see TaskService.is_linked_to_recurring_event."
+        ),
+    ),
     current_user = Depends(get_current_user_or_internal),
     db: AsyncSession = Depends(get_async_db),
 ):
     service = TaskService(db)
+    current = await service.get_task(task_id=task_id, user_id=current_user.id)
+    if current is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+
+    # A row already scoped to one occurrence (its own original_start_time
+    # set) has nothing else "delete" could mean — always a hard delete.
+    if current.original_start_time is None and await service.is_linked_to_recurring_event(current):
+        if occurrence_start_time is None or edit_scope is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "This task is a checklist item on a recurring event — "
+                    "occurrence_start_time and edit_scope are required."
+                ),
+            )
+        if edit_scope == "this_only":
+            cancelled = await service.cancel_task_occurrence(
+                task_id=task_id, user_id=current_user.id, occurrence_start_time=occurrence_start_time,
+            )
+            if cancelled is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+            return None
+
     deleted = await service.delete_task(task_id, current_user.id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")

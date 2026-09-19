@@ -57,13 +57,18 @@ interface CalendarViewProps {
     onUpdate?: (item: Schedule, patch: Partial<Schedule>) => Promise<boolean>
     onUpdateInstance?: (item: Schedule, editScope: EditScope, patch: Partial<Schedule>) => Promise<boolean>
     onRemove: (id: string) => Promise<void>
+    // Recurring-only path, mirroring onUpdateInstance: every occurrence
+    // without its own exception reports the root's id, so onRemove alone
+    // would delete the whole series. Optional so a caller that never shows
+    // recurring events doesn't have to wire it.
+    onRemoveInstance?: (item: Schedule, editScope: EditScope) => Promise<boolean>
 }
 
 export function CalendarView({
     isGoogleCalendarConnected = false,
     items, schedules, startDate, endDate,
     onStartDateChange, onEndDateChange,
-    onFetch, onOpenCreateEvent, onSlotSelect, onToggleComplete, onUpdate, onUpdateInstance, onRemove,
+    onFetch, onOpenCreateEvent, onSlotSelect, onToggleComplete, onUpdate, onUpdateInstance, onRemove, onRemoveInstance,
 }: CalendarViewProps) {
     const [selectedSchedule, setSelectedSchedule] = useState<Schedule | null>(null)
     const [currentDate, setCurrentDate] = useState<Date>(() => new Date(startDate))
@@ -332,6 +337,7 @@ export function CalendarView({
                     onToggleComplete={onToggleComplete}
                     onUpdateInstance={onUpdateInstance}
                     onRemove={onRemove}
+                    onRemoveInstance={onRemoveInstance}
                     onClose={() => setSelectedSchedule(null)}
                 />
             )}
