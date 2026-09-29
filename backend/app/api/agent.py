@@ -7,14 +7,20 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database_async import get_async_db
 from app.dependencies import get_current_active_user, get_current_user_or_internal
 from app.models import User
 from app.schemas import (
-    AgentChatRequest, 
+    AgentChatRequest,
     AgentChatResponse,
+    ConversationExecutionModeUpdate,
+    ConversationExecutionModeResponse,
+    PendingToolCallOut,
+    PendingToolCallListResponse,
+    ResolveToolCallsRequest,
 )
 from app.ai.agents.agent_service import AgentService
 from app.ai.agents.model_client import ModelClient
@@ -112,6 +118,42 @@ async def chat(
         ) from exc
 
 
+def _encode_sse_event(chunk: dict) -> str | None:
+    """Dict event (as yielded by `AgentService._run_tool_loop` and friends)
+    → one SSE `data: ...\\n\\n` line, or None if the event type isn't one
+    the frontend understands.
+
+    Shared by `stream_chat` and `resolve_tool_calls` so the two SSE-emitting
+    routes can't drift out of sync on which event types get through — they
+    already did once, on the frontend side (`api.ts` duplicates its
+    dict→StreamEvent mapping for the trailing-buffer flush).
+    """
+    event = chunk.get("event")
+    if event == "token" and chunk.get("text"):
+        return f'data: {json.dumps({"event": "token", "text": chunk["text"]})}\n\n'
+    if event == "tool_start":
+        return f'data: {json.dumps({"event": "tool_start", "tool_name": chunk.get("tool_name"), "tool_args": chunk.get("tool_args")})}\n\n'
+    if event == "tool_result":
+        return f'data: {json.dumps({"event": "tool_result", "tool_name": chunk.get("tool_name"), "result": chunk.get("result"), "success": chunk.get("success"), "error": chunk.get("error")})}\n\n'
+    if event == "title_generated":
+        return f'data: {json.dumps({"event": "title_generated", "title": chunk.get("title"), "conversation_id": str(chunk.get("conversation_id"))})}\n\n'
+    if event == "done":
+        return f'data: {json.dumps({"event": "done", "conversation_id": str(chunk.get("conversation_id")), "usage": chunk.get("usage"), "model_used": chunk.get("model_used")})}\n\n'
+    if event == "reasoning_token" and chunk.get("text"):
+        return f'data: {json.dumps({"event": "reasoning_token", "text": chunk["text"]})}\n\n'
+    if event == "note_diff":
+        return f'data: {json.dumps({"event": "note_diff", "proposal_id": chunk.get("proposal_id"), "note_id": chunk.get("note_id"), "base_version": chunk.get("base_version")})}\n\n'
+    if event == "plan_proposal":
+        return f'data: {json.dumps({"event": "plan_proposal", "proposal_id": chunk.get("proposal_id"), "item_count": chunk.get("item_count")})}\n\n'
+    if event == "ask_choice":
+        return f'data: {json.dumps({"event": "ask_choice", "questions": chunk.get("questions")})}\n\n'
+    if event == "awaiting_approval":
+        return f'data: {json.dumps({"event": "awaiting_approval", "conversation_id": chunk.get("conversation_id"), "turn_id": chunk.get("turn_id"), "pending": chunk.get("pending")})}\n\n'
+    if event == "error":
+        return f'data: {json.dumps({"event": "error", "message": chunk.get("message")}, ensure_ascii=False)}\n\n'
+    return None
+
+
 @router.post("/stream/chat")
 async def stream_chat(
     payload: AgentChatRequest,
@@ -144,10 +186,6 @@ async def stream_chat(
         try:
             service = AgentService(user=current_user, db=db)
 
-            # Process with streaming
-            reply_text = ""
-            result_conversation_id = None
-
             async for chunk in service.handle_streaming_generator(
                 message=payload.message,
                 conversation_id=payload.conversation_id,
@@ -157,29 +195,10 @@ async def stream_chat(
                 temperature=payload.temperature,
                 surface=payload.surface,
             ):
-                if chunk.get("event") == "token" and chunk.get("text"):
-                    reply_text += chunk["text"]
-                    yield f'data: {json.dumps({"event": "token", "text": chunk["text"]})}\n\n'
-                elif chunk.get("event") == "tool_start":
-                    yield f'data: {json.dumps({"event": "tool_start", "tool_name": chunk.get("tool_name"), "tool_args": chunk.get("tool_args")})}\n\n'
-                elif chunk.get("event") == "tool_result":
-                    yield f'data: {json.dumps({"event": "tool_result", "tool_name": chunk.get("tool_name"), "result": chunk.get("result"), "success": chunk.get("success"), "error": chunk.get("error")})}\n\n'
-                elif chunk.get("event") == "title_generated":
-                    yield f'data: {json.dumps({"event": "title_generated", "title": chunk.get("title"), "conversation_id": str(chunk.get("conversation_id"))})}\n\n'
-                elif chunk.get("event") == "done":
-                    result_conversation_id = chunk.get("conversation_id")
-                    yield f'data: {json.dumps({"event": "done", "conversation_id": str(result_conversation_id), "usage": chunk.get("usage"), "model_used": chunk.get("model_used")})}\n\n'
-                elif chunk.get("event") == "reasoning_token" and chunk.get("text"):
-                    yield f'data: {json.dumps({"event": "reasoning_token", "text": chunk["text"]})}\n\n'
-                elif chunk.get("event") == "note_diff":
-                    yield f'data: {json.dumps({"event": "note_diff", "proposal_id": chunk.get("proposal_id"), "note_id": chunk.get("note_id"), "base_version": chunk.get("base_version")})}\n\n'
-                elif chunk.get("event") == "plan_proposal":
-                    yield f'data: {json.dumps({"event": "plan_proposal", "proposal_id": chunk.get("proposal_id"), "item_count": chunk.get("item_count")})}\n\n'
-                elif chunk.get("event") == "ask_choice":
-                    yield f'data: {json.dumps({"event": "ask_choice", "questions": chunk.get("questions")})}\n\n'
-                elif chunk.get("event") == "error":
-                    yield f'data: {json.dumps({"event": "error", "message": chunk.get("message")})}\n\n'
-                    
+                line = _encode_sse_event(chunk)
+                if line:
+                    yield line
+
         except asyncio.CancelledError:
             logger.info("Stream cancelled — server shutting down or client disconnected")
         except GeneratorExit:
@@ -192,6 +211,112 @@ async def stream_chat(
             logger.error(f"Error in stream chat: {exc}", exc_info=True)
             yield f'data: {json.dumps({"event": "error", "message": "Có lỗi khi xử lý tin nhắn của bạn. Bạn thử lại nhé."}, ensure_ascii=False)}\n\n'
     
+    return StreamingResponse(
+        stream_events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+# ============================================================================
+# Auto/manual execution mode + pending tool call approval
+# ============================================================================
+#
+# "auto" keeps `_run_tool_loop`'s default behavior. "manual" makes it stop
+# before executing any tool call the model asks for, persist the pending
+# calls, and end the SSE stream with an `awaiting_approval` event instead —
+# see `AgentService._run_tool_loop`'s docstring. Web-only for now: JWT auth
+# (`get_current_active_user`), not `get_current_user_or_internal` — the
+# Mezon bot has no UI to approve/reject a pending call.
+
+@router.patch("/conversations/{conversation_id}/execution-mode", response_model=ConversationExecutionModeResponse)
+async def update_execution_mode(
+    conversation_id: UUID,
+    body: ConversationExecutionModeUpdate,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    from app.ai.agents.conversation_store import ConversationStore
+
+    store = ConversationStore(db)
+    conv = await store.get_conversation_by_id(conversation_id, current_user.id)
+    if not conv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+
+    conv.execution_mode = body.execution_mode
+    await db.commit()
+    return ConversationExecutionModeResponse(conversation_id=conv.id, execution_mode=conv.execution_mode)
+
+
+@router.get("/conversations/{conversation_id}/pending-tool-calls", response_model=PendingToolCallListResponse)
+async def list_pending_tool_calls(
+    conversation_id: UUID,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Pending tool calls for this conversation, if any — lets the frontend
+    restore the approval card after a page reload."""
+    from app.ai.agents.conversation_store import ConversationStore
+    from app.models import AgentPendingToolCall
+
+    store = ConversationStore(db)
+    conv = await store.get_conversation_by_id(conversation_id, current_user.id)
+    if not conv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+
+    result = await db.execute(
+        select(AgentPendingToolCall)
+        .where(AgentPendingToolCall.conversation_id == conv.id)
+        .order_by(AgentPendingToolCall.created_at.asc())
+    )
+    rows = result.scalars().all()
+    return PendingToolCallListResponse(
+        conversation_id=conv.id,
+        pending=[
+            PendingToolCallOut(
+                id=r.id, turn_id=r.turn_id, tool_call_id=r.tool_call_id,
+                tool_name=r.tool_name, tool_input=r.tool_input or {},
+            )
+            for r in rows
+        ],
+    )
+
+
+@router.post("/conversations/{conversation_id}/tool-calls/resolve")
+async def resolve_tool_calls(
+    conversation_id: UUID,
+    payload: ResolveToolCallsRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Approve/reject a paused manual-mode turn's pending tool calls and
+    stream the turn's continuation as SSE — same event vocabulary and
+    encoding as `/stream/chat` (see `_encode_sse_event`)."""
+    async def stream_events():
+        try:
+            service = AgentService(user=current_user, db=db)
+            async for chunk in service.resume_after_tool_decisions(
+                conversation_id=conversation_id,
+                turn_id=payload.turn_id,
+                decisions=[d.model_dump() for d in payload.decisions],
+                model=payload.model,
+                temperature=payload.temperature,
+            ):
+                line = _encode_sse_event(chunk)
+                if line:
+                    yield line
+        except asyncio.CancelledError:
+            logger.info("Resolve stream cancelled — server shutting down or client disconnected")
+        except GeneratorExit:
+            pass
+        except Exception as exc:
+            logger.error(f"Error in resolve tool calls stream: {exc}", exc_info=True)
+            yield f'data: {json.dumps({"event": "error", "message": "Có lỗi khi xử lý phê duyệt. Bạn thử lại nhé."}, ensure_ascii=False)}\n\n'
+
     return StreamingResponse(
         stream_events(),
         media_type="text/event-stream",

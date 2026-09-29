@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { streamAgentMessage, listConversations, getConversation, deleteConversation, revertAction, getAvailableModels, ApiError, type ConversationListItem, type StreamEvent, type PendingChange, type TokenUsage, type AskChoiceQuestion, type AvailableModel } from '../services/api'
+import {
+    streamAgentMessage, listConversations, getConversation, deleteConversation, revertAction, getAvailableModels,
+    updateConversationExecutionMode, getPendingToolCalls, resolveToolCalls as resolveToolCallsApi,
+    ApiError,
+    type ConversationListItem, type StreamEvent, type PendingChange, type TokenUsage, type AskChoiceQuestion,
+    type AvailableModel, type ExecutionMode, type PendingToolCall, type ToolCallDecision,
+} from '../services/api'
 import { useConversationStore } from '../stores/conversationStore'
 import { knowledgeRoute, noteRoute, scheduleRoute } from '../services/routes'
 
@@ -272,6 +278,19 @@ export function useAgentStream(options: UseAgentStreamOptions) {
         () => localStorage.getItem(MODEL_KEY) || 'auto'
     )
     const [availableModels, setAvailableModels] = useState<AvailableModel[]>([AUTO_MODEL_OPTION])
+    // Per-conversation, not localStorage (unlike selectedModel) — it's
+    // stored server-side on AgentConversation.execution_mode. A brand-new
+    // conversation has no id to PATCH yet, so it starts "auto" until the
+    // first turn completes and the user flips the toggle.
+    const [executionMode, setExecutionModeState] = useState<ExecutionMode>('auto')
+    // Non-null while a manual-mode turn is paused waiting for the user to
+    // approve/reject its tool calls (`awaiting_approval` SSE event) — see
+    // `AgentService._run_tool_loop`'s manual-mode guard on the backend.
+    const [pendingApproval, setPendingApproval] = useState<{
+        conversationId: string
+        turnId: string
+        pending: PendingToolCall[]
+    } | null>(null)
     const [lastUsage, setLastUsage] = useState<TokenUsage | null>(null)
     const [lastModelUsed, setLastModelUsed] = useState<string | null>(null)
     const abortRef = useRef<AbortController | null>(null)
@@ -362,6 +381,20 @@ export function useAgentStream(options: UseAgentStreamOptions) {
                 }
                 if (restoredChanges.length > 0) {
                     setPendingChanges(restoredChanges)
+                }
+
+                try {
+                    const { pending } = await getPendingToolCalls(savedConversationId)
+                    if (!canceled && pending.length > 0) {
+                        setExecutionModeState('manual')
+                        setPendingApproval({
+                            conversationId: savedConversationId,
+                            turnId: pending[0].turn_id,
+                            pending,
+                        })
+                    }
+                } catch (pendingErr) {
+                    console.warn('Failed to check pending tool calls:', pendingErr)
                 }
             } catch (err) {
                 console.error('❌ Failed to restore conversation from backend:', err)
@@ -532,6 +565,17 @@ export function useAgentStream(options: UseAgentStreamOptions) {
             saveConversationIdToStorage(sessionId)
             setConversationTitle(conversation.title ?? null)
             setSessions([])
+            setExecutionModeState('auto')
+            setPendingApproval(null)
+            try {
+                const { pending } = await getPendingToolCalls(sessionId)
+                if (pending.length > 0) {
+                    setExecutionModeState('manual')
+                    setPendingApproval({ conversationId: sessionId, turnId: pending[0].turn_id, pending })
+                }
+            } catch (pendingErr) {
+                console.warn('Failed to check pending tool calls:', pendingErr)
+            }
 
             const dismissedIds = getDismissedActionIds()
             const loadedChanges: PendingChange[] = []
@@ -599,6 +643,8 @@ export function useAgentStream(options: UseAgentStreamOptions) {
         setPendingChanges([])
         setLastUsage(null)
         setLastModelUsed(null)
+        setExecutionModeState('auto')
+        setPendingApproval(null)
         clearDismissedActionIds()
         clearConversationIdFromStorage()
     }, [clearConversationIdFromStorage])
@@ -634,11 +680,22 @@ export function useAgentStream(options: UseAgentStreamOptions) {
         }
     }, [])
 
+    const handleExecutionModeChange = useCallback((mode: ExecutionMode) => {
+        setExecutionModeState(mode)
+        if (conversationId) {
+            updateConversationExecutionMode(conversationId, mode).catch(err => {
+                console.error('Failed to update execution mode:', err)
+            })
+        }
+        // No conversation yet: takes effect once one exists — see
+        // executionMode's declaration comment.
+    }, [conversationId])
+
     const sendMessage = useCallback(async (
         text: string,
         addedPills: ContextPill[],
     ) => {
-        if (!text.trim() || isLoading) return
+        if (!text.trim() || isLoading || pendingApproval) return
         const userMsg = text.trim()
 
         setError(null)
@@ -851,6 +908,17 @@ export function useAgentStream(options: UseAgentStreamOptions) {
                     }
                     thinkingSteps = [...thinkingSteps, step]
                     pushStepNow()
+                } else if (event.type === 'awaiting_approval' && event.turn_id && event.pending) {
+                    /* Manual execution mode: the backend stopped the turn
+                       before running these tool calls — see AgentService.
+                       _run_tool_loop's guard. No `done` event follows this
+                       one; the stream ends here until resolveApproval calls
+                       the dedicated resume endpoint. */
+                    flushPendingThinking()
+                    flushPendingText()
+                    const approvalConvId: string = event.conversation_id || finalConversationId || conversationId || ''
+                    finalConversationId = approvalConvId || finalConversationId
+                    setPendingApproval({ conversationId: approvalConvId, turnId: event.turn_id, pending: event.pending })
                 } else if (event.type === 'error') {
                     /* The backend already phrased this for a person; show it
                        as the assistant's reply rather than a toast, because
@@ -913,7 +981,7 @@ export function useAgentStream(options: UseAgentStreamOptions) {
             abortRef.current = null
             setIsLoading(false)
         }
-    }, [isLoading, conversationId, updateTokenUsage, buildRuntimeContextText, buildPageContext, navigate, projectId, onToolNavigate, saveConversationIdToStorage, selectedModel, onNoteDiff, onPlanProposal])
+    }, [isLoading, pendingApproval, conversationId, updateTokenUsage, buildRuntimeContextText, buildPageContext, navigate, projectId, onToolNavigate, saveConversationIdToStorage, selectedModel, onNoteDiff, onPlanProposal])
 
     const acceptChange = useCallback((changeId: string, actionId: string) => {
         persistDismissedActionId(actionId)
@@ -975,6 +1043,112 @@ export function useAgentStream(options: UseAgentStreamOptions) {
         void sendMessage(summaryText, [])
     }, [sendMessage])
 
+    const resolveApproval = useCallback(async (decisions: ToolCallDecision[]) => {
+        if (!pendingApproval || isLoading) return
+        const { conversationId: convId, turnId } = pendingApproval
+        setPendingApproval(null)
+        setError(null)
+
+        const loadingMsgObj: AgentMessage = {
+            id: (Date.now() + 3).toString(),
+            role: 'assistant',
+            content: '',
+            loading: true,
+            thinkingOpen: false,
+            thinkingSteps: [],
+        }
+        setMessages(prev => [...prev, loadingMsgObj])
+        setIsLoading(true)
+
+        let thinkingSteps: NonNullable<AgentMessage['thinkingSteps']> = []
+        let currentTextText = ''
+        let currentThinkingText = ''
+        let streamError: string | null = null
+
+        const flushPendingText = () => {
+            if (!currentTextText) return
+            thinkingSteps = [...thinkingSteps.filter(s => s.id !== LIVE_TEXT_ID),
+                { id: `text-${Date.now()}-${Math.random()}`, type: 'text' as const, text: currentTextText }]
+            currentTextText = ''
+        }
+        const flushPendingThinking = () => {
+            if (!currentThinkingText) return
+            thinkingSteps = [...thinkingSteps.filter(s => s.id !== LIVE_THINKING_ID),
+                { id: `thinking-${Date.now()}-${Math.random()}`, type: 'thinking' as const, text: currentThinkingText }]
+            currentThinkingText = ''
+        }
+        const pushStepNow = () => {
+            setMessages(prev => prev.map(m => m.id === loadingMsgObj.id ? { ...m, thinkingSteps } : m))
+        }
+
+        try {
+            const controller = new AbortController()
+            abortRef.current = controller
+            for await (const event of resolveToolCallsApi(convId, turnId, decisions, {
+                model: selectedModel === 'auto' ? undefined : selectedModel,
+                signal: controller.signal,
+            })) {
+                if (event.type === 'text' && event.text) {
+                    currentTextText += event.text
+                    thinkingSteps = [...thinkingSteps.filter(s => s.id !== LIVE_TEXT_ID),
+                        { id: LIVE_TEXT_ID, type: 'text' as const, text: currentTextText }]
+                    pushStepNow()
+                } else if (event.type === 'thinking' && event.text) {
+                    currentThinkingText += event.text
+                    thinkingSteps = [...thinkingSteps.filter(s => s.id !== LIVE_THINKING_ID),
+                        { id: LIVE_THINKING_ID, type: 'thinking' as const, text: currentThinkingText }]
+                    pushStepNow()
+                } else if (event.type === 'tool_start' && event.tool_name) {
+                    flushPendingThinking(); flushPendingText()
+                    thinkingSteps = [...thinkingSteps, {
+                        id: `tool-${Date.now()}-${Math.random()}`, type: 'tool_start' as const,
+                        toolName: event.tool_name, toolArgs: event.tool_args,
+                    }]
+                    pushStepNow()
+                } else if (event.type === 'tool_result' && event.tool_name) {
+                    flushPendingThinking(); flushPendingText()
+                    thinkingSteps = [...thinkingSteps, {
+                        id: `result-${Date.now()}-${Math.random()}`, type: 'tool_result' as const,
+                        toolName: event.tool_name, result: event.result, success: event.success,
+                    }]
+                    pushStepNow()
+                    const resultData = event.result as Record<string, unknown> | undefined
+                    const actionId = resultData?.action_id as string | undefined
+                    if (actionId) {
+                        const change = buildPendingChange(event.tool_name, event.result, undefined)
+                        if (change) setPendingChanges(prev => [...prev, change])
+                    }
+                } else if (event.type === 'awaiting_approval' && event.turn_id && event.pending) {
+                    // The continuation itself called another tool that also
+                    // needs approval — stays in manual mode, same as the
+                    // first pause.
+                    flushPendingThinking(); flushPendingText()
+                    setPendingApproval({ conversationId: convId, turnId: event.turn_id, pending: event.pending })
+                } else if (event.type === 'error') {
+                    flushPendingThinking(); flushPendingText()
+                    streamError = event.error || 'Có lỗi khi xử lý phê duyệt. Bạn thử lại nhé.'
+                } else if (event.type === 'done') {
+                    if (event.usage) {
+                        setLastUsage(event.usage)
+                        if (typeof event.usage.total_tokens === 'number') updateTokenUsage(event.usage.total_tokens)
+                    }
+                    if (event.model_used) setLastModelUsed(event.model_used)
+                }
+            }
+            flushPendingThinking(); flushPendingText()
+        } catch (err) {
+            streamError = err instanceof Error ? err.message : 'Failed to resolve approval.'
+        } finally {
+            setMessages(prev => prev.map(m => m.id === loadingMsgObj.id
+                ? { ...m, loading: false, thinkingSteps, ...(streamError ? { content: streamError } : {}) }
+                : m
+            ))
+            if (streamError) setError(streamError)
+            abortRef.current = null
+            setIsLoading(false)
+        }
+    }, [pendingApproval, isLoading, selectedModel, updateTokenUsage])
+
     return {
         messages,
         isLoading,
@@ -990,6 +1164,8 @@ export function useAgentStream(options: UseAgentStreamOptions) {
         pendingChanges,
         selectedModel,
         availableModels,
+        executionMode,
+        pendingApproval,
         lastUsage,
         lastModelUsed,
         abortRef,
@@ -1006,11 +1182,13 @@ export function useAgentStream(options: UseAgentStreamOptions) {
         loadMoreSessions,
         deleteSession,
         handleModelChange,
+        handleExecutionModeChange,
         acceptChange,
         undoChange,
         acceptAllChanges,
         undoAllChanges,
         answerChoice,
+        resolveApproval,
         clearConversationIdFromStorage,
     }
 }

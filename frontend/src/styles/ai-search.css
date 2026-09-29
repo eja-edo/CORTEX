@@ -337,6 +337,42 @@
     min-width: 0;
 }
 
+.ask-ai-execution-mode-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    border: 1px solid var(--border);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-size: 10.5px;
+    font-weight: 500;
+    padding: 3px 8px;
+    border-radius: 999px;
+    cursor: pointer;
+    outline: none;
+    transition: border-color 0.12s, background 0.12s, color 0.12s;
+    white-space: nowrap;
+    font-family: inherit;
+    line-height: 1.4;
+    flex-shrink: 0;
+}
+
+.ask-ai-execution-mode-btn:hover:not(:disabled) {
+    border-color: var(--accent);
+    background: var(--bg-hover);
+}
+
+.ask-ai-execution-mode-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.ask-ai-execution-mode-btn.is-manual {
+    color: #b45309;
+    border-color: rgba(180,83,9,0.3);
+    background: rgba(180,83,9,0.08);
+}
+
 .ask-ai-model-select {
     position: relative;
     flex-shrink: 0;
@@ -1664,6 +1700,123 @@
 
 .plan-proposal-approve-btn:disabled,
 .plan-proposal-reject-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+/* Tool-call approval card — manual execution mode. Same "card in the chat
+   flow" language as .plan-proposal-*, shown while AgentService._run_tool_loop
+   is paused waiting for POST .../tool-calls/resolve. */
+.tool-approval-card {
+    margin-bottom: 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    padding: 8px;
+}
+
+.tool-approval-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 2px 6px;
+    color: var(--text-tertiary);
+}
+
+.tool-approval-title {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.tool-approval-list {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.tool-approval-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 6px;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.tool-approval-item:hover {
+    background: var(--bg-hover);
+}
+
+.tool-approval-item input[type="checkbox"] {
+    margin-top: 2px;
+    flex-shrink: 0;
+}
+
+.tool-approval-item-body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.tool-approval-item-name {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-primary);
+    font-family: var(--font-mono, monospace);
+}
+
+.tool-approval-item-args {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    overflow-wrap: break-word;
+}
+
+.tool-approval-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.tool-approval-approve-btn,
+.tool-approval-reject-btn {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: pointer;
+    background: transparent;
+    transition: all 0.1s;
+    font-family: inherit;
+}
+
+.tool-approval-approve-btn {
+    color: #0f7b6c;
+    border-color: color-mix(in srgb, var(--green) 25%, transparent);
+}
+
+.tool-approval-approve-btn:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--green) 8%, transparent);
+}
+
+.tool-approval-reject-btn {
+    color: #dc2626;
+    border-color: rgba(220,38,38,0.2);
+}
+
+.tool-approval-reject-btn:hover:not(:disabled) {
+    background: rgba(220,38,38,0.08);
+}
+
+.tool-approval-approve-btn:disabled,
+.tool-approval-reject-btn:disabled {
     opacity: 0.5;
     cursor: default;
 }

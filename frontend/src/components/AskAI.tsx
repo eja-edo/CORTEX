@@ -5,6 +5,7 @@ import { MessageList } from './MessageList'
 import { StreamingComposer } from './StreamingComposer'
 import { TokenBudgetBar } from './TokenBudgetBar'
 import { PlanProposalCard } from './PlanProposalCard'
+import { ToolCallApprovalCard } from './ToolCallApprovalCard'
 
 interface AskAIProps {
     noteContent?: string
@@ -126,6 +127,14 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                     />
                 )}
 
+                {stream.pendingApproval && (
+                    <ToolCallApprovalCard
+                        pending={stream.pendingApproval.pending}
+                        isResolving={stream.isLoading}
+                        onResolve={(decisions) => void stream.resolveApproval(decisions)}
+                    />
+                )}
+
                 <StreamingComposer
                     input={input}
                     onInputChange={setInput}
@@ -150,6 +159,9 @@ export function AskAI({ noteContent, noteTitle, pendingSelection, onClose, onIns
                     selectedModel={stream.selectedModel}
                     onModelChange={stream.handleModelChange}
                     availableModels={stream.availableModels}
+                    executionMode={stream.executionMode}
+                    onExecutionModeChange={stream.handleExecutionModeChange}
+                    awaitingApproval={!!stream.pendingApproval}
                 />
 
                 <TokenBudgetBar lastUsage={stream.lastUsage} lastModelUsed={stream.lastModelUsed} />
