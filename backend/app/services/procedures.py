@@ -76,6 +76,64 @@ logger = get_logger(__name__)
 # run và đọc cho người dùng danh sách việc của một hoàn cảnh khác.
 MIN_TRIGGER_SCORE = 0.70
 
+# Ngưỡng "cùng một quy trình" cho `procedure.create` — dùng để quyết định
+# CẬP NHẬT thay vì tạo bản sao khi người dùng dạy lại một quy trình bằng
+# cách nói khác. **Không phải một ngưỡng vector đơn thuần** — xem
+# `ProcedureService.find_same_procedure()`.
+#
+# Lịch sử ngắn, vì nó định hình lý do hai hằng số dưới đây tồn tại cùng
+# nhau: bản đầu chỉ dùng vector, một ngưỡng duy nhất (0.90, kế thừa từ
+# `procedure_extraction.py` đã xoá — hiệu chỉnh cho model tự viết lại
+# trigger trong CÙNG một lần gọi, gần như trùng khớp chữ). Đo lại
+# 2026-09-22/23 trên 7 hoàn cảnh khác nhau (remote, khách hàng mới, báo
+# cáo tuần, deadline, chốt sổ, demo khách, gym), mỗi hoàn cảnh 3 cách nói
+# tự nhiên khác nhau — **hai lần dạy độc lập, không cùng một lần gọi**:
+#
+#     Chỉ vector, ngưỡng 0.90            1/21  (5%)  đúng — gần như luôn
+#                                                     tạo bản sao
+#     Vector 0.70 HOẶC từ khoá chung     17/21 (81%) đúng, NHƯNG 2/21 (10%)
+#                                                     bắt nhầm — và bắt
+#                                                     nhầm ở đây nghĩa là
+#                                                     GHI ĐÈ nội dung một
+#                                                     quy trình khác có
+#                                                     thật, không phải chỉ
+#                                                     hiện thừa
+#     Vector 0.70 VÀ từ khoá chung       13/21 (62%) đúng, 0/21 bắt nhầm
+#
+# AND an toàn nhưng bắt đúng thấp — cho tới khi kết hợp với việc
+# `save_procedure` giờ bắt model sinh ÍT NHẤT 3 cách nói mỗi lần dạy
+# (app/ai/tools/save_procedure.py), thay vì một câu chép lại nguyên văn.
+# Đo lại AND trên nền đã làm giàu đó (14 cặp, mỗi hoàn cảnh so với 2 câu
+# CHƯA từng dùng để dạy): **12/14 (86%) đúng, 1/42 (2%) bắt nhầm** — ngang
+# tỉ lệ đúng của OR, an toàn hơn nó 6 lần. Đây là cấu hình được chọn.
+#
+# `procedure.create` ghi trực tiếp, không qua xác nhận người dùng — nên
+# hậu quả hai phía không cân nhau, đúng lý lẽ đã dùng cho
+# `MIN_TRIGGER_SCORE`: bắt hụt chỉ tạo thêm một bản trùng (khó chịu, dễ
+# thấy, dễ dọn); bắt nhầm âm thầm xoá nội dung một quy trình có thật của
+# người dùng, không cảnh báo. Đây là lý do chọn AND, không phải OR, dù OR
+# bắt đúng ngang nhau trên bộ dữ liệu đã làm giàu.
+DEDUP_VECTOR_FLOOR = 0.70
+
+# Từ hư/nối hay gặp trong câu nêu hoàn cảnh, và vài từ tuy còn nghĩa nhưng
+# quá chung chung để làm tín hiệu phân biệt (đo được: "việc" nối nhầm
+# "làm việc từ xa" với "công việc gấp" — hai hoàn cảnh khác hẳn nhau;
+# "hết" nối nhầm "hết hạn" với "hết tháng"). Bỏ trước khi so từ khoá.
+_TRIGGER_STOPWORDS = frozenset({
+    "khi", "tôi", "thì", "có", "mới", "sắp", "rồi", "gần", "hôm", "nào",
+    "mai", "nay", "là", "làm", "đi", "buổi", "cho", "tới", "kỳ", "đầu",
+    "tuần", "chuẩn", "bị", "hết", "việc", "và", "của", "này", "sẽ", "sau",
+    "một", "các", "những", "để", "được", "vào", "ra", "lúc", "từ",
+})
+
+
+def _trigger_keywords(text: str) -> set[str]:
+    return {w for w in text.lower().split() if w not in _TRIGGER_STOPWORDS}
+
+
+def _shares_trigger_keyword(a: str, b: str) -> bool:
+    return bool(_trigger_keywords(a) & _trigger_keywords(b))
+
 # Một run bỏ dở bao lâu thì thôi không coi là "đang làm" nữa.
 #
 # Cần một giới hạn, vì khối tiến độ giờ xuất hiện ở **mọi** lượt khi có run
@@ -113,6 +171,13 @@ def _normalise_steps(steps: list[dict] | None) -> list[dict]:
             "order": len(out) + 1,
             "title": title,
             "due_hint": (raw.get("due_hint") or "").strip() or None,
+            # Mô tả rộng hơn tiêu đề — loại hành động, đối tượng liên quan
+            # (note/task/schedule), điều kiện áp dụng. Tuỳ chọn, và vẫn là
+            # văn bản tự do model tự diễn giải mỗi lần chạy lại, không phải
+            # tool_name/args cố định — xem thảo luận "Hướng A" trong
+            # docstring `Procedure` (models.py) về vì sao không lưu lệnh
+            # thực thi sẵn.
+            "detail": (raw.get("detail") or "").strip() or None,
         })
     return out
 
@@ -277,6 +342,65 @@ class ProcedureService:
         if procedure is None:
             return None
         return procedure, float(row[1])
+
+    async def find_same_procedure(
+        self,
+        user_id: UUID,
+        new_phrases: list[str],
+        min_score: float = DEDUP_VECTOR_FLOOR,
+    ) -> tuple[Procedure, float, str, str] | None:
+        """Quy trình đã có trùng với MỘT TRONG các cách nói vừa dạy, nếu có.
+
+        Dùng cho `procedure.create` quyết định cập nhật thay vì tạo bản
+        sao — khác `match()` (đọc, một câu nói so với trigger) ở hai
+        điểm: (1) có nhiều cách nói mới để thử, không phải một; (2) đòi
+        **cả** cosine ≥ `min_score` **lẫn** chung ít nhất một từ khoá trên
+        ĐÚNG CẶP đang so — không phải "điểm cao nhất nói chung" cộng "có
+        chung từ khoá ở đâu đó". Xem docstring `DEDUP_VECTOR_FLOOR` cho số
+        đo đứng sau lựa chọn AND thay vì chỉ vector hay OR.
+
+        Trả `(procedure, score, new_phrase, matched_existing_phrase)` của
+        cặp khớp tốt nhất, hoặc `None`.
+        """
+        best: tuple[Procedure, float, str, str] | None = None
+
+        for new_phrase in new_phrases:
+            query_embedding = await self._embeddings.embed_query(new_phrase)
+            if query_embedding is None:
+                continue
+
+            embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+            stmt = text("""
+                SELECT t.procedure_id, t.phrase,
+                       (1 - (t.embedding <=> CAST(:q AS vector))) AS score
+                FROM procedure_trigger_phrases t
+                JOIN procedures p ON p.id = t.procedure_id
+                WHERE p.user_id = :user_id
+                  AND p.is_active IS TRUE
+                  AND t.embedding IS NOT NULL
+                ORDER BY score DESC
+                LIMIT 20
+            """)
+            rows = (
+                await self.db.execute(stmt, {"q": embedding_str, "user_id": str(user_id)})
+            ).all()
+
+            for procedure_id, existing_phrase, score in rows:
+                score = float(score)
+                if score < min_score:
+                    # Đã sắp giảm dần — không hàng nào sau đây còn đạt sàn.
+                    break
+                if not _shares_trigger_keyword(new_phrase, existing_phrase):
+                    continue
+                if best is None or score > best[1]:
+                    procedure = await self.db.get(Procedure, procedure_id)
+                    if procedure is not None:
+                        best = (procedure, score, new_phrase, existing_phrase)
+                # Hàng đầu tiên thoả cả hai điều kiện là tốt nhất cho
+                # đúng new_phrase này (đã sắp giảm dần) — sang phrase kế.
+                break
+
+        return best
 
     # ── Lần chạy ───────────────────────────────────────────────────────
 

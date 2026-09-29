@@ -333,6 +333,7 @@ class ContextService:
                 pending=pending,
                 done=done,
                 run_id=str(run.id),
+                last_confirmed_at=procedure.last_confirmed_at,
             )
         except Exception as exc:
             logger.warning(f"Procedure matching failed (non-fatal): {exc}")

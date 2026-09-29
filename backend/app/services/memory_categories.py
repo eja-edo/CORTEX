@@ -57,8 +57,11 @@ CANONICAL_CATEGORIES: tuple[str, ...] = (
 
 CATEGORY_DESCRIPTIONS: dict[str, str] = {
     CATEGORY_ROUTINE: (
-        'quy trình lặp lại, dạng "khi <hoàn cảnh> thì tôi phải <các bước>". '
-        "Giữ nguyên cả trigger lẫn mọi bước trong MỘT entry."
+        "quy trình lặp lại — một hoàn cảnh sẽ lặp lại kèm các bước luôn đi "
+        'theo nó, ở BẤT KỲ cách diễn đạt nào ("khi X thì Y" chỉ là một '
+        'cách nói, không phải khuôn để so khớp — "mỗi lần...", "cứ...là...", '
+        "hay chỉ kể lại việc gì luôn xảy ra tiếp theo cũng tính). Giữ "
+        "nguyên cả trigger lẫn mọi bước trong MỘT entry."
     ),
     CATEGORY_PREFERENCE: (
         "sở thích, thói quen, cách người dùng muốn được phục vụ "

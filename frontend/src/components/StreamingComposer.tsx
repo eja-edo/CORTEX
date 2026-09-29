@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowUp, Square, Plus, Mic, FileText, ChevronDown, Check } from 'lucide-react'
-import type { PendingChange, AvailableModel } from '../services/api'
+import { ArrowUp, Square, Plus, Mic, FileText, ChevronDown, Check, Hand, Zap } from 'lucide-react'
+import type { PendingChange, AvailableModel, ExecutionMode } from '../services/api'
 
 interface ContextPill {
     id: string
@@ -29,6 +29,13 @@ interface StreamingComposerProps {
     selectedModel: string
     onModelChange: (model: string) => void
     availableModels: AvailableModel[]
+    executionMode: ExecutionMode
+    onExecutionModeChange: (mode: ExecutionMode) => void
+    /** A manual-mode turn is paused waiting for the user to approve/reject
+     * its tool calls — the composer can't send a new message until that's
+     * resolved (backend rejects an interleaved turn; see AgentService.
+     * handle_streaming_generator's pending-conflict guard). */
+    awaitingApproval?: boolean
 }
 
 export function StreamingComposer({
@@ -38,7 +45,9 @@ export function StreamingComposer({
     pendingChanges, pendingChangesOpen, onTogglePendingChanges,
     onAcceptChange, onUndoChange, onAcceptAllChanges, onUndoAllChanges,
     selectedModel, onModelChange, availableModels,
+    executionMode, onExecutionModeChange, awaitingApproval,
 }: StreamingComposerProps) {
+    const composerDisabled = isLoading || !!awaitingApproval
     const inputRef = useRef<HTMLTextAreaElement>(null)
     const modelDropdownRef = useRef<HTMLDivElement>(null)
     const [modelDropdownOpen, setModelDropdownOpen] = useState(false)
@@ -142,17 +151,17 @@ export function StreamingComposer({
                 <textarea
                     ref={inputRef}
                     className="ask-ai-input"
-                    placeholder="Ask anything…"
+                    placeholder={awaitingApproval ? 'Duyệt hành động đang chờ trước khi gửi tiếp…' : 'Ask anything…'}
                     value={input}
                     onChange={e => onInputChange(e.target.value)}
                     onKeyDown={handleKeyDown}
-                    disabled={isLoading}
+                    disabled={composerDisabled}
                 />
                 <button
                     type="button"
                     className="ask-ai-mic-btn"
                     title="Voice input"
-                    disabled={isLoading}
+                    disabled={composerDisabled}
                 >
                     <Mic size={15} />
                 </button>
@@ -179,6 +188,18 @@ export function StreamingComposer({
                     )}
                 </div>
                 <div className="ask-ai-bottom-right">
+                    <button
+                        type="button"
+                        className={`ask-ai-execution-mode-btn ${executionMode === 'manual' ? 'is-manual' : ''}`}
+                        onClick={() => onExecutionModeChange(executionMode === 'auto' ? 'manual' : 'auto')}
+                        disabled={isLoading}
+                        title={executionMode === 'auto'
+                            ? 'Tự động: AI tự chạy mọi tool. Bấm để chuyển sang thủ công.'
+                            : 'Thủ công: mọi tool phải chờ bạn duyệt. Bấm để chuyển sang tự động.'}
+                    >
+                        {executionMode === 'auto' ? <Zap size={12} /> : <Hand size={12} />}
+                        <span>{executionMode === 'auto' ? 'Tự động' : 'Thủ công'}</span>
+                    </button>
                     <div className="ask-ai-model-select" ref={modelDropdownRef}>
                         <button
                             type="button"
@@ -225,7 +246,7 @@ export function StreamingComposer({
                             type="button"
                             className={`ask-ai-send-btn ${input.trim() ? 'active' : ''}`}
                             onClick={() => onSend(input)}
-                            disabled={!input.trim()}
+                            disabled={!input.trim() || !!awaitingApproval}
                             title="Send"
                         >
                             <ArrowUp size={16} />

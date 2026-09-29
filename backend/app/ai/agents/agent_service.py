@@ -5,11 +5,12 @@ import os
 from datetime import datetime, timezone
 from uuid import UUID
 
+from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database_async import AsyncSessionLocal
 from app.ids import uuid7
-from app.models import User
+from app.models import User, AgentPendingToolCall
 from app.schemas import AgentChatRequest as ChatRequest
 from app.ai.agents.conversation_service import ConversationService, _build_history_contents, _inject_context_into_text, _format_timestamp, _trim_incomplete_tail, strip_injected_timestamp
 from app.ai.agents.tool_execution_service import ToolExecutionService, _estimate_token_breakdown, _validate_contents_ordering, _log_contents_structure, MAX_TOOL_TURNS
@@ -539,6 +540,404 @@ class AgentService:
             logger.warning(f"Title generation failed (non-fatal): {exc}")
             return None
 
+    async def _run_tool_loop(
+        self,
+        conv,
+        ctx: ToolContext,
+        messages: list,
+        gen_config: GenerationConfig,
+        tools,
+        preferred_model: str | None,
+        message_source: str | None,
+        summarizer,
+        title_task=None,
+        last_model_used: str | None = None,
+    ):
+        """Shared turn-loop body: streams the model, executes tool calls
+        (or, in manual mode, pauses for approval), and finishes the turn.
+
+        Extracted from `handle_streaming_generator` so `resume_after_tool_decisions`
+        can re-enter the exact same loop after a paused turn's pending tool
+        calls are resolved, without duplicating ~300 lines of retry/synthesis/
+        bookkeeping logic. Always starts at turn 0 — a resume rebuilds
+        `messages` fresh from DB (now including the just-resolved tool
+        results) rather than carrying turn count across the HTTP boundary;
+        this is the same pattern `CONTINUATION_INSTRUCTION` already uses when
+        a user types "tiếp tục" after hitting `MAX_TOOL_TURNS`.
+
+        Caller owns the try/except/finally (error handling, `ctx.close()`) —
+        this generator lets exceptions propagate.
+
+        In manual mode (`conv.execution_mode == "manual"`), the first turn
+        that wants to call a tool stops short of executing it: every pending
+        call is persisted to `AgentPendingToolCall` (same `turn_id`), an
+        `awaiting_approval` event is yielded, and the generator returns
+        without reaching `done` — the SSE stream ends there. Nothing about
+        this turn is written to `agent_messages` yet (only the narration
+        text, if any, saved a few lines above the guard, exactly like the
+        auto-mode path already does), so `_build_history_contents` sees no
+        trace of the tool call until `resume_after_tool_decisions` writes
+        the real (or rejected) result under the same `turn_id`.
+        """
+        conversation_id_str = str(conv.id)
+        turn = 0
+        reply_text = ""
+        tool_call_counts = {}
+        source_id_counter = 0
+        if settings.AGENT_TOOL_CALL_COUNT_SCOPE not in ("turn", "request"):
+            logger.warning(f"Unknown AGENT_TOOL_CALL_COUNT_SCOPE='{settings.AGENT_TOOL_CALL_COUNT_SCOPE}'. Expected 'turn' or 'request'. Defaulting to 'request' behavior.")
+        hard_error_occurred = False
+        saved_assistant_count = 0
+        total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "estimated_system_prompt_tokens": 0, "estimated_history_tokens": 0, "estimated_current_input_tokens": 0, "estimated_tool_results_tokens": 0}
+
+        while turn < MAX_TOOL_TURNS:
+            if settings.AGENT_TOOL_CALL_COUNT_SCOPE == "turn":
+                tool_call_counts = {}
+            logger.debug(f"Streaming turn {turn + 1}/{MAX_TOOL_TURNS} | conversation={conv.id}")
+
+            bd = _estimate_token_breakdown(messages, gen_config.system_instruction or "", turn)
+            for k, v in bd.items():
+                total_usage[k] = total_usage.get(k, 0) + v
+            self.tool_service.log_token_breakdown(bd, turn, conv.id)
+
+            turn_text = ""
+            tool_calls = []
+            partial_shown = False
+            _turn_completion_before = total_usage.get("completion_tokens", 0)
+            _turn_completion = 0
+
+            try:
+                async for chunk in _model_client.stream(messages, gen_config, tools=tools, preferred_model=preferred_model):
+                    if chunk.content:
+                        turn_text += chunk.content
+                        partial_shown = True
+                        yield {"event": "token", "text": chunk.content}
+                    if chunk.reasoning:
+                        yield {"event": "reasoning_token", "text": chunk.reasoning}
+                    if chunk.tool_calls:
+                        tool_calls.extend(chunk.tool_calls)
+                    if chunk.usage:
+                        last_model_used = preferred_model or last_model_used
+                        for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                            total_usage[k] = total_usage.get(k, 0) + (chunk.usage.get(k) or 0)
+
+                _turn_completion = total_usage.get("completion_tokens", 0) - _turn_completion_before
+                # Cắt tiền tố thời gian model có thể đã copy — xem
+                # `strip_injected_timestamp`.
+                #
+                # Hạn chế đã biết: các chunk đã được `yield` ra client
+                # ngay khi tới, nên với streaming, một tiền tố lọt ra sẽ
+                # hiện trên màn hình trước khi tới được đây. Chặn cả chỗ
+                # đó đòi giữ lại vài chục ký tự đầu của **mọi** câu trả
+                # lời để chờ xem có phải tiền tố không — thêm độ trễ cho
+                # token đầu tiên của mọi lượt, đổi lấy một lỗi hiếm.
+                # Không đáng, nên ở đây chỉ đảm bảo thứ được *lưu* và
+                # thứ đi vào lịch sử là sạch.
+                turn_text = strip_injected_timestamp(turn_text)
+                reply_text += turn_text
+
+                # Ready yet? Never waited on — only collected.
+                if title_task is not None and title_task.done():
+                    _title = title_task.result()
+                    title_task = None
+                    if _title:
+                        yield {"event": "title_generated", "conversation_id": str(conv.id), "title": _title}
+                logger.info(f"Stream turn {turn + 1} complete | text_len={len(turn_text)} tool_calls={len(tool_calls)}")
+
+            except Exception as stream_err:
+                err_str = str(stream_err)
+                logger.error(f"Streaming error at turn {turn + 1} after all retries: {err_str[:300]}", exc_info=True)
+                # Tiếng Việt như phần còn lại của sản phẩm: đây là câu
+                # duy nhất người dùng đọc khi mọi thứ hỏng, và cho tới
+                # gần đây nó còn không tới được họ (frontend không có
+                # nhánh nào cho sự kiện `error`).
+                if isinstance(stream_err, EmptyModelStreamError):
+                    user_msg = user_messages.EMPTY_REPLY
+                elif is_fatal_error(stream_err):
+                    user_msg = user_messages.MISCONFIGURED
+                elif is_quota_error(stream_err):
+                    user_msg = user_messages.RATE_LIMITED
+                elif is_connection_error(stream_err):
+                    user_msg = user_messages.UNREACHABLE
+                elif is_model_incompatible_error(stream_err):
+                    user_msg = "Không mô hình nào xử lý được yêu cầu này. Bạn thử diễn đạt lại ngắn gọn hơn xem sao."
+                elif partial_shown:
+                    # Đã có chữ hiện trên màn hình rồi — đừng nói như thể
+                    # chưa có gì xảy ra. Người dùng đang nhìn một câu bị
+                    # cụt và cần biết đó là lỗi, không phải câu trả lời.
+                    user_msg = "Câu trả lời bị ngắt giữa chừng. Bạn thử gửi lại nhé."
+                else:
+                    user_msg = "Mình gặp lỗi khi tạo câu trả lời. Bạn thử lại nhé."
+                yield {"event": "error", "message": user_msg}
+                hard_error_occurred = True
+                break
+
+            if turn_text:
+                try:
+                    saved_msg = await self.conversation_service.store.save_message(conversation_id=conv.id, role="assistant", content=turn_text, token_count=_turn_completion or None, source=message_source)
+                    if saved_msg is not None:
+                        saved_assistant_count += 1
+                except Exception as save_err:
+                    logger.warning(f"Could not save assistant message (non-fatal): {save_err}")
+
+            if tool_calls:
+                messages.append(Message(role="assistant", tool_calls=[ToolCall(id=tc.id, name=tc.name, args=tc.args) for tc in tool_calls], created_at=datetime.utcnow()))
+            elif turn_text:
+                messages.append(Message(role="assistant", content=_format_timestamp(datetime.utcnow()) + turn_text, created_at=datetime.utcnow()))
+
+            is_valid, validation_msg = _validate_contents_ordering(messages)
+            if not is_valid:
+                logger.error(f"Messages invalid after appending model response at turn {turn + 1}: {validation_msg}")
+                _log_contents_structure(messages, f"Invalid after turn {turn + 1} model response")
+                yield {"event": "error", "message": "Internal error: Conversation structure became invalid. Please start a new conversation."}
+                hard_error_occurred = True
+                break
+
+            if not tool_calls:
+                logger.info(f"Streaming finished at turn {turn + 1} (no tool calls)")
+                break
+
+            execution_list, should_break, limit_reply = await self.tool_service.check_tool_limits(tool_calls, tool_call_counts, is_streaming=True)
+
+            if should_break:
+                if limit_reply:
+                    yield {"event": "token", "text": limit_reply}
+                    reply_text += limit_reply
+                break
+
+            current_turn_id = uuid7()
+
+            if execution_list and conv.execution_mode == "manual":
+                pending_out = []
+                for tc, tool_name, tool_args in execution_list:
+                    pending_row = AgentPendingToolCall(
+                        conversation_id=conv.id,
+                        turn_id=current_turn_id,
+                        tool_call_id=tc.id,
+                        tool_name=tool_name,
+                        tool_input=tool_args,
+                    )
+                    self.db.add(pending_row)
+                    await self.db.flush()
+                    pending_out.append({
+                        "id": str(pending_row.id),
+                        "turn_id": str(current_turn_id),
+                        "tool_call_id": tc.id,
+                        "tool_name": tool_name,
+                        "tool_input": tool_args,
+                    })
+                await self.db.commit()
+                logger.info(
+                    f"event=manual_mode_pause conversation_id={conv.id} "
+                    f"turn_id={current_turn_id} pending_count={len(pending_out)}"
+                )
+                yield {
+                    "event": "awaiting_approval",
+                    "conversation_id": str(conv.id),
+                    "turn_id": str(current_turn_id),
+                    "pending": pending_out,
+                }
+                return
+
+            tool_result_msgs = []
+
+            if settings.AGENT_PARALLEL_TOOL_EXECUTION:
+                for tc, tool_name, tool_args in execution_list:
+                    logger.info(f"Streaming parallel tool: {tool_name} | args: {tool_args}")
+                    yield {"event": "tool_start", "tool_name": tool_name, "tool_args": tool_args}
+
+                async def _exec_parallel(tc, name, args):
+                    # A fresh session per concurrently-gathered call — AsyncSession
+                    # is not safe for concurrent use, and every tool handler here
+                    # touches the DB, so sharing the request-scoped `ctx.async_db()`
+                    # across `asyncio.gather` causes intermittent
+                    # "another operation is in progress" / "Session is already
+                    # flushing" failures once two handlers' awaits interleave.
+                    #
+                    # `AsyncSessionLocal` is `_AsyncSessionLocalProxy`
+                    # (database_async.py), not a plain `async_sessionmaker` —
+                    # calling it only builds the proxy; the real `AsyncSession`
+                    # comes back from `__aenter__()`. `db = AsyncSessionLocal()`
+                    # here (an earlier version of this fix) skipped that and
+                    # handed every tool a proxy with none of `AsyncSession`'s
+                    # methods — confirmed live, twice, as `AttributeError:
+                    # '_AsyncSessionLocalProxy' object has no attribute
+                    # 'scalars'` from inside the tool call and `... 'close'`
+                    # from the `finally` below once every parallel tool call in
+                    # the turn failed the same way.
+                    #
+                    # `db.close()` is shielded, not just wrapped in `finally` —
+                    # confirmed live, separately: the client disconnecting
+                    # mid-stream (the Mezon bot restarting mid-turn) cancels
+                    # this whole generator while it's awaiting `asyncio.gather`
+                    # below, and that cancellation reaching `db.close()` through
+                    # an `async with`'s implicit exit is what left a connection
+                    # needing Postgres's own garbage collector to force-close
+                    # it. `asyncio.shield` makes the close itself uncancellable;
+                    # the outer cancellation still propagates once it finishes.
+                    db = await AsyncSessionLocal().__aenter__()
+                    try:
+                        call_ctx = ToolContext(
+                            user_id=ctx.user_id, async_db=db,
+                            project_id=ctx.project_id, conversation_id=ctx.conversation_id,
+                            # Session mới không thấy tin nhắn chưa commit
+                            # của lượt này — xem docstring ToolContext.
+                            current_message=ctx.current_message,
+                        )
+                        result = await self.tool_service.execute_single_tool(name, args, call_ctx)
+                    finally:
+                        await asyncio.shield(db.close())
+                    return tc, name, args, result
+
+                exec_results = await asyncio.gather(
+                    *[_exec_parallel(tc, n, a) for tc, n, a in execution_list]
+                )
+
+                for tc, tool_name, tool_args, result in exec_results:
+                    source_id_counter += 1
+                    result["source_id"] = f"S{source_id_counter}"
+
+                    await self._check_proactive_triggers(tool_name=tool_name, tool_result=result, history=[], ctx=ctx)
+
+                    yield {"event": "tool_result", "tool_name": tool_name, "success": bool(result.get("success")), "result": result.get("result"), "error": result.get("error")}
+
+                    if tool_name == "update_note":
+                        inner = result.get("result", {})
+                        if inner.get("proposal_id"):
+                            yield {"event": "note_diff", "proposal_id": inner["proposal_id"], "note_id": inner.get("id"), "base_version": inner.get("version")}
+
+                    if tool_name == "propose_plan":
+                        inner = result.get("result", {})
+                        if inner.get("proposal_id"):
+                            yield {"event": "plan_proposal", "proposal_id": inner["proposal_id"], "item_count": inner.get("item_count")}
+
+                    if tool_name == "ask_user_choice":
+                        inner = result.get("result", {})
+                        yield {"event": "ask_choice", "questions": inner.get("questions", [])}
+
+                    await self.store.save_message(
+                        conversation_id=conv.id, role="tool", tool_name=tool_name,
+                        tool_input=tool_args, tool_output=result, tool_call_id=tc.id,
+                        turn_id=current_turn_id, source=message_source,
+                    )
+
+                    tool_result_msgs.append(Message(
+                        role="tool", tool_result=ToolResult(tool_call_id=tc.id, name=tool_name, content=result),
+                        created_at=datetime.utcnow(),
+                    ))
+            else:
+                for tc, tool_name, tool_args in execution_list:
+                    logger.info(f"Streaming sequential tool: {tool_name} | args: {tool_args}")
+                    yield {"event": "tool_start", "tool_name": tool_name, "tool_args": tool_args}
+
+                    result, tool_msg, source_id_counter = await self.tool_service.execute_single_tool_streaming(
+                        tc, tool_name, tool_args, conv, ctx, current_turn_id, source_id_counter,
+                        source=message_source,
+                    )
+                    tool_result_msgs.append(tool_msg)
+
+                    await self._check_proactive_triggers(tool_name=tool_name, tool_result=result, history=[], ctx=ctx)
+
+                    yield {"event": "tool_result", "tool_name": tool_name, "success": bool(result.get("success")), "result": result.get("result"), "error": result.get("error")}
+
+                    if tool_name == "update_note":
+                        inner = result.get("result", {})
+                        if inner.get("proposal_id"):
+                            yield {"event": "note_diff", "proposal_id": inner["proposal_id"], "note_id": inner.get("id"), "base_version": inner.get("version")}
+
+                    if tool_name == "propose_plan":
+                        inner = result.get("result", {})
+                        if inner.get("proposal_id"):
+                            yield {"event": "plan_proposal", "proposal_id": inner["proposal_id"], "item_count": inner.get("item_count")}
+
+                    if tool_name == "ask_user_choice":
+                        inner = result.get("result", {})
+                        yield {"event": "ask_choice", "questions": inner.get("questions", [])}
+
+            if tool_result_msgs:
+                messages.extend(tool_result_msgs)
+                is_valid, validation_msg = _validate_contents_ordering(messages)
+                if not is_valid:
+                    logger.error(f"Messages invalid after appending tool responses at turn {turn + 1}: {validation_msg}")
+                    _log_contents_structure(messages, "Invalid after tool responses")
+                    yield {"event": "error", "message": "Internal error: Tool response created invalid conversation structure. Please try again."}
+                    hard_error_occurred = True
+                    break
+
+            turn += 1
+
+        _synth_completion = 0
+
+        if turn >= MAX_TOOL_TURNS and not reply_text and not hard_error_occurred:
+            logger.warning(f"event=max_tool_turns_hit turn_count={turn} conversation_id={conv.id} streaming=true")
+            try:
+                synthesis_config = GenerationConfig(system_instruction=(gen_config.system_instruction or "") + CONTINUATION_INSTRUCTION, temperature=gen_config.temperature, max_output_tokens=gen_config.max_output_tokens)
+                synthesis_text = ""
+                _synth_completion_before = total_usage.get("completion_tokens", 0)
+                async for chunk in _model_client.stream(messages, synthesis_config, tools=None, preferred_model=preferred_model):
+                    if chunk.content:
+                        synthesis_text += chunk.content
+                        yield {"event": "token", "text": chunk.content}
+                    if chunk.usage:
+                        for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                            total_usage[k] = total_usage.get(k, 0) + (chunk.usage.get(k) or 0)
+                _synth_completion = total_usage.get("completion_tokens", 0) - _synth_completion_before
+                reply_text = synthesis_text or user_messages.TOO_MANY_STEPS
+            except Exception as synth_exc:
+                logger.warning(f"Streaming synthesis turn failed (non-fatal): {synth_exc}")
+                limit_text = user_messages.TOO_MANY_STEPS
+                reply_text = limit_text
+                yield {"event": "token", "text": limit_text}
+                _synth_completion = 0
+
+        # Lưới cuối: kết thúc bình thường mà không có chữ nào.
+        #
+        # Trước đây ca này rơi thẳng xuống `done` — không token, không
+        # `error`, không lưu gì. Người dùng nhận một bong bóng rỗng và
+        # không có cách nào biết là hỏng hay AI cố tình im. Đo được 4
+        # lần trong một phiên test khi gateway trả stream không có
+        # `choices`.
+        #
+        # `EmptyModelStreamError` đã chặn phần lớn ca đó ở tầng dưới;
+        # đây là lưới cho những đường còn lại (ví dụ lượt cuối chỉ có
+        # tool_calls rồi hết lượt). Thà nói sai còn hơn im lặng.
+        if not reply_text and not hard_error_occurred:
+            logger.warning(
+                f"event=empty_turn conversation_id={conv.id} turns={turn} "
+                f"saved_assistant={saved_assistant_count} streaming=true"
+            )
+            fallback = "Mình chưa tạo được câu trả lời cho tin nhắn này. Bạn thử gửi lại nhé."
+            reply_text = fallback
+            yield {"event": "token", "text": fallback}
+
+        if reply_text and saved_assistant_count == 0:
+            try:
+                await self.conversation_service.store.save_message(conversation_id=conv.id, role="assistant", content=strip_injected_timestamp(reply_text), token_count=_synth_completion or None, source=message_source)
+            except Exception as save_err:
+                logger.warning(f"Could not save final reply (non-fatal): {save_err}")
+
+        await self.conversation_service.update_timestamp(conv.id)
+        await self.conversation_service.increment_message_count(conv.id)
+
+        if total_usage.get("total_tokens"):
+            try:
+                await self.conversation_service.increment_token_count(conv.id, total_usage["total_tokens"])
+            except Exception as tok_err:
+                logger.warning(f"Could not record token count (non-fatal): {tok_err}")
+
+        await self.memory_service.maybe_trigger(summarizer, conv)
+        await self.db.commit()
+
+        if title_task is not None and title_task.done():
+            _title = title_task.result()
+            title_task = None
+            if _title:
+                yield {"event": "title_generated", "conversation_id": str(conv.id), "title": _title}
+
+        yield {"event": "done", "conversation_id": conversation_id_str, "usage": total_usage, "model_used": last_model_used or "auto"}
+        logger.info(f"event=token_breakdown_total estimated_system_prompt_tokens={total_usage['estimated_system_prompt_tokens']} estimated_history_tokens={total_usage['estimated_history_tokens']} estimated_current_input_tokens={total_usage['estimated_current_input_tokens']} estimated_tool_results_tokens={total_usage['estimated_tool_results_tokens']} prompt_tokens={total_usage['prompt_tokens']} completion_tokens={total_usage['completion_tokens']} total_tokens={total_usage['total_tokens']} conversation_id={conversation_id_str}")
+        logger.info(f"Streaming completed | conversation={conversation_id_str} | hard_error={hard_error_occurred} | usage={total_usage}")
+
     async def handle_streaming_generator(self, message: str, conversation_id: UUID | None = None, project_id: UUID | None = None, context: dict | None = None, model: str | None = None, temperature: float | None = None, surface: str | None = None):
         user_id = self.user.id
         conv = None
@@ -583,6 +982,20 @@ class AgentService:
 
             conversation_id_str = str(conv.id)
 
+            if conv.execution_mode == "manual":
+                pending_exists = await self.db.scalar(
+                    select(AgentPendingToolCall.id)
+                    .where(AgentPendingToolCall.conversation_id == conv.id)
+                    .limit(1)
+                )
+                if pending_exists is not None:
+                    yield {
+                        "event": "error",
+                        "message": "Còn hành động đang chờ bạn duyệt — xử lý thẻ đó trước khi gửi tin nhắn mới.",
+                    }
+                    yield {"event": "done", "conversation_id": conversation_id_str}
+                    return
+
             budget_ok, budget_err = await self.conversation_service.check_token_budget(conv)
             if not budget_ok:
                 yield {"event": "error", "message": budget_err}
@@ -624,333 +1037,20 @@ class AgentService:
             _log_contents_structure(messages, "Valid streaming messages for turn 1")
 
             preferred_model = await self._resolve_preferred_model(model, surface, user_id)
-            turn = 0
-            reply_text = ""
-            tool_call_counts = {}
-            source_id_counter = 0
-            if settings.AGENT_TOOL_CALL_COUNT_SCOPE not in ("turn", "request"):
-                logger.warning(f"Unknown AGENT_TOOL_CALL_COUNT_SCOPE='{settings.AGENT_TOOL_CALL_COUNT_SCOPE}'. Expected 'turn' or 'request'. Defaulting to 'request' behavior.")
-            hard_error_occurred = False
-            saved_assistant_count = 0
-            total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "estimated_system_prompt_tokens": 0, "estimated_history_tokens": 0, "estimated_current_input_tokens": 0, "estimated_tool_results_tokens": 0}
-            last_model_used = model
 
-            while turn < MAX_TOOL_TURNS:
-                if settings.AGENT_TOOL_CALL_COUNT_SCOPE == "turn":
-                    tool_call_counts = {}
-                logger.debug(f"Streaming turn {turn + 1}/{MAX_TOOL_TURNS} | conversation={conv.id}")
-
-                bd = _estimate_token_breakdown(messages, gen_config.system_instruction or "", turn)
-                for k, v in bd.items():
-                    total_usage[k] = total_usage.get(k, 0) + v
-                self.tool_service.log_token_breakdown(bd, turn, conv.id)
-
-                turn_text = ""
-                tool_calls = []
-                partial_shown = False
-                _turn_completion_before = total_usage.get("completion_tokens", 0)
-                _turn_completion = 0
-
-                try:
-                    async for chunk in _model_client.stream(messages, gen_config, tools=tools, preferred_model=preferred_model):
-                        if chunk.content:
-                            turn_text += chunk.content
-                            partial_shown = True
-                            yield {"event": "token", "text": chunk.content}
-                        if chunk.reasoning:
-                            yield {"event": "reasoning_token", "text": chunk.reasoning}
-                        if chunk.tool_calls:
-                            tool_calls.extend(chunk.tool_calls)
-                        if chunk.usage:
-                            last_model_used = preferred_model or last_model_used
-                            for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
-                                total_usage[k] = total_usage.get(k, 0) + (chunk.usage.get(k) or 0)
-
-                    _turn_completion = total_usage.get("completion_tokens", 0) - _turn_completion_before
-                    # Cắt tiền tố thời gian model có thể đã copy — xem
-                    # `strip_injected_timestamp`.
-                    #
-                    # Hạn chế đã biết: các chunk đã được `yield` ra client
-                    # ngay khi tới, nên với streaming, một tiền tố lọt ra sẽ
-                    # hiện trên màn hình trước khi tới được đây. Chặn cả chỗ
-                    # đó đòi giữ lại vài chục ký tự đầu của **mọi** câu trả
-                    # lời để chờ xem có phải tiền tố không — thêm độ trễ cho
-                    # token đầu tiên của mọi lượt, đổi lấy một lỗi hiếm.
-                    # Không đáng, nên ở đây chỉ đảm bảo thứ được *lưu* và
-                    # thứ đi vào lịch sử là sạch.
-                    turn_text = strip_injected_timestamp(turn_text)
-                    reply_text += turn_text
-
-                    # Ready yet? Never waited on — only collected.
-                    if title_task is not None and title_task.done():
-                        _title = title_task.result()
-                        title_task = None
-                        if _title:
-                            yield {"event": "title_generated", "conversation_id": str(conv.id), "title": _title}
-                    logger.info(f"Stream turn {turn + 1} complete | text_len={len(turn_text)} tool_calls={len(tool_calls)}")
-
-                except Exception as stream_err:
-                    err_str = str(stream_err)
-                    logger.error(f"Streaming error at turn {turn + 1} after all retries: {err_str[:300]}", exc_info=True)
-                    # Tiếng Việt như phần còn lại của sản phẩm: đây là câu
-                    # duy nhất người dùng đọc khi mọi thứ hỏng, và cho tới
-                    # gần đây nó còn không tới được họ (frontend không có
-                    # nhánh nào cho sự kiện `error`).
-                    if isinstance(stream_err, EmptyModelStreamError):
-                        user_msg = user_messages.EMPTY_REPLY
-                    elif is_fatal_error(stream_err):
-                        user_msg = user_messages.MISCONFIGURED
-                    elif is_quota_error(stream_err):
-                        user_msg = user_messages.RATE_LIMITED
-                    elif is_connection_error(stream_err):
-                        user_msg = user_messages.UNREACHABLE
-                    elif is_model_incompatible_error(stream_err):
-                        user_msg = "Không mô hình nào xử lý được yêu cầu này. Bạn thử diễn đạt lại ngắn gọn hơn xem sao."
-                    elif partial_shown:
-                        # Đã có chữ hiện trên màn hình rồi — đừng nói như thể
-                        # chưa có gì xảy ra. Người dùng đang nhìn một câu bị
-                        # cụt và cần biết đó là lỗi, không phải câu trả lời.
-                        user_msg = "Câu trả lời bị ngắt giữa chừng. Bạn thử gửi lại nhé."
-                    else:
-                        user_msg = "Mình gặp lỗi khi tạo câu trả lời. Bạn thử lại nhé."
-                    yield {"event": "error", "message": user_msg}
-                    hard_error_occurred = True
-                    break
-
-                if turn_text:
-                    try:
-                        saved_msg = await self.conversation_service.store.save_message(conversation_id=conv.id, role="assistant", content=turn_text, token_count=_turn_completion or None, source=message_source)
-                        if saved_msg is not None:
-                            saved_assistant_count += 1
-                    except Exception as save_err:
-                        logger.warning(f"Could not save assistant message (non-fatal): {save_err}")
-
-                if tool_calls:
-                    messages.append(Message(role="assistant", tool_calls=[ToolCall(id=tc.id, name=tc.name, args=tc.args) for tc in tool_calls], created_at=datetime.utcnow()))
-                elif turn_text:
-                    messages.append(Message(role="assistant", content=_format_timestamp(datetime.utcnow()) + turn_text, created_at=datetime.utcnow()))
-
-                is_valid, validation_msg = _validate_contents_ordering(messages)
-                if not is_valid:
-                    logger.error(f"Messages invalid after appending model response at turn {turn + 1}: {validation_msg}")
-                    _log_contents_structure(messages, f"Invalid after turn {turn + 1} model response")
-                    yield {"event": "error", "message": "Internal error: Conversation structure became invalid. Please start a new conversation."}
-                    hard_error_occurred = True
-                    break
-
-                if not tool_calls:
-                    logger.info(f"Streaming finished at turn {turn + 1} (no tool calls)")
-                    break
-
-                execution_list, should_break, limit_reply = await self.tool_service.check_tool_limits(tool_calls, tool_call_counts, is_streaming=True)
-
-                if should_break:
-                    if limit_reply:
-                        yield {"event": "token", "text": limit_reply}
-                        reply_text += limit_reply
-                    break
-
-                tool_result_msgs = []
-                current_turn_id = uuid7()
-
-                if settings.AGENT_PARALLEL_TOOL_EXECUTION:
-                    for tc, tool_name, tool_args in execution_list:
-                        logger.info(f"Streaming parallel tool: {tool_name} | args: {tool_args}")
-                        yield {"event": "tool_start", "tool_name": tool_name, "tool_args": tool_args}
-
-                    async def _exec_parallel(tc, name, args):
-                        # A fresh session per concurrently-gathered call — AsyncSession
-                        # is not safe for concurrent use, and every tool handler here
-                        # touches the DB, so sharing the request-scoped `ctx.async_db()`
-                        # across `asyncio.gather` causes intermittent
-                        # "another operation is in progress" / "Session is already
-                        # flushing" failures once two handlers' awaits interleave.
-                        #
-                        # `AsyncSessionLocal` is `_AsyncSessionLocalProxy`
-                        # (database_async.py), not a plain `async_sessionmaker` —
-                        # calling it only builds the proxy; the real `AsyncSession`
-                        # comes back from `__aenter__()`. `db = AsyncSessionLocal()`
-                        # here (an earlier version of this fix) skipped that and
-                        # handed every tool a proxy with none of `AsyncSession`'s
-                        # methods — confirmed live, twice, as `AttributeError:
-                        # '_AsyncSessionLocalProxy' object has no attribute
-                        # 'scalars'` from inside the tool call and `... 'close'`
-                        # from the `finally` below once every parallel tool call in
-                        # the turn failed the same way.
-                        #
-                        # `db.close()` is shielded, not just wrapped in `finally` —
-                        # confirmed live, separately: the client disconnecting
-                        # mid-stream (the Mezon bot restarting mid-turn) cancels
-                        # this whole generator while it's awaiting `asyncio.gather`
-                        # below, and that cancellation reaching `db.close()` through
-                        # an `async with`'s implicit exit is what left a connection
-                        # needing Postgres's own garbage collector to force-close
-                        # it. `asyncio.shield` makes the close itself uncancellable;
-                        # the outer cancellation still propagates once it finishes.
-                        db = await AsyncSessionLocal().__aenter__()
-                        try:
-                            call_ctx = ToolContext(
-                                user_id=ctx.user_id, async_db=db,
-                                project_id=ctx.project_id, conversation_id=ctx.conversation_id,
-                                # Session mới không thấy tin nhắn chưa commit
-                                # của lượt này — xem docstring ToolContext.
-                                current_message=ctx.current_message,
-                            )
-                            result = await self.tool_service.execute_single_tool(name, args, call_ctx)
-                        finally:
-                            await asyncio.shield(db.close())
-                        return tc, name, args, result
-
-                    exec_results = await asyncio.gather(
-                        *[_exec_parallel(tc, n, a) for tc, n, a in execution_list]
-                    )
-
-                    for tc, tool_name, tool_args, result in exec_results:
-                        source_id_counter += 1
-                        result["source_id"] = f"S{source_id_counter}"
-
-                        await self._check_proactive_triggers(tool_name=tool_name, tool_result=result, history=[], ctx=ctx)
-
-                        yield {"event": "tool_result", "tool_name": tool_name, "success": bool(result.get("success")), "result": result.get("result"), "error": result.get("error")}
-
-                        if tool_name == "update_note":
-                            inner = result.get("result", {})
-                            if inner.get("proposal_id"):
-                                yield {"event": "note_diff", "proposal_id": inner["proposal_id"], "note_id": inner.get("id"), "base_version": inner.get("version")}
-
-                        if tool_name == "propose_plan":
-                            inner = result.get("result", {})
-                            if inner.get("proposal_id"):
-                                yield {"event": "plan_proposal", "proposal_id": inner["proposal_id"], "item_count": inner.get("item_count")}
-
-                        if tool_name == "ask_user_choice":
-                            inner = result.get("result", {})
-                            yield {"event": "ask_choice", "questions": inner.get("questions", [])}
-
-                        await self.store.save_message(
-                            conversation_id=conv.id, role="tool", tool_name=tool_name,
-                            tool_input=tool_args, tool_output=result, tool_call_id=tc.id,
-                            turn_id=current_turn_id, source=message_source,
-                        )
-
-                        tool_result_msgs.append(Message(
-                            role="tool", tool_result=ToolResult(tool_call_id=tc.id, name=tool_name, content=result),
-                            created_at=datetime.utcnow(),
-                        ))
-                else:
-                    for tc, tool_name, tool_args in execution_list:
-                        logger.info(f"Streaming sequential tool: {tool_name} | args: {tool_args}")
-                        yield {"event": "tool_start", "tool_name": tool_name, "tool_args": tool_args}
-
-                        result, tool_msg, source_id_counter = await self.tool_service.execute_single_tool_streaming(
-                            tc, tool_name, tool_args, conv, ctx, current_turn_id, source_id_counter,
-                            source=message_source,
-                        )
-                        tool_result_msgs.append(tool_msg)
-
-                        await self._check_proactive_triggers(tool_name=tool_name, tool_result=result, history=[], ctx=ctx)
-
-                        yield {"event": "tool_result", "tool_name": tool_name, "success": bool(result.get("success")), "result": result.get("result"), "error": result.get("error")}
-
-                        if tool_name == "update_note":
-                            inner = result.get("result", {})
-                            if inner.get("proposal_id"):
-                                yield {"event": "note_diff", "proposal_id": inner["proposal_id"], "note_id": inner.get("id"), "base_version": inner.get("version")}
-
-                        if tool_name == "propose_plan":
-                            inner = result.get("result", {})
-                            if inner.get("proposal_id"):
-                                yield {"event": "plan_proposal", "proposal_id": inner["proposal_id"], "item_count": inner.get("item_count")}
-
-                        if tool_name == "ask_user_choice":
-                            inner = result.get("result", {})
-                            yield {"event": "ask_choice", "questions": inner.get("questions", [])}
-
-                if tool_result_msgs:
-                    messages.extend(tool_result_msgs)
-                    is_valid, validation_msg = _validate_contents_ordering(messages)
-                    if not is_valid:
-                        logger.error(f"Messages invalid after appending tool responses at turn {turn + 1}: {validation_msg}")
-                        _log_contents_structure(messages, "Invalid after tool responses")
-                        yield {"event": "error", "message": "Internal error: Tool response created invalid conversation structure. Please try again."}
-                        hard_error_occurred = True
-                        break
-
-                turn += 1
-
-            _synth_completion = 0
-
-            if turn >= MAX_TOOL_TURNS and not reply_text and not hard_error_occurred:
-                logger.warning(f"event=max_tool_turns_hit turn_count={turn} conversation_id={conv.id} streaming=true")
-                try:
-                    synthesis_config = GenerationConfig(system_instruction=(gen_config.system_instruction or "") + CONTINUATION_INSTRUCTION, temperature=gen_config.temperature, max_output_tokens=gen_config.max_output_tokens)
-                    synthesis_text = ""
-                    _synth_completion_before = total_usage.get("completion_tokens", 0)
-                    async for chunk in _model_client.stream(messages, synthesis_config, tools=None, preferred_model=preferred_model):
-                        if chunk.content:
-                            synthesis_text += chunk.content
-                            yield {"event": "token", "text": chunk.content}
-                        if chunk.usage:
-                            for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
-                                total_usage[k] = total_usage.get(k, 0) + (chunk.usage.get(k) or 0)
-                    _synth_completion = total_usage.get("completion_tokens", 0) - _synth_completion_before
-                    reply_text = synthesis_text or user_messages.TOO_MANY_STEPS
-                except Exception as synth_exc:
-                    logger.warning(f"Streaming synthesis turn failed (non-fatal): {synth_exc}")
-                    limit_text = user_messages.TOO_MANY_STEPS
-                    reply_text = limit_text
-                    yield {"event": "token", "text": limit_text}
-                    _synth_completion = 0
-
-            # Lưới cuối: kết thúc bình thường mà không có chữ nào.
-            #
-            # Trước đây ca này rơi thẳng xuống `done` — không token, không
-            # `error`, không lưu gì. Người dùng nhận một bong bóng rỗng và
-            # không có cách nào biết là hỏng hay AI cố tình im. Đo được 4
-            # lần trong một phiên test khi gateway trả stream không có
-            # `choices`.
-            #
-            # `EmptyModelStreamError` đã chặn phần lớn ca đó ở tầng dưới;
-            # đây là lưới cho những đường còn lại (ví dụ lượt cuối chỉ có
-            # tool_calls rồi hết lượt). Thà nói sai còn hơn im lặng.
-            if not reply_text and not hard_error_occurred:
-                logger.warning(
-                    f"event=empty_turn conversation_id={conv.id} turns={turn} "
-                    f"saved_assistant={saved_assistant_count} streaming=true"
-                )
-                fallback = "Mình chưa tạo được câu trả lời cho tin nhắn này. Bạn thử gửi lại nhé."
-                reply_text = fallback
-                yield {"event": "token", "text": fallback}
-
-            if reply_text and saved_assistant_count == 0:
-                try:
-                    await self.conversation_service.store.save_message(conversation_id=conv.id, role="assistant", content=strip_injected_timestamp(reply_text), token_count=_synth_completion or None, source=message_source)
-                except Exception as save_err:
-                    logger.warning(f"Could not save final reply (non-fatal): {save_err}")
-
-            await self.conversation_service.update_timestamp(conv.id)
-            await self.conversation_service.increment_message_count(conv.id)
-
-            if total_usage.get("total_tokens"):
-                try:
-                    await self.conversation_service.increment_token_count(conv.id, total_usage["total_tokens"])
-                except Exception as tok_err:
-                    logger.warning(f"Could not record token count (non-fatal): {tok_err}")
-
-            await self.memory_service.maybe_trigger(summarizer, conv)
-            await self.db.commit()
-
-            if title_task is not None and title_task.done():
-                _title = title_task.result()
-                title_task = None
-                if _title:
-                    yield {"event": "title_generated", "conversation_id": str(conv.id), "title": _title}
-
-            if not conversation_id_str:
-                conversation_id_str = str(conv.id)
-            yield {"event": "done", "conversation_id": conversation_id_str, "usage": total_usage, "model_used": last_model_used or "auto"}
-            logger.info(f"event=token_breakdown_total estimated_system_prompt_tokens={total_usage['estimated_system_prompt_tokens']} estimated_history_tokens={total_usage['estimated_history_tokens']} estimated_current_input_tokens={total_usage['estimated_current_input_tokens']} estimated_tool_results_tokens={total_usage['estimated_tool_results_tokens']} prompt_tokens={total_usage['prompt_tokens']} completion_tokens={total_usage['completion_tokens']} total_tokens={total_usage['total_tokens']} conversation_id={conversation_id_str}")
-            logger.info(f"Streaming completed | conversation={conversation_id_str} | hard_error={hard_error_occurred} | usage={total_usage}")
+            async for ev in self._run_tool_loop(
+                conv=conv,
+                ctx=ctx,
+                messages=messages,
+                gen_config=gen_config,
+                tools=tools,
+                preferred_model=preferred_model,
+                message_source=message_source,
+                summarizer=summarizer,
+                title_task=title_task,
+                last_model_used=model,
+            ):
+                yield ev
 
         except Exception as exc:
             logger.error(f"Unhandled error in streaming generator: {exc}", exc_info=True)
@@ -966,6 +1066,149 @@ class AgentService:
                     yield {"event": "done", "conversation_id": str(conv.id)}
                 except Exception:
                     pass
+        finally:
+            if ctx is not None:
+                try:
+                    ctx.close()
+                except Exception:
+                    pass
+
+    async def resume_after_tool_decisions(
+        self,
+        conversation_id: UUID,
+        turn_id: UUID,
+        decisions: list[dict],
+        model: str | None = None,
+        temperature: float | None = None,
+    ):
+        """Resume a manual-mode turn after the user approved/rejected its
+        pending tool calls (`POST .../tool-calls/resolve`).
+
+        `decisions` is `[{"pending_id": UUID, "approved": bool}, ...]` and
+        must cover exactly the pending rows for `turn_id` (see
+        `ResolveToolCallsRequest`'s docstring — no partial approval).
+        Approved calls run through the same `ToolExecutionService.
+        execute_single_tool` auto mode uses; rejected ones get a synthetic
+        `rejected_by_user` result instead — either way a real
+        `AgentMessage(role="tool", ...)` row is written under `turn_id`, the
+        pending rows are deleted, and `_run_tool_loop` re-enters with
+        history rebuilt fresh from DB (turn always restarts at 0 here — see
+        `_run_tool_loop`'s docstring for why that's safe).
+
+        v1 scope: web only (JWT auth at the route level) — `message_source`
+        is always web (`None`), matching `handle_streaming_generator`'s
+        `surface=None` default.
+        """
+        user_id = self.user.id
+        ctx = None
+        message_source = None
+        conversation_id_str = str(conversation_id)
+        try:
+            conv = await self.conversation_service.store.get_conversation_by_id(conversation_id, user_id)
+            if not conv:
+                yield {"event": "error", "message": "Conversation not found. Please start a new chat."}
+                return
+
+            pending_result = await self.db.execute(
+                select(AgentPendingToolCall).where(
+                    AgentPendingToolCall.conversation_id == conv.id,
+                    AgentPendingToolCall.turn_id == turn_id,
+                )
+            )
+            pending_rows = {row.id: row for row in pending_result.scalars().all()}
+
+            if not pending_rows:
+                yield {"event": "error", "message": "Không còn hành động nào đang chờ duyệt cho lượt này."}
+                yield {"event": "done", "conversation_id": conversation_id_str}
+                return
+
+            decision_ids = {d["pending_id"] for d in decisions}
+            if decision_ids != set(pending_rows.keys()):
+                yield {
+                    "event": "error",
+                    "message": "Danh sách duyệt không khớp với các hành động đang chờ — bạn thử tải lại trang.",
+                }
+                yield {"event": "done", "conversation_id": conversation_id_str}
+                return
+
+            ctx = ToolContext(user_id=user_id, async_db=self.db, project_id=None, conversation_id=conv.id, current_message=None)
+
+            for decision in decisions:
+                row = pending_rows[decision["pending_id"]]
+                if decision["approved"]:
+                    yield {"event": "tool_start", "tool_name": row.tool_name, "tool_args": row.tool_input}
+                    result = await self.tool_service.execute_single_tool(row.tool_name, row.tool_input, ctx)
+                    await self._check_proactive_triggers(tool_name=row.tool_name, tool_result=result, history=[], ctx=ctx)
+                else:
+                    result = {
+                        "success": False,
+                        "rejected_by_user": True,
+                        "message": "Người dùng đã từ chối thực hiện hành động này.",
+                    }
+                    logger.info(
+                        f"event=manual_mode_rejected conversation_id={conv.id} "
+                        f"turn_id={turn_id} tool_name={row.tool_name}"
+                    )
+
+                yield {
+                    "event": "tool_result", "tool_name": row.tool_name,
+                    "success": bool(result.get("success")), "result": result.get("result"), "error": result.get("error"),
+                }
+
+                await self.store.save_message(
+                    conversation_id=conv.id, role="tool", tool_name=row.tool_name,
+                    tool_input=row.tool_input, tool_output=result, tool_call_id=row.tool_call_id,
+                    turn_id=turn_id, source=message_source,
+                )
+
+            await self.db.execute(delete(AgentPendingToolCall).where(AgentPendingToolCall.id.in_(pending_rows.keys())))
+            await self.db.commit()
+
+            summarizer = await self.conversation_service.get_summarizer()
+            recent_messages = await self.conversation_service.load_history(conv.id, conv.last_summary_message_id)
+            # No `_trim_incomplete_tail` here, unlike a fresh turn — that
+            # helper strips trailing user/tool messages before appending a
+            # NEW user message. Here the rebuilt history is meant to end in
+            # exactly the tool results just saved above, same as the normal
+            # auto-mode post-execution state before the model's next call.
+            messages = _build_history_contents(recent_messages)
+
+            is_valid, validation_msg = _validate_contents_ordering(messages)
+            logger.info(validation_msg)
+            if not is_valid:
+                logger.error("Resume: messages ordering validation failed before continuing turn")
+                yield {"event": "error", "message": "Internal error: Invalid conversation structure. Please start a new conversation."}
+                yield {"event": "done", "conversation_id": conversation_id_str}
+                return
+
+            context_string = await self._build_context_string(None, conv.id, None, "")
+            system_prompt = await self.conversation_service.build_system_prompt(conv, "", None, summarizer, SYSTEM_PROMPT, context_string=context_string, recent_messages=recent_messages)
+            gen_config = GenerationConfig(system_instruction=system_prompt, temperature=temperature, max_output_tokens=MAX_CHAT_OUTPUT_TOKENS)
+            tools = self.registry.get_provider_tools()
+            preferred_model = await self._resolve_preferred_model(model, None, user_id)
+
+            async for ev in self._run_tool_loop(
+                conv=conv,
+                ctx=ctx,
+                messages=messages,
+                gen_config=gen_config,
+                tools=tools,
+                preferred_model=preferred_model,
+                message_source=message_source,
+                summarizer=summarizer,
+                title_task=None,
+                last_model_used=model,
+            ):
+                yield ev
+
+        except Exception as exc:
+            logger.error(f"Unhandled error in resume_after_tool_decisions: {exc}", exc_info=True)
+            try:
+                await self.db.rollback()
+            except Exception:
+                pass
+            yield {"event": "error", "message": "An unexpected error occurred while processing your request."}
+            yield {"event": "done", "conversation_id": conversation_id_str}
         finally:
             if ctx is not None:
                 try:

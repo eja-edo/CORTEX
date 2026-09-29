@@ -75,16 +75,20 @@ class TestWiredIntoBothPaths:
         assert "CONTINUATION_INSTRUCTION" in src
 
     def test_streaming_uses_the_instruction(self):
+        # `handle_streaming_generator` delegates its turn loop to
+        # `_run_tool_loop` (shared with `resume_after_tool_decisions` for
+        # manual execution mode) — that's where the synthesis-turn wiring
+        # actually lives now.
         from app.ai.agents.agent_service import AgentService
 
-        src = self._source(AgentService.handle_streaming_generator)
+        src = self._source(AgentService._run_tool_loop)
         assert "CONTINUATION_INSTRUCTION" in src
 
     def test_instruction_is_appended_not_replacing_the_system_prompt(self):
         """Mất system prompt gốc thì mất mọi ràng buộc an toàn khác của nó."""
         from app.ai.agents.agent_service import AgentService
 
-        for func in (AgentService.handle, AgentService.handle_streaming_generator):
+        for func in (AgentService.handle, AgentService._run_tool_loop):
             src = self._source(func)
             assert (
                 "(gen_config.system_instruction or \"\") + CONTINUATION_INSTRUCTION"

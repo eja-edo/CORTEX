@@ -68,9 +68,15 @@ class TestWiredEverywhere:
         assert "strip_injected_timestamp(reply_text)" in src
 
     def test_streaming_strips_each_turn(self):
+        # Lives in `_run_tool_loop` now, not `handle_streaming_generator`
+        # itself — that function was extracted so
+        # `resume_after_tool_decisions` (manual execution mode) can re-enter
+        # the same turn loop without duplicating it. Both callers go through
+        # it, so the guarantee this test cares about ("streaming strips each
+        # turn") still holds either way.
         from app.ai.agents.agent_service import AgentService
 
-        src = self._source(AgentService.handle_streaming_generator)
+        src = self._source(AgentService._run_tool_loop)
         assert "strip_injected_timestamp(turn_text)" in src
 
     def test_prompt_also_tells_the_model_not_to(self):

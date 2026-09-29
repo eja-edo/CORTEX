@@ -723,6 +723,10 @@ class AgentConversation(Base):
     last_summary_message_id = Column(UUID(as_uuid=True), ForeignKey("agent_messages.id", ondelete="SET NULL"), nullable=True, index=True)
     tokens_since_last_summary = Column(Integer, nullable=False, default=0, server_default=text("0"))
     messages_since_last_summary = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    # "auto" | "manual" — manual makes the turn loop stop before executing
+    # any tool call and wait for POST .../tool-calls/resolve; see
+    # AgentPendingToolCall.
+    execution_mode = Column(String(10), nullable=False, default="auto", server_default=text("'auto'"))
     created_at = Column(DateTime, default=_utcnow, nullable=False, server_default=text("NOW()"))
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False, server_default=text("NOW()"))
 
@@ -758,6 +762,27 @@ class AgentMessage(Base):
         Index("ix_agent_messages_conversation_created", "conversation_id", "created_at"),
         Index("ix_agent_messages_conversation_role", "conversation_id", "role"),
     )
+
+
+class AgentPendingToolCall(Base):
+    """A tool call the model asked for, held for user approval.
+
+    Only exists while `AgentConversation.execution_mode == "manual"` and the
+    turn is paused — see `AgentService._run_tool_loop`'s manual-mode guard.
+    No `status` column: the row's presence *is* "pending"; resolving a
+    decision (approve or reject) deletes it and writes the real outcome — a
+    normal `AgentMessage(role="tool", ...)` row — with the same `turn_id`,
+    which is all `_build_history_contents` needs to reconstruct the turn.
+    """
+    __tablename__ = "agent_pending_tool_calls"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid7)
+    conversation_id = Column(UUID(as_uuid=True), ForeignKey("agent_conversations.id", ondelete="CASCADE"), nullable=False, index=True)
+    turn_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    tool_call_id = Column(String(100), nullable=False)
+    tool_name = Column(String(100), nullable=False)
+    tool_input = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    created_at = Column(DateTime, default=_utcnow, nullable=False, server_default=text("NOW()"))
 
 
 class ProjectStatus(str, Enum):

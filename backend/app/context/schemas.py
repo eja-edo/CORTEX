@@ -14,10 +14,19 @@ passthroughs; `project`/`recent_notes`/`recent_schedules` are the genuinely
 new, DB-sourced sections `ContextService` adds.
 """
 
+from datetime import datetime, timedelta
 from typing import Any, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
+
+# Một quy trình không được xác nhận lại (qua `mark_procedure_step` hoặc
+# `save_procedure`) trong bao lâu thì `_render_procedure` gợi ý model hỏi
+# lại "còn đúng không" thay vì áp dụng thẳng. Không xoá, không tự động
+# ngừng dùng — chỉ đổi cách trình bày, đúng docstring của cột
+# `Procedure.last_confirmed_at` (models.py): "đáng hỏi lại, không phải để
+# tự xoá".
+PROCEDURE_STALE_AFTER_DAYS = 90
 
 
 class ContextPill(BaseModel):
@@ -64,6 +73,11 @@ class ActiveProcedure(BaseModel):
     pending: list[dict] = Field(default_factory=list, description="Bước chưa xong")
     done: list[dict] = Field(default_factory=list, description="Bước đã xong")
     run_id: str = ""
+    # Lần gần nhất người dùng xác nhận (gián tiếp, qua mark_procedure_step)
+    # hoặc dạy lại (qua save_procedure) quy trình này còn đúng. `None` cho
+    # quy trình tạo trước khi cột này được nối dây — coi như chưa từng xác
+    # nhận, không coi như mới tạo.
+    last_confirmed_at: Optional[datetime] = None
 
 
 class InterventionLevels(BaseModel):
@@ -207,6 +221,12 @@ class UnifiedContext(BaseModel):
                 hint = step.get("due_hint")
                 suffix = f" ({hint})" if hint else ""
                 lines.append(f"  {step.get('order')}. {step.get('title')}{suffix}")
+                # Mô tả rộng hơn tiêu đề, nếu có — xem `_normalise_steps`
+                # (procedures.py). Không render thì `detail` model dạy qua
+                # `save_procedure` nằm im trong DB, không tới được prompt.
+                detail = step.get("detail")
+                if detail:
+                    lines.append(f"     → {detail}")
         else:
             lines.append("Tất cả các bước đã xong.")
 
@@ -221,6 +241,18 @@ class UnifiedContext(BaseModel):
             "procedure_id ở trên, kèm số thứ tự bước và câu họ vừa nói. "
             "Vẫn hỏi trước khi tạo việc hay đặt lịch."
         )
+
+        stale = (
+            p.last_confirmed_at is None
+            or (datetime.utcnow() - p.last_confirmed_at) > timedelta(days=PROCEDURE_STALE_AFTER_DAYS)
+        )
+        if stale:
+            lines.append(
+                f"Quy trình này đã hơn {PROCEDURE_STALE_AFTER_DAYS} ngày không "
+                "được xác nhận lại — hỏi người dùng một câu xem còn đúng "
+                "không trước khi áp dụng, đừng mặc định đúng."
+            )
+
         return "\n".join(lines)
 
     def _render_memories(self, max_items: int) -> str:

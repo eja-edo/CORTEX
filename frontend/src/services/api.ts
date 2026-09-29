@@ -241,6 +241,14 @@ export interface AskChoiceQuestion {
     allow_multiple?: boolean
 }
 
+export interface PendingToolCall {
+    id: string
+    turn_id: string
+    tool_call_id: string
+    tool_name: string
+    tool_input: Record<string, unknown>
+}
+
 export interface StreamEvent {
     /* `error` carries a message the backend already wrote for a person to
        read — rate-limited, empty reply, cut off mid-answer. It used to be
@@ -249,7 +257,7 @@ export interface StreamEvent {
        floor and the user watched the answer simply never arrive. */
     type: 'text' | 'done' | 'tool_start' | 'tool_result' | 'thinking' | 'title_generated'
     | 'note_diff' | 'proposal_approved' | 'proposal_rejected' | 'proposal_conflict' | 'proposal_expired'
-    | 'plan_proposal' | 'ask_choice' | 'error'
+    | 'plan_proposal' | 'ask_choice' | 'awaiting_approval' | 'error'
     text?: string
     conversation_id?: string
     title?: string
@@ -266,6 +274,8 @@ export interface StreamEvent {
     version?: number
     item_count?: number
     questions?: AskChoiceQuestion[]
+    turn_id?: string
+    pending?: PendingToolCall[]
 }
 
 export interface StreamOptions {
@@ -274,27 +284,121 @@ export interface StreamOptions {
     signal?: AbortSignal
 }
 
-export async function* streamAgentMessage(
-    message: string,
-    conversationId?: string,
-    projectId?: string,
-    context?: Record<string, unknown>,
-    options?: StreamOptions,
+/** Shape of one SSE `data: {...}` payload, already JSON-parsed — every
+ * field any event type might carry (backend's `_encode_sse_event`,
+ * agent.py). Loose on purpose: which fields are actually present depends
+ * on `event`. */
+interface RawSSEPayload {
+    event: string
+    text?: string
+    message?: string
+    conversation_id?: string
+    usage?: TokenUsage
+    model_used?: string
+    title?: string
+    tool_name?: string
+    tool_args?: Record<string, unknown>
+    result?: unknown
+    success?: boolean
+    error?: string
+    proposal_id?: string
+    note_id?: string
+    base_version?: number
+    expected?: number
+    actual?: number
+    item_count?: number
+    questions?: AskChoiceQuestion[]
+    turn_id?: string
+    pending?: PendingToolCall[]
+    version?: number
+}
+
+/** One SSE `data: {...}` payload (already JSON-parsed) → a `StreamEvent`,
+ * or `null` for an event type this client doesn't render. Shared by the
+ * main read loop and the trailing-buffer flush below — those used to
+ * duplicate this mapping and could drift out of sync (adding an event type
+ * to only one of them silently dropped it on the other path), and now by
+ * `resolveToolCalls`, which streams from a different endpoint but the same
+ * event vocabulary (backend's `_encode_sse_event`, agent.py). */
+function parseSSEEvent(data: RawSSEPayload): StreamEvent | null {
+    switch (data.event) {
+        case 'token':
+            return data.text ? { type: 'text', text: data.text } : null
+        case 'error':
+            return { type: 'error', error: data.message }
+        case 'done':
+            return {
+                type: 'done',
+                conversation_id: data.conversation_id,
+                usage: data.usage,
+                model_used: data.model_used,
+            }
+        case 'title_generated':
+            return { type: 'title_generated', conversation_id: data.conversation_id, title: data.title }
+        case 'tool_start':
+            return { type: 'tool_start', tool_name: data.tool_name, tool_args: data.tool_args }
+        case 'tool_result':
+            return {
+                type: 'tool_result',
+                tool_name: data.tool_name,
+                result: data.result,
+                success: data.success,
+                error: data.error,
+            }
+        case 'reasoning_token':
+            return data.text ? { type: 'thinking', text: data.text } : null
+        case 'note_diff':
+            return {
+                type: 'note_diff',
+                proposal_id: data.proposal_id,
+                note_id: data.note_id,
+                base_version: data.base_version,
+            }
+        case 'plan_proposal':
+            return { type: 'plan_proposal', proposal_id: data.proposal_id, item_count: data.item_count }
+        case 'ask_choice':
+            return { type: 'ask_choice', questions: data.questions }
+        case 'awaiting_approval':
+            return {
+                type: 'awaiting_approval',
+                conversation_id: data.conversation_id,
+                turn_id: data.turn_id,
+                pending: data.pending,
+            }
+        case 'proposal_approved':
+            return { type: 'proposal_approved', proposal_id: data.proposal_id, note_id: data.note_id, version: data.version }
+        case 'proposal_rejected':
+            return { type: 'proposal_rejected', proposal_id: data.proposal_id, note_id: data.note_id }
+        case 'proposal_conflict':
+            return {
+                type: 'proposal_conflict',
+                proposal_id: data.proposal_id,
+                note_id: data.note_id,
+                base_version: data.expected,
+                version: data.actual,
+            }
+        case 'proposal_expired':
+            return { type: 'proposal_expired', proposal_id: data.proposal_id, note_id: data.note_id }
+        default:
+            return null
+    }
+}
+
+/** POSTs `body` to an SSE endpoint (with the same 401-refresh-and-retry
+ * `streamAgentMessage` always did) and yields each parsed `StreamEvent`.
+ * Shared transport for `streamAgentMessage` and `resolveToolCalls`. */
+async function* consumeAgentSSE(
+    path: string,
+    body: Record<string, unknown>,
+    signal?: AbortSignal,
 ): AsyncGenerator<StreamEvent, void, undefined> {
     let tokens = getCurrentTokens()
     if (!tokens?.accessToken) {
         throw new Error('No authentication token available')
     }
 
-    const url = `${API_BASE_URL}/agent/stream/chat`
-    const body = JSON.stringify({
-        message,
-        conversation_id: conversationId,
-        project_id: projectId,
-        context,
-        model: options?.model,
-        temperature: options?.temperature,
-    })
+    const url = `${API_BASE_URL}${path}`
+    const payload = JSON.stringify(body)
 
     let response = await fetch(url, {
         method: 'POST',
@@ -302,8 +406,8 @@ export async function* streamAgentMessage(
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${tokens.accessToken}`,
         },
-        body,
-        signal: options?.signal,
+        body: payload,
+        signal,
     })
 
     // Handle 401 - token expired, refresh and retry
@@ -317,7 +421,7 @@ export async function* streamAgentMessage(
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${tokens.accessToken}`,
                 },
-                body,
+                body: payload,
             })
         } catch {
             // Refresh failed, return original 401 error
@@ -349,98 +453,12 @@ export async function* streamAgentMessage(
             buffer = lines.pop() || ''
 
             for (const line of lines) {
-                if (!line.trim()) continue
-
-                if (line.startsWith('data: ')) {
-                    try {
-                        const data = JSON.parse(line.slice(6))
-
-                        if (data.event === 'token' && data.text) {
-                            yield { type: 'text', text: data.text }
-                        } else if (data.event === 'error') {
-                            yield { type: 'error', error: data.message }
-                        } else if (data.event === 'done') {
-                            yield {
-                                type: 'done',
-                                conversation_id: data.conversation_id,
-                                usage: data.usage,
-                                model_used: data.model_used,
-                            }
-                        } else if (data.event === 'title_generated') {
-                            yield {
-                                type: 'title_generated',
-                                conversation_id: data.conversation_id,
-                                title: data.title
-                            }
-                        } else if (data.event === 'tool_start') {
-                            yield {
-                                type: 'tool_start',
-                                tool_name: data.tool_name,
-                                tool_args: data.tool_args
-                            }
-                        } else if (data.event === 'tool_result') {
-                            yield {
-                                type: 'tool_result',
-                                tool_name: data.tool_name,
-                                result: data.result,
-                                success: data.success,
-                                error: data.error,
-                            }
-                        } else if (data.event === 'reasoning_token') {
-                            yield {
-                                type: 'thinking',
-                                text: data.text
-                            }
-                        } else if (data.event === 'note_diff') {
-                            console.log('[api.ts] note_diff event received', { proposal_id: data.proposal_id, note_id: data.note_id, base_version: data.base_version })
-                            yield {
-                                type: 'note_diff',
-                                proposal_id: data.proposal_id,
-                                note_id: data.note_id,
-                                base_version: data.base_version,
-                            }
-                        } else if (data.event === 'plan_proposal') {
-                            yield {
-                                type: 'plan_proposal',
-                                proposal_id: data.proposal_id,
-                                item_count: data.item_count,
-                            }
-                        } else if (data.event === 'ask_choice') {
-                            yield {
-                                type: 'ask_choice',
-                                questions: data.questions,
-                            }
-                        } else if (data.event === 'proposal_approved') {
-                            yield {
-                                type: 'proposal_approved',
-                                proposal_id: data.proposal_id,
-                                note_id: data.note_id,
-                                version: data.version,
-                            }
-                        } else if (data.event === 'proposal_rejected') {
-                            yield {
-                                type: 'proposal_rejected',
-                                proposal_id: data.proposal_id,
-                                note_id: data.note_id,
-                            }
-                        } else if (data.event === 'proposal_conflict') {
-                            yield {
-                                type: 'proposal_conflict',
-                                proposal_id: data.proposal_id,
-                                note_id: data.note_id,
-                                base_version: data.expected,
-                                version: data.actual,
-                            }
-                        } else if (data.event === 'proposal_expired') {
-                            yield {
-                                type: 'proposal_expired',
-                                proposal_id: data.proposal_id,
-                                note_id: data.note_id,
-                            }
-                        }
-                    } catch {
-                        // Ignore JSON parse errors
-                    }
+                if (!line.trim() || !line.startsWith('data: ')) continue
+                try {
+                    const event = parseSSEEvent(JSON.parse(line.slice(6)))
+                    if (event) yield event
+                } catch {
+                    // Ignore JSON parse errors
                 }
             }
         }
@@ -448,85 +466,8 @@ export async function* streamAgentMessage(
         // Process any remaining buffer
         if (buffer.trim() && buffer.startsWith('data: ')) {
             try {
-                const data = JSON.parse(buffer.slice(6))
-                if (data.event === 'token' && data.text) {
-                    yield { type: 'text', text: data.text }
-                } else if (data.event === 'error') {
-                    yield { type: 'error', error: data.message }
-                } else if (data.event === 'done') {
-                    yield {
-                        type: 'done',
-                        conversation_id: data.conversation_id,
-                        usage: data.usage,
-                        model_used: data.model_used,
-                    }
-                } else if (data.event === 'title_generated') {
-                    yield {
-                        type: 'title_generated',
-                        conversation_id: data.conversation_id,
-                        title: data.title
-                    }
-                } else if (data.event === 'tool_start') {
-                    yield {
-                        type: 'tool_start',
-                        tool_name: data.tool_name,
-                        tool_args: data.tool_args
-                    }
-                } else if (data.event === 'tool_result') {
-                    yield {
-                        type: 'tool_result',
-                        tool_name: data.tool_name,
-                        result: data.result,
-                        success: data.success,
-                        error: data.error,
-                    }
-                } else if (data.event === 'note_diff') {
-                    console.log('[api.ts buffer] note_diff event received', { proposal_id: data.proposal_id, note_id: data.note_id })
-                    yield {
-                        type: 'note_diff',
-                        proposal_id: data.proposal_id,
-                        note_id: data.note_id,
-                        base_version: data.base_version,
-                    }
-                } else if (data.event === 'plan_proposal') {
-                    yield {
-                        type: 'plan_proposal',
-                        proposal_id: data.proposal_id,
-                        item_count: data.item_count,
-                    }
-                } else if (data.event === 'ask_choice') {
-                    yield {
-                        type: 'ask_choice',
-                        questions: data.questions,
-                    }
-                } else if (data.event === 'proposal_approved') {
-                    yield {
-                        type: 'proposal_approved',
-                        proposal_id: data.proposal_id,
-                        note_id: data.note_id,
-                        version: data.version,
-                    }
-                } else if (data.event === 'proposal_rejected') {
-                    yield {
-                        type: 'proposal_rejected',
-                        proposal_id: data.proposal_id,
-                        note_id: data.note_id,
-                    }
-                } else if (data.event === 'proposal_conflict') {
-                    yield {
-                        type: 'proposal_conflict',
-                        proposal_id: data.proposal_id,
-                        note_id: data.note_id,
-                        base_version: data.expected,
-                        version: data.actual,
-                    }
-                } else if (data.event === 'proposal_expired') {
-                    yield {
-                        type: 'proposal_expired',
-                        proposal_id: data.proposal_id,
-                        note_id: data.note_id,
-                    }
-                }
+                const event = parseSSEEvent(JSON.parse(buffer.slice(6)))
+                if (event) yield event
             } catch {
                 // Ignore JSON parse errors
             }
@@ -539,6 +480,63 @@ export async function* streamAgentMessage(
     } finally {
         reader.releaseLock()
     }
+}
+
+export function streamAgentMessage(
+    message: string,
+    conversationId?: string,
+    projectId?: string,
+    context?: Record<string, unknown>,
+    options?: StreamOptions,
+): AsyncGenerator<StreamEvent, void, undefined> {
+    return consumeAgentSSE('/agent/stream/chat', {
+        message,
+        conversation_id: conversationId,
+        project_id: projectId,
+        context,
+        model: options?.model,
+        temperature: options?.temperature,
+    }, options?.signal)
+}
+
+export type ExecutionMode = 'auto' | 'manual'
+
+export async function updateConversationExecutionMode(
+    conversationId: string,
+    executionMode: ExecutionMode,
+): Promise<{ conversation_id: string; execution_mode: ExecutionMode }> {
+    return requestWithAuth(`/agent/conversations/${conversationId}/execution-mode`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ execution_mode: executionMode }),
+    })
+}
+
+export async function getPendingToolCalls(
+    conversationId: string,
+): Promise<{ conversation_id: string; pending: PendingToolCall[] }> {
+    return requestWithAuth(`/agent/conversations/${conversationId}/pending-tool-calls`)
+}
+
+export interface ToolCallDecision {
+    pending_id: string
+    approved: boolean
+}
+
+/** Approve/reject a paused manual-mode turn's pending tool calls and stream
+ * its continuation — same event vocabulary as `streamAgentMessage`. */
+export function resolveToolCalls(
+    conversationId: string,
+    turnId: string,
+    decisions: ToolCallDecision[],
+    options?: StreamOptions,
+): AsyncGenerator<StreamEvent, void, undefined> {
+    return consumeAgentSSE(`/agent/conversations/${conversationId}/tool-calls/resolve`, {
+        turn_id: turnId,
+        decisions,
+        model: options?.model,
+        temperature: options?.temperature,
+    }, options?.signal)
 }
 
 export async function uploadNoteImage(

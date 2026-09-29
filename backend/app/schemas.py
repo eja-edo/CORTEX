@@ -1378,3 +1378,44 @@ class AgentStreamingStartResponse(BaseModel):
     status: str = Field(default="streaming_started", description="Status indicating streaming has begun")
     conversation_id: UUID | None = Field(default=None, description="Conversation ID if available")
     message: str = Field(default="Events will be streamed via SSE", description="Informational message")
+
+
+class ConversationExecutionModeUpdate(BaseModel):
+    """Body for PATCH .../execution-mode. 'manual' pauses the turn loop
+    before every tool call for approval — see AgentPendingToolCall."""
+    execution_mode: Literal["auto", "manual"]
+
+
+class ConversationExecutionModeResponse(BaseModel):
+    conversation_id: UUID
+    execution_mode: Literal["auto", "manual"]
+
+
+class PendingToolCallOut(BaseModel):
+    """One tool call awaiting approval — mirrors the dict shape already
+    streamed in the `awaiting_approval` SSE event."""
+    id: UUID
+    turn_id: UUID
+    tool_call_id: str
+    tool_name: str
+    tool_input: dict
+
+
+class PendingToolCallListResponse(BaseModel):
+    conversation_id: UUID
+    pending: list[PendingToolCallOut]
+
+
+class ToolCallDecision(BaseModel):
+    pending_id: UUID
+    approved: bool
+
+
+class ResolveToolCallsRequest(BaseModel):
+    """Body for POST .../tool-calls/resolve. `decisions` must cover exactly
+    the full set of pending rows for `turn_id` — partial approval of a turn
+    isn't supported (see AgentService.resume_after_tool_decisions)."""
+    turn_id: UUID
+    decisions: list[ToolCallDecision] = Field(..., min_length=1)
+    model: str | None = None
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)

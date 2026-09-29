@@ -24,11 +24,29 @@ cung cấp — đây không phải bịa thêm, mà là định tuyến đúng c
 """
 
 
-def rescue_title(data: dict) -> dict:
-    """`model_validator(mode="before")`: nếu thiếu `title` mà có
-    `description`, dùng `description` làm `title` và xoá `description` đi
-    — nó không còn là "chi tiết thêm ngoài tiêu đề" một khi chính nó đã
-    trở thành tiêu đề.
+def rescue_title(
+    data: dict, fallback_field: str = "description", clear_fallback: bool = True
+) -> dict:
+    """`model_validator(mode="before")`: nếu thiếu `title` mà có nội dung ở
+    `fallback_field`, dùng nội dung đó làm `title`.
+
+    Tổng quát hoá từ bản gốc (chỉ nhận `description`) để dùng lại được cho
+    `save_procedure`: cùng đúng kiểu hỏng đo được ở đây lại xảy ra ở đó —
+    model bỏ trống `title` của bước, chỉ điền `detail`, 100% số lần gọi
+    trong lần eval sống đầu tiên (`tests/eval/test_save_procedure_live.py`,
+    2026-09-22). Cùng kết luận của docstring module này vẫn đúng: sửa bằng
+    câu chữ trong prompt đã không đủ ở ca gốc, nên không thử lại ở đây —
+    vá tại biên tool ngay từ đầu.
+
+    `clear_fallback=False` cho ca `fallback_field` vẫn cần giữ nguyên sau
+    khi được mượn làm `title` — ví dụ `trigger_text` của `save_procedure`
+    vẫn là trường bắt buộc riêng, không "trở thành tiêu đề" theo nghĩa
+    `description`/`detail` (thứ chỉ tồn tại để bổ sung cho `title`).
+
+    Cắt về tối đa 255 ký tự — `fallback_field` (`description`, 1000 ký
+    tự; `detail`, 500 ký tự) có thể dài hơn giới hạn của `title`, và không
+    cắt thì việc cứu trường này lại tạo ra chính lỗi validation nó định
+    tránh.
 
     Không đụng gì khi `title` đã có — đây là lưới an toàn, không phải một
     cách viết `title` khác.
@@ -38,9 +56,10 @@ def rescue_title(data: dict) -> dict:
     title = (data.get("title") or "").strip() if isinstance(data.get("title"), str) else data.get("title")
     if title:
         return data
-    description = data.get("description")
-    if isinstance(description, str) and description.strip():
+    fallback = data.get(fallback_field)
+    if isinstance(fallback, str) and fallback.strip():
         data = dict(data)
-        data["title"] = description.strip()
-        data["description"] = None
+        data["title"] = fallback.strip()[:255]
+        if clear_fallback:
+            data[fallback_field] = None
     return data
