@@ -61,13 +61,20 @@ jobs:
         run: python -m alembic upgrade head
 
       - name: Run tests
-        # These 5 call the real embedding gateway (app/ai/agents/embedding_service.py,
+        # These 7 call the real embedding gateway (app/ai/agents/embedding_service.py,
         # OPENAI_BASE_URL) that only exists on the maintainer's own infra — not
         # reachable from a GitHub-hosted runner, so they fail on ConnectError here
         # regardless of code correctness. They're intentionally not under the
         # `live_llm` marker (that's for the paid model; this is a free internal
         # service assumed always-on in normal dev), so they're deselected here
         # instead of skipped via a marker.
+        #
+        # The two test_procedure_create_command.py ones were confirmed locally
+        # (OPENAI_BASE_URL pointed at an unreachable host): without embeddings,
+        # ProcedureService.find_same_procedure() can't score any candidate, so
+        # procedure.create always takes the "create new" branch and the
+        # "updates instead of duplicating" assertions fail — not a code bug,
+        # same shape as the test_procedures.py entries below.
         run: >-
           python -m pytest
           --deselect tests/integration/test_procedures.py::TestDefinition::test_trigger_is_embedded_separately_from_steps
@@ -75,6 +82,8 @@ jobs:
           --deselect tests/integration/test_procedures.py::TestTriggerMatching::test_matches_the_situation_it_describes
           --deselect tests/integration/test_memory_recall.py::TestRecallReachesContext::test_matching_message_surfaces_the_memory
           --deselect tests/integration/test_memory_recall.py::TestRecallReachesContext::test_memory_reaches_the_system_prompt_string
+          --deselect tests/integration/test_procedure_create_command.py::TestCreate::test_same_trigger_updates_instead_of_duplicating
+          --deselect tests/integration/test_procedure_create_command.py::TestCreate::test_a_genuine_paraphrase_updates_not_duplicates
 
   frontend:
     name: Frontend lint, build & tests
