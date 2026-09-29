@@ -30,6 +30,7 @@ from app.ai.tools.get_today import GET_TODAY_DEFINITION
 from app.ai.tools.list_pending_tasks import LIST_PENDING_TASKS_DEFINITION
 from app.ai.tools.list_projects import LIST_PROJECTS_DEFINITION
 from app.ai.tools.move_task import MOVE_TASK_DEFINITION
+from app.ai.tools.save_procedure import SAVE_PROCEDURE_DEFINITION
 from app.ai.tools.update_schedule import UPDATE_SCHEDULE_DEFINITION
 
 # ── Đóng băng (DESIGN 11.3) — import giữ nguyên, không đăng ký ───────────
@@ -101,6 +102,11 @@ LIVE_TOOLS = [
     # không biết gì.
     EXTRACT_MEMORY_DEFINITION,
     MARK_PROCEDURE_STEP_DEFINITION,
+    # Đường **ghi** trực tiếp cho quy trình lặp lại — thay cho đường cũ
+    # (chỉ tạo Procedure gián tiếp, sau khi batch trích xuất bộ nhớ phân
+    # loại đúng category `routine`). Model gọi ngay trong lúc chat, còn
+    # nguyên ngữ cảnh gốc thay vì một bản tóm tắt đã nén.
+    SAVE_PROCEDURE_DEFINITION,
 ]
 
 # Mỗi mục dưới đây phục vụ một bề mặt đã gỡ khỏi nav hoặc một service đã gỡ

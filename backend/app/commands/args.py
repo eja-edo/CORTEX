@@ -384,3 +384,23 @@ class ProcedureStepMarkArgs(BaseModel):
                 "nguyên văn câu của người dùng"
             )
         return self
+
+
+class ProcedureCreateArgs(BaseModel):
+    """Arguments for `procedure.create` — lưu một quy trình lặp lại.
+
+    Ghi trực tiếp trong lúc chat, thay cho đường cũ (chỉ tạo được gián
+    tiếp, sau khi batch trích xuất bộ nhớ phân loại đúng category
+    `routine`). Nếu `trigger_text` khớp một quy trình đã có của người dùng
+    (`ProcedureService.find_same_procedure()`, procedures.py), handler
+    UPDATE quy trình đó thay vì tạo bản sao.
+    """
+    title: str = Field(..., min_length=1, max_length=255)
+    trigger_text: str = Field(
+        ..., min_length=1, max_length=500,
+        description="Các cách người dùng có thể nhắc tới hoàn cảnh này, cách nhau bởi dấu phẩy",
+    )
+    # Mỗi phần tử: {title, due_hint?, detail?} — kiểm/chuẩn hoá thật sự nằm
+    # ở `ProcedureService._normalise_steps()` (một bước thiếu title bị bỏ
+    # qua thay vì làm hỏng cả lần ghi), nên ở đây chỉ cần list[dict] lỏng.
+    steps: list[dict] = Field(..., min_length=1)

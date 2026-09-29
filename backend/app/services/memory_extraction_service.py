@@ -210,32 +210,17 @@ async def extract_and_store(
         except Exception as exc:
             logger.error(f"Task candidate storage failed: {exc}", exc_info=True)
 
-    # ── 4. Cấu trúc hoá routine thành Procedure ──
-    #
-    # Chỉ chạy khi lô này thật sự có bộ nhớ `routine` — `sync_from_memories`
-    # trả về ngay nếu không có, nên vòng trích xuất thường (không routine)
-    # không tốn thêm lời gọi model nào.
-    #
-    # Hỏng ở đây không được làm hỏng vòng trích xuất: bộ nhớ đã được lưu an
-    # toàn ở bước 2, và bộ nhớ `routine` thô vẫn dùng được như trước khi
-    # bảng `procedures` tồn tại. Mất một quy trình, không mất cả bản tóm
-    # tắt.
-    procedure_ids = []
-    if semantic_memories:
-        try:
-            from app.services.procedure_extraction import sync_from_memories
-
-            procedure_ids = await sync_from_memories(
-                db, conv.user_id, semantic_memories
-            )
-            if procedure_ids:
-                logger.info(
-                    "Dựng %d procedure từ routine | conversation=%s",
-                    len(procedure_ids), conversation_id,
-                )
-        except Exception as exc:
-            logger.error(f"Procedure sync failed (non-fatal): {exc}", exc_info=True)
-
+    # Routine không còn được cấu trúc hoá thành Procedure ở đây. Trước đây
+    # bước 4 gọi `procedure_extraction.sync_from_memories()` khi lô này có
+    # bộ nhớ category `routine` — đường ghi gián tiếp đó đã bị gỡ (quyết
+    # định 2026-09-21): nội dung phải sống sót qua một lần nén (bản tóm tắt
+    # `episodic_summary`/`semantic_memories` ở nhiệt độ 0.2) trước khi tới
+    # được `structure_routine()`, và batch chỉ chạy sau ngưỡng 20 tin nhắn
+    # — quá trễ và quá xa nguồn so với model chính đang chat, vốn đã có
+    # toàn bộ ngữ cảnh gốc. Đường ghi duy nhất cho Procedure giờ là tool
+    # `save_procedure` (app/ai/tools/save_procedure.py), gọi trực tiếp
+    # trong lượt hội thoại. `semantic_memories` với category `routine` vẫn
+    # được lưu như mọi fact khác ở bước 2 — chỉ không còn được promote.
     await db.commit()
 
     return {
@@ -246,7 +231,6 @@ async def extract_and_store(
         "title": title,
         "new_messages": len(new_messages),
         "tasks": task_result,
-        "procedures_created": len(procedure_ids),
     }
 
 

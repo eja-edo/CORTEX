@@ -6,15 +6,21 @@ thẳng vào service sẽ bỏ qua cả bốn.
 """
 
 import re
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import select
 
 from app.ai.agents.tool_context import ToolContext
-from app.commands.args import ProcedureStepMarkArgs
+from app.commands.args import ProcedureCreateArgs, ProcedureStepMarkArgs
 from app.commands.schemas import Command
 from app.models import Procedure
-from app.services.procedures import ProcedureService
+from app.services.procedures import (
+    DEDUP_VECTOR_FLOOR,
+    ProcedureService,
+    _normalise_steps,
+    split_trigger,
+)
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -194,6 +200,12 @@ async def procedure_mark_step_handler(command: Command, ctx: ToolContext) -> dic
         except ValueError as exc:
             return {"success": False, "error": "invalid_step", "message": str(exc)}
 
+        # Người dùng vừa báo tiến độ trên quy trình này — xác nhận gián
+        # tiếp rằng nó còn đúng. Cùng cột `_render_procedure` (context/
+        # schemas.py) đọc để quyết định có nên gợi ý hỏi lại hay không sau
+        # 90 ngày không có tín hiệu nào.
+        procedure.last_confirmed_at = datetime.utcnow()
+
         await db.commit()
 
         pending = service.pending_steps(procedure, run)
@@ -245,6 +257,119 @@ async def revert_procedure_mark_step(snapshot: dict, ctx: ToolContext) -> dict:
         return {"success": True, "run_id": str(run.id)}
 
 
+async def procedure_create_handler(command: Command, ctx: ToolContext) -> dict:
+    """Lưu một quy trình lặp lại — đường ghi trực tiếp, sống trong lúc chat.
+
+    Thay cho đường cũ (chỉ tạo được gián tiếp, sau khi batch trích xuất bộ
+    nhớ phân loại đúng category `routine`, qua `procedure_extraction.py` —
+    đã xoá). Model gọi `save_procedure` ngay khi nhận ra một chuỗi công
+    việc, còn nguyên ngữ cảnh gốc thay vì một bản tóm tắt đã nén.
+
+    Khớp trước khi tạo: cùng hoàn cảnh phát biểu lại thì UPDATE quy trình
+    đã có (steps/title), không tạo bản sao. Dùng
+    `ProcedureService.find_same_procedure()` — cosine ≥
+    `DEDUP_VECTOR_FLOOR` VÀ chung từ khoá trên đúng cặp cách nói đang so,
+    không phải chỉ vector. Xem docstring `DEDUP_VECTOR_FLOOR`
+    (procedures.py) cho số đo đứng sau lựa chọn này: chỉ vector bỏ sót
+    95% lần dạy lại bằng cách nói khác; AND giữ ~2% bắt nhầm (so với 12%
+    của OR) trong khi bắt đúng ngang OR, nhờ `save_procedure` giờ đã bắt
+    model sinh nhiều cách nói mỗi lần dạy thay vì một câu chép lại.
+    """
+    args = ProcedureCreateArgs(**command.args)
+
+    async with ctx.async_db() as db:
+        service = ProcedureService(db)
+        now = datetime.utcnow()
+
+        candidate_phrases = split_trigger(args.trigger_text) or [args.trigger_text]
+        existing = await service.find_same_procedure(
+            ctx.user_id, candidate_phrases, min_score=DEDUP_VECTOR_FLOOR
+        )
+
+        if existing is not None:
+            procedure, score, new_phrase, matched_phrase = existing
+            prev_state = {
+                "mode": "update",
+                "procedure_id": str(procedure.id),
+                "title": procedure.title,
+                "steps": procedure.steps,
+                "last_confirmed_at": (
+                    procedure.last_confirmed_at.isoformat() if procedure.last_confirmed_at else None
+                ),
+            }
+
+            procedure.steps = _normalise_steps(args.steps)
+            procedure.title = args.title
+            procedure.last_confirmed_at = now
+            await db.commit()
+
+            logger.info(
+                "Procedure cập nhật qua save_procedure: %s (score=%.4f, %r ~ %r đã có, %d bước)",
+                procedure.id, score, new_phrase, matched_phrase, len(procedure.steps),
+            )
+            return {
+                "success": True,
+                "mode": "updated",
+                "procedure_id": str(procedure.id),
+                "title": procedure.title,
+                "step_count": len(procedure.steps),
+                "prev_state": prev_state,
+            }
+
+        procedure = await service.create(
+            user_id=ctx.user_id,
+            title=args.title,
+            trigger_text=args.trigger_text,
+            steps=args.steps,
+        )
+        procedure.last_confirmed_at = now
+        await db.commit()
+
+        logger.info(
+            "Procedure tạo mới qua save_procedure: %s (%d bước)",
+            procedure.id, len(procedure.steps),
+        )
+        return {
+            "success": True,
+            "mode": "created",
+            "procedure_id": str(procedure.id),
+            "title": procedure.title,
+            "step_count": len(procedure.steps),
+            "prev_state": {"mode": "create", "procedure_id": str(procedure.id)},
+        }
+
+
+async def revert_procedure_create(snapshot, ctx: ToolContext) -> dict:
+    """Hoàn tác `procedure.create`.
+
+    Tạo mới → tắt mềm (`is_active = False`), không hard-delete — cùng quy
+    ước `is_active` của bảng này. Update (khớp trigger) → phục hồi
+    title/steps/last_confirmed_at từ ảnh chụp trước đó.
+    """
+    prev = snapshot.snapshot
+    procedure_id = prev.get("procedure_id")
+    if not procedure_id:
+        return {"success": False, "error": "missing_procedure_id"}
+
+    async with ctx.async_db() as db:
+        procedure = await db.get(Procedure, UUID(procedure_id))
+        if procedure is None or procedure.user_id != ctx.user_id:
+            return {"success": False, "error": "procedure_not_found"}
+
+        if prev.get("mode") == "create":
+            procedure.is_active = False
+        else:
+            procedure.title = prev.get("title", procedure.title)
+            procedure.steps = prev.get("steps", procedure.steps)
+            last_confirmed_at = prev.get("last_confirmed_at")
+            procedure.last_confirmed_at = (
+                datetime.fromisoformat(last_confirmed_at) if last_confirmed_at else None
+            )
+
+        await db.commit()
+        return {"success": True, "procedure_id": str(procedure.id)}
+
+
 def register_procedure_commands() -> None:
     """Register procedure commands with the global CommandRegistry."""
     from app.commands.registry import get_command_registry
@@ -258,5 +383,13 @@ def register_procedure_commands() -> None:
         handler=procedure_mark_step_handler,
         revertable=True,
         revert_handler=revert_procedure_mark_step,
+    )
+    registry.register(
+        name="procedure.create",
+        description="Lưu (tạo mới hoặc cập nhật) một quy trình lặp lại của người dùng",
+        args_schema=ProcedureCreateArgs,
+        handler=procedure_create_handler,
+        revertable=True,
+        revert_handler=revert_procedure_create,
     )
     logger.info("Procedure commands registered")
