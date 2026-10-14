@@ -1,128 +1,84 @@
 # AGENTS.md
 
-Cortex is a monorepo with multiple services. Always identify which service a task touches before running commands.
+> **Đọc [`docs/DESIGN.md`](docs/DESIGN.md) và [`docs/LESSONS.md`](docs/LESSONS.md) trước mọi task.** DESIGN.md là nguồn sự thật duy nhất: sản phẩm là gì, nguyên tắc, kiến trúc và kế hoạch. Tài liệu này chỉ mô tả *cách chạy code*, không mô tả *nên xây gì*.
+>
+> ⚠️ Trước mọi việc, áp **luật L1 trong DESIGN mục 0**:
+> 1. Việc này thuộc cổng nào, hoặc gói việc v0 nào (§7.2)?
+> 2. Nó đưa tới cổng đó bằng cách nào?
+> 3. Bằng chứng nào trong `docs/customers/` cho thấy cần làm?
+>
+> **Ngoài phạm vi v0, code sản phẩm đóng băng tới cổng G2** (L3, ngân sách v0 ≤ 5.000 dòng — nới ngày 2026-10-12). Ngoại lệ chỉ có: sửa bảo mật, script phục vụ việc làm tay, gỡ code.
 
-> **Đọc [`docs/DESIGN.md`](docs/DESIGN.md) trước mọi task.** Đó là nguồn sự thật duy nhất về sản phẩm là gì, nguyên tắc ràng buộc, mô hình dữ liệu và kế hoạch. Tài liệu này chỉ mô tả *cách chạy code*, không mô tả *nên xây gì*.
+## Repo này chứa gì
+
+| Thư mục | Nội dung |
+|---|---|
+| [`cortex-leads/`](cortex-leads/) | **Dự án duy nhất.** Nền tảng v0 "không để rơi khách tiềm năng — AI đứng sau nhân viên tư vấn". **Trạng thái 2026-10-12:** đã xây tới WP16 (371 test, 4.943/5.000 dòng), mới chạy trên dữ liệu giả lập — chưa nối nền tảng thật (WP14) |
+| [`docs/DESIGN.md`](docs/DESIGN.md) | Thiết kế bản 2.1, nguồn sự thật |
+| [`docs/LESSONS.md`](docs/LESSONS.md) | Bài học đã trả giá: hướng đã chết, số đã đo, lỗi đã gặp |
+| [`docs/customers/`](docs/customers/) | Bằng chứng từ người thật. **Chỉ bản ẩn danh**, vì repo này đang công khai |
+| [`docs/LEGACY.md`](docs/LEGACY.md) | Hệ cũ đã gỡ ngày 2026-10-10: thứ gì còn đáng lấy lại từ git, ở commit nào |
+| [`docs/archive/`](docs/archive/) | Kế hoạch và thiết kế cũ (bản 1). Chỉ để tra cứu, không làm theo |
+
+Hệ cũ (`backend/`, `frontend/`, `mezon_bot/`, `workflow_service/`, `ocr_service/`, `stt_service/`, `infrastructure/`) **đã bị gỡ**. Không khôi phục chúng vào cây thư mục. Cần tham khảo thì dùng `git show 0a22e33:<đường dẫn>` (xem LEGACY.md).
+
+## cortex-leads — cách chạy
+
+Mọi lệnh chạy từ thư mục `cortex-leads/`.
+
+```bash
+make setup      # .venv (python3.12) + pip install -e .[dev]
+make db-up      # Postgres 16 riêng của dự án, cổng host 5544
+make migrate
+make test       # pytest trên Postgres thật
+```
+
+Hướng dẫn chạy thử đầy đủ (tenant, connector, skill, bridge Pancake, MCP) nằm trong [`cortex-leads/README.md`](cortex-leads/README.md).
+
+### Cách làm việc khi code
+
+- **Hợp đồng xây dựng:** [`cortex-leads/PLAN.md`](cortex-leads/PLAN.md) chốt schema, kiểu chung, giao diện giữa các gói, và **quyền sở hữu tệp** của từng gói việc. Đọc nó trước khi sửa code.
+- **Sổ review:** [`cortex-leads/REVIEW.md`](cortex-leads/REVIEW.md) ghi mọi phát hiện còn mở (R1, R2, …). Sửa xong một mục thì đánh dấu ✅ kèm ngày.
+- **Đổi schema:** thêm revision Alembic mới. **Không sửa** `0001_initial.py`, vì nó dựng bằng `Base.metadata.create_all` từ models tại thời điểm đó.
+- **Chạy test song song** (nhiều agent cùng lúc): mỗi agent dùng một DB riêng, nếu không test của người này sẽ TRUNCATE dữ liệu của người kia.
+  ```bash
+  docker compose exec -T pg createdb -U cl_owner cortex_leads_<tên>
+  export CL_DATABASE_URL=postgresql+asyncpg://cl_app:cl_app_dev@localhost:5544/cortex_leads_<tên>
+  export CL_DATABASE_OWNER_URL=postgresql+asyncpg://cl_owner:cl_owner_dev@localhost:5544/cortex_leads_<tên>
+  ```
+  Migration tự áp lên DB mới khi test chạy.
+  ⚠️ Khi dùng DB riêng, chạy `.venv/bin/python -m pytest …` trực tiếp — **không** dùng `make test`, vì Makefile `source .env.test` sẽ ghi đè biến đã export và trỏ về DB chung (đã xảy ra, REVIEW R30).
+
+### Bất biến — test phải giữ xanh
+
+Chi tiết ở DESIGN §5.0.
+
+| # | Bất biến |
+|---|---|
+| A1 | `tenant_id` + RLS (`FORCE`) trên mọi bảng dữ liệu. Code chạy bằng role `cl_app`, không phải owner |
+| A3 | Tenant, actor, scope do server điền: lấy từ connector key, API key, hoặc `RunContext`. Không bao giờ lấy từ body hay tham số LLM |
+| A7 | Validator chạy **bên trong** tool ghi. Mọi con số khách nhìn thấy phải trỏ về một dòng catalog |
+| A9 | **Chỉ một đường gửi tin cho khách:** tool `send_message` → `outbox` → worker → bridge. Hai lớp chặn do người cấu hình: skill (`send_policy` auto/manual) và bridge (`outbound`). Chế độ manual không bao giờ sinh outbox khi chưa có người duyệt; AI chỉ gửi trong cửa sổ tự do, kèm dòng xưng AI |
+| — | Dữ liệu cá nhân (tên, SĐT, email) được che trước mọi lời gọi LLM |
+
+### Bẫy đã gặp
+
+- **PyYAML đọc khoá `on` thành `True`** (YAML 1.1). Parse frontmatter skill **chỉ** qua `cortex_leads.skills.loader`, không gọi `yaml.safe_load` trực tiếp.
+- **`mcp` là bản 2.x** (`mcp>=2,<3`). API khác bản 1.x: dùng `mcp.server.mcpserver.MCPServer`, không có `mcp.server.fastmcp`.
+- **Owner trong Docker là superuser**, nên view bỏ qua RLS. View của supervisor dùng `security_invoker = true`.
+- **Dòng cuối của prompt quyết định hình dạng JSON.** Dùng `cortex_leads.llm.shape.response_shape(example)` để *vẽ* shape bằng ví dụ, không chỉ nêu tên khoá.
+- **`draft.created_at` dùng đồng hồ DB.** Test dùng `now` cố định thì phải dời dữ liệu seed về quá khứ thật.
+- **Không dùng LLM endpoint không có DPA cho dữ liệu khách thật** (REVIEW R2, DESIGN §6). Ví dụ: 9Router `free_auto`.
+
+## Bảo mật
+
+- Repo đang **công khai**. Không commit secret, dữ liệu khách, catalog hay prompt riêng của khách. `cortex-leads/data/` và `.env*` (trừ `.env.test`) đã gitignore.
+- `cortex-leads/.env.test` chỉ chứa giá trị **dành riêng cho test**. Config từ chối khởi động nếu secret trùng giá trị đã lộ của hệ cũ.
+- Server EC2 cũ vẫn chạy hệ cũ từ nhánh `develop`. Xem DESIGN §10: vá bảo mật, dump DB, rồi tắt. **Không merge nhánh gỡ hệ cũ vào `develop` trước khi tắt server.**
 
 ## Codebase discovery
 
-Project đã được index trong `codebase-memory-mcp` dưới tên **`home-duyanh-project-Cortex`** — luôn truyền `project="home-duyanh-project-Cortex"` khi gọi MCP. Ưu tiên graph tools (`search_graph` → `trace_path` → `get_code_snippet` → `query_graph`) hơn grep/glob. Chi tiết cách dùng từng tool (mode, paging, Cypher queries hay dùng, khi nào fallback) xem `.opencode/MCP_USAGE.md`.
-
-## Repository layout (services)
-
-| Dir | Stack | Purpose | Default port |
-|---|---|---|---|
-| `backend/` | FastAPI + SQLAlchemy + Alembic | Main API: auth, notes, schedules, workspaces, agent/chat, media, SSE | 8000 |
-| `frontend/` | Vite + React 19 + TS | Web UI; proxies `/api/v1/{workflows,executions,webhooks,actions}` → workflow_service | 5173 |
-| `workflow_service/` | FastAPI + Temporal | Workflow runtime (CRUD, triggers, actions); talks to backend via internal API key | 8001 |
-| `ocr_service/` | FastAPI + EasyOCR | Video/image OCR pipeline; Redis queue consumer | — |
-| `stt_service/` | FastAPI + WhisperX | Speech-to-text worker; Redis queue consumer | — |
-| `sync-server/` | Node/Yjs (sources empty here; see `sync-server/tests/`) | Yjs CRDT sync endpoint | 1235 |
-| `infrastructure/` | docker-compose | Postgres+pgvector (5434), Mongo (27016), Redis (6377), MinIO (9002/9003), Temporal (7233, UI 8088), workflow_service | — |
-| `lab/` | Python | Throwaway OCR pipeline experiments — do not import from here in any service | — |
-| `docs/` | Markdown | **`docs/DESIGN.md` là nguồn sự thật duy nhất** về sản phẩm, kiến trúc và kế hoạch. Đọc trước mọi task. `docs/archive/` là kế hoạch cũ, không làm theo | — |
-
-## Run order (local dev)
-
-1. `cd infrastructure && docker compose up -d db mongo redis minio-cortex minio-cortex-init temporal temporal-ui` — bring up infra. `pgvector/pgvector:pg16` is required (not plain postgres).
-2. Backend migrations: from `backend/`, `python -m alembic upgrade head` (or `python run_migration.py`). Re-run after every schema change.
-3. Backend: `python main.py` (preferred) or `uvicorn app:app --reload --host 0.0.0.0 --port 8000`. `main.py` configures the root logger before SQLAlchemy imports — use it, not bare `uvicorn`, when log noise matters.
-4. Workflow service: `uvicorn app.main:app --port 8001` from `workflow_service/` (uses `app/config.py` Settings; reads `workflow_service/.env` if present, else falls back to localhost defaults).
-5. Frontend: `npm run dev` from `frontend/`. Vite proxy already routes workflow endpoints to `:8001`.
-6. OCR/STT workers only needed if touching the media pipeline.
-
-Health checks: `http://localhost:8000/health`, `http://localhost:8001/health`, `http://localhost:8088` (Temporal UI), `http://localhost:9002` (MinIO console `:9003`).
-
-## Phép thử A/B (DESIGN mục 12)
-
-Cổng nghiệm thu duy nhất của sản phẩm. Nhóm chia bằng `user_preferences.gate_bypass`:
-
-```bash
-# gán một người vào nhóm A (nhắc ngây thơ, bỏ qua Attention Gate)
-curl -X PATCH localhost:8000/internal/users/<user_id>/gate-bypass \
-  -H "X-Internal-API-Key: $INTERNAL_API_KEY" \
-  -H 'Content-Type: application/json' -d '{"enabled": true}'
-
-# đọc hai con số của 12.3
-cd backend && python -m scripts.ab_test_numbers
-```
-
-Cờ cố ý **không** có trong trang cài đặt: nó là biến điều khiển của một thí nghiệm, không phải tuỳ chọn sản phẩm — người dùng thấy nó là mời họ tự đổi nhóm giữa chừng.
-
-## Mezon bot
-
-- Chạy: `cd mezon_bot && npm start` — HTTP `:8100` (`/health`, `POST /internal/deliver` với `X-Internal-API-Key`). Test: `npm test` (222 test, node:test).
-- ⚠️ **Phải chạy trên Node 22, không phải 24.** `mezon-sdk` kéo theo `better-sqlite3@11.10`, bản này không tương thích Node 24: biên dịch được nhưng crash trong `Statement::~Statement()` với `Assertion failed: (env) != nullptr`, kèm core dump ngay lúc khởi động. `nvm use 22` rồi `npm rebuild better-sqlite3`.
-- Nếu `npm rebuild` báo `ENOENT ... build/node_gyp_bins`: đó là bug node-gyp, tạo tay thư mục đó rồi chạy lại (`mkdir -p node_modules/better-sqlite3/build/node_gyp_bins`).
-
-## Webhook bot họp
-
-`POST /api/internal/tasks` (`X-Internal-API-Key`) — nhận action item, gom theo dự án. Luôn trả 200; item không vào được nằm trong `items[].skipped_reason`. Gửi `external_id` cho mỗi item, nếu không mỗi lần retry sẽ đẻ một bản sao. Chi tiết: `backend/app/services/task_ingest.py`.
-
-## Environment / secrets
-
-- `backend/.env` is **not** tracked in git (verified 2026-08-24). It holds non-prod keys (Google OAuth, Gemini, OpenAI-compatible local endpoint, Zep, MinIO, internal API key `cortex-internal-key-2024`). Treat as dev only — never reuse these in prod.
-- `backend/.env` points to non-default ports (`5434` Postgres, `27016` Mongo, `6377` Redis, `9002` MinIO) to match `infrastructure/docker-compose.yml`. Don't change to defaults without updating compose.
-- The same `INTERNAL_API_KEY` value (`cortex-internal-key-2024`) is used by `workflow_service/config.py` default and by the Yjs sync-server tests (`X-Internal-Token: cortex-internal-secret` in `sync-server/tests/test-headless-apply.mjs` — note the value differs; sync-server uses `cortex-internal-secret`).
-- JWT secret default is the literal string `change-this-in-production-super-secret-key` (see `backend/.env`, `workflow_service/app/config.py:resolved_jwt_secret`). Required for both backend and workflow_service to validate the same tokens.
-
-## Backend (FastAPI)
-
-- Entry: `backend/app/__init__.py` (constructs `app`), started by `backend/main.py`. Workers (transcription consumer, LLM processor, reminder, Google sync) are started in background threads via `WorkerThread` in the app lifespan.
-- DB: async SQLAlchemy (`database_async.py`) + sync (`database.py`) for scripts. Schema migrations live in `backend/alembic/versions/`. Migrations named like `00X_*.py` — use sequential numbering for new ones.
-- Settings: `backend/app/config.py` (`pydantic-settings`), reads `backend/.env`.
-- API routers in `backend/app/api/`: `auth`, `agent` (chat/SSE), `notes`, `schedules`, `workspaces`, `proposals`, `assets`, `images`, `upload`, `knowledge`, `notifications`, `google_calendar`, `internal` (for workflow_service callbacks), `sse/*`.
-- Adding a new API route: register the router in `backend/app/__init__.py`.
-- One-off scripts live in `backend/scripts/` and add the parent to `sys.path` themselves — run as `python -m scripts.<name>` from `backend/`.
-
-### Backend tests
-
-- Config: `backend/pytest.ini` → `testpaths = tests`, asyncio scope = function. Run from `backend/`: `python -m pytest` or `python -m pytest tests/test_foo.py -v`.
-- Many numbered ad-hoc tests sit at the top of `backend/` (`test_issue1_extract_memory_triggers.py` … `test_issue8_dead_code.py`, `test_e2e_*.py`, `test_function_unit.py`, `test_token_budget_history.py`, etc.). They follow a "Part N" convention — see the file's module docstring for `Run: python -m pytest <file> -v`.
-- Integration tests for the agent require the agent infrastructure; check fixture docstrings before running.
-- `backend/check_env.py` and `backend/check_migration.py` are diagnostic one-liners, not tests.
-
-## Workflow service
-
-- Entry: `workflow_service/app/main.py` — lifespan starts the internal-event Redis listener and a Temporal worker in the background.
-- Depends on: Temporal at `temporal:7233` (compose service name), backend at `http://localhost:8000` (or `host.docker.internal:8000` from inside compose), Redis at `redis:6377`.
-- Talks to backend over `X-Internal-Token: $CORTEX_INTERNAL_API_KEY` (default `cortex-internal-key-2024`); see `backend/app/api/internal.py` for the receiving side.
-- Triggering: backend publishes events on Redis channel `cortex:workflow:events` (see `docs/archive/workflow_feature/10_INTEGRATION_GUIDE.md`). Webhooks use `trigger_type=webhook` and a per-workflow `webhook_url` + `webhook_secret`; secret is required only if set.
-- Tests: `workflow_service/pytest.ini` (asyncio_mode=auto, session scope). Pytest suite: `python -m pytest` from `workflow_service/`. End-to-end integration script: `bash workflow_service/tests/run_integration_tests.sh` (requires a running service at `$HOST`, default `http://localhost:8001`).
-- ⚠️ `workflow_service` đã **đóng băng** (`docs/DESIGN.md` mục 11): 0 workflow trong DB, gỡ khỏi compose mặc định. Không thêm tính năng vào đây. Design docs cũ nằm ở `docs/archive/workflow_feature/`, chỉ để tra cứu.
-
-## Frontend
-
-- Vite config: `frontend/vite.config.ts` — proxy targets are for workflow_service paths only. Backend calls go directly to `:8000`.
-- Scripts: `npm run dev`, `npm run build` (runs `tsc -b` then Vite build — type errors fail the build), `npm run lint` (ESLint flat config), `npm run test` (Vitest, jsdom, files matched by `src/**/*.{test,spec}.{ts,tsx}`).
-- Order matters when validating: `lint → build (typecheck via tsc) → test`.
-- Main app shell: `frontend/src/App.tsx`; workflow UI lives in `frontend/src/components/workflow/` plus `WorkflowBuilder.tsx`.
-- Don't forget to also run `npm run build` after TypeScript changes — `tsc -b` is the project's typecheck.
-- ⚠️ **`npx tsc --noEmit` checks nothing and exits 0.** The root `tsconfig.json` is `"files": []` + project references, so a bare invocation has no input files. It looks like a clean typecheck and is not one — a deliberate `const x: number = 'str'` passes. Always `npx tsc -b` (or `-p tsconfig.app.json`).
-
-## OCR / STT / Sync notes
-
-- `ocr_service/main.py` and `stt_service/main.py` each load a local `.env` from their own directory and start a Redis queue consumer at startup. They depend on MinIO + Redis from compose.
-- `ocr_service/worker/` contains the RQ-style task processors; `stt_service/service/` the WhisperX pipeline.
-- `sync-server/` source tree is empty in this checkout (only `tests/` and `dist/`, `node_modules/`); the Yjs protocol contract is in `docs/feat_notes/03-prompt-migrate-realtime-collab-yjs.md` and `04-prompt-crdt-agent-proposals.md`. When asked to modify sync-server behavior, verify the running source elsewhere first.
-
-## Conventions / gotchas worth knowing
-
-- Logging must be configured before SQLAlchemy is imported (`_configure_root_logger()` in `backend/app/__init__.py` and `backend/main.py`) — don't reorder imports or the SQLAlchemy banner floods stdout.
-- Internal service-to-service auth uses `INTERNAL_API_KEY` header (`backend/app/api/internal.py`); do not add JWT to internal calls.
-- Worker threads in `backend/app/__init__.py` run async loops in their own threads — be careful sharing async resources (DB sessions, Redis pools) across them; each worker manages its own.
-- `backend/migrations/` is an old folder, not used; the live migration tree is `backend/alembic/`.
-- `lab/` and `logs/` are gitignored; safe to ignore unless the task explicitly references them.
-- Several `.bak` files exist under `backend/tests/` (`test_search.py.bak`) — leave them alone unless asked.
-- The codebase mixes English and Vietnamese comments/docs; preserve existing language in surrounding context when editing comments.
-- **The last line of an LLM prompt decides the JSON shape.** The gateway does not support `response_format` schemas, so the only lever is the prompt — and the closing instruction of the *user* turn beats the system prompt. Naming keys ("a JSON object containing episodic_summary, semantic_memories, title") gets you arrays of bare strings; the shape has to be drawn out. Use `response_shape()` in `backend/app/services/memory_extraction_prompt.py` rather than writing a new closing line.
-- The Cortex backend runs as `./venv/bin/python main.py` (not `uvicorn app.main:app` — that command line belongs to an unrelated container also bound to :8000). Prompts under `backend/app/ai/prompts/` are loaded at import, so editing one needs a restart.
-
-## When the task touches more than one service
-
-- Schema change: alembic migration in `backend/` → run `alembic upgrade head` → if workflow_service reads the new columns, update its models in `workflow_service/app/models/` and re-run its migrations.
-- New workflow trigger/action: implement handler in `workflow_service/app/triggers/` or `workflow_service/app/actions/`, then add backend publisher in `backend/app/services/redis/event_publisher.py` per `workflow_feature/10_INTEGRATION_GUIDE.md`.
-- New frontend route under `/workflows`: add the React Flow component under `frontend/src/components/workflow/` and wire the route in `frontend/src/App.tsx`.
+Index `codebase-memory-mcp` cũ (`home-duyanh-project-Cortex`) mô tả hệ đã bị gỡ, nên **không còn đúng**. Cần index lại (`index_repository`) trước khi dùng graph tools cho `cortex-leads`. Chưa index lại thì dùng Grep/Read.
 
 ## Agent Protocol
 
@@ -135,3 +91,5 @@ Before executing ANY task:
 
 `.opencode/protocol.md` takes priority over your default execution habits.
 You are an executor, not a planner: never invent the next task, never widen scope.
+
+> Ghi chú 2026-10-10: thư mục `.opencode/` hiện không tồn tại trong checkout này.

@@ -24,15 +24,11 @@ htmlcov/
 # Virtual environments
 venv/
 .venv/
-backend/venv/
-backend/.venv/
 
 # Environment files / secrets
 .env
 .env.*
 !.env.example
-backend/.env
-backend/.env.*
 
 # Logs
 *.log
@@ -71,3 +67,8 @@ logs/
 test_artifacts/
 
 .opencode/
+# cortex-leads
+cortex-leads/data/
+cortex-leads/.venv/
+!cortex-leads/.env.test
+*.egg-info/

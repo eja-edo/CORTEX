@@ -13,4 +13,5 @@ Giữ lại để tra cứu lịch sử quyết định, không phải để là
 | `mezon-bot-plan.md` | Đã triển khai xong. Phần phát hiện về Mezon SDK còn giá trị tra cứu |
 | `planning/` | Bản 2, đã bị planning-v3 thay thế, rồi cả hai bị DESIGN.md thay thế |
 | `tasks/` | Phase cũ, không còn phản ánh đường tới hạn |
-| `workflow_feature/` | `workflow_service` đã đóng băng — xem DESIGN.md mục 11 |
+| `workflow_feature/` | `workflow_service` đã đóng băng — xem `DESIGN-v1-2026-08.md` mục 11 |
+| `DESIGN-v1-2026-08.md` | Bản 1 (Attention Gate, "nói ít hơn"), khép ngày 2026-10-09. Chưa từng được kiểm với người dùng thật. Code còn nhiều chú thích `DESIGN x.y` trỏ về bản này. Bài học rút ra nằm ở [`../LESSONS.md`](../LESSONS.md) |

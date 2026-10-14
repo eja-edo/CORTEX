@@ -1,1089 +1,897 @@
 # Cortex — Thiết Kế Hệ Thống
 
-**Bản 1 · 2026-08-24 · Nguồn sự thật duy nhất**
+**Bản 2.1 · chốt 2026-10-10 · Nguồn sự thật duy nhất**
 
-**Sửa đổi:**
+| Ngày | Thay đổi | Bằng chứng / lý do |
+|---|---|---|
+| 2026-10-09 | Khép bản 1 (Attention Gate nhắc việc nội bộ) và nhánh AI companion. Chốt hướng "không để rơi khách tiềm năng — AI đứng sau nhân viên tư vấn" | Hai vòng phản biện, 11 góc chuyên gia (tóm tắt ở [`LESSONS.md`](LESSONS.md)) |
+| 2026-10-10 | Chốt kiến trúc 4 lớp, mô hình agent và cách ly, danh mục năng lực, MCP, hiệu năng | Vòng phản biện 3 (6 góc) |
+| 2026-10-10 | **Tầm nhìn nền tảng:** nhiều sandbox / agent cho nhiều việc của chủ doanh nghiệp, có AI tổng giám sát (không đọc nội dung), trigger theo thời gian, Skill / MCP / kênh thêm theo quy ước chung không sửa code lõi, cổng nhận chuẩn cho bridge bên ngoài. Thêm §5.2, §5.6–5.8, cổng G2.5 | Vòng phản biện 4 (5 góc): 5/5 đồng ý tầm nhìn là **bản vẽ đích**, nền tảng phải được **rút ra từ việc thật** |
+| 2026-10-10 | **Chủ dự án quyết định xây nền tảng tối thiểu (v0) ngay**, trước G2, trong thư mục mới `cortex-leads/`. L3 được sửa (xem §0) kèm ngân sách cứng và mốc giết. **Ghi lại để trung thực:** cả bốn vòng hội đồng khuyên không xây trước G2. Quyết định này chịu rủi ro đó có chủ đích | Quyết định của chủ dự án. Chưa có bằng chứng từ khách |
+| 2026-10-10 | v0 xây xong (175 test). **Gỡ toàn bộ hệ cũ khỏi repo** theo quyết định của chủ dự án; file ngoài git (venv, `.env`, log, dữ liệu MinIO, `unsearch`) xoá vĩnh viễn. Danh sách thứ đáng lấy lại từ git ở [`LEGACY.md`](LEGACY.md) | Quyết định của chủ dự án; `cortex-leads` không phụ thuộc code cũ (đã kiểm) |
+| 2026-10-10 | **AI có năng lực chủ động gửi tin cho khách** (A9, N1, N3, N4 sửa; §5.2 thêm chiều ra *Cortex Action Format*; §5.8 thêm `send_policy` và `outbound`). Muốn chặn thì chặn ở **hai lớp do người cấu hình**: skill (`send_policy`) và bridge — tầng giao tiếp giữa hệ thống và nền tảng (`outbound`). Mặc định vẫn là nháp | Quyết định của chủ dự án |
+| 2026-10-12 | **Đầu ra của v0 = chạy thật được.** Mọi phần cần để chạy thật đều vào v0: trí nhớ và vòng đời lời hẹn (WP9), domain pack, bridge Messenger (WP10), bộ chạy thử và bridge Twenty (WP11), hai chế độ gửi **auto / manual** (WP8), trang duyệt cho nhân viên (WP13). **Ngân sách L3 nới từ 4.000 lên 5.000 dòng.** v0 có tiêu chí nghiệm thu A–D (§7.2). Mặc định *có thể đổi*: doanh nghiệp mới ở `manual`; skill "khách im" bắn ở mốc 20 giờ, trước khi cửa sổ 24 giờ của Messenger đóng (R15) | Quyết định của chủ dự án: "đầu ra là chạy thật, những phần đã nêu là điều kiện cần" |
+| 2026-10-12 | **Giọng văn trả lời khách** (§5.8): `STYLE.md` theo sandbox, ví dụ giọng thật của doanh nghiệp, skill v3 có bảng chiến thuật theo `reason_code`, bộ eval 25 tình huống | Chủ dự án yêu cầu tin nhắn không giống AI; tham khảo agency-agents (MIT) |
+| 2026-10-13 | **Trả lời lượt khách khi chưa có người trả lời** (WP16, §5.7 loại `turn`): tin của khách được gom thành *lượt* (chờ khách nhắn xong, mặc định 30 giây), rồi LLM đọc cả lượt và quyết định `reply` / `wait` / `handoff` / `none`. Auto → gửi ngay trong cửa sổ tự do, kèm dòng xưng AI; manual → nháp trả lời hiện ngay ở đầu trang duyệt. Không bắn khi nhân viên đang trực hội thoại đó. A2, N7, §1.1, §1.4, §11 sửa theo. **Ghi lại để trung thực:** N7 cũ cấm đúng việc này vì đối thủ cho miễn phí; ranh giới mới là AI *lấp chỗ chưa có người*, không thay nhân viên, và điểm bán vẫn là không để rơi + trí nhớ + theo sát | Quyết định của chủ dự án: "đó là vấn đề cơ bản trong chăm sóc khách hàng" — khách nhắn mà không ai trả lời là kiểu rơi khách đầu tiên |
+| 2026-10-12 | **Cửa sổ kênh đã đóng → nháp tuyến `offchannel`** (`draft.route`): nhân viên gọi điện/nhắn Zalo theo gợi ý, không bao giờ vào outbox (kể cả `auto`, kể cả nút duyệt). Validator kiểm cả **ngày** (dd/mm) như số liệu | R39: lời hẹn xa trên Messenger tới ngày thì cửa sổ đã đóng, hệ thống im → rơi khách; R38: ngày khai giảng sai lọt tới khách |
 
-| Ngày | Thay đổi |
-|---|---|
-| 2026-08-25 | QĐ-2 — project neo vào Mezon channel, không neo vào lịch (mục 15) |
-| 2026-08-25 | QĐ-3 — 10.4 và 10.5 hoãn, vào sổ hoãn 13.5 mới (mục 15) |
-| 2026-08-28 | Mục 16 — thiết kế trigger chủ động cho agent, hoãn theo 13.4 (vào sổ hoãn 13.5) |
+> **Chưa có bằng chứng nào từ người thật.** Phần sản phẩm (§1–4) là giả thuyết cho tới khi §3 có số. Phần nền tảng (§5) được xây theo §7.2, và **chỉ đúng phạm vi v0**. Mọi thứ ngoài v0 vẫn mở theo cổng.
+
+Bản 1 lưu ở [`archive/DESIGN-v1-2026-08.md`](archive/DESIGN-v1-2026-08.md). Các chú thích `DESIGN x.y` trong code cũ (`backend/`, `mezon_bot/`…) trỏ về bản đó.
+
+**Mục lục:** 0 Luật · 1 Sản phẩm · 2 Người dùng và tiền · 3 Giả thuyết · 4 Nguyên tắc sản phẩm · 5 Kiến trúc · 6 Pháp lý và kênh · 7 Kế hoạch và lộ trình xây · 8 Cam kết · 9 Rà soát · 10 Nợ phải trả · 11 Không làm
 
 ---
 
-## 0. Trạng thái tài liệu
+## 0. Luật dùng tài liệu — chống lệch hướng
 
-Bản này **thay thế toàn bộ** các tài liệu kế hoạch trước đó, đã chuyển vào `docs/archive/`:
+Cortex đã đổi hướng bốn lần, lần nào cũng theo cùng một kiểu: tài liệu viết luật hay, tay làm việc khác, tài liệu không được sửa.
 
-| Tài liệu cũ | Vì sao ngừng dùng |
-|---|---|
-| `planning-v3.md` | Xây quanh giả định Cortex là trợ lý cá nhân đa năng. Hướng đã đổi |
-| `requeirment.md` | Định nghĩa sản phẩm bằng phủ định và bằng vòng lặp trừu tượng — không nói được "lúc nào dùng". Xem mục 1 |
-| `CORTEX_ANALYSIS_REPORT.md` | Kiểm kê tại 2026-07-28, đã lạc hậu |
-| `tasks/plan.md`, `tasks/phase1/*` | Phase cũ, không còn phản ánh đường tới hạn |
-| `workflow_feature/*` | `workflow_service` bị đóng băng — xem mục 11 |
-| `mezon-bot-plan.md` | Đã triển khai xong. Phần phát hiện về SDK còn giá trị tra cứu, giữ trong archive |
+**L1 — Trước mọi việc, trả lời ba câu. Không trả lời được câu nào thì không làm.**
 
-**Không lạc hậu, vẫn dùng:** `docs/architecture/memory-architecture.md`, `docs/architecture/conversation-summary.md` (kiến trúc, không phải kế hoạch).
+1. Việc này thuộc cổng nào, hoặc thuộc gói việc nào trong phạm vi v0 (§7.2)?
+2. Việc này đưa mình tới gần cổng đó bằng cách nào?
+3. Bằng chứng nào trong `docs/customers/` cho thấy khách cần nó? Với gói việc v0, câu trả lời được chấp nhận là "nằm trong phạm vi v0 đã ghi ở §7.2".
 
-**Quy tắc dùng tài liệu này:**
+**L2 — Đổi hướng thì sửa tài liệu trước, code sau.** Thêm một dòng vào bảng sửa đổi, kèm bằng chứng hoặc lý do. Các câu kiểu "tôi nghĩ là", "chuyên gia nói", "mô phỏng cho thấy" không được tính là bằng chứng *từ khách*.
 
-- Mỗi mục 13.x là một Epic. Mỗi tiêu chí nghiệm thu là một Story verify độc lập.
-- **Mục tiêu là tiêu chí nghiệm thu.** Code xong mà mục tiêu chưa đạt thì chưa done.
-- Khi một thiết kế mâu thuẫn với nguyên tắc ở mục 2: **sửa thiết kế, không sửa nguyên tắc.**
-- Khi thực tế buộc phải đổi nguyên tắc: **sửa tài liệu này trước, rồi mới code.** Bản 2 lạc hậu chính vì bước này bị bỏ qua.
+**L3 (sửa 2026-10-10) — Ngoài phạm vi v0 (§7.2), code sản phẩm đóng băng tới cổng G2.** Phạm vi v0 có **ngân sách cứng ≤ 5.000 dòng code** (không tính test, migration, công cụ dev trong `dev/`; nới từ 4.000 ngày 2026-10-12). Chạm ngân sách là dừng, không nới. Ngoài v0, chỉ có ba ngoại lệ:
+
+- sửa bảo mật;
+- script phục vụ việc làm tay;
+- gỡ code.
+
+**L4 — Mốc giết là mốc giết.** Trượt mốc thì làm đúng điều cột "không đạt" ghi, không gia hạn.
+
+**L5 — Có một người ngoài giữ mốc** (§8). Người này xem §9 mỗi tuần và có quyền tuyên bố dừng.
+
+**L6 — Không có hướng thứ sáu trên codebase này.** Trượt G4 thì Cortex thành portfolio.
+
+**L7 — Mỗi năng lực, skill, connector đều cần một phiếu hoặc manifest (§5.4, §5.8) trước khi viết code.**
+
+**L8 (mới) — Giờ code ≤ giờ nói chuyện với khách, tính từ 2026-10-17.** Vượt tỷ lệ này một tuần thì ghi dòng đỏ ở §9. Vượt hai tuần liên tiếp thì dừng code cho tới khi cân lại.
 
 ---
 
 ## 1. Sản phẩm là gì
 
-> **Việc đã được ghi ra ở đâu đó rồi. Cortex nhận về, gom theo dự án, và quyết định lúc nào nói với ai về việc gì — nói ít hơn mọi công cụ khác, nhưng mỗi lần nói đều đáng.**
+### 1.1 Câu định nghĩa
 
-### 1.1 Ba tầng, một tầng là sản phẩm
+> **Mỗi sáng, nhân viên tư vấn nhận danh sách khách đã hỏi mà đang bị bỏ rơi — kèm lý do đoán vì sao họ im và một tin nhắn nháp. Nhân viên bấm gửi. Không khách tiềm năng nào rơi mà không ai biết.**
+>
+> **Khách nhắn mà chưa ai trả lời thì không phải chờ:** khi khách nhắn xong, AI đọc cả lượt và trả lời (auto) hoặc đặt sẵn nháp trả lời cho nhân viên (manual) — chỉ khi chưa có người trả lời.
 
-```
-Tầng 1 — THU THẬP           Phần lớn KHÔNG tự xây.
-                             Bot họp cho action item. Google Calendar
-                             cho sự kiện. Cortex nhận qua webhook.
+Đây là **sandbox đầu tiên** (`customer_care`) trên nền tảng ở §5. Các sandbox khác chỉ mở theo cổng G2.5.
 
-Tầng 2 — GOM THEO DỰ ÁN      Một bảng, xác định lúc ghi, sửa được tại chỗ.
+### 1.2 Vấn đề — *giả thuyết, chưa kiểm*
 
-Tầng 3 — QUYẾT ĐỊNH NÓI      ← Sản phẩm nằm ở đây và chỉ ở đây.
-                             Attention Gate 5 bước. 0 token.
-```
+Doanh nghiệp bán dịch vụ cần tư vấn trả tiền quảng cáo để có khách nhắn tin. Một phần đáng kể khách đã hỏi giá **không được ai liên hệ lại đúng lúc**. Chủ cũng **không nhìn thấy** lead nào đang rơi, và rơi trong tay ai.
 
-Dừng ở tầng 2 thì đây là một công cụ tổng hợp việc — Motion, Sunsama, Akiflow, Todoist đều đã làm và làm tốt. Giá trị chỉ xuất hiện ở tầng 3; hai tầng dưới tồn tại để nuôi nó.
+Điều chưa biết, và nó quyết định tất cả: khách im vì *không ai nhắn lại* (cứu được), hay vì đang dò giá, chê giá (không cứu được)? H1 ở §3 kiểm đúng điều này.
 
-### 1.2 Tiêu chí thành công ngược với công cụ tổng hợp
+### 1.3 Vì sao chỗ này còn trống
 
-| | Công cụ tổng hợp | Cortex |
+"AI trả lời khách" đã thành hàng miễn phí: Botcake AI Agent, Meta Business AI tiếng Việt (beta từ 4/2026), Sapo. CRM ngành thì nắm khâu sau khi khách đã thành khách hàng. Còn khâu **từ lúc lead hỏi tới lúc có lịch hẹn** vẫn nằm trong Pancake, Excel và đầu của telesale. Khe hở này hẹp: Pancake có thể lấp nó trong 12–18 tháng.
+
+**Chỗ khác biệt của Cortex là trigger theo thời gian cộng hiểu ngữ cảnh**: hỏi lại đúng hẹn, đúng khách, với một thông tin mới, và qua tay nhân viên.
+
+### 1.4 Cortex KHÔNG phải
+
+Chatbot *thay* nhân viên (AI chỉ trả lời khi chưa có người, §5.7 `turn`) · CRM · inbox đa kênh · trợ lý cá nhân · nền tảng automation chung · công cụ BI · công cụ xếp hạng nhân viên.
+
+---
+
+## 2. Người dùng, người trả tiền, ngành
+
+### 2.1 Ba vai — không được trộn
+
+| Vai | Ai | Cần gì |
 |---|---|---|
-| Đánh giá bằng | Có hiện đủ mọi thứ không | Có im đúng lúc và nói đúng lúc không |
-| Bản năng | Hiện **nhiều** hơn | Nói **ít** đi |
-| Thất bại khi | Bỏ sót một việc | Nói một câu không đáng nói |
+| **Người dùng hằng ngày** | Nhân viên tư vấn / telesale | Biết hôm nay chăm ai trước, có sẵn câu để gửi, công chốt vẫn là của mình |
+| **Người trả tiền** | Chủ / quản lý | Nhìn thấy lead đang rơi ở đâu; tiền quảng cáo không bị đốt |
+| **Khách cuối** | Người hỏi giá | Được trả lời đúng, không bị đeo bám, biết khi nào mình đang nói với AI |
 
-Hệ quả lên roadmap: **mục tiêu là chọn lọc, không phải tổng hợp** — nên chỉ cần *đủ* đầu vào để quyết định tốt. Thêm nguồn chỉ đáng khi nó làm *quyết định* tốt lên, không phải khi nó làm *danh sách* dài ra.
+Danh sách lead rơi là **danh sách việc cho nhân viên**, không phải bảng xếp hạng lỗi. Báo cáo về từng người gửi tới chính người đó trước.
 
-### 1.3 Cortex không phải là
+### 2.2 Giá thử và kênh bán
 
-Nơi tổng hợp việc · phần mềm quản lý dự án · công cụ trích xuất · trợ lý cá nhân đa năng · nơi ghi chú · nền tảng automation.
+- **Giá:** setup 3 triệu + 3–4 triệu/tháng/cơ sở. Mốc so sánh là lương một telesale (15–25 triệu).
+- **Lưu ý từ mô phỏng:** chủ spa và shop online neo giá theo phần mềm, khoảng 0,3–2 triệu. Mức 3–4 triệu chỉ hợp với ngành khoá học hoặc nha khoa.
+- **Kênh bán thử đầu tiên:** agency chạy quảng cáo tin nhắn, chia 20–30%.
 
-**Cả sáu thứ này đều đã tồn tại trong repo.** Mục 11 nói cách gỡ chúng khỏi đường chính.
+### 2.3 Ngành — ⏳ **CHƯA CHỐT, hạn 2026-10-16**
 
-### 1.4 Bối cảnh của quyết định
+**Quy tắc:** chọn ngành mà người xây quen được **≥ 15 chủ doanh nghiệp**. Nếu không có ngành nào như vậy, mặc định là **khoá học / du học**.
 
-Truy vấn DB ngày 2026-08-24: **95 tài khoản, 94 là `*-test-*` do integration test sinh ra, 1 người dùng thật.** 11 task · 1 note · 5 lịch · 0 asset · 1 notification · 1 dòng `attention_log` · 0 workflow.
-
-Nghĩa là toàn bộ hệ thống được thiết kế và nghiệm thu **chưa từng đi qua một người dùng ngoài tác giả**. Mọi hạng mục nhằm cải thiện tính đúng đắn nội bộ có kỳ vọng giá trị ≈ 0 cho tới khi có người dùng thứ hai. Đó là lý do mục 12 (phép thử) đứng trước mọi thứ khác.
-
-**Hai hướng đã bị loại, ghi lại để không quay vòng:**
-
-| Hướng | Chết vì |
-|---|---|
-| Bot nghe channel Mezon, tự trích lời hứa | Tập thể trả giá (cho bot vào nghe), cá nhân hưởng (nhắc riêng). Lỗi cấu trúc, không sửa bằng code. Cộng thêm: channel không có ranh giới hội thoại để định cửa sổ trích xuất |
-| Cortex tự làm biên bản + trích action item từ cuộc họp | Đã có bot họp làm khâu này. Cạnh tranh khâu trích xuất là tự chọn trận thua — và không cần, vì output của nó dùng được ngay |
-
-Cả hai đều nhắm vào **tầng 1**. Quyết định cuối cùng là giao hẳn tầng đó cho hệ thống khác.
+| Ngành | Hạng trung bình | Mạnh | Yếu |
+|---|---|---|---|
+| **Khoá học / du học** | ~2,6 · *vững nhất* | Quản lý đau rõ; CRM ngành ít AI; chu kỳ chốt dài | Hứa visa / học bổng; phụ huynh dùng Zalo cá nhân |
+| Nội thất | ~2,8 | An toàn pháp lý | Khách nằm trong Zalo cá nhân; báo giá tuỳ đo đạc |
+| Nha khoa | ~3,2 · *nhiều tiền nhất* | Đang trả 10–15 triệu cho người trực page | Dữ liệu sức khoẻ; tư vấn dễ bị coi là khám chữa bệnh |
+| Linh kiện, spa, xe | ≥ 3,8 | — | **Không chọn** |
 
 ---
 
-## 2. Nguyên tắc ràng buộc
+## 3. Giả thuyết và phép thử — ghi ngưỡng trước, không sửa sau khi chạy
 
-Vi phạm bất kỳ nguyên tắc nào dưới đây là lý do đủ để từ chối một thiết kế.
+**Cách chạy.** Làm tay với 3–5 doanh nghiệp:
 
-**P1 — Một cổng duy nhất.** Mọi thứ làm phiền người dùng phải qua Attention Gate. Không component nào được ghi thẳng vào `notifications`. *(Giữ nguyên từ bản cũ.)*
+1. Mỗi sáng, lọc khách đã hỏi giá mà im ≥ 24 giờ, hoặc đã tới ngày khách tự hẹn.
+2. Đoán lý do khách im, soạn nháp.
+3. Gửi nháp cho nhân viên của doanh nghiệp. **Nhân viên bấm gửi.**
+4. Chia nhóm thử / nhóm đối chứng theo ID chẵn / lẻ.
 
-**P2 — Detection ≠ Delivery ≠ Channel.** Phát hiện điều đáng nói, quyết định có nói không, và chọn kênh phát là ba việc tách rời. Gate quyết định **có nói không**; delivery layer quyết định **nói qua đâu**. *(Giữ nguyên; F0 đã kéo dài thêm một nấc.)*
+Từ khi v0 chạy được, bước 1–2 do v0 làm và người xây duyệt.
 
-**P3 — Deterministic trước, AI sau.** Hạn chế AI mà vẫn đạt mục tiêu; khi AI vào thì phải tạo đột phá lớn. Gate, State Evaluator, ranking, xác định project: **0 token**. AI chỉ được vào khi đo được rằng logic deterministic không quyết nổi, và tỷ lệ đó cao dai dẳng. *(Giữ nguyên.)*
+| # | Giả thuyết | Đo | **Bác bỏ nếu** |
+|---|---|---|---|
+| H0 | Tiếp cận được ngành | Số cuộc nói chuyện, số doanh nghiệp cho xem inbox | Tới 23/10: < 15 cuộc **hoặc** < 3 doanh nghiệp |
+| H1 | Lead rơi là có thật và đủ lớn | % lead hỏi giá mà không ai liên hệ, không có lịch trong 24 giờ | Bất kỳ điều nào: < 10% ở cả 3 doanh nghiệp · < 10 lead rơi/tháng/doanh nghiệp · > 30% "im lặng" thực ra đã chuyển sang Zalo cá nhân hoặc điện thoại |
+| H2 | Nhân viên dùng nháp | % nháp được gửi nguyên văn hoặc sửa nhẹ | < 40% sau tuần đầu |
+| H3 | Theo sát cứu được khách | Tỷ lệ khách trả lời và đặt lịch trong 7 ngày, so với nhóm đối chứng | Hơn < 10 điểm %, **hoặc** bị chặn / phàn nàn > 5% |
+| H4 | Có người trả tiền | Chuyển khoản thật | Tới 31/12: < 3 khách trả ≥ 2 triệu/tháng |
 
-**P4 — Suy ra trước, khai báo sau.** *(Mới.)* Thực thể nào cần người dùng tự khai và tự duy trì thì sẽ rỗng mãi mãi — `goals` đã chết đúng như vậy. Mọi thực thể mới phải xuất hiện từ dữ liệu đang chảy sẵn. Khai báo tay là **lối sửa**, không phải cửa chính.
+**Chỉ số vận hành, ghi từ ngày đầu:**
 
-> **Phép thử P4:** người dùng không bao giờ mở màn hình X — Cortex có còn hữu ích không? **Phải là CÓ.**
-
-**P5 — Nói ít hơn, không nhiều hơn.** *(Mới.)* Mọi tính năng phải trả lời được: nó làm Cortex nói **ít đi mà đúng hơn**, hay chỉ làm nó nói **nhiều hơn**? Cái sau bị từ chối kể cả khi thông tin thêm vào là đúng.
-
-**P6 — Một bề mặt chỉ vào nav nếu nó làm lời nhắc kế tiếp thông minh hơn.** *(Mới.)* Không phải "hữu ích", không phải "user có thể cần". Phải chỉ ra được dữ liệu từ đó đi vào `StateEvaluator` hoặc `TodayService` bằng đường nào.
-
-**P7 — Nghi ngờ thì bỏ.** Một gợi ý sai đắt hơn một gợi ý thiếu nhiều lần. Áp cho trích xuất, cho gán project, cho mọi phỏng đoán. *(Giữ nguyên từ `task_extraction.py`.)*
-
-**P8 — Không xây tầng thứ hai trước khi tầng thứ nhất có 10 người dùng.** *(Mới.)* Goal trên Task, AI reasoning trên Gate, workflow trên predicate, dashboard trên project — đều là tầng hai xây trên nền chưa ai đứng.
+- số hội thoại mới mỗi ngày;
+- số tin mỗi ngày;
+- giờ cao điểm và độ dồn của nó;
+- tỷ lệ lead rơi;
+- số nháp nhân viên duyệt được trong một buổi sáng;
+- thời gian khách trả lời;
+- số lead đã hết cửa sổ nhắn trước khi có ai chạm tới;
+- số phút làm tay mỗi sáng.
 
 ---
 
-## 3. Mô hình dữ liệu
+## 4. Nguyên tắc sản phẩm
 
-### 3.1 Bảng mới: `projects`
+Vi phạm một nguyên tắc là đủ lý do từ chối một thiết kế.
 
-**Project là thực thể dùng chung, không thuộc về một người**, và **neo vào một Mezon channel** — xem QĐ-1 và QĐ-2 ở mục 15.
+**N1 — AI đứng sau người là *mặc định*, không phải giới hạn năng lực.** Mặc định, người nói chuyện với khách là nhân viên dùng tên thật, còn AI soạn nháp. AI **có năng lực tự gửi** (A9), nhưng chỉ dùng được khi **skill** và **bridge** cùng cho phép. Khi AI tự gửi, nó phải:
 
-```sql
-CREATE TABLE projects (
-    id                  UUID PRIMARY KEY,          -- uuid7
-    owner_id            UUID NOT NULL REFERENCES users(id),  -- người/luồng tạo ra nó
-    name                VARCHAR(255) NOT NULL,
-    status              projectstatus NOT NULL DEFAULT 'active',   -- active | closed
-    deadline            TIMESTAMP NULL,            -- suy ra được, sửa được
-    deadline_is_manual  BOOLEAN NOT NULL DEFAULT false,
-    source_channel_id   VARCHAR(255) NULL,         -- Mezon channel — danh tính CHUNG (xem 3.1.1)
-    origin              projectorigin NOT NULL,    -- derived | manual | personal
-    created_at          TIMESTAMP NOT NULL,
-    updated_at          TIMESTAMP NOT NULL
-);
+- xưng là trợ lý AI (Luật AI 134/2025);
+- chỉ nói dữ kiện có trong catalog (N2);
+- dừng và chuyển sang người khi gặp `must_handoff`.
 
-CREATE UNIQUE INDEX uq_projects_source_channel
-    ON projects (source_channel_id) WHERE source_channel_id IS NOT NULL;
-```
+**N2 — Mọi con số khách nhìn thấy phải trỏ về một dòng catalog.** Không có dữ liệu thì dùng câu mẫu cố định. Không để LLM lấp chỗ trống.
 
-```sql
-CREATE TABLE project_members (
-    project_id  UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    user_id     UUID NOT NULL REFERENCES users(id)    ON DELETE CASCADE,
-    joined_via  projectjoinsource NOT NULL,   -- derived | manual
-    joined_at   TIMESTAMP NOT NULL,
-    PRIMARY KEY (project_id, user_id)
-);
-CREATE INDEX ix_project_members_user ON project_members (user_id);
-```
+**N3 — Luật kênh là ràng buộc cứng.** Lõi tính cửa sổ nhắn theo khách × kênh (`window_state`) và gửi kèm trong mỗi lệnh chiều ra. **Bridge** là tầng giao tiếp với nền tảng, nên là nơi quyết định cuối: có gửi được trên nền tảng đó, lúc đó hay không. Ví dụ, tag HUMAN_AGENT của Messenger chỉ dành cho người gõ tay, nên bridge từ chối lệnh do `ai:*` gửi trong khung này.
 
-**`project_members` cố ý KHÔNG có cột `role`.** Đó là thứ đã làm `WorkspaceMember` sai ngữ nghĩa (3.6 lý do 2). Thêm `role` chỉ khi có một quyết định cụ thể cần tới nó — hiện chưa có.
+**N4 — Duyệt nháp là mặc định.** Tự gửi là ngoại lệ, phải bật tường minh theo từng skill (`send_policy.mode: auto`). Khuyến nghị chỉ bật khi skill đó đã có thống kê duyệt tốt (§5.8, "thang bật tự gửi").
 
-**Thành viên cũng được suy ra, không phải mời** (P4): khi task của người B rơi vào một chuỗi đã có project, B tự động vào `project_members` với `joined_via='derived'`. Không có luồng mời/duyệt trong v1.
+**N5 — Tối đa 3 lần chạm, mỗi lần phải có thứ mới.** Không có thông tin mới → `blocked: NO_NEW_INFO`. Khách có tín hiệu tiêu cực thì dừng ngay.
 
-### 3.1.1 `source_channel_id` — danh tính chung của một dự án
+**N6 — Không làm nhân viên phiền hơn tự làm.** Duyệt dưới 10 giây một nháp. Mỗi nhân viên có trần nháp/ngày. **Sức duyệt của nhân viên chính là ngân sách của hệ thống.**
 
-**Lịch không mang thông tin dự án.** Calendar không sync chéo giữa người dùng, và trong một lịch công việc không có tín hiệu nào phân biệt *"chuỗi này là dự án Alpha"* với *"chuỗi này là standup / 1:1 / ăn trưa"*. Tài khoản chỉ tách được **cá nhân ↔ công việc**, không tách được **dự án ↔ dự án**. Mọi suy ra project từ hình dạng lịch đều là phỏng đoán, và P7 cấm.
+**N7 — Không xây lại thứ đối thủ cho miễn phí:** inbox, CRM, chatbot kịch bản. Trả lời lượt khách (§5.7 `turn`) có trong lõi nhưng chỉ để **lấp chỗ chưa có người**; nó dùng chung validator, trí nhớ và catalog với phần theo sát, và không phải điểm bán (sửa 2026-10-13).
 
-Mezon channel thì ngược lại, ở cả bốn mặt:
+**N8 — Ghi lại mọi quyết định, kể cả quyết định im lặng.**
 
-| | Chuỗi sự kiện lịch | Mezon channel |
+---
+
+## 5. Kiến trúc
+
+> **Tầng:** **T0** = script / MCP cục bộ phục vụ việc làm tay · **v0** = nền tảng tối thiểu đang xây (§7.2) · **T1** = sau G2 · **T2** = sau G3/G4.
+
+### 5.0 Bất biến kiến trúc — đúng từ dòng code đầu tiên
+
+| # | Bất biến | Vì sao |
 |---|---|---|
-| Danh tính chung giữa người dùng | ❌ Mỗi người một `Schedule` row | ✅ Một id, mọi người thấy như nhau |
-| Có sẵn thành viên | ❌ Phải suy từ attendee | ✅ Thành viên channel |
-| Có tên do người đặt | Tên cuộc họp | ✅ Tên channel — đúng thứ người ta gọi là dự án |
-| Bot họp ở đâu | Không ở đó | ✅ Nó đăng biên bản vào channel |
-| Ánh xạ tới kênh phát (8.1) | Phải thiết kế riêng | ✅ **Project *chính là* channel** |
+| A1 | `tenant_id` có trên mọi bảng, mọi hàng đợi, mọi log. Postgres RLS theo `app.tenant_id` | Cách ly; mở đường cho mô hình cell / silo |
+| A2 | **Không gọi LLM theo mỗi tin nhắn.** Tin khách được gom theo **lượt** (chờ khách nhắn xong); luật 0 token chạy trước (nhân viên đang trực, opt-out, ngân sách); LLM gọi tối đa một lần mỗi lượt, và chỉ khi có việc thật | Tải và chi phí tỷ lệ theo *việc*, không theo *lưu lượng* |
+| A3 | Tenant, actor, scope **do server điền** (từ connector key hoặc `RunContext`), không bao giờ lấy từ body hay tham số LLM | Chống giả danh và rò dữ liệu |
+| A4 | Mọi lời gọi ra ngoài (kênh, LLM) đi qua **một cổng**, có rate limit theo tenant | Không để tenant ồn ào lấn tenant khác; kiểm soát quota |
+| A5 | Mỗi lượt chạy agent **không giữ trạng thái**. Trạng thái nằm trong DB | Muốn mở rộng thì thêm worker |
+| A6 | Engine **chỉ đọc profile / manifest**, không biết tên profile nào | Thêm agent = thêm cấu hình, không thêm nhánh code |
+| A7 | Validator 0 token chạy **bên trong** tool ghi | LLM không thể bỏ qua |
+| A8 | Ingest trả 202 ngay; idempotent theo `(tenant, connector, external_id)` | Không mất tin, không xử lý trùng |
+| A9 | **Chỉ có một đường để gửi tin cho khách:** tool `send_message` → `outbox` → bridge chiều ra (§5.2). Không runner hay tool nào được gọi API của kênh trực tiếp. Lệnh gửi chỉ đi khi **cả hai lớp chặn cho phép**: skill (`send_policy`, mặc định `draft`) và bridge (`outbound`, luật nền tảng). Lõi chỉ giữ một **sàn** không tắt được: kill switch, khách opt-out, audit, idempotency, dòng xưng AI | Gửi được hay không là chuyện cấu hình; *gửi qua đâu* là cấu trúc. Một đường duy nhất thì chặn, đo và tắt được ở một chỗ |
 
-`source_channel_id` là id channel Mezon. `NULL` cho dự án cá nhân và dự án tạo tay.
-
-- `deadline` mặc định suy ra (mục 4.3); `deadline_is_manual` khoá lại khi người dùng sửa tay.
-- `owner_id` là *ai tạo ra*, không phải *ai sở hữu duy nhất*. Truy vấn "dự án của tôi" đi qua `project_members`, không qua `owner_id`.
-
-### 3.2 Cột thêm: `schedules.project_id`
-
-```sql
-ALTER TABLE schedules ADD COLUMN project_id UUID NULL REFERENCES projects(id) ON DELETE SET NULL;
-CREATE INDEX ix_schedules_project_id ON schedules (project_id);
-```
-
-**Chỉ đặt trên hàng template** (`recurrence_id IS NULL`). Không đặt lên occurrence exception — nếu không, một chuỗi 30 lần lặp sinh 30 hàng cùng project và quy tắc suy ra sẽ trôi.
-
-### 3.3 `tasks.project_id` — cột thật, bắt buộc
-
-```sql
--- Ba bước. ADD COLUMN ... NOT NULL trên bảng đã có dữ liệu sẽ lỗi.
-ALTER TABLE tasks ADD COLUMN project_id UUID REFERENCES projects(id);
-
--- backfill: mọi task hiện có → dự án cá nhân của chủ sở hữu
--- (tạo dự án cá nhân trước nếu chưa có)
-UPDATE tasks t SET project_id = p.id
-  FROM projects p
- WHERE p.user_id = t.user_id AND p.origin = 'personal';
-
-ALTER TABLE tasks ALTER COLUMN project_id SET NOT NULL;
-CREATE INDEX ix_tasks_project_id ON tasks (project_id);
-```
-
-**Mọi task thuộc đúng một project.** Task có thể không gắn sự kiện nào, nhưng không bao giờ không có project.
-
-`Task.related_event_id` (đã có, `models.py:851`) vẫn giữ nguyên và vẫn có ý nghĩa — nó nói *task này sinh ra từ cuộc họp nào*. Nhưng nó **không còn là đường tra project**. Hai quan hệ độc lập:
+### 5.1 Bốn lớp
 
 ```
-Task ──project_id──▶ Project        bắt buộc, luôn có
-Task ──related_event_id──▶ Schedule tuỳ chọn, chỉ nói nguồn gốc
+ ┌── LỚP 1: GIÁC QUAN ─────────────────────────────────────────────────────┐
+ │ Bridge bên ngoài (Pancake forwarder, n8n, bot…) ─► POST /ingest/v1/events│
+ │ ĐỒNG HỒ: sweeper next_check_at · cron slot                               │
+ └────────────────────────────────┬────────────────────────────────────────┘
+ ┌── LỚP 2: TRÍ NHỚ (Postgres + RLS) ──▼────────────────────────────────────┐
+ │ tenant · sandbox · connector · contact · conversation · message ·        │
+ │ catalog_item · followup_job · trigger_run · draft · decision_log · ...   │
+ └────────────────────────────────┬────────────────────────────────────────┘
+        sự kiện miền: customer.message · staff.reply · conversation.silent · conversation.promised_date_reached · ...
+ ┌── LỚP 4: NÃO ───────────────────▼────────────────────────────────────────┐
+ │ engine trigger (0 token) → chọn ĐÚNG 1 skill → RunContext + Context Builder│
+ │ → một lượt LLM, ≤ 3 vòng tool, ≤ 8 tool → kết quả có cấu trúc            │
+ └────────────────────────────────┬────────────────────────────────────────┘
+ ┌── LỚP 3: TAY CHÂN ──────────────▼────────────────────────────────────────┐
+ │ Tool (vỏ) → Command (validate · authorize · audit · idempotency) → DB/cổng│
+ └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-> **Ghi lại một thiết kế đã bị bác bỏ, để không quay lại:** bản nháp trước tính project lúc đọc qua `related_event_id → schedule → project_id`, không có cột trên `tasks`. Nó **không diễn đạt được** trường hợp phổ biến nhất: một task thuộc dự án Alpha nhưng không gắn cuộc họp nào. Mô hình đó sẽ đẩy task vào dự án cá nhân — sai, không phải mặc định hợp lý. Project đi qua sự kiện là *một* con đường, không phải con đường duy nhất.
+Skill nằm ở lớp 4, năng lực ở lớp 3, thời gian thực ở lớp 1. Ba thứ này không được trộn vào nhau.
 
-### 3.4 Dự án cá nhân — mặc định, không phải nơi chứa đồ thất lạc
+### 5.2 Lớp 1 — Giác quan: cổng nhận chuẩn + bridge + đồng hồ
 
-Mỗi người dùng có **một** dự án cá nhân: tên mặc định là tên hiển thị của họ, `origin='personal'`, `source_schedule_id = NULL`, `deadline = NULL`.
-
-```sql
-CREATE UNIQUE INDEX uq_projects_personal_per_user
-    ON projects (owner_id) WHERE origin = 'personal';
-```
-
-**Tạo lười**, lần đầu người dùng cần một project mà chưa có ngữ cảnh nào — không tạo lúc `POST /auth/register`. Tạo lúc đăng ký sẽ lặp lại đúng lỗi của `workspaces` (`api/auth.py:136`): mỗi tài khoản test cũng đẻ một hàng, và vi phạm P4.
-
-Nó là **giá trị mặc định khi người dùng không nói gì khác**, không phải nơi hứng những task mà hệ thống không biết xếp vào đâu. Khác biệt này quan trọng: nếu người dùng đang mở dự án Alpha và tạo một việc, việc đó thuộc Alpha — kể cả khi không có cuộc họp nào liên quan.
-
-> ⚠️ **`deadline IS NULL` là bất biến chịu lực.** Nó là thứ **duy nhất** ngăn dự án cá nhân sinh thông báo cấp dự án (6.1, 6.2, 7.1 đều guard theo nó). Bắt buộc có test khoá: *dự án cá nhân với 50 task quá hạn không sinh predicate cấp dự án nào.* Không có test đó thì sớm muộn xuất hiện câu "Cá nhân có 47 việc quá hạn" — đúng loại vi phạm P5.
-
-Dự án cá nhân **không bao giờ** gắn Mezon channel (8.1), không vào thống kê ở 4.4, và **luôn có đúng một thành viên** — chính chủ. Không ai được thêm vào nó.
-
-### 3.5 Xác định project lúc tạo task
-
-Không có resolver lúc đọc. `project_id` được quyết một lần lúc ghi, theo thứ tự ưu tiên:
+**Thêm kênh không phải sửa code lõi.** Phần code riêng của từng kênh (cách xác thực, chữ ký webhook của kênh, polling, phân trang, phân biệt người gửi) nằm ở **bridge bên ngoài lõi**. Lõi chỉ có **một** cổng nhận, theo một định dạng chuẩn.
 
 ```
-1. Chỉ định tường minh      UI: dự án đang mở
-                            Tool: project_ref  (9.2)
-                            Webhook: project_ref nếu bot họp gửi kèm
-
-2. Từ sự kiện liên quan     related_event_id → chuỗi template → project_id
-                            (bao gồm cả tạo lười project cho chuỗi — 4.1)
-
-3. Dự án cá nhân            khi không có ngữ cảnh nào ở trên
+Kênh (Pancake, Zalo OA, Messenger, Mezon, form…) → BRIDGE (bot / n8n / script)
+    → dịch sang Cortex Event Format, ký HMAC → POST /ingest/v1/events → lõi
 ```
 
-**Sửa sau bằng `move_task`** (9.2) hoặc dropdown tại chỗ (10.1). Vì `project_id` là giá trị ghi một lần, mọi lượt sửa là tín hiệu đo chất lượng bước 2 — xem 4.4.
+**Cortex Event Format v1** (hợp đồng chính thức, có version):
 
-**Hệ quả phải xử lý:** gán một chuỗi sự kiện vào project khác (`PATCH /api/schedules/{id}/project`) **không** tự đổi project của các task đã tạo từ nó. Đây là chủ ý — task đã có project riêng, ghi đè hàng loạt là hành vi phá hoại. API trả về số task bị ảnh hưởng để UI hỏi *"chuyển N việc cũ sang theo không?"*.
+```json
+POST /ingest/v1/events
+Headers: X-Connector-Id: <id>
+         X-Timestamp: <unix seconds>                  // chống phát lại: lệch > 300s → 401
+         X-Signature: sha256=<hex HMAC_SHA256(secret, timestamp + "." + body)>
+{
+  "format": "cortex.event/1",
+  "events": [{
+    "type": "message.created",                 // message.created | conversation.updated | contact.updated
+    "external_id": "pancake:page123:msg_998",  // BẮT BUỘC, khoá chống trùng
+    "occurred_at": "2026-10-10T14:03:22+07:00",
+    "channel": {"kind": "messenger", "account_ref": "page123"},   // kind ∈ danh mục kênh của lõi
+    "conversation": {"external_id": "conv_55"},
+    "contact": {"external_id": "psid_8812", "display_name": "...", "phone": "..."},
+    "sender": {"role": "customer"},            // customer | staff | bot — BẮT BUỘC
+    "staff": {"external_id": null},
+    "text": "...", "attachments": [],
+    "meta": {}                                 // tuỳ ý, không được dùng để ra quyết định
+  }]
+}
+→ 202 {"results": [{"external_id": "...", "status": "accepted|duplicate|rejected", "error": null}]}
+```
 
-### 3.6 Vì sao KHÔNG đổi tên `workspaces` thành `projects`
+**Lõi phải tự làm, không tin lời bridge:**
 
-Đã cân nhắc và bác bỏ. Bốn lý do, tất cả kiểm chứng được trong code:
+- Tenant suy ra từ connector, không bao giờ lấy từ body.
+- Schema được validate chặt. Lỗi thì `rejected` kèm lý do, không đoán.
+- `external_id` là unique.
+- **Luật cửa sổ kênh** do lõi tự tính theo `channel.kind`, từ bảng chính sách kênh trong lõi.
+- Rate limit, kích thước batch và kill switch được áp theo từng connector.
 
-1. **Workspace tự sinh lúc đăng ký** (`api/auth.py:136`, `is_personal=True`). Đổi tên nghĩa là mỗi tài khoản mới đã có sẵn một "dự án" rỗng mang tên mình — danh sách dự án thành sản phẩm phụ của việc đăng ký.
-2. **Ngữ nghĩa thành viên khác nhau.** `WorkspaceMember.role` là *ai được xem tài liệu* (`VIEWER`, `invited_by`, `joined_at`). Thành viên dự án là *ai chịu trách nhiệm việc gì*.
-3. **Nó kéo Notes và Assets trở lại đường chính.** Workspace tồn tại để nhóm note và asset — cả hai bị đóng băng ở mục 11. Đổi tên thì danh sách dự án = danh sách thư mục.
-4. **Mất khả năng phân biệt nguồn** (`origin`), thứ quyết định project sống hay chết như Goal.
+**Mức tin cậy của connector:**
 
-**Chi phí đo thật (2026-08-24), không phải ước lượng:**
-
-| | Đổi tên workspace → project | Bảng `projects` mới *(đang chọn)* |
+| Mức | Ai viết | Được làm |
 |---|---|---|
-| Tham chiếu phải sửa | ~1.565 (backend 499 / frontend 1.066) | **0** |
-| Tệp phải chạm | 62 (backend 38 / frontend 24) | ~15–20 |
-| Bảng phải migrate | 6 bảng có `workspace_id` | 1 bảng mới + 2 cột |
-| Kéo theo phần đóng băng | **Có — 4/6 bảng** | Không |
-| Di trú dữ liệu | Notes/assets phải theo | **Không có gì để di trú** |
+| `official` | Người xây | Đầy đủ |
+| `partner` | Agency | Như `official`, sau khi qua contract test |
+| `custom` | Khách tự viết | Chỉ được nạp dữ liệu; không kích hoạt hành động nhạy cảm cho tới khi qua contract test |
 
-Sáu bảng có `workspace_id`: `notes`, `assets`, `agent_conversations`, `workflow_definitions`, `workspace_members`, `workspace_workflow_settings`. **Bốn trong sáu thuộc phần đã đóng băng ở mục 11** — nên đổi tên buộc phải sửa đúng khối code vừa quyết định không đụng tới. Đóng băng và đổi tên là hai thao tác mâu thuẫn nhau trên cùng một khối code.
+`sender.role` là trường sống còn: `conversation.silent` đúng hay sai phụ thuộc vào nó. Vì vậy **mỗi bridge phải có contract test chạy trên dữ liệu mẫu**.
 
-Thêm một va chạm ngữ nghĩa: `AgentConversation.workspace_id` (`models.py:748`) — đổi tên nghĩa là mọi hội thoại thuộc về một project, đúng thứ mục 9.2 đã bác bỏ.
+**Chiều ra: Cortex Action Format v1** (thiết kế; xây khi mở theo §7). Lõi gọi vào bridge bằng webhook có ký HMAC (cùng secret của connector). Bridge là **tầng giao tiếp giữa hệ thống và nền tảng**, và là một trong hai lớp chặn.
 
-Đổi tên **máy móc** thì dễ (IDE làm được). Cái đắt nằm ở 6 migration đổi cột FK, ở việc phải diễn giải lại `WorkspaceMember.role` cho từng chỗ dùng, và ở chỗ nó lôi bốn tính năng đã đóng băng trở lại bàn làm việc.
-
-**Kết luận: `workspaces` giữ nguyên, tiếp tục phục vụ Notes và Assets, chỉ bị ẩn khỏi nav. `projects` là bảng mới sống song song. Không convert, không di trú.**
-
----
-
-## 4. Quy tắc suy ra project
-
-### 4.1 Tạo lười — project sinh ra từ channel có việc
-
-```
-Khi một action item của người U đến từ channel C:
-
-    P := project có source_channel_id = C
-    nếu chưa có → tạo project(source_channel_id=C,
-                              name=tên channel, origin='derived', owner_id=U)
-
-    task.project_id = P.id
-    thêm (P, U) vào project_members nếu chưa có, joined_via='derived'
+```json
+POST <connector.outbound.url>                       // Cortex → bridge
+Headers: X-Cortex-Timestamp, X-Cortex-Signature: sha256=<HMAC(secret, ts + "." + body)>
+{
+  "format": "cortex.action/1",
+  "action_id": "<uuid>",                     // idempotency — bridge phải bỏ qua action_id đã xử lý
+  "type": "send_message",                    // send_message | add_tag | add_note (T2)
+  "channel": {"kind": "messenger", "account_ref": "page123"},
+  "conversation": {"external_id": "conv_55"},
+  "actor": "ai:customer_drafter@1",          // hoặc "staff:<ref>"
+  "text": "...", "disclosure": "Trợ lý AI của <doanh nghiệp>",   // disclosure bắt buộc khi actor là ai:*
+  "window": {"open": true, "basis": "free", "expires_at": "..."}, // lõi tính, bridge dùng để kiểm
+  "source": {"skill": "hoi-lai-khach-im@1", "run_id": "<uuid>"}
+}
+→ 200 {"status": "sent", "external_message_id": "..."}
+  | {"status": "refused", "reason": "OUTBOUND_DISABLED|AI_SEND_DISABLED|WINDOW_CLOSED|PLATFORM_POLICY|QUIET_HOURS|RATE_LIMIT|NOT_SUPPORTED"}
+  | {"status": "error", "retryable": true|false}
 ```
 
-**Channel nào không sinh ra việc thì không bao giờ thành project** — nên channel tán gẫu, thông báo chung, random không làm ngập bảng. Cùng bộ lọc như bản trước, chỉ đổi nguồn.
+- **Bridge chặn** những gì thuộc về nền tảng: chiều ra tắt; tài khoản này không cho AI gửi; ngoài cửa sổ; `ai:*` trong khung HUMAN_AGENT; giờ yên lặng của doanh nghiệp; quota của nền tảng; kênh không hỗ trợ.
+- **Lõi coi `refused` là kết quả bình thường** (`blocked` + lý do, ghi `decision_log`), không retry. Chỉ `error` có `retryable=true` mới được thử lại, có backoff.
+- **Chỉ connector `official` hoặc `partner` được bật chiều ra.** `custom` thì không, vì lõi không kiểm được bridge đó có thi hành luật nền tảng hay không.
+- **Tin đã gửi quay về qua chiều vào** như mọi tin khác (`sender.role = bot` nếu là AI, `staff` nếu nhân viên bấm), nên đồng hồ và lịch sử luôn khớp với thực tế trên nền tảng.
 
-Người thứ hai nhận việc từ cùng channel **tìm thấy project đã có** và tự vào làm thành viên — không tạo bản thứ hai.
+Nếu bridge chạy trên dịch vụ bên thứ ba (n8n cloud, Zapier), dữ liệu đi qua họ, nên họ phải được ghi vào DPA như **bên xử lý phụ**.
 
-### 4.2 Lịch ↔ project — một lớp phủ, không phải nền móng
+**Đồng hồ — lõi của "trigger theo thời gian".** "Khách im" là sự vắng mặt của một sự kiện, nên không webhook nào báo được. Mỗi hội thoại có `next_check_at` (có index), được tính lại khi có tin mới. Sweeper lấy việc tới hạn:
 
-Danh tính dự án đến từ channel (4.1). Việc gắn *sự kiện* vào project là **tuỳ chọn, tích luỹ dần**, và nếu không bao giờ xảy ra thì không có gì gãy.
-
-Cầu nối là **bot họp**, vì nó đứng ở giao điểm: nó biết vừa tóm tắt cuộc họp nào *và* đăng vào channel nào. Đây là dữ liệu thật, không phải phỏng đoán.
-
-Thang bốn mức, dừng ở mức đầu tiên khớp:
-
-```
-1. Webhook mang provider_event_id
-   → ScheduleExternalMap → Schedule → đặt project_id trên HÀNG TEMPLATE
-   CHÍNH XÁC
-
-2. Webhook mang link Meet của phiên ghi
-   → khớp Schedule.hangout_link
-   CHÍNH XÁC   (cần thêm cột — xem dưới)
-
-3. Không khớp gì
-   → sự kiện KHÔNG có project. Dừng.
-   KHÔNG đoán theo giờ + tiêu đề na ná (P7): một cuộc 1:1 và một cuộc
-   họp dự án cùng 10h thứ Ba sẽ bị trộn
-
-4. Người dùng gắn tay một lần cho cả chuỗi (10.1)
-   → lối sửa, luôn có
+```sql
+SELECT id FROM conversation WHERE next_check_at <= now()
+ ORDER BY next_check_at LIMIT 100 FOR UPDATE SKIP LOCKED;
 ```
 
-Đặt trên **hàng template** (`recurrence_id IS NULL`): học một lần từ một occurrence, áp cho cả chuỗi về sau.
+Chi phí tỷ lệ theo *số việc tới hạn*, không theo *tổng dữ liệu*.
 
-**Cột phải thêm cho mức 2:** `google_calendar_sync.py:492` chỉ lưu `event.get("location")`. Google để link Meet ở `hangoutLink` / `conferenceData.entryPoints[].uri`, **không phải** `location`. Thêm `schedules.hangout_link` và một dòng đọc trong sync.
+**Sự kiện miền:** `customer.message` · `staff.reply` · `conversation.silent` · `conversation.promised_date_reached` · `draft.expired` · `cron.tick`.
 
-**Không có liên kết thì mất đúng hai thứ**, cả hai là tính năng cộng thêm: mục 8.2 (Gate biết bận vì dự án nào) và ngữ cảnh trước họp. Task/predicate/định tuyến kênh/`starts_soon`/`is_user_busy`/`find_free_slots` **đều không cần project trên sự kiện**.
+### 5.3 Lớp 2 — Trí nhớ
 
-### 4.3 Suy ra `deadline`
+**Bảng (v0):**
 
-```
-deadline := max(due_date) của các task thuộc project
-         ?? NULL
-```
+- `tenant` · `sandbox` · `connector(secret_hash, trust, status)`
+- `contact` · `conversation(next_check_at, last_customer_at, last_staff_at, owner_staff_ref, promised_date, offchannel_contact)` · `message`
+- `catalog_item(version, valid_until)` · `ingest_event(raw, status)`
+- `followup_job(dedupe_key UNIQUE)` · `trigger_run` (**không có cột văn bản**)
+- `draft(status, text, claims, reason_code)` · `staff_action` · `decision_log` · `action_log`
 
-Nhánh "lần lặp cuối của chuỗi" đã bỏ cùng với việc neo project vào channel (3.1.1) — project không còn gắn với một chuỗi lịch nào.
+Tất cả có `tenant_id` đứng đầu index và có RLS.
 
-`NULL` là hợp lệ. Predicate nào cần deadline mà không có thì im (mục 6).
+**Bộ nhớ chia theo phạm vi** (không có kho chung tìm bằng embedding — LESSONS 3):
 
-Người dùng sửa tay → đặt cờ `deadline_is_manual`, không bị suy ra ghi đè lần sau.
+| Loại | Phạm vi | Ai ghi | Ai đọc |
+|---|---|---|---|
+| Hồ sơ khách: nhu cầu, ngày khách tự hẹn, người quyết định, đã liên hệ ngoài kênh | Một khách | Customer run (kèm `msg_id` làm bằng chứng) hoặc nhân viên | Customer run của chính khách đó; người |
+| Catalog, FAQ | Một tenant | Người | Mọi run trong tenant, chỉ đọc |
+| Cách làm việc của chủ | Một tenant | Cấu hình skill có version, có duyệt | Customer run, qua skill |
 
-**Chống dao động:** nhánh `max(due_date)` khiến `deadline` nhảy mỗi lần thêm task, và `project.will_miss` sẽ bật/tắt theo. Quy tắc: `deadline` chỉ tính lại **khi chuỗi sự kiện đổi** hoặc **một lần mỗi ngày** trong `StateEvaluator`, không tính lại ở mỗi lần ghi task. Và `will_miss` chỉ phát khi vượt ngưỡng **hai lần đánh giá liên tiếp** — cùng nguyên tắc chống rung mà `StateEvaluatorFlag` đang dùng.
+Dữ liệu thô bị xoá theo hạn ghi trong DPA.
 
-### 4.4 Đo chất lượng quy tắc suy ra
+### 5.4 Lớp 3 — Tay chân (năng lực)
 
-Mỗi lần người dùng sửa quy gán project (mục 10.1) là một nhãn âm. Tỷ lệ sửa trên tổng số gán `origin='derived'` là chỉ số chất lượng của quy tắc.
-
-**Ngưỡng:** nếu > 20% lượt gán bị sửa tay thì quy tắc sai — sửa quy tắc, không thêm UI.
-
----
-
-## 5. Luồng dữ liệu đầu-cuối
-
-```
-   Bot họp (ngoài)          Google Calendar
-        │ webhook                │ sync
-        ▼                        ▼
-   POST /api/internal/tasks   schedules
-        │                        │
-        └──► ScheduleExternalMap ┘
-                     │
-                     ▼
-              Task.project_id ──► tạo lười project cho chuỗi (4.1)
-                     │
-                     ▼
-        ┌────────────────────────────┐
-        │  StateEvaluator  (0 token) │  ← join thẳng tasks.project_id
-        │  9 predicate               │
-        └────────────┬───────────────┘
-                     │ event bus
-                     ▼
-        ┌────────────────────────────┐
-        │  Attention Gate  (0 token) │
-        │  1 importance              │
-        │  2 đã biết chưa (dedup)    │
-        │  3 có nên im không         │  ← biết đang bận VÌ dự án nào (8.2)
-        │  4 gộp với gì              │  ← gộp theo project (7.2)
-        │  5 lúc nào                 │
-        └────────────┬───────────────┘
-                     ▼
-              Notification row
-                     │
-        ┌────────────┴────────────┐
-        │  delivery/dispatcher    │  ← định tuyến kênh theo phạm vi (8.1)
-        └──┬──────────────────┬───┘
-           ▼                  ▼
-      in_app (SSE)      Mezon (DM hoặc channel dự án)
-```
-
-Không có nhánh nào đi qua `workflow_service`. Đó là quyết định đã chốt từ bản cũ (mục A2) và giữ nguyên.
-
----
-
-## 6. Predicate dự án
-
-Bổ sung vào `state_evaluator.py`. Cả hai **deterministic, 0 token**, dùng `StateEvaluatorFlag` cho idempotency đúng như 7 predicate hiện có.
-
-### 6.1 `project.slipping`
-
-| | |
-|---|---|
-| Điều kiện | Số task mở của project **tăng** so với lần đánh giá trước, **và** `deadline` còn ≤ 14 ngày |
-| Vì sao đáng nói | Đây là tín hiệu goal-progress đã mất khi `goals` bị xoá. Không gì khác phát hiện được |
-| `flag_key` | `project.slipping:{project_id}` |
-| Trạng thái cần lưu | Số task mở của lần đánh giá trước. `StateEvaluatorFlag` chỉ lưu cờ, không lưu số — thêm cột `snapshot JSONB NULL` vào bảng đó, hoặc một bảng `project_snapshots(project_id, open_count, evaluated_at)`. **Chọn cái sau**: nó cũng là dữ liệu cho `will_miss` và cho biểu đồ sau này, và không làm `StateEvaluatorFlag` phình ra |
-| `reason_key` | `project.slipping` → mức nền **RECOMMEND** |
-| Im khi | `deadline IS NULL` — không có chân trời thì không có khái niệm trượt |
-
-### 6.2 `project.will_miss`
-
-| | |
-|---|---|
-| Điều kiện | Theo tốc độ hoàn thành hiện tại, dự án kết thúc **sau** `deadline` |
-| Công thức | `tốc_độ := số task completed trong 14 ngày qua / 14`; `ngày_cần := task_mở / tốc_độ`; phát khi `now + ngày_cần > deadline` |
-| Vì sao đáng nói | Cảnh báo **trước** khi trễ, không phải sau |
-| `flag_key` | `project.will_miss:{project_id}` |
-| `reason_key` | `project.will_miss` → mức nền **ASK** (ngang `task.at_risk`) |
-| Im khi | `deadline IS NULL`, hoặc `tốc_độ = 0` và task_mở = 0 |
-
-**Số học thuần trên `completed_at`. Không ML, không token.** Nếu thấy mình định gọi LLM ở đây thì đã sai P3.
-
-### 6.3 Ranh giới không được vượt
-
-> **Task = tiến độ. Event = khung thời gian. Không trộn.**
-
-Tiến độ dự án **chỉ đếm Task**. Không bao giờ tính từ số cuộc họp đã diễn ra. `CalendarItemService` đang merge Task + Schedule để *hiển thị* — đó là chuyện khác, và không được dùng làm đầu vào cho rủi ro.
-
-Đây là kiểu hỏng kinh điển của mọi công cụ PM: dự án nhiều họp trông như đang hoạt động mạnh.
-
----
-
-## 7. Xếp hạng và gộp
-
-### 7.1 `TodayService._rank_actions` — sắp theo rủi ro dự án
-
-Hiện sắp theo "không làm hôm nay thì mất gì" ở mức từng task. Đổi thành hai tầng:
+**Ba tầng code. LLM chỉ chạm tầng ngoài cùng:**
 
 ```
-khoá sắp xếp := (rủi_ro_dự_án(project) desc, khoá_task_hiện_tại)
+Tool (vỏ: ≤ 2 câu mô tả + schema) → Command (validate · authorize · thực thi · audit · idempotency) → DB / cổng
 ```
 
-`rủi_ro_dự_án` tái dùng `compute_risk` (`risk_detection.py`) ở phạm vi project:
+**Phiếu năng lực (L7):**
+
+```yaml
+name: draft_followup
+effect: read | internal | customer       # server dùng để quyết propose hay commit
+tier: v0 | T1 | T2
+gate: G1.5
+evidence_required: [msg_ids]
+args: {...}  returns: {status, data, note?, violations[], next_step}
+blocked_codes: [...]  guards: [tenant, kill_switch, rate_limit]  audit: action_log  revert: ...
+```
+
+**Hợp đồng chung:**
+
+```yaml
+server_context: tenant_id · actor (ai:<profile>@<ver> | staff:<id>) · run_id · idempotency_key   # không bao giờ lấy từ LLM
+mode: read → chạy · internal → AI được commit, hoàn tác được · customer → chỉ tool `send_message`; ai:* được commit khi skill `send_policy.mode=auto`, ngược lại thành propose (nháp). Commit = ghi outbox, bridge mới là nơi gửi thật
+status: ok | proposed | blocked | not_found | ambiguous | error
+note: BẮT BUỘC khi kết quả rỗng ("Không có… — đừng suy đoán")      # code cũ: kết quả rỗng thì agent bịa 6/6 lần
+blocked ≠ error: WINDOW_CLOSED · NO_CONSENT · TOUCH_LIMIT · UNVERIFIED_CLAIM · FORBIDDEN_PHRASE · OWNER_IS_HUMAN · OPTED_OUT · NO_NEW_INFO
+refs: khớp 1 → dùng · khớp nhiều → ambiguous kèm danh sách · không khớp → not_found kèm danh sách   # không fuzzy, không gọi LLM
+next_step: một câu, không chứa quy trình
+cùng một tool trả INVALID_ARGS 2 lần → handoff
+```
+
+**Danh mục năng lực:**
+
+| Miền | v0 | T1 | T2 |
+|---|---|---|---|
+| Hội thoại | `read_messages` (đã che PII) | `handoff` | — |
+| Khách | `read_contact` | `add_contact_note`, `set_promised_date`, `log_offchannel_contact` | `merge_contacts` |
+| Phát hiện | `list_dropped_leads` (luật 0 token) | — | — |
+| Catalog | `lookup_catalog` | `get_faq` | `propose_catalog_edit` |
+| Nháp | `draft_followup` (+ `validate_draft` bên trong) | nháp tự huỷ khi khách nhắn thêm | `auto_reply_offhours` |
+| Gửi | — | `send_message` (effect `customer`; `validate_draft` + sàn A9 bên trong; ghi `outbox`) · worker chiều ra | — |
+| Nhân viên | `record_staff_action` (sự kiện từ UI, không phải tool LLM) | `create_staff_task` | — |
+| An toàn | `redact_pii`, `decision_log`, kill switch theo tenant / skill / connector | `check_consent`, `export/delete_contact` | — |
+
+**Không bao giờ giao cho AI:**
+
+- gửi tin cho khách **ngoài** tool `send_message` (A9);
+- báo giá hoặc giảm giá ngoài catalog;
+- cam kết kết quả;
+- nhắn qua Zalo cá nhân;
+- đổi người phụ trách;
+- xoá hoặc chặn khách;
+- xác nhận thanh toán;
+- chẩn đoán từ ảnh;
+- xếp hạng nhân viên;
+- gọi điện.
+
+### 5.5 Lớp 4 — Não: profile, RunContext, ba loại run
+
+**Một engine, nhiều profile.** Mỗi lượt chạy là một phòng kín logic. Không có agent sống lâu: mỗi sự kiện dựng một run mới, chạy xong thì bỏ.
+
+| | **Customer run** | **Headless run** | **Supervisor ("AI tổng", T2)** |
+|---|---|---|---|
+| Đầu vào | Tin của khách — **không tin được** | Dữ liệu trong DB | Read-model metadata |
+| Phạm vi | **Đúng một hội thoại** + hồ sơ khách đó + catalog | Theo job | Toàn tenant, **không có văn bản** |
+| Trần effect | `internal`; `customer` khi skill có `send_policy.mode: auto` | `internal` | Chỉ được đề xuất |
+| Đầu ra | Có cấu trúc: `{act, reason_code, claims[], text}` | Có cấu trúc | Đề xuất tạm dừng hoặc hạ version |
+
+**Profile:**
+
+```yaml
+id: customer_drafter  version: 1  audience: customer  input_trust: untrusted
+context_sources: [conversation:{scope}, contact_profile:{scope}, catalog:tenant, skill:{id}@{ver}]
+tool_allowlist: [read_messages, read_contact, lookup_catalog, draft_followup]
+effect_ceiling: internal  memory_scope: contact  output_schema: DraftResult
+model: lite  max_tool_calls: 3  timeout_s: 30  token_budget: 8000
+```
 
 ```python
-def project_risk(project, tasks) -> float:
-    if project.deadline is None:
-        return 0.0                      # dự án cá nhân và mọi dự án không hạn
-    base = max((compute_risk(t.priority, overdue_days(t), open_subtasks(t))
-                for t in tasks), default=0.0)
-    days_left = max((project.deadline.date() - today()).days, 0)
-    urgency = 1.0 + 2.0 / (1.0 + days_left)   # 1.0 khi còn xa, 3.0 khi tới hạn
-    return base * urgency
+@dataclass(frozen=True)
+class RunContext:            # server dựng cho mỗi run, LLM không sửa được
+    run_id: UUID; tenant_id: UUID; sandbox_id: UUID
+    profile: str; profile_version: int
+    principal: Principal     # Customer(contact_id) | Staff(id) | System(job)
+    scope: Scope             # {conversation_id} | {tenant} | {job_id}
+    trigger_event_id: str | None
 ```
 
-Hàm thuần, không chạm DB — test được không cần fixture, đúng như `compute_risk`.
+**Bốn chốt chặn (trong code, không trong prompt):**
 
-Task thuộc dự án cá nhân (3.4) → không có `deadline` → `rủi_ro_dự_án = 0` → sắp đúng như hôm nay ở tầng hai. **Không được thay đổi hành vi hiện tại cho việc lẻ.**
+1. Context Builder chỉ nạp các `context_sources` đã khai.
+2. RLS: mỗi run thực hiện `SET LOCAL app.tenant_id`.
+3. Tool lấy scope từ `RunContext`, và chặn mọi tool có effect vượt trần.
+4. Mỗi hội thoại chỉ có một run tại một thời điểm (advisory lock).
 
-Lý do đây là hạng mục quan trọng nhất mục 13: nó nâng cấp đúng phần lõi mỏng nhất (`today.py`, 305 dòng), và là thứ khiến Gate thắng cách biệt trong phép thử mục 12 — nhắc ngây thơ không có dữ liệu này.
+**Mẫu Dual-LLM.** Văn bản tự do của khách **không bao giờ** chảy vào ngữ cảnh của agent có quyền rộng hơn.
 
-### 7.2 Gộp theo project
+### 5.6 Sandbox và AI tổng
 
-`attention_bundle` hiện gộp theo *người + thời điểm*. Thêm project làm khoá gộp:
+**Sandbox** là một không gian AI làm một loại việc, cách ly với các sandbox khác.
 
+```yaml
+sandbox:
+  id, tenant_id, name
+  purpose: customer_care | owner_digest | ...     # v0 chỉ có customer_care
+  profile: customer_drafter@1
+  skills: [skill_id@ver]                           # hướng dẫn, có version, có duyệt
+  connectors: [connector_id]                       # kênh / nguồn được gắn
+  tools: allowlist ⊆ profile.tool_allowlist
+  data_scope: các hội thoại / nguồn được chạm
+  egress_schema: thứ DUY NHẤT được đi ra (metadata, reason_code, nháp vào hàng duyệt)
+  isolation: logical | process | dedicated         # v0: logical
+  budget: {runs_per_day, drafts_per_staff_per_day, tokens_per_day}
+  status: active | paused                          # kill switch
 ```
-"Alpha có 3 việc cần chú ý"
-```
 
-thay vì ba lần rung riêng lẻ về ba việc không liên quan. Việc thuộc dự án cá nhân gộp như hiện tại — nhưng nhãn gộp là tên dự án cá nhân, không phải một nhóm vô danh.
+**Khi nào bắt buộc tách sandbox.** Đây là luật 0 token. AI tổng chỉ đề xuất, người xác nhận. Cấu hình thuộc **bất kỳ** trường hợp nào dưới đây thì phải chạy trong sandbox:
 
+- chạm dữ liệu khách;
+- có đầu vào không tin được;
+- gắn kênh có khách ở đầu kia;
+- dùng MCP bên ngoài.
+
+**Chiều đi của thông tin:**
+
+| Chiều | Được đi | Cấm |
+|---|---|---|
+| Sandbox → AI tổng | Metadata của `trigger_run` (trạng thái, `reason_code` dạng enum, mã bị chặn, token, `act`, kết quả từ nhân viên) + kết quả theo `egress_schema` | Văn bản tin nhắn, prompt, văn bản tự do của khách |
+| AI tổng → sandbox | Cấu hình có version, qua duyệt | Ra lệnh khi đang chạy; đọc vào bên trong |
+| Sandbox ↔ sandbox | Không đi thẳng; chỉ cùng đọc dữ liệu tenant (catalog) | Mọi đường khác |
+| Người → nội dung thô | Giao diện có audit | AI tổng đọc hộ |
+
+**Read-model của AI tổng** là `trigger_run` / `decision_log` **không có cột văn bản**. Có role DB riêng với `GRANT` theo cột. Số tổng hợp chỉ hiện khi n ≥ 5.
+
+### 5.7 Engine trigger
+
+Phát triển từ bản 1 §16, phần chưa từng được code.
+
+| Loại | Ví dụ | Đầu ra cho phép | Tầng |
+|---|---|---|---|
+| **relative** | Im 24 giờ sau khi hỏi giá; tới ngày khách hẹn; nháp hết hạn | `draft_for_staff` | v0 |
+| **turn** (lượt khách) | `conversation.awaiting_reply`: khách nhắn xong (im ≥ `after`, mặc định 30 giây) mà chưa ai trả lời | `send_to_customer` (auto) hoặc nháp trả lời ngay (manual); LLM chọn `reply` / `wait` / `handoff` / `none` | v0 (WP16) |
+| **event** | `customer.message`, `staff.reply` | Huỷ hoặc dời trigger khác (reset `next_check_at`, huỷ nháp). Im lặng | v0 |
+| **cron** | 7h45 gom danh sách; tóm tắt tuần cho chủ | `staff_task` / `owner_digest`, bản đầu dùng **template** | T1 (template) / G2.5 (LLM) |
+| **condition** | Lead rơi tuần này tăng X% | `owner_digest`, predicate có tên, 0 token | G2.5 |
+
+**Quy tắc engine:**
+
+- **Đầu ra:** `draft_for_staff | send_to_customer | staff_task | owner_digest | none`. `send_to_customer` chỉ hợp lệ khi skill khai `send_policy.mode: auto`. Kể cả khi đó, lệnh vẫn đi qua `send_message` → outbox → bridge, và bridge có quyền từ chối (A9). Khi bị từ chối, kết quả chuyển thành `draft_for_staff` nếu skill khai `fallback: draft`.
+- **Lượt khách (`turn`, WP16):** mỗi tin khách dời mốc `reply_check_at = tin cuối + after` (cửa sổ trượt); tin của nhân viên hoặc bot xoá mốc. Tới mốc mà vẫn chưa ai trả lời thì bắn `conversation.awaiting_reply`, trừ khi nhân viên vừa nhắn trong hội thoại đó ≤ 10 phút (đang trực — AI không chen ngang). LLM đọc cả lượt:
+  - `reply` → nháp; auto thì đi `send_message` ngay (không chờ giờ làm việc: khách vừa nhắn), manual thì nháp lên đầu trang duyệt với nhãn "khách đang chờ";
+  - `wait` → khách có vẻ chưa nói xong ("cho em hỏi…"): dời mốc thêm 2 phút, tối đa 1 lần, sau đó phải chọn khác;
+  - `handoff` → câu cần người (giảm giá, khiếu nại, ngoài catalog, muốn đăng ký): thẻ "Cần người trả lời" cho nhân viên, **không bao giờ tự gửi**, và thẻ không hết hạn khi khách nhắn tiếp (chỉ hết khi nhân viên trả lời). Ở `auto`, khách vẫn được báo ngay một câu "đã chuyển bạn tư vấn" (model viết, qua validator; hỏng thì dùng câu cố định `handoff_reply` của skill) — **khách không bao giờ nhắn mà không ai đáp** (2026-10-14);
+  - câu `reply` bị validator chặn → model được viết lại **một lần** kèm lý do; vẫn hỏng → thành `handoff`. Model không được khẳng định điều catalog không ghi, không hứa việc nó không tự làm (giữ chỗ, kiểm tra, xếp lớp) — cụm hứa nằm trong `never_say`;
+  - `none` → không cần trả lời ("ok", "cảm ơn", sticker).
+  Tin trả lời lượt **không tính** vào trần 3 lần chạm của phần theo sát (N5); nhân viên tự trả lời thì nháp lượt đó hết hạn.
+- **Khớp 0 token, chỉ so bằng.** Predicate là một *tên* trong registry viết bằng code, không phải biểu thức. Thấy mình muốn thêm `$or` hoặc chuỗi bước là dừng.
+- **Idempotency:** `UNIQUE(trigger_id, dedupe_key)`. `dedupe_key` có một trong các dạng:
+  - `event_id`;
+  - `cron:<id>:<slot>`;
+  - `silent:<conv>:<last_customer_msg_id>` (mỗi đợt im chỉ bắn một lần).
+- **Chống vòng lặp:** event có `source=engine` không bao giờ khớp lại. `causation_depth ≤ 1`.
+- **Chọn trước, viết sau:** xếp hạng ứng viên bằng 0 token, lấy top K theo trần nháp/ngày, rồi mới gọi LLM.
+- **Chống bão tải:** mục tiêu là *sẵn sàng trước giờ*, không phải chạy đúng giờ. `not_before = slot − 2h + hash(tenant) % 105 phút`. Hướng ưu tiên hơn: **viết nháp khi nhân viên mở danh sách**, nhờ đó không có bão tải và không có nháp cũ.
+- **Mặc định là không làm gì:** `{"act":"none"}`. Tỷ lệ im phải ≥ 50%.
+- **Ngân sách cứng trong code:** trần run / tenant / ngày. Lỗi 3 lần liên tiếp thì trigger chuyển `disabled` và báo một lần.
+- **"Hằng tuần hỏi han khách tiềm năng"** = một danh sách cho nhân viên, chia theo trạng thái cửa sổ:
+  - còn cửa sổ → nháp; hoặc tự gửi nếu skill `auto` và bridge cho phép;
+  - trong 7 ngày HUMAN_AGENT → nháp, người gửi (phải xác minh, xem §10);
+  - đã opt-in marketing → bắt buộc có `new_info_ref`, chủ duyệt;
+  - không còn đường nào → nhắc nhân viên gọi, hoặc bỏ. Cửa sổ kênh đã đóng → nháp tuyến `offchannel` cho nhân viên gọi/Zalo, không bao giờ vào outbox.
+
+  Không có thông tin mới → `NO_NEW_INFO`.
+- **Thẻ chiến lược (T2):** tối đa 3 thẻ, mặc định 0 thẻ. Mỗi thẻ là **một thay đổi cấu hình skill**, kèm quan sát, n, phép thử và nút Duyệt. Duyệt thì sinh skill chạy shadow. Không bao giờ là văn xuôi.
+
+### 5.8 Manifest và vòng đời plugin
+
+**Quy ước chung để thêm Skill / tool / kênh mà không sửa code lõi.** Người viết manifest trên thực tế là người xây, rồi tới agency. Chủ doanh nghiệp chỉ thấy *form* sinh từ manifest.
+
+**Skill** (`sandboxes/<sandbox>/skills/<name>/SKILL.md`, frontmatter theo chuẩn Agent Skills + trường riêng):
+
+```yaml
 ---
-
-## 8. Định tuyến kênh
-
-### 8.1 Phạm vi quyết định kênh
-
-| Phạm vi | Ví dụ `reason_key` | Kênh |
-|---|---|---|
-| **Cá nhân** | `task.overdue`, `task.due_soon`, `task.at_risk`, `task.stale` | Mezon **DM** |
-| **Dự án** | `project.slipping`, `project.will_miss` | Mezon **channel dự án** |
-
-Đây là **thứ duy nhất trong thiết kế tạo ra giá trị tập thể ở đúng chi phí tập thể** — nó gỡ chính lỗi cấu trúc đã giết hướng "bot nghe channel" (mục 1.4).
-
-Cơ chế: thêm trường phạm vi vào `attention_reason_catalog`, `delivery/dispatcher.py` đọc nó để chọn kênh. **Không sửa `attention_gate.py`** — đúng tiêu chí nghiệm thu của F0.
-
-**Channel đích không cần thiết kế thêm:** `projects.source_channel_id` (3.1.1) *chính là* channel phát. Project neo vào channel nào thì nhắc cấp dự án về channel đó. Dự án cá nhân và dự án tạo tay có `source_channel_id = NULL` → mọi nhắc của chúng về DM.
-
-### 8.2 Gate biết bạn bận *vì cái gì*
-
-**Chỉ chạy khi sự kiện đã được gắn project qua 4.2.** Sự kiện chưa gắn → hành xử đúng như hôm nay (im khi bận, không phân biệt dự án).
-
-Bước 3 của Gate đã có `is_user_busy` (`availability.py`). Bổ sung: nếu sự kiện đang diễn ra thuộc project P thì
-
-- lời nhắc thuộc **P** → giữ lại tới ngay sau buổi họp (hoặc đẩy lên ngay *trước*, tuỳ mức)
-- lời nhắc thuộc **project khác** → im như hiện tại
-
-### 8.3 `find_free_slots` — nối vào
-
-Hàm đã viết và test xong (`availability.py`, 2026-08-16), chưa nối vào đâu. Ghép với project thì có nội dung thật:
-
-> *"Chiều nay bạn trống 3 tiếng, và Alpha đang chậm 2 việc."*
-
-Hiện ở dòng trạng thái màn Hôm nay và trong card `project.slipping`.
-
+name: hoi-lai-khach-im
+description: "Nháp hỏi lại khách hỏi giá rồi im ≥24h. KHÔNG dùng khi khách đã chê giá/đã mua."
+version: 1
+status: draft | shadow | live
+trigger: {kind: relative, on: conversation.silent, match: {intent: hoi_gia}, after: 20h}   # 20h: trước khi cửa sổ 24h của Messenger đóng (R15)
+requires_tools: [read_messages, read_contact, lookup_catalog, draft_followup]   # ⊆ profile, ≤ 8
+output_kind: draft_for_staff
+limits: {max_touches: 3, min_gap: 24h, fire_limit: 1, expires_after: 14d}
+must_handoff: [giảm giá, khiếu nại, ngoài catalog, khách đòi gặp người]
+never_say: [cam kết kết quả, "tốt nhất", "rẻ nhất"]
+approval: always
+send_policy:                       # lớp chặn 1 — theo skill. Bỏ trống = theo chế độ của sandbox
+  mode: auto | manual              # ghi đè `sandbox.send_mode` (mặc định doanh nghiệp mới: manual)
+  auto_when: {window: free, max_per_contact_per_day: 1}   # chỉ được siết thêm, không nới sàn
+  fallback: manual                 # bị chặn (luật kênh, validator, must_handoff, bridge từ chối) → chuyển nhân viên duyệt
+eval: {cases: eval/, min_pass: 0.9}
 ---
-
-## 9. API
-
-### 9.1 Endpoint
-
-Chỉ những gì cần. Mọi endpoint đều dưới auth người dùng trừ `/internal/*`.
-
-| Method | Đường dẫn | Mục đích |
-|---|---|---|
-| `POST` | `/api/internal/tasks` | Bot họp đẩy action item vào. Nhận `provider_event_id` tuỳ chọn để tra `ScheduleExternalMap`. Dùng `X-Internal-Token` |
-| `GET` | `/api/projects` | Liệt kê project đang mở + số liệu tóm tắt (task mở/xong, deadline, rủi ro) |
-| `GET` | `/api/projects/{id}` | Chi tiết một project |
-| `PATCH` | `/api/projects/{id}` | Sửa `name`, `deadline`, `status`. Đặt cờ "đã sửa tay" cho `deadline` |
-| `POST` | `/api/projects` | Tạo tay — `origin='manual'`. **Lối phụ, không phải cửa chính** |
-| `PATCH` | `/api/tasks/{id}/project` | Ghi thẳng `tasks.project_id`. **Không đụng `related_event_id`** — nguồn gốc task không đổi khi đổi dự án. Ghi lại một nhãn cho 4.4 |
-| `PATCH` | `/api/schedules/{id}/project` | Gán chuỗi sự kiện vào project khác. Chỉ hợp lệ trên hàng template |
-
-Không có endpoint xoá project — `status='closed'` là đủ, và xoá sẽ mồ côi lịch sử `attention_log`.
-
-### 9.2 Tool cho agent — thao tác nhiều dự án trong một hội thoại
-
-**Quyết định nền tảng: không có "project hiện tại" ở mức phiên hội thoại.**
-
-Nếu tồn tại ngữ cảnh project ngầm, sẽ gặp đúng lỗi kinh điển: người dùng nói *"đánh dấu xong việc gửi spec"*, agent lặng lẽ thao tác nhầm dự án, và không ai biết cho tới lúc quá muộn. Thay vào đó **mọi lời gọi tool mang `project_ref` tường minh**, giải tên ngay tại thời điểm gọi.
-
-| Tool | Trạng thái | Ghi chú |
-|---|---|---|
-| `list_projects(status?)` | **Mới** | Cửa vào. Trả tên, deadline, số việc mở/xong, rủi ro. **Bắt buộc có giới hạn số dòng** — trả 50 dự án kèm task là thổi bay context |
-| `get_project_tasks(project_ref, status?)` | **Mới** | Việc trong một dự án. Cùng dữ liệu màn **Việc** (10.2) hiển thị |
-| `move_task(task_id, project_ref)` | **Mới** | Ghi thẳng `tasks.project_id`. Không đụng `related_event_id` — nguồn gốc task không đổi khi đổi dự án |
-| `create_task(..., project_ref?)` | Mở rộng | Thiếu `project_ref` → theo thứ tự ưu tiên ở 3.5 |
-| `list_pending_tasks(..., project_ref?)` | Mở rộng | Thiếu `project_ref` → mọi dự án |
-| `create_project(name)` | **Mới, hạn chế** | Chỉ khi người dùng nói thẳng tên và ý định. **Không bao giờ tạo từ suy luận** |
-
-#### Quy tắc giải `project_ref` — chỗ dễ hỏng nhất
-
-```
-khớp đúng 1 tên       → dùng
-khớp nhiều tên        → ask_user_choice   (tool đã có sẵn)
-không khớp gì         → trả danh sách dự án,
-                        KHÔNG đoán, KHÔNG tự tạo
+(thân: cách làm + 3 cặp vào/ra mẫu)
 ```
 
-Nhánh cuối là **P7**. Agent tự tạo dự án `"Alpah"` vì người dùng gõ sai chính tả là kiểu hỏng im lặng tệ nhất — nó tạo dữ liệu rác mà không ai nhận ra cho tới khi báo cáo sai.
+**Giọng văn.** `STYLE.md` theo sandbox + ví dụ giọng thật của doanh nghiệp trong `data/voice/<tenant_id>/<sandbox>.md` (không commit; ưu tiên hơn ví dụ trong skill) được nạp vào ngữ cảnh, cắt theo `token_budget`; cụm "giọng AI" đưa vào `never_say` để validator chặn. Bộ eval `sandboxes/<sandbox>/eval/cases.yaml` chạy bằng `dev/eval_skills.py`.
 
-Dự án cá nhân (3.4) **không hiện** trong `list_projects` trừ khi người dùng hỏi rõ, để nó không chiếm chỗ trong ngữ cảnh mỗi lần agent liệt kê.
+**Hai chế độ gửi.** `auto`: AI soạn → validator → gửi ngay qua bridge (trong giờ làm việc; ngoài giờ xếp hàng chờ). `manual`: AI soạn → validator → **thông báo nhân viên duyệt**; nhân viên bấm Duyệt thì **hệ thống gửi qua bridge** (không phải chép sang Pancake). Chế độ đặt ở **sandbox** (mặc định cho cả doanh nghiệp) và **ghi đè được theo skill**. Ở `auto`, mọi tin không được phép gửi tự động (ngoài cửa sổ tự do, HUMAN_AGENT, validator chặn, `must_handoff`, bridge từ chối) **tự rơi về `manual`**.
 
-#### Ngân sách tool
+**Thang bật auto (khuyến nghị, không phải luật của lõi):** chỉ đổi một skill sang `send_policy.mode: auto` khi skill đó đã có ≥ 20 nháp được gửi nguyên văn liên tiếp, tỷ lệ phải sửa < 5%, và 0 lần bị chặn vì `UNVERIFIED_CLAIM`. Sau khi bật, nếu có phàn nàn, khách chặn, hoặc nhân viên báo sai, thì hạ skill về `manual` và báo chủ.
 
-Mục 11 cắt từ 21 xuống ~8 tool. Bốn tool mới ở đây nằm trong ngân sách đó, nhưng **mỗi tool là một đường agent có thể đi sai** — thêm tool thứ chín phải trả lời được P5: nó làm agent quyết định *đúng hơn*, hay chỉ làm agent *nói nhiều hơn*.
+**Tool connector** (T1: `http_readonly`; T2: `mcp`):
 
----
-
-## 10. Giao diện
-
-### 10.1 Sửa tại chỗ, không phải trang quản lý
-
-```
-Trong lời nhắc / chi tiết task:
-
-    Nộp spec cho Minh              Alpha ▾
-                                   ├ Beta
-                                   ├ Cá nhân          ← dự án cá nhân (3.4)
-                                   └ Dự án mới…
+```yaml
+id: catalog_sheet  kind: builtin | http_readonly | mcp
+source: {...}  pin_sha256: <hash của tools/list + schema>
+expose: [{remote: get_rows, as: lookup_catalog, description: "<do người duyệt viết>"}]
+effect: read            # người duyệt gán; server tự khai khác → chặn
+egress_allow: [...]  args_redacted: true  result: untrusted  secret: vault://...
 ```
 
-Sửa quy gán **ngay tại chỗ nhìn thấy nó sai** tốt hơn: điều hướng sang trang quản lý → tìm lại task → sửa → quay về. Và nó bỏ được một mục nav.
+**Channel connector** (cho cổng nhận chuẩn ở §5.2):
 
-Tương tự trong chi tiết sự kiện lặp: *"Chuỗi này thuộc: Alpha ▾"* — đổi project của chuỗi, và hỏi *"chuyển N việc đã tạo từ chuỗi này sang theo không?"* (3.5). Không bao giờ ghi đè im lặng.
+```yaml
+id: conn_xxx  tenant: ...  trust: official | partner | custom
+channel_kind: messenger | zalo_oa | ...     # ∈ danh mục kênh của lõi; luật cửa sổ do lõi tính, bridge thi hành
+emits: [message.created, conversation.updated]
+outbound:                                    # lớp chặn 2 — tầng giao tiếp với nền tảng. Bỏ trống = tắt
+  enabled: false
+  url: https://...                           # bridge nhận Cortex Action Format v1
+  capabilities: [send_message]               # add_tag, add_note (T2)
+  policy: {ai_send: false, quiet_hours: "21:00-08:00", max_per_minute: 20}
+contract_test: passed_at                     # bật outbound cần contract test cho cả chiều ra
+```
 
-Mỗi lượt sửa ghi lại làm nhãn cho mục 4.4.
+**Lint khi nạp:**
 
-### 10.2 Hai màn hình, hai vai trò khác nhau
+- `requires_tools` ⊆ allowlist, tối đa 8;
+- `effect` không vượt trần;
+- `on` thuộc từ vựng sự kiện;
+- `match` chỉ so bằng, không có `$or`;
+- frontmatter tối đa ~15 trường;
+- `send_policy.mode: auto` thì bắt buộc `requires_tools` có `send_message` và `output_kind: send_to_customer`;
+- hash khớp.
 
-| Màn | Phạm vi | Vai trò |
-|---|---|---|
-| **Hôm nay** (mặc định) | **Tổng hợp mọi dự án**, đã xếp hạng và đã qua Gate | **Bề mặt sản phẩm.** Trả lời *"giờ tôi nên làm gì"* |
-| **Việc** | **Chỉ dự án đang mở** | **Bề mặt tra cứu và sửa.** Trả lời *"dự án này đang có gì"* |
+**Vòng đời:**
 
-Kèm một **bộ chuyển dự án** ở topbar. Component `WorkspaceSwitcher.tsx` dùng lại được về mặt giao diện — nhưng đọc từ bảng `projects`, không phải `workspaces` (3.6).
+- **draft:** lint + eval offline.
+- **shadow:** chạy trên sự kiện thật, ghi `decision_log`, không vào hàng duyệt. Tối thiểu 7 ngày hoặc 30 run, đọc tay 20.
+- **live:** có người ký.
 
-**Vì sao Hôm nay không lọc theo dự án đang mở:** nếu nó lọc thì người dùng phải tự nhớ đi qua từng dự án để biết mình cần làm gì — tức là chính công việc mà Cortex sinh ra để bỏ đi. Xếp hạng ở 7.1 chỉ có nghĩa khi nó nhìn được toàn bộ.
+Version là bất biến. Rollback = trỏ con trỏ `live` về version cũ. Kill switch ở mức tenant / skill / connector. Tự tắt khi lỗi 3 lần, khi hash lệch, hoặc khi `blocked` vọt.
 
-> ⚠️ **Rủi ro đã biết:** một danh sách việc theo dự án là chỗ sản phẩm bắt đầu trông giống Todoist. Chặn bằng hai điều: **Hôm nay là màn mặc định** khi đăng nhập, và màn Việc **không có** thêm bất kỳ thứ gì ngoài danh sách + dropdown sửa project (10.1). Không sort tuỳ chỉnh, không filter nâng cao, không nhóm, không kéo thả. Mỗi thứ thêm vào đó là một bước về phía sân đã thua.
+**"Agent biết làm gì":**
 
-### 10.3 Nav
+1. **Router 0 token:** trigger chọn đúng một skill, nên mỗi run chỉ có khoảng 3 tool.
+2. Mô tả tool do mình viết lại.
+3. Ví dụ vào/ra nằm trong thân skill.
+4. Eval là cổng bắt buộc.
 
-| Giữ | Bỏ khỏi nav |
+**MCP bên ngoài (T2):**
+
+- không bao giờ được vào customer run;
+- chỉ `effect: read`;
+- chỉ remote HTTP, có egress allowlist;
+- không chạy stdio của bên thứ ba;
+- lượt có kết quả MCP ngoài thì tắt mọi tool ghi.
+
+### 5.9 MCP — vị trí
+
+MCP (spec 2026-07-28) là giao thức **kéo**: model gọi tool. Thông báo chỉ tới client, **không đánh thức model**. Vì vậy MCP **không phải event bus**.
+
+| Câu hỏi | Quyết định |
 |---|---|
-| **Hôm nay** · **Việc** · **Cài đặt** | Schedule · Notes · Records · Workflows · Notifications |
+| Giác quan / đánh thức AI | Tự xây (§5.2, §5.7) |
+| Nguồn sự thật của tool | Registry riêng (§5.4) |
+| Runner gọi tool | Gọi trực tiếp trong process |
+| MCP dùng ở đâu | **v0:** MCP server cục bộ `cortex-leads` (stdio, chỉ đọc), cho người xây làm việc tay cùng Claude Desktop / Code |
+| MCP Pancake của bên thứ ba | Không. Token Pancake có toàn quyền page |
+| Tính năng tasks / subscriptions của MCP | Không dùng |
+| Bảo mật | `redact_pii` chạy **bên trong** server trước khi trả kết quả |
 
-Route vẫn còn, chỉ không hiển thị (11.2). Áp P6: không mục nào trong năm mục bỏ đi có đường dẫn dữ liệu vào `StateEvaluator` hoặc `TodayService`.
+### 5.10 Hiệu năng và mở rộng
 
-Màn **Việc** là ngoại lệ có chủ ý với P6 — nó không làm lời nhắc thông minh hơn, nhưng nó là nơi người dùng *sửa* quy gán project, và mỗi lượt sửa là tín hiệu đầu vào cho 4.4. Ghi lại ngoại lệ này để lần sau ai muốn thêm màn khác phải đưa ra lý do mạnh tương đương.
+CPU và DB không phải nút thắt cho tới vài trăm doanh nghiệp, **với điều kiện giữ A2**.
 
-### 10.4 Làm Gate hiện hình — ⏸ **HOÃN, xem 13.5**
+Nút thắt thật, theo thứ tự sẽ gặp:
 
-Một dòng trên màn Hôm nay:
+1. **API kênh.** Pancake cho 5 req/s mỗi page, nên cần token bucket mỗi page, nằm ở bridge.
+2. **Quota LLM.** Một cổng duy nhất, có ưu tiên, có prompt caching. **Không dùng 9Router `free_auto` cho khách thật.**
+3. **Tenant ồn ào.** Lập lịch xoay vòng theo tenant.
+4. **Quét theo thời gian.** Dùng `next_check_at` + `SKIP LOCKED`.
+5. **Sức duyệt của nhân viên.** Trần nháp/ngày.
 
-> *"Hôm nay đã im 6 lần: 4 lần bạn đang họp, 2 lần gộp vào bản tin chiều."*
+**Mô hình tenant:** pool (mặc định) → cell (từ ~300–500 doanh nghiệp) → silo (khách lớn trả tiền cho việc đó). Chuyển được mà không viết lại, nhờ A1 + A4 + bảng định tuyến `tenant → cell`.
 
-Vấn đề nó giải là thật: **một công cụ mà giá trị là im lặng thì trông y hệt một công cụ đã chết**, và tiêu chí thành công ở 12.5 là *"họ không tắt nó"* — người ta tắt thứ có vẻ không làm gì.
+**Lộ trình hạ tầng:**
 
-Nhưng hoãn, vì hai lẽ.
+| Quy mô | Hạ tầng | Chi phí / tháng |
+|---|---|---|
+| T0–v0 | Laptop + Docker Postgres | ~0 + LLM |
+| ≤ 20 doanh nghiệp | 1 VM 2 vCPU / 4 GB, backup S3 | ~$30–50 + LLM |
+| ~100 doanh nghiệp | 2 node ingest + LB, 2–4 worker, Postgres managed, partition `message` | ~$300–600 |
+| 1.000+ doanh nghiệp | Cell | Tỷ lệ theo số cell |
 
-**Một — tiền đề "dữ liệu đã có" sai.** Kiểm tại 2026-08-25: `attention_log` ghi hàng cho quyết định im, nhưng **không ghi vì sao im**, và loại im thường xuyên nhất thì không ghi gì cả.
+### 5.11 Code — thư mục mới, mang theo rất ít
 
-| Loại im | Trong `attention_log` |
+**Sản phẩm mới nằm ở `cortex-leads/` ở gốc repo** (theo quyết định của chủ dự án). Không import gì từ `backend/`; code cũ chỉ được **chép rồi sửa**, có chú thích nguồn.
+
+> ⚠️ Repo này đang **công khai**. `cortex-leads/` không bao giờ chứa dữ liệu khách, secret, catalog hay prompt riêng của khách (`data/` được gitignore toàn bộ). **Trước khi nhận dữ liệu của khách đầu tiên:** chuyển `cortex-leads/` sang một repo private, hoặc chuyển cả repo này sang private.
+
+```
+cortex-leads/
+  pyproject.toml · docker-compose.yml (Postgres test :5544) · Makefile · README.md
+  cortex_leads/
+    config.py            secret bắt buộc, không có mặc định, từ chối giá trị đã lộ
+    core/                RunContext, Principal, Scope, ids, errors, envelope ToolResult
+    db/                  models, session (SET LOCAL app.tenant_id), RLS · migrations/ (alembic)
+    ingest/              Cortex Event Format v1 (pydantic), HMAC, API /ingest/v1/events, chuẩn hoá
+    clock/               sweeper next_check_at, tính next_check_at
+    triggers/            engine: registry predicate, dedupe, followup_job, trigger_run
+    skills/              loader SKILL.md, lint, registry version / status; profiles/ (YAML)
+    sandbox/             model sandbox, budget, kill switch, quy tắc tách
+    tools/               registry, phiếu năng lực, refs, empty note, các tool v0
+    privacy/             redact_pii
+    guard/               validator (catalog, từ cấm, số lần chạm, opted-out, cửa sổ)
+    channels/            bảng chính sách kênh (dữ liệu)
+    llm/                 cổng LLM (port model_client), rate limit theo tenant, FakeProvider cho test
+    runner/              Context Builder, customer run, kết quả có cấu trúc
+    review/              API hàng nháp cho nhân viên, staff_action
+    supervisor/          read-model metadata (không có văn bản)
+    mcp_server/          MCP stdio chỉ đọc
+  bridges/pancake/       bridge official: poll Pancake (chỉ GET) → Event Format → POST
+  sandboxes/customer_care/   profile + skills/*/SKILL.md mẫu
+  tests/                 unit + integration (Postgres thật)
+  data/                  gitignore
+```
+
+**Mang sang từ code cũ (port, không import):**
+
+| Mang sang | Nguồn |
 |---|---|
-| Người dùng tắt loại nhắc đó | hàng `level=silent`, không có lý do |
-| Bị reason mạnh hơn thay thế | hàng `level=silent`, không có lý do |
-| Feedback loop tự hạ cấp | hàng `level=silent`, không có lý do |
-| Đang bận / quiet hours | hàng `level=silent`, không có lý do |
-| **Dedup — đã nhắc rồi** | **không có hàng nào** (`attention_gate.py` thoát sớm trước khi ghi) |
+| Retry và phân loại lỗi LLM (không có fallback) | `backend/app/ai/agents/model_client.py` |
+| Giờ làm việc / khung trống | `backend/app/services/availability.py` (`_gaps`, `is_in_quiet_hours`) |
+| Kết quả rỗng phải kèm note | `backend/app/ai/tools/empty_result.py` |
+| Giải tham chiếu không đoán → `refs.py` | `backend/app/ai/tools/project_ref.py` |
+| Cứu trường điền nhầm chỗ | `backend/app/ai/tools/title_fallback.py` |
+| Pipeline validate → quyền → chạy → audit | `backend/app/commands/registry.py`, `schemas.py` |
+| Làm sạch args trước khi log | `backend/app/ai/agents/tool_registry.py` (`_sanitize_args`) |
+| Idempotency theo `external_id` | `backend/app/services/task_ingest.py` |
+| Dòng cuối prompt vẽ shape | `backend/app/services/memory_extraction_prompt.py` (`response_shape`) |
+| Ý engine trigger | `docs/archive/DESIGN-v1-2026-08.md` §16 |
 
-Nên câu mẫu ở trên không dựng được, và con số "im N lần" sẽ luôn đếm thiếu. Làm đúng cần thêm cột `silence_reason`, ghi một hàng ở nhánh dedup, và **sửa `attention_gate.py`** — đúng tệp mà tiêu chí nghiệm thu của 8.1 lấy làm mốc là không đụng tới.
+**Không mang:** `agent_service.py`, 22 tool cũ, `Procedure`, Attention Gate, `mezon_bot`, `workflow_service`, OCR / STT, frontend.
 
-**Hai — hình dạng sai, và chế độ hỏng rất thật.** Nó là Cortex nói **thêm**, trên màn chính, về **chính nó** (P5), và không có đường dữ liệu nào vào `StateEvaluator` hay `TodayService` (P6 — màn Việc đã là ngoại lệ được ghi nhận, đây sẽ là ngoại lệ thứ hai, lặng lẽ). Tệ hơn: *"đã im 6 lần"* mời câu hỏi *"im về cái gì?"*. Trả lời câu đó là xây một hộp thư các việc bị nén — đúng bản năng "hiện nhiều hơn" mà 1.2 nói là nước cờ thua. Không trả lời thì tạo lo lắng không lối thoát.
+**Hệ cũ** (`backend/`, `mezon_bot/`, `frontend/`, …) **đã gỡ khỏi repo ngày 2026-10-10**, chỉ còn trong lịch sử git (commit `0a22e33`); xem [`LEGACY.md`](LEGACY.md). Server cũ: vá bảo mật (§10), dump DB, tắt — **không merge nhánh gỡ vào `develop` trước khi tắt server**.
 
-**Ba hình dạng tốt hơn, xét lại khi hồi sinh:**
+### 5.12 Bộ chạy thử (0 đồng, chạy trên laptop)
 
-1. Gắn vào tin nhắn Cortex **đang gửi sẵn** — chân card Mezon: *"Hôm nay tôi đã giữ lại 3 lần khác."* Không tạo dịp nói mới nào, nên không đụng P5, và nó xuất hiện đúng lúc người dùng đang đánh giá phán đoán của Cortex.
-2. Chỉ hiện ở trạng thái `all_clear` / `nothing_urgent` — đúng chỗ màn hình trống và trông như hỏng.
-3. Giữ nội bộ trong 6 tuần thử. Với một người dùng thật, đây thực chất là công cụ debug.
-
-> ⚠️ Nếu xây: **không bấm được, không mở rộng được.** Một con số không có drill-down là sự trấn an; có drill-down là một cái inbox.
-
-**Việc tách rời vẫn còn giá trị:** vá điểm mù dedup trong `attention_log`. Không có nó, câu hỏi *"Cortex đã im đúng bao nhiêu lần"* — chỉ số duy nhất về sau ở 12.5 — là không trả lời được. Nó **không** cần UI đi kèm, và cũng không chặn hai con số nghiệm thu ở 12.3 (cả hai đọc từ `attention_log.response`).
-
-### 10.5 Nút "nhắc sai rồi" — ⏸ **HOÃN, xem 13.5**
-
-Trên mỗi card Mezon. Hiện `feedback_loop` phải *suy* ý người dùng từ tỷ lệ dismiss — tín hiệu nhiễu, vì dismiss có thể chỉ vì đang bận. Một nút tường minh cho tín hiệu sạch hơn nhiều lần.
-
-Hoãn vì **P8, áp đúng chỗ**: một tín hiệu sạch chỉ đáng giá khi có thứ *tiêu thụ* nó, và thứ đó là một vòng học — hạ cấp theo loại nhắc, theo dự án, theo giờ. Xây nút trước vòng học là xây tầng hai trên nền chưa ai đứng, và tệ hơn: nó **buộc** phải xây vòng học ngay sau đó, nếu không người dùng bấm "nhắc sai rồi" ba lần rồi thấy Cortex vẫn nhắc y như cũ — lúc đó nút không phải là trung tính, nó là một lời hứa bị bội.
-
-`feedback_loop.apply_downgrade` hiện tại (hạ cấp theo số lần dismiss) đã là một vòng học thô và **chưa từng chạy với dữ liệu thật**. Đo nó trước; nếu nó đủ, nút này không cần tồn tại.
-
----
-
-### 10.6 Màu sự kiện theo dự án, không theo `type`
-
-Hiện `CalendarView.tsx:303` gán `cal-event-{type}` với 4 class CSS cố định (`CLASS`/`DEADLINE`/`EXAM`/`PERSONAL`). Loại sự kiện là phân loại **hành chính** — nó không cho biết việc này thuộc về đâu.
-
-Đổi sang tô theo **dự án**:
-
-- Màu suy ra **xác định** từ `project_id` (băm → chỉ số bảng màu), không lưu cột, không bắt người dùng chọn. Cùng dự án luôn cùng màu, mọi máy, mọi phiên.
-- Sự kiện **chưa gắn dự án** (phần lớn, theo 4.2) → một màu trung tính, không phải màu của dự án nào. Nó phải trông *khác loại*, không phải "một dự án nữa".
-- `type` vẫn còn trong dữ liệu và trong form; chỉ thôi quyết định màu.
-
-### 10.7 Trang Sự kiện — tổng hợp + lọc theo dự án
-
-Một trang, **hiển thị mọi sự kiện từ mọi tài khoản đã sync**, kèm bộ lọc chọn dự án nào được hiện.
-
-- Mặc định: hiện tất cả.
-- Bộ lọc là **đa chọn**, kèm hai mục đặc biệt: *"Chưa thuộc dự án"* và *"Theo tài khoản nguồn"* (Google account nào).
-- Lọc chỉ **ẩn/hiện**, không đổi dữ liệu — nó là kính lọc, không phải phép gán.
-
-**Vì sao có mục "Theo tài khoản nguồn":** lịch sync theo từng tài khoản; tài khoản chỉ tách được cá nhân ↔ công việc. Đây là chiều phân loại có thật và người dùng nghĩ theo nó — nên để nó là *một chiều lọc*, không phải một phép suy ra dự án (3.1.1).
-
-> ⚠️ Trang này chịu cùng hàng rào như màn Việc (10.2): **chỉ có lịch + bộ lọc**. Không thống kê, không biểu đồ, không chế độ xem tuỳ biến. Nó là kính lọc, không phải dashboard.
-
----
-
-## 11. Đóng băng — không xoá dòng code nào
-
-**Nguyên tắc: không một tính năng nào bị xoá.** Mọi thứ ở lại repo, ở lại lịch sử git, ở lại nguyên vẹn. Việc duy nhất xảy ra là **gỡ chúng khỏi đường chính**: khỏi luồng khởi động, khỏi `docker-compose` mặc định, khỏi nav, khỏi prompt của agent.
-
-Sau khi phần lõi chạy tốt và có số liệu (mục 12), từng mục được xem xét hồi sinh — và khi đó nền tảng đã tốt hơn, nên xây lại sẽ rẻ hơn và đúng hơn lần đầu.
-
----
-
-### 11.1 Đóng băng không miễn phí — biết trước để không tự lừa mình
-
-"Để đấy" nghe như chi phí bằng 0. Không phải:
-
-- Code đóng băng **vẫn bị đọc** — bởi bạn, bởi agent, trong mọi lần grep và mọi lần khảo sát codebase.
-- Nó **mục dần**: dependency trôi, test hỏng, API bên thứ ba đổi. Hồi sinh sau 6 tháng đắt hơn hồi sinh sau 6 tuần.
-- Nó **vẫn kéo sự chú ý**. Đây là chi phí lớn nhất và khó thấy nhất.
-
-Nên đóng băng là một **quyết định có giá**, không phải cách né quyết định. Mục 11.3 tồn tại để giá đó không tăng vô hạn.
-
-### 11.2 Cơ chế — gỡ thế nào cho hồi sinh rẻ
-
-| Loại | Cách gỡ | Cách bật lại |
+| Thành phần | Chọn | Vai trò |
 |---|---|---|
-| Service (Temporal, OCR, STT, searxng) | `profiles:` trong `docker-compose.yml` | `docker compose --profile <tên> up` |
-| Worker trong backend lifespan | Cờ trong `config.py`, mặc định `False` | Đổi một biến môi trường |
-| Mục nav | Gỡ khỏi sidebar `App.tsx`, **giữ nguyên route** | Thêm lại một `<li>` |
-| AI tool | Gỡ khỏi `tools/__init__.py` registry, **giữ nguyên file** | Thêm lại một dòng `register` |
-| Bảng DB | **Không đụng tới.** Không migration xoá, không drop | Không cần làm gì |
+| Kênh hội thoại | **Facebook Page thử + Meta app chế độ phát triển** | Hội thoại thật với tester (người có vai trò trong app); không cần App Review |
+| Đường hầm HTTPS | Cloudflare Tunnel (hoặc ngrok) | Webhook của Meta / Twenty về laptop |
+| Kết quả bán hàng | **Twenty CRM** (Docker, nguyên bản, không fork) | Deal "Won" → `deal.updated` |
+| Bảng giá, đơn ghi tay | **Google Sheet** | Catalog và đơn hàng theo cách SME đang làm |
+| LLM | `FakeProvider` khi test; lớp lite (Claude Haiku 5.5) khi chạy thử | Đo chất lượng nháp thật |
+| Nhân viên | Trang duyệt (WP13) + MCP trên Claude Desktop | Duyệt nháp, ghi trí nhớ |
 
-**Không dùng branch riêng, không dùng thư mục `_deprecated/`, không comment-out code.** Cả ba đều làm hồi sinh đắt hơn và làm codebase khó đọc hơn.
+**Kịch bản chuẩn:** tester nhắn hỏi giá → người xây trả lời trong hộp thư Page (nhận diện là nhân viên) → tester im (skill thử `after: 5m`) → AI soạn nháp có nguồn → duyệt trên trang duyệt → tin gửi qua bridge → tester "tuần sau chị bàn với chồng" → ghi ngày hẹn + người quyết → kéo deal "Won" trong Twenty → hẹn đóng → số liệu AI tổng không có chữ của khách. Chạy lại ở chế độ `auto`.
 
-**Test của phần đóng băng:** đánh dấu `skip` có lý do (`@pytest.mark.skip(reason="frozen — xem DESIGN.md 11")`), không xoá. Để chúng chạy và hỏng dần sẽ làm hỏng tín hiệu CI cho phần đang sống.
-
-### 11.3 Sổ đóng băng — mỗi mục phải có điều kiện hồi sinh
-
-> **Luật: không mục nào được đóng băng nếu không ghi được điều kiện cụ thể để hồi sinh nó.**
->
-> "Khi nào cần" không phải điều kiện. Điều kiện phải là thứ quan sát được và biết được lúc nào nó xảy ra.
-
-| Thành phần | Bằng chứng đóng băng | **Điều kiện hồi sinh** |
-|---|---|---|
-| `workflow_service` + Temporal | 0 workflow trong DB | Xuất hiện nhu cầu thật cần **nhiều bước / nhiều event** mà không phải "một điều kiện → một nhắc". 7 predicate hiện tại đều không phải loại đó |
-| `ocr_service` + MinIO | 0 asset từng xử lý | Có nguồn việc đến từ **ảnh/văn bản chụp** mà bot họp không phủ được |
-| `stt_service` (WhisperX + diarization) | 0 asset | **Bot họp hiện tại không đủ** — không đẩy được webhook, hoặc không gán được người nói. Đây là mục có xác suất hồi sinh cao nhất; diarization word-level đã chạy được là đường lùi rẻ |
-| searxng + unsearch | Phục vụ một tool phụ | Chi phí API search vượt chi phí vận hành 2 container |
-| Notes + Yjs sync-server | 1 note | Ghi chú trở thành **nguồn việc** (note chứa deadline → task), tức là nó nuôi được vòng lặp theo P6 |
-| Workspaces | 1 người dùng | Có ≥ 2 đội dùng thật và cần tách dữ liệu giữa các đội |
-| Zep | Chưa chứng minh giá trị | `pgvector_memory_provider` đo được là kém hơn rõ rệt trên cùng truy vấn |
-| 13 AI tool | Phục vụ bề mặt đã đóng băng | Bề mặt tương ứng được hồi sinh |
-
-Mục tiêu vận hành sau khi gỡ: **≤ 5 container** (`db`, `redis`, `backend`, `mezon_bot`, reverse proxy).
-
-### 11.4 Mô hình cuối cùng — `projects` là container duy nhất
-
-**Đã chốt về đích, chưa tới lúc trả tiền.**
-
-Có hai container song song (`workspaces` cho tài liệu, `projects` cho việc) là một cái wart, và nó không phải trạng thái cuối. Khi Notes hoặc Assets hồi sinh theo điều kiện ở 11.3:
-
-```sql
-ALTER TABLE notes  ADD COLUMN project_id UUID REFERENCES projects(id);
-ALTER TABLE assets ADD COLUMN project_id UUID REFERENCES projects(id);
--- rồi khai tử workspaces
-```
-
-`projects` trở thành container duy nhất cho cả việc lẫn tài liệu.
-
-**Vì sao đi đường này thay vì đổi tên `workspaces` ngay bây giờ:** đổi tên giữ nguyên hành lý của workspace dưới một cái tên mới — `is_personal`, tự tạo lúc đăng ký (`auth.py:136`), `WorkspaceMember.role` là quyền *đọc tài liệu*, `slug` unique toàn hệ thống, `workspace_permission.py` với 7 tệp phụ thuộc. Kết quả là *một container mang tên project*, không phải *một container thật sự là project*.
-
-Con đường này tới cùng một đích với một thực thể sạch. Và thời điểm đứng về phía nó: hiện có **1 note, 0 asset** — migration sau này chạy trên gần như không có dữ liệu. Xem bảng chi phí ở 3.6.
-
-### 11.5 Rà lại định kỳ
-
-Sổ ở 11.3 được đọc lại **mỗi khi đọc số của mục 12**. Mỗi mục có đúng ba kết cục, và phải chọn một:
-
-1. **Điều kiện đã xảy ra** → hồi sinh, ghi ngày.
-2. **Điều kiện chưa xảy ra** → tiếp tục đóng băng, không bàn thêm.
-3. **Điều kiện sẽ không bao giờ xảy ra** → lúc này mới bàn tới việc xoá, và đó là một quyết định riêng, có chủ đích.
-
-Không có kết cục thứ tư là "để đó xem sao". Đó chính là trạng thái đã tạo ra 84.000 dòng code cho một người dùng.
-
-### 11.6 Vì sao đây không phải là vứt bỏ công sức
-
-Không dòng nào mất đi. Phần lớn những gì đóng băng ở đây được xây tử tế — `stt_service` có diarization word-level đã qua 6 vòng sửa lỗi, delivery layer có tiêu chí nghiệm thu rõ ràng, workflow runtime chạy trên Temporal đúng bài.
-
-Vấn đề chưa bao giờ là chất lượng của chúng. Vấn đề là **cả bảy thứ cùng ở trên đường chính một lúc**, nên không thứ nào đủ tốt để có người dùng.
-
-Xây lại sau — khi phần lõi đã có số liệu thật, khi biết chính xác người dùng cần gì từ chúng — sẽ **rẻ hơn và đúng hơn lần đầu**. Đóng băng là để dành, không phải để bỏ.
+**Giới hạn:** chỉ tester có vai trò trong app mới nhắn được; khách thật cần Pancake hoặc Advanced Access (§6). Payload Twenty / Messenger khác Pancake / KiotViet — bridge cho phần mềm của khách vẫn phải làm và test trên payload thật của họ.
 
 ---
 
-## 12. Cổng nghiệm thu — phép thử A/B
+## 6. Ràng buộc pháp lý và kênh
 
-### 12.1 Giả định đang đặt cược
+Tra từ web 2026-10-09/10, **chưa có luật sư xác nhận.**
 
-> **Nhắc qua Attention Gate hơn nhắc ngây thơ đủ nhiều để người dùng cảm nhận được.**
+- **Luật AI 134/2025, Điều 11** (hiệu lực 1/3/2026): phải công khai cho người dùng biết họ đang nói với AI. Cấm persona giả làm người.
+- **Luật BVDLCN 91/2025 + NĐ 356/2025:**
+  - đồng ý phải rõ ràng, kiểm chứng được, ghi theo khách × kênh × mục đích;
+  - Cortex là bên xử lý, phải có DPA;
+  - gọi LLM ở nước ngoài = chuyển dữ liệu xuyên biên giới (Điều 20), phạt tới 5% doanh thu → **che PII trước khi gọi LLM**.
+- **NĐ 91/2020:** tin quảng cáo cần đồng ý trước. Khách từ chối hoặc không phản hồi thì không gửi tiếp.
+- **Y tế:** tư vấn chẩn đoán / điều trị = khám chữa bệnh từ xa.
+- **Messenger:**
+  - nhắn tự do trong 24 giờ;
+  - HUMAN_AGENT trong 7 ngày, chỉ cho người gõ tay;
+  - Marketing Messages: opt-in, 1 tin/người/ngày, trả phí, có ở VN;
+  - Recurring Notifications đã ngừng (10/2/2026);
+  - đọc hội thoại trực tiếp cần Advanced Access + pháp nhân.
+- **Pancake Public API:**
+  - token page không hết hạn, **toàn quyền**, không có chế độ chỉ đọc;
+  - 5 req/s mỗi page;
+  - **không có endpoint lịch hẹn**;
+  - webhook tốn slot, tự tắt khi lỗi > 80%.
+- **Zalo OA:** cần gói Tăng trưởng trở lên, tối đa 3 app uỷ quyền. Tin tư vấn trong khoảng 48 giờ. ZNS dùng mẫu đã duyệt. *Chưa xác minh từ nguồn chính thức.*
+- **Zalo cá nhân:** không có API. Chỉ nhắc nhân viên.
 
-Nếu sai: bot họp thêm chức năng nhắc trong hai tuần và Cortex không còn sản phẩm. **Không có phòng thủ nào khác.** Nên phép thử này đứng trước mọi việc ở tuần 3 trở đi.
+---
 
-### 12.2 Cách chạy
+## 7. Kế hoạch và lộ trình xây
 
-20–30 action item thật, chia đôi, cùng người dùng, cùng khoảng thời gian, tối thiểu 2 tuần.
+### 7.1 Cổng sản phẩm và tầng nền tảng
 
-```
-Nhóm A   đến hạn → ping một lần
-Nhóm B   qua Gate đầy đủ:
-         dedup · im khi bận · quiet hours · gộp theo project · chọn thời điểm
-```
+| Cổng | Hạn | Phải đạt | Nền tảng được xây | Không đạt thì |
+|---|---|---|---|---|
+| **G0 — Chọn ngành** | 2026-10-16 | Ngành ghi vào 2.3 + danh sách ≥ 15 chủ doanh nghiệp + tên người giữ mốc | **v0** (§7.2), trong ngân sách L3 | Mặc định khoá học / du học |
+| **G1 — Tiếp cận** | 2026-10-23 | H0; ≥ 3 doanh nghiệp cho xem inbox | v0 đạt nghiệm thu A–D (§7.2) | **Ngừng mọi code mới** (chỉ sửa lỗi) cho tới khi đạt. Thử ngành thứ hai đúng một lần |
+| **G1.5 — Nỗi đau** | 2026-11-15 | H1, H2, H3 qua ngưỡng | Chỉ sửa lỗi và cải tiến *đo được* trên v0 | **Dừng hướng** |
+| **G2 — Tiền** | 2026-12-31 | H4: ≥ 3 khách chuyển khoản ≥ 2 triệu/tháng; ≥ 5 lịch hẹn/tháng/khách truy được về danh sách đã gửi | **Mở T1** | Portfolio (L6) |
+| **G2.5 — Việc thứ hai** | — | ≥ 2 khách đang trả tiền tự nêu một việc thứ hai trong `docs/customers/` và chịu trả thêm | Sandbox thứ hai (ví dụ `owner_digest`); trigger cron/condition dùng LLM; AI tổng (chỉ đọc metadata) | Ở lại sản phẩm đơn |
+| **G3 — Lặp lại** | 2027-02-28 | ≥ 6 khách; phần làm tay đã lặp ở ≥ 5 khách | Form skill cho chủ / agency; connector `http_readonly` | Giữ dạng dịch vụ |
+| **G4 — Sống được** | 2027-03-31 | ≥ 10 khách, ≥ 30 triệu/tháng, churn ≤ 8%/tháng, ≥ 1 agency mang về ≥ 3 khách | T2: MCP bên ngoài (chỉ đọc), chiều ngược về kênh, thẻ chiến lược | Portfolio (L6) |
 
-Cơ chế: một cờ per-user bỏ qua Gate và gọi thẳng `create_notification_*`.
+### 7.2 v0 — "sẵn sàng chạy thật" (ngân sách ≤ 5.000 dòng)
 
-### 12.3 Hai con số
+**Đầu ra của v0 là chạy thật được** với doanh nghiệp đầu tiên ở G1.5. v0 bàn giao:
 
-1. **Tỷ lệ dismiss** — thấp hơn là tốt hơn
-2. **Tỷ lệ được làm trong 24h sau khi nhắc** — cao hơn là tốt hơn
+1. Hệ thống chạy trọn **kịch bản chuẩn** trên bộ chạy thử (§5.12), có script chạy lại được.
+2. **Checklist thiết lập một doanh nghiệp** trong ≤ 2 giờ.
+3. **Báo cáo chạy thử với LLM thật** (≈ 30 hội thoại thử, các số ở nhóm B).
+4. Test xanh, CI xanh, README / DESIGN / PLAN / REVIEW cập nhật.
 
-### 12.4 Quy tắc quyết định
+**Nghiệm thu: phải đạt cả bốn nhóm.**
 
-| Kết quả | Làm gì |
+**A. Chức năng** (mỗi dòng có test hoặc chạy được trong kịch bản chuẩn)
+
+| # | Phải làm được |
 |---|---|
-| B hơn A rõ rệt trên cả hai số | Có hào. Đi tiếp, và biết chính xác đang bán cái gì |
-| B hơn A không đáng kể | Gate không phải hào ở sân này. Chuyển sang bán chính engine cho bài toán **alert fatigue** — nơi vấn đề gay gắt hơn và có ngân sách. Sáu tuần không phí, vì Gate cuối cùng cũng có số liệu vận hành thật |
+| A1 | Nhận tin **thật** từ Facebook Page thử; phân biệt đúng khách / nhân viên / bot |
+| A2 | Phát hiện khách im và khách tới ngày hẹn |
+| A2b | Khách nhắn mà chưa ai trả lời → sau khi khách nhắn xong ≤ 60 giây có trả lời (auto) hoặc nháp trả lời (manual); nhân viên đang trực thì AI không chen ngang (WP16) |
+| A3 | Soạn nháp có nguồn cho mọi con số; giá bịa bị chặn |
+| A4 | Ghi trí nhớ có bằng chứng: ngày hẹn, người quyết định, đã gọi, đã chốt; tự đóng lời hẹn khi có kết quả |
+| A5 | Deal "Won" trong Twenty (và đơn từ Google Sheet) → `deal.updated` → đóng hẹn, thôi theo sát |
+| A6 | Chế độ **manual**: nhân viên duyệt trên trang duyệt → hệ thống gửi qua bridge. Chế độ **auto**: tự gửi khi được phép, còn lại tự rơi về manual |
+| A7 | Số liệu của AI tổng không chứa chữ nào của khách |
+| A8 | Thêm skill mới chỉ bằng file; thêm lĩnh vực mới chỉ bằng domain pack |
 
-### 12.5 Chỉ số duy nhất về sau
+**B. Chất lượng** (≈ 30 hội thoại thử, LLM thật, người xây và tester đóng vai khách theo nhiều kịch bản)
 
-> **Số lần Cortex nói một điều người dùng chưa biết, và họ hành động theo.**
+| Chỉ số | Ngưỡng |
+|---|---|
+| Nháp bịa giá / dữ kiện lọt tới khách | **0** |
+| Nháp dùng được (gửi nguyên văn hoặc sửa nhẹ) | ≥ 70% |
+| Ca nên im (đã chê giá, đã mua) mà hệ thống im đúng | ≥ 90% |
+| Ngày hẹn ghi đúng trong ca hẹn rõ | ≥ 90%, **0 ngày bịa** |
+| Tên / SĐT lọt vào nội dung gửi LLM | **0** |
+| Trigger → nháp (p95) | ≤ 60 giây |
+| Trả lời lượt khách: AI chen ngang khi nhân viên đang trực | **0** |
+| Trả lời lượt khách dùng được (đúng ý, đúng catalog) | ≥ 80% |
+| Chi phí LLM mỗi nháp | ≤ 100đ |
 
-DAU sai với sản phẩm này — mục tiêu là người dùng **không cần** mở nó. Dữ liệu đã nằm sẵn trong `attention_log` (ghi cả trường hợp im lặng) join với phản hồi trên card Mezon.
+Không đạt nhóm B sau 2 vòng chỉnh skill và prompt → xem lại cách làm (ví dụ mẫu câu cố định thay vì để LLM viết tự do), không cố đẩy tiếp.
 
-**Thành công sau 6 tuần:** một đội thật, mỗi người ≥ 1 lần/tuần, và họ **không tắt nó**.
+**C. An toàn và pháp lý** (bắt buộc trước khi chạm dữ liệu khách thật — §10): repo private · server cũ vá hoặc tắt · DPA mẫu có luật sư xem · nhà cung cấp LLM không dùng dữ liệu để huấn luyện · kill switch thử được (< 1 phút) · backup DB hằng ngày · đường kết nối khách thật đã rõ (qua Pancake, hoặc pháp nhân + App Review).
 
----
+**D. Kỷ luật:** ≤ 5.000 dòng; L8 không vi phạm hai tuần liên tiếp.
 
-## 13. Kế hoạch
+**Sang G1.5 khi:** v0 đạt A + B + C, **và** cổng kinh doanh G1 đạt. v0 đạt mà G1 trượt thì vẫn không sang được.
 
-### 13.0 Trước tuần 0 — không phải code
+**Đợt 1 (đã xong, 2026-10-10):** WP0–WP7 — nền tảng tối thiểu, 175 test, 2.810 dòng.
 
-Mang câu này đi hỏi 5 người:
+**Đợt 2 — gói việc để chạy thật** (Sonnet thực thi, leader điều phối và review; thứ tự do tệp dùng chung quyết định):
 
-> *"Nếu có thứ tự động nhận việc từ biên bản họp, gom theo dự án, rồi nhắn riêng nhắc bạn trước hạn — bạn có muốn tắt nó ngay không?"*
+| Sóng | Gói | Nội dung | Dòng ước tính |
+|---|---|---|---|
+| 0 | **WP12 Nền** | Migration 0002 cho **mọi** bảng/cột mới của đợt 2 (`contact_fact`, `deal`, `outbox`, `sandbox.send_mode`, `sandbox.domain_pack`, `connector.outbound`, trạng thái `booked`); **domain pack** (từ vựng ra khỏi lõi, sự kiện trung tính `conversation.*`) | ~200 |
+| 1 | **WP9 Trí nhớ** | Fact có bằng chứng, vòng đời lời hẹn, kết quả (won/booked/lost), `deal.updated`, API nhân viên ghi và sửa trí nhớ | ~410 |
+| 1 | **WP10 Bridge Messenger** | Chiều vào (chữ ký, xác minh webhook, `is_echo`/`app_id`) + chiều ra (nhận Cortex Action Format, thi hành luật Messenger, gọi Send API) | ~280 |
+| 1 | **WP11 Bộ chạy thử** | Bridge Twenty → `deal.updated`, import catalog và đơn từ Google Sheet, `dev/` compose + script kịch bản chuẩn | ~150 (+ dev) |
+| 1 | **WP13 Trang duyệt** | Trang web nhỏ dùng được trên điện thoại: danh sách cần duyệt, Duyệt / Sửa / Bỏ, ghi nhanh trí nhớ | ~300 |
+| 2 | **WP8 Gửi tin** | `send_message` + outbox + worker chiều ra, chế độ auto/manual theo sandbox và skill, tự rơi về manual, xếp hàng ngoài giờ, dòng xưng AI | ~550 |
+| 2b | **WP16 Lượt khách** | Gom tin theo lượt (`reply_check_at`), sự kiện `conversation.awaiting_reply`, skill `tra-loi-khach`, act `reply/wait/handoff/none`, không chen ngang nhân viên, worker chạy liên tục | ~220 |
+| 3 | **WP14 Nghiệm thu** | Chạy kịch bản chuẩn trên bộ thử, đo nhóm B với LLM thật, checklist thiết lập | test + báo cáo |
 
-Trả lời **"có, tắt ngay"** có giá trị ngang **"muốn thử"**. Chi phí 0 dòng code, 2 ngày. Không ai muốn thì dừng tại đây và tiết kiệm 3 tuần.
+Tổng ước tính ≈ 2.810 + 1.890 ≈ **4.700 / 5.000**.
 
-### 13.1 Tuần 0 — Gỡ khỏi đường chính và dựng chỗ đứng
+**Không thuộc v0:** AI tổng chạy LLM · sandbox thứ hai · form skill cho chủ · MCP bên ngoài · multi-cell · bridge cho phần mềm cụ thể của khách (KiotViet, Sapo… — làm sau G1 khi biết khách dùng gì) · thông báo qua Telegram/Zalo (v0 dùng trang duyệt).
 
-- Đóng băng theo mục 11 · nav xuống 3 mục · tool xuống ~8
-- VPS: `db` + `redis` + `backend` + `bot` + Caddy TLS
-- Xoay secret (`SECRET_KEY`, `INTERNAL_API_KEY` hiện là giá trị mặc định trong code)
-- Migration một lượt:
-  - bảng `projects` + `project_members` — 3.1
-  - `schedules.project_id` — 3.2
-  - `tasks.project_id` ba bước add→backfill→NOT NULL — 3.3
-  - **sửa `uq_schedule_external_maps_provider_event` để kèm `user_id`** — chặn thật, xem QĐ-1 phát hiện #2
-- Quy tắc xác định 3.5 + suy ra 4.1 (kèm tự thêm thành viên)
+**Tuần này, song song với việc xây:**
 
-**Nghiệm thu:** khởi động còn ≤ 5 container · hệ thống chạy ngoài laptop · `tasks.project_id` là `NOT NULL` và mọi task hiện có đã được backfill · tạo một chuỗi sự kiện lặp + một task gắn vào nó → project tự xuất hiện, không ai bấm gì · tạo task khi đang mở dự án Alpha mà không gắn sự kiện nào → task thuộc **Alpha**, không phải dự án cá nhân · **hai người cùng sync một cuộc họp không còn lỗi ràng buộc, và cả hai vào chung một project** (QĐ-1).
-
-### 13.2 Tuần 1 — Làm Gate nói được câu không ai nói được
-
-- 7.1 xếp hạng theo rủi ro dự án
-- 8.1 định tuyến kênh theo phạm vi
-- 6.1 + 6.2 hai predicate
-- 10.1 dropdown sửa tại chỗ · 10.2 hai màn Hôm nay / Việc + bộ chuyển dự án
-
-> **10.4 và 10.5 đã rời tuần này** — chuyển xuống sổ hoãn 13.5 (quyết định 2026-08-25). Cả hai là bề mặt *về cơ chế*, không phải về việc của người dùng; và 10.5 kéo theo một vòng học phải xây ngay sau nó. Tuần 1 cần ổn định trước, không cần thêm bề mặt.
-
-**Nghiệm thu:** một lời nhắc thật có nội dung Todoist không tạo ra được — ví dụ *"Alpha còn 5 ngày, 3 việc quá hạn, 2 việc đang chờ Minh"* · nhắc cấp dự án về đúng channel, nhắc cá nhân về đúng DM · **test khoá bất biến 3.4:** dự án cá nhân với 50 task quá hạn không sinh predicate cấp dự án nào · agent thao tác được hai dự án khác nhau trong cùng một hội thoại mà không nhầm (9.2).
-
-### 13.3 Tuần 2 — Nối nguồn thật và chạy phép thử
-
-- 9 `POST /api/internal/tasks` + tra `provider_event_id`
-- 12.2 cờ bật/tắt Gate per-user
-- Chạy A/B trên 20–30 action item thật
-
-**Nghiệm thu:** có số.
-
-### 13.4 DỪNG
-
-**Không tính năng nào ở tuần 3 cho tới khi đọc xong hai con số của mục 12.3.** Đây là điểm dừng bắt buộc, không phải gợi ý.
-
-### 13.5 Sổ hoãn — mỗi mục phải có điều kiện làm lại
-
-> **Cùng luật với sổ đóng băng ở 11.3: không mục nào được hoãn nếu không ghi được điều kiện cụ thể để làm lại nó.** *"Khi nào ổn định"* không phải điều kiện. Điều kiện phải quan sát được và biết được lúc nào nó xảy ra.
->
-> Khác 11.3 ở một điểm: 11.3 là code **đã có**, gỡ khỏi đường chính. Đây là thứ **chưa xây**. Nên chi phí hoãn ở đây gần bằng 0 — không có gì mục dần, không có gì phải đọc lướt qua khi grep.
-
-| Mục | Vì sao hoãn | **Điều kiện làm lại** |
-|---|---|---|
-| **10.4** dòng "đã im N lần" | Tiền đề "dữ liệu đã có" sai — `attention_log` không ghi *lý do* im, và nhánh dedup không ghi gì cả. Cộng thêm P5/P6: Cortex nói thêm, về chính nó, trên màn chính | Điểm mù dedup đã vá **và** có bằng chứng quan sát được rằng người dùng tưởng nó chết — họ hỏi *"nó còn chạy không?"*, hoặc mở app chỉ để kiểm tra. Không có bằng chứng đó thì đây là giải pháp cho một vấn đề chưa tồn tại |
-| **10.5** nút "nhắc sai rồi" | P8 — tín hiệu sạch chỉ đáng giá khi có thứ tiêu thụ nó, và thứ đó là một vòng học chưa có. Nút không có vòng học phía sau là một lời hứa bị bội | `feedback_loop.apply_downgrade` đã chạy với dữ liệu thật **và** đo được là không đủ: tỷ lệ dismiss vẫn cao dai dẳng sau khi nó đã tự hạ cấp. Lúc đó mới biết cần học *thêm gì*, và nút được thiết kế theo cái đó thay vì theo phỏng đoán |
-| **16** trigger chủ động cho agent | Nó **bơm nhiễu vào chính phép đo của mục 12**: `ab_test_numbers.py` lọc theo `level != 'silent'` và `item_type == TASK`, không lọc `reason_key` — nên một lời nhắc từ watch rơi vào mẫu số của nhóm B và được chấm bằng "task xong trong 24h". Cộng thêm P8: nếu 12.4 rẽ nhánh hai thì tầng này đứng trên một giả định vừa bị bác | Hai con số 12.3 đã đọc **và** nhóm B thắng **và** có người dùng thật hỏi *"sao nó không tự theo dõi giúp tôi cái này"*. Thiết kế đầy đủ đã ghi ở mục 16 — không phải nghĩ lại từ đầu |
-
-**Việc tách rời, vẫn nên làm nhưng không gấp:** vá điểm mù dedup trong `attention_log` (10.4). Nó là điều kiện cần cho chỉ số duy nhất về sau ở 12.5, nhưng **không** chặn hai con số nghiệm thu ở 12.3 — cả hai đọc từ `attention_log.response`, không liên quan tới đếm im lặng. Nên nó xếp sau tuần 2, và nó sửa `attention_gate.py` nên đừng làm cùng lúc với bất kỳ thay đổi nào khác trên Gate.
+- vá bảo mật (§10);
+- phỏng vấn cho G1;
+- tạo page Pancake thử để xác minh API.
 
 ---
 
-## 14. Không làm
+## 8. Cam kết hành vi
 
-Danh sách từ chối. Mỗi mục đều đã được cân nhắc và bác bỏ có lý do — đưa lại phải kèm lý do mới, không phải lý do cũ.
+| Cam kết | Đo bằng |
+|---|---|
+| 10 giờ/tuần nói chuyện với chủ doanh nghiệp hoặc nhân viên trong ngành | Số file mới trong `docs/customers/` |
+| Giờ code ≤ giờ nói chuyện với khách (L8) | Ghi ở §9 |
+| Không viết code ngoài v0 trước G2 (L3) | `git log` |
+| Chỉ tính tiền thật | Chuyển khoản |
+
+**Người giữ mốc:** *(điền tên trước 2026-10-16)*
+
+---
+
+## 9. Rà soát hằng tuần
+
+| Tuần | Cổng | Cuộc nói chuyện mới | Giờ code / giờ khách | Dòng v0 / 4.000 | Phát hiện quan trọng nhất | Vi phạm L3 / L8 | Người giữ mốc xác nhận |
+|---|---|---|---|---|---|---|---|
+| 2026-10-09 | G0 | 0 | — | 0 | — | — | — |
+| 2026-10-10 | G0 | 0 | v0 xây xong (175 test) | 2.810 / 4.000 | R13, R15 cần quyết (xem cortex-leads/REVIEW.md) | — (v0 trong phạm vi L3 sửa đổi) | — |
+| 2026-10-12 | G0 | 0 | Đợt 2 xây xong tới WP8 + F1, F2 (327 test; kịch bản chuẩn giả lập chạy trọn, gồm auto/manual) | 4.627 / 5.000 | Còn WP14 (cần Page thật, API key); R13/R27 phải kiểm trên Page thật | Chưa có cuộc nói chuyện nào với khách — L8 bắt đầu tính từ 17/10 | — |
+
+---
+
+## 10. Nợ phải trả
+
+**Bảo mật server cũ — khẩn** (đã xác minh trong code; trạng thái thật trên server chưa kiểm):
+
+- [ ] **Security Group trên AWS:** đóng `5434` (Postgres `cortex/cortex`), `6377` (Redis không có mật khẩu), `8000` (API, Swagger, `/internal/*`), `20128` (9Router). Docker tự ghi iptables nên `ufw` không chặn được các cổng này.
+- [ ] Compose: bind các cổng về `127.0.0.1`, đổi mật khẩu DB, thêm `requirepass` cho Redis.
+- [ ] Đổi `SECRET_KEY` và `INTERNAL_API_KEY`. Giá trị cũ nằm trong repo công khai nên coi như đã lộ. Refresh token Google được mã hoá bằng khoá suy ra từ `SECRET_KEY`, phải xử lý trước khi đổi.
+- [ ] Ứng dụng phải báo lỗi khi khởi động nếu secret là giá trị mặc định. Tắt `/register` và Swagger.
+- [ ] Kiểm tra dấu vết xâm nhập. Hoặc dump DB rồi tắt server cũ.
+
+**Trước khi nhận token hoặc dữ liệu của doanh nghiệp đầu tiên:**
+
+- [ ] `cortex-leads/` (hoặc cả repo) chuyển sang private.
+- [ ] Hợp đồng lao động: kiểm điều khoản cạnh tranh và sở hữu trí tuệ.
+- [ ] Pháp nhân.
+- [ ] DPA tối giản, có luật sư xem.
+- [ ] Kho dữ liệu mã hoá, có hạn xoá. Tài khoản Pancake riêng có 2FA, có sổ ghi truy cập.
+- [ ] Pre-commit gitleaks + regex số điện thoại.
+
+**Phải xác minh bằng tay:**
+
+- [ ] Gửi qua Pancake ngoài 24 giờ: có tự gắn tag HUMAN_AGENT không? `can_inbox` có đúng không? Gửi tin cần gói Pancake nào?
+- [ ] Nháp do nhân viên bấm gửi dưới tag HUMAN_AGENT có hợp lệ với Meta không.
+- [ ] developers.zalo.me: cửa sổ nhắn; 3 slot app uỷ quyền; có chặn IP ngoài Việt Nam không.
+- [ ] Một buổi với luật sư: vai trò bên xử lý; chuyển dữ liệu xuyên biên giới; NĐ 142/2026.
+
+---
+
+## 11. Không làm — đưa lại phải kèm lý do mới
 
 | Không làm | Vì sao |
 |---|---|
-| Board / Kanban / Gantt | Là Jira. Thua chắc |
-| Template dự án, workflow riêng từng dự án | Hồi sinh `workflow_service` qua cửa sau |
-| Thảo luận trong dự án | Mezon đã là chỗ đó |
-| Phân bổ nguồn lực, capacity planning | PM doanh nghiệp, sân khác |
-| Quyền theo dự án | Workspace tập hai |
-| Dashboard, báo cáo, biểu đồ | Điểm đến. Không ai mở lần thứ hai. Vi phạm P5 |
-| Dựng lại Goal | Đã chết vì P4. Project là bản thay thế |
-| AI reasoning trong Gate (6.4 cũ) | Vi phạm P3 cho tới khi đo được tỷ lệ Gate không quyết nổi |
-| Cortex tự trích action item từ chat / họp | Đã có hệ thống khác làm. Mục 1.4 |
-| App mobile native | Bot Mezon phủ ~95% giá trị với ~5% chi phí |
-| Inbound Email / GitHub | Vi phạm 1.2 — làm danh sách dài ra, không làm quyết định tốt lên |
+| Định vị sản phẩm là chatbot trả lời 24/7 *thay* nhân viên | Hàng miễn phí. Trả lời lượt khách (WP16) chỉ lấp chỗ chưa có người; điểm bán vẫn là không để rơi + trí nhớ + theo sát (§1.3) |
+| Xây nền tảng **vượt phạm vi v0** trước G2 | Bản tái sinh của `workflow_service` / planning-v3. Nền tảng chỉ lớn lên theo cổng (§7.1) |
+| Sandbox thứ hai trước G2.5 | Chưa có khách nào xin |
+| Người dùng tự gắn MCP trước G4 | Tool poisoning; dữ liệu khách |
+| Adapter từng kênh trong lõi | Code riêng của kênh nằm ở bridge (§5.2) |
+| AI tổng đọc văn bản của sandbox | Phá mẫu Dual-LLM (§5.6) |
+| `$or`, biểu thức, chuỗi bước trong trigger / manifest | Đang viết lại workflow DSL |
+| Bot nhắn khách qua Zalo cá nhân | Không có API hợp lệ |
+| Tư vấn chẩn đoán, điều trị, visa | Pháp lý |
+| Bảng xếp hạng nhân viên | Nhân viên sẽ né và chống |
+| Kho bộ nhớ chung tìm bằng embedding | Đã đo, không tách được đúng / sai (LESSONS 3) |
+| Import code từ `backend/` | Khoá theo `user_id`, có lỗ hổng giả danh. Chỉ port có chủ đích |
+| Trợ lý cá nhân / chat agent cho người xây | Đã chết (LESSONS 2) |
 
 ---
 
-## 15. Rủi ro đã biết và câu hỏi mở
-
-### ✅ QĐ-1 — Project dùng chung, có bảng thành viên. **CHỐT 2026-08-24**
-
-`projects` không thuộc về một người. `owner_id` là *ai tạo ra*; ai ở trong dự án thì tra `project_members`. Bảng thành viên **không có cột `role`** (đó là thứ làm `WorkspaceMember` sai ngữ nghĩa) và thành viên được **suy ra, không mời** (P4).
-
-Lo ngại ban đầu là P8 — membership là tầng thứ hai. Bác bỏ: nó là **điều kiện để tầng thứ nhất đúng**. Không có nó thì số liệu cấp dự án gửi vào channel chung là sai.
-
-### ✅ QĐ-2 — Project neo vào Mezon channel, không neo vào lịch. **CHỐT 2026-08-25**
-
-Bản trước neo project vào chuỗi sự kiện Google (`source_event_key`). Sai, vì hai lẽ đã kiểm chứng:
-
-1. **Lịch không sync chéo** — mỗi tài khoản chỉ nhận sự kiện của mình, nên không có danh tính chung.
-2. **Lịch không mang thông tin dự án.** Tài khoản chỉ tách được cá nhân ↔ công việc; trong một lịch công việc, standup / 1:1 / ăn trưa / họp dự án nằm lẫn nhau, không có tín hiệu nào phân biệt. Suy ra project từ hình dạng lịch là phỏng đoán, và P7 cấm.
-
-Channel thì có đủ bốn thứ lịch không có: danh tính chung, thành viên sẵn, tên do người đặt, và bot họp đã sống ở đó. Xem bảng ở 3.1.1.
-
-**Lịch trở về đúng vai: khung thời gian, không phải cấu trúc dự án.** Việc gắn sự kiện vào project là lớp phủ tuỳ chọn qua thang bốn mức ở 4.2 — không có nó thì chỉ mất 8.2 và ngữ cảnh trước họp, cả hai là tính năng cộng thêm.
-
-**Ba câu hỏi mở cũ đóng theo:**
-
-| | Trạng thái |
-|---|---|
-| `iCalUID` có chung giữa người dự không | ✅ Không còn liên quan — danh tính dự án không đi qua lịch |
-| Ánh xạ project → Mezon channel | ✅ Không cần — project *là* channel (`source_channel_id`) |
-| `uq_schedule_external_maps` thiếu `user_id` | ⚠️ Vẫn là lỗi thật nhưng **không còn chặn**. Sửa trong tuần 0 |
-
-### ✅ QĐ-3 — Không xây bề mặt phản hồi trước khi có vòng học. **CHỐT 2026-08-25**
-
-10.4 (dòng "đã im N lần") và 10.5 (nút "nhắc sai rồi") rời khỏi Tuần 1, vào sổ hoãn 13.5.
-
-Lý do chung, và nó là P8 áp đúng chỗ: **cả hai là bề mặt nói về cơ chế, không nói về việc của người dùng.** 10.4 báo cáo Cortex đã quyết định gì; 10.5 thu tín hiệu mà hiện chưa có gì tiêu thụ. Cái sau nguy hơn cái trước — một nút phản hồi không có vòng học phía sau không trung tính, nó là lời hứa bị bội: bấm ba lần rồi thấy Cortex nhắc y như cũ.
-
-Phát hiện kèm theo, và là lý do 10.4 phải hoãn chứ không chỉ nên hoãn: **tiền đề "dữ liệu đã có" của nó sai.** `attention_log` không lưu *lý do* im, và nhánh dedup — loại im thường xuyên nhất — không ghi hàng nào. Xem bảng ở 10.4.
-
-Cái được đánh đổi là thật và ghi lại ở đây để không quên: một công cụ mà giá trị là im lặng thì trông y hệt một công cụ đã chết, và 12.5 lấy *"họ không tắt nó"* làm tiêu chí. Nếu trong 6 tuần thử có bằng chứng người dùng tưởng nó chết, đó chính là điều kiện làm lại đã ghi ở 13.5 — không phải một lần cân nhắc lại từ đầu.
-
-**Rủi ro 1 — Bot họp thêm chức năng nhắc.** Phòng thủ duy nhất là chất lượng Gate, và nó chưa được chứng minh. Mục 12 tồn tại chính vì rủi ro này.
-
-**Rủi ro 2 — Bước 2 của 3.5 gán sai.** Action item đến từ channel #alpha nhưng thực ra là việc của Beta → task lấy project Alpha, và sai. **Không phát hiện được, và không nên cố.** Giảm thiểu bằng P7 (bước 2 chỉ áp dụng khi sự kiện thuộc chuỗi lặp) + 10.1 (sửa tại chỗ) + 4.4 (đo tỷ lệ sửa).
-
-**Rủi ro 3 — Attention Gate mới chạy 1 lần trong đời.** Toàn bộ tinh vi của nó chưa từng gặp tải thật. Có thể có lỗi mà chỉ tải thật mới lộ.
-
-**Câu hỏi mở 1 —** Bot họp hiện có đẩy được webhook không, và output của nó có mang `provider_event_id` của cuộc họp không? Nếu không thì 4.2 phải đổi và cần một cột nguồn trên `tasks`. **Cần xác nhận trước tuần 2.**
-
-**Câu hỏi mở 2 —** Đã đóng bởi QĐ-2: project *là* channel.
-
-**Câu hỏi mở 3 —** `project.will_miss` cần ≥ 14 ngày dữ liệu `completed_at` mới có tốc độ. Dự án mới sẽ im trong hai tuần đầu. Chấp nhận được, nhưng cần ghi rõ trong card để không trông như hỏng.
-
----
-
-## 16. Trigger chủ động cho agent — ⏸ **HOÃN, xem 13.5**
-
-Thiết kế đầy đủ, ghi lại để khi điều kiện ở 16.7 xảy ra thì không phải nghĩ lại từ đầu. **Không code mục này trước khi đọc hai con số của 12.3** — lý do ở 16.6, và nó là lý do kỹ thuật, không phải kỷ luật roadmap.
-
-### 16.1 Cái được hỏi, và cái thực sự còn thiếu
-
-Câu hỏi ban đầu: *"làm sao để LLM tự được trigger khi một sự kiện xảy ra, như hook của Claude Code."* Claude Code làm việc đó bằng bốn thứ — hook (matcher xác định trên event), thông báo khi việc nền xong, cron/wakeup, và watch trạng thái ngoài.
-
-Cortex đã có ba trong bốn tầng của cả bốn thứ đó:
-
-| Tầng | Đang có gì | |
-|---|---|---|
-| **0 — Tín hiệu** | `events/event_bus.py` (Redis Streams, consumer group bền, DLQ, fan-out) + `state_evaluator.py` (vòng lặp poll, 11 predicate, `StateEvaluatorFlag` chống lặp) | ✅ |
-| **1 — Khớp** | Không có. `subscribe()` chỉ nối cứng event → handler viết tay trong `notification_subscribers.py` | ❌ |
-| **2 — Chạy LLM** | Không có. `AgentService` luôn cần một `message` từ người | ❌ |
-| **3 — Nói ra** | `attention_gate.py:request_attention_async` → `delivery/dispatcher.py` → Mezon DM/channel | ✅ |
-
-> **Ghi lại để không bị bán một lần nữa:** Cortex **đã** trigger chủ động rồi. `StateEvaluator` chạy 11 predicate không có người trong vòng lặp, tự bắn event, tự đi qua Gate, tự về DM. Mục này **không** thêm khả năng "chủ động" — nó chỉ đổi *ai viết câu*: template → LLM. Delta giá trị nhỏ hơn cảm giác ban đầu nhiều, và biết điều đó là điều kiện để không xây nó quá sớm.
-
-Phần phải xây là **một tầng khớp 0 token và một agent runner không có người trong vòng lặp**. Ước lượng 400–600 dòng. Không phải một platform.
-
-### 16.2 Bốn tầng và ranh giới token
-
-```
-Tầng 0  TÍN HIỆU     event bus · StateEvaluator · cron tick         0 token   (đã có)
-   │
-Tầng 1  KHỚP         TriggerDispatcher: (event_type, match=)        0 token   ← MỚI
-   │                 equality trên payload. KHÔNG expression.
-   │                 + cooldown + ngân sách + chống vòng lặp
-   ▼   hàng đợi Redis `agent:trigger:runs`
-Tầng 2  CHẠY         HeadlessAgentRunner: 1 lượt, ≤3 vòng tool,     CÓ token  ← MỚI
-   │                 timeout cứng, tool set thu hẹp
-   │                 → {"speak": false}  ← kết cục THƯỜNG GẶP NHẤT
-   ▼
-Tầng 3  NÓI          request_attention_async(reason_key=...)        0 token   (đã có)
-                     → Gate vẫn có quyền im → delivery
-```
-
-Hai bất biến giữ cho nó không vi phạm P1 và P3:
-
-- **LLM không bao giờ quyết định có bắn hay không.** Khớp là xác định, 0 token, vĩnh viễn.
-- **Output của LLM không phải là một notification.** Nó là một *đề xuất* nộp cho Gate; Gate vẫn im được. Không component nào ghi thẳng vào `notifications` — P1 nguyên vẹn, và `attention_gate.py` không phải sửa một dòng.
-
-**Vì sao tầng 2 xứng đáng tốn token (lập luận P3):** 11 handler trong `notification_subscribers.py` render câu từ template viết sẵn — hợp lệ, vì điều kiện là cố định và biết trước. Một watch thì ngược lại: chỉ dẫn của người dùng là ngôn ngữ tự nhiên tuỳ ý (*"theo dõi Alpha, khi Minh xong phần API thì bảo tôi"*), không template nào viết trước được. Đó đúng là *"logic deterministic không quyết nổi"*.
-
-**Vì sao có hàng đợi giữa tầng 1 và 2, không gọi thẳng:** một lời gọi LLM bên trong `route_event()` sẽ chặn bus, và ngữ nghĩa retry sai — LLM timeout không nên đẩy event vào DLQ. Dùng đúng hình dạng outbox mà `NotificationDelivery` đã dùng, và đó cũng là chỗ duy nhất giới hạn concurrency phải sống.
-
-### 16.3 Mô hình dữ liệu
-
-```sql
-CREATE TABLE agent_triggers (
-    id UUID PRIMARY KEY,
-    user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    project_id UUID NULL REFERENCES projects(id) ON DELETE SET NULL,
-    kind agenttriggerkind NOT NULL,          -- event | schedule | condition
-
-    -- KHỚP (xác định, 0 token)
-    event_type VARCHAR(64) NULL,             -- phải thuộc EVENT_VOCABULARY, validate lúc tạo
-    match      JSONB NOT NULL DEFAULT '{}',  -- equality trên payload. KHÔNG toán tử, KHÔNG biểu thức
-    next_run_at TIMESTAMP NULL,              -- kind=schedule
-
-    -- CHẠY
-    instruction TEXT NOT NULL,               -- câu người dùng đã nói, giữ nguyên
-    tool_grants JSONB NOT NULL DEFAULT '[]', -- quyền quyết MỘT LẦN lúc tạo; rỗng = chỉ đọc
-    reason_key  VARCHAR(100) NOT NULL DEFAULT 'agent.watch',
-
-    -- VÒNG ĐỜI — phần giữ cho bảng không phình
-    status      agenttriggerstatus NOT NULL DEFAULT 'active',  -- active|fired|expired|disabled
-    fire_limit  INT NOT NULL DEFAULT 1,      -- MẶC ĐỊNH BẮN MỘT LẦN
-    fire_count  INT NOT NULL DEFAULT 0,
-    expires_at  TIMESTAMP NOT NULL,          -- KHÔNG NULL BAO GIỜ. mặc định +14 ngày
-    cooldown_seconds INT NOT NULL DEFAULT 3600,
-    last_fired_at TIMESTAMP NULL,
-    source_conversation_id UUID NULL,
-    created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL
-);
-CREATE INDEX ix_agent_triggers_dispatch ON agent_triggers (event_type) WHERE status = 'active';
-```
-
-Ba cột chịu lực. Bỏ cột nào thì mục này thành thứ khác:
-
-| Cột | Vì sao chịu lực |
-|---|---|
-| `expires_at NOT NULL` | Một watch là **lời hứa có ngày hết hạn**. Đây là câu trả lời cho **P4**: watch do người dùng khai, nhưng nó *tự chết*, nên không có màn hình nào phải duy trì. Không có cột này thì sáu tháng nữa bảng đầy watch chết đúng như `goals` |
-| `fire_limit` mặc định 1 | *"Theo dõi X"* gần như luôn có nghĩa *"báo tôi lần đầu"*. Lặp vô hạn phải là lựa chọn tường minh, không phải mặc định |
-| `match` chỉ equality | Thêm `$gt`, `$or`, hay bất kỳ toán tử nào là đang viết DSL, và DSL là `workflow_service` hồi sinh qua cửa sau (11.3). Điều kiện phức tạp hơn thì viết thành một predicate xác định trong `StateEvaluator` rồi bắn event — đường đó đã có sẵn |
-
-```sql
-CREATE TABLE agent_trigger_runs (
-    id UUID PRIMARY KEY,
-    trigger_id UUID NULL REFERENCES agent_triggers(id) ON DELETE SET NULL,
-    user_id UUID NOT NULL, event_id VARCHAR(64) NULL,
-    started_at TIMESTAMP NOT NULL, finished_at TIMESTAMP NULL,
-    status runstatus NOT NULL,           -- ok|no_output|error|budget_denied|timeout
-    tokens_in INT, tokens_out INT, model VARCHAR(64),
-    outcome_notification_id UUID NULL,   -- NULL = đã chạy nhưng không nói ra
-    error TEXT NULL
-);
-CREATE UNIQUE INDEX uq_trigger_run_event
-    ON agent_trigger_runs (trigger_id, event_id) WHERE event_id IS NOT NULL;
-```
-
-Unique index đó chống bắn trùng khi `XAUTOCLAIM` reclaim message của một consumer đã chết — không có nó, một lần crash sinh hai tin nhắn cho cùng một sự kiện. Bảng này cũng chính là nguồn số cho 12.5: *bao nhiêu lượt chủ động thực sự dẫn tới hành động*, và chi phí token của chúng.
-
-### 16.4 Thành phần
-
-| Tệp mới | Nội dung |
-|---|---|
-| `services/triggers/dispatcher.py` | `subscribe()` mọi type trong `EVENT_VOCABULARY`; lọc trigger active theo `(event_type, user_id)`, áp `match`, cooldown, ngân sách → `XADD agent:trigger:runs`. **0 token** |
-| `services/triggers/runner.py` | `HeadlessAgentRunner.run(trigger, event)` — dựng `ToolContext(user_id=…, project_id=trigger.project_id)`, system prompt riêng, tool set thu hẹp, `max_tool_iterations=3`, timeout 30s, không streaming |
-| `services/triggers/budget.py` | Trần theo ngày/người, concurrency toàn cục, circuit breaker theo trigger |
-| `services/triggers/outcome.py` | `speak:true` → `request_attention_async(...)`. **Không bao giờ gọi `create_notification_*`** |
-| `services/trigger_worker.py` | `TriggerWorker`, vào lifespan qua `WorkerThread`, sau cờ `ENABLE_AGENT_TRIGGERS=false` — đúng cơ chế 11.2 |
-| `ai/prompts/system/proactive_system.md` | Prompt cho lượt không có người |
-| `ai/tools/watch.py` | `create_watch` / `list_watches` / `cancel_watch`, đăng ký qua `CommandRegistry` — quyền, snapshot, audit, revert có sẵn |
-
-Hình dạng output bắt buộc của tầng 2:
-
-```json
-{"speak": false}
-{"speak": true, "title": "…", "body": "…", "level_hint": "inform|recommend|ask"}
-```
-
-`{"speak": false}` phải là kết cục **rẻ, bình thường và hay gặp nhất**; prompt nói thẳng điều đó. Và `agent_trigger_runs` phải cho thấy tỷ lệ im **≥ 50%** — nếu thấp hơn, model đang tìm cớ để nói, và đó là **P5 hỏng ngay tại tầng mới**, không phải một tham số cần chỉnh.
-
-### 16.5 Ba ràng buộc giữ cho nó không thành cỗ máy spam
-
-**1 — Chống vòng lặp. Bắt buộc có ở F1, không phải "để sau".** Một headless run tạo task → `task.created` → khớp một watch khác → chạy tiếp. `EventEnvelope` đã có trường `source`: event do một run sinh ra mang `source="agent_trigger"`, và dispatcher **từ chối khớp mọi event có source đó**. Một dòng `if`. Không có nó, một đêm mất vài triệu token và không ai biết cho tới lúc xem hoá đơn.
-
-**2 — Ngân sách cứng, trong code, không phải trong prompt.** ≤ 20 run/người/ngày · ≤ **5 lượt được nói**/người/ngày · concurrency toàn cục 2 · cooldown mỗi trigger 1h. Vượt trần → `budget_denied`, ghi hàng, im. Đây là chỗ **P5 được thi hành**; một câu dặn trong prompt không phải là thi hành. Trigger lỗi 3 lần liên tiếp → `disabled`, và báo cho người dùng **một lần** qua Gate — một watch hỏng âm thầm đúng là loại "lời hứa bị bội" đã mô tả ở 10.5.
-
-**3 — Nội dung không tin được.** Payload của `task.created` có thể chứa văn bản do bot họp bơm vào từ biên bản của người khác, và nó đi vào một lượt LLM **có tool**. Nên: payload luôn được bọc như *dữ liệu* trong prompt, và `tool_grants` mặc định **rỗng** — F1–F3 chỉ có tool đọc. Quyền ghi là F4, sau khi có số.
-
-### 16.6 Vì sao phải hoãn — lý do kỹ thuật, không phải kỷ luật
-
-**Nó bơm nhiễu thẳng vào phép đo của mục 12.** `scripts/ab_test_numbers.py` lọc đúng hai điều kiện: `level != 'silent'` và `item_type == TASK`. **Không lọc theo `reason_key`.** Một watch kiểu *"theo dõi task X"* khi nói ra sẽ rơi vào mẫu số của nhóm B và được chấm bằng "task xong trong 24h" — công của một lời nhắc mà Gate không tạo ra. Kết quả là đo Gate với một cái loa thứ hai trong phòng, trong khi 12.4 bắt ra quyết định sống-chết của sản phẩm dựa trên đúng hai con số đó.
-
-**Và nếu Gate thua thì tầng này là công dã tràng.** Nhánh hai của 12.4 (chuyển sang bài toán alert fatigue) làm cho một tầng LLM **xây trên Gate** không dùng lại được — nó đứng trên giả định vừa bị bác. Đó là **P8** áp đúng chỗ.
-
-### 16.7 Điều kiện làm lại
-
-> Hai con số 12.3 đã đọc **và** nhóm B thắng **và** có người dùng thật hỏi *"sao nó không tự theo dõi giúp tôi cái này"* — chứ không phải mình nghĩ họ sẽ hỏi.
-
-Khi đó, lộ trình:
-
-| | Việc | Nghiệm thu |
-|---|---|---|
-| **F0** ~0.5 ngày, 0 token | Hai bảng + dispatcher + worker; tầng 2 tạm thời là **template**, chưa gọi LLM | Tạo tay một trigger trên `task.overdue` → có một hàng `agent_trigger_runs` và một notification qua Gate. Chứng minh đường ống trước khi tiêu token nào |
-| **F1** ~1.5 ngày | `HeadlessAgentRunner` thật + `budget.py` + chống vòng lặp + prompt | Test khoá: event `source="agent_trigger"` **không** khớp trigger nào · vượt trần ngày → `budget_denied`, không gọi LLM · `{"speak": false}` không sinh notification nào · cùng `event_id` xử lý hai lần chỉ sinh **một** run |
-| **F2** ~1 ngày | `create_watch`/`cancel_watch` qua `CommandRegistry` + nút "hủy theo dõi" trên card Mezon | *"Theo dõi task X, xong thì báo tôi"* → có trigger, `expires_at` = +14 ngày, `fire_limit=1` · task xong → **một** tin DM · trigger chuyển `fired` |
-| **F3** ~1 ngày | `kind='schedule'` (poll `next_run_at`) và `kind='condition'` (bám cadence `StateEvaluator`) | *"8h sáng thứ Hai tóm tắt Alpha"* chạy đúng một lần mỗi tuần, và **im** khi Alpha không có gì đổi |
-| **F4** | `tool_grants` cho tool ghi — agent *làm*, không chỉ *nói* | Không mở trước khi F1–F3 có số vận hành thật |
-
-### 16.8 Ranh giới với `workflow_service`
-
-Mục này **không** phải cửa sau hồi sinh `workflow_service`. Phân biệt bằng một câu:
-
-> `agent_triggers` là **một điều kiện → một lượt agent**. Nhiều bước, nhiều event, trạng thái giữa các bước, retry theo bước — là Temporal, và điều kiện hồi sinh của nó ghi ở 11.3.
-
-Phòng thủ cụ thể là hai mặc định ở 16.3: `match` chỉ equality, `fire_limit` = 1. **Ngày nào thấy mình muốn thêm `$or` vào `match`, dừng lại và đọc 11.3** — lúc đó điều kiện hồi sinh Temporal đã thật sự xảy ra, và xây tiếp ở đây là đi đường vòng đắt hơn.
+## Nguồn chính
+
+- Meta Messenger policy: https://developers.facebook.com/docs/messenger-platform/policy/policy-overview · Marketing Messages FAQ: https://developers.facebook.com/documentation/business-messaging/messenger-platform/marketing-messages-on-messenger/faq
+- Meta Business AI tại VN: https://vietnamnews.vn/Sci-Tech/1779103/viet-nam-becomes-test-bed-for-ai-driven-commerce-tools.html
+- Pancake OpenAPI: https://developer.pancake.biz/openapi/openapi.yaml · Webhook: https://developer.pancake.biz/openapi/webhook.yaml
+- Agent Skills spec: https://agentskills.io/specification
+- MCP spec 2026-07-28: https://modelcontextprotocol.io/specification/2026-07-28/changelog
+- n8n — trigger node phải viết bằng code: https://docs.n8n.io/integrations/creating-nodes/plan/choose-node-method
+- Dual-LLM: https://simonwillison.net/2023/Apr/25/dual-llm-pattern/ · CaMeL: https://arxiv.org/abs/2503.18813
+- Luật AI 134/2025: https://thuvienphapluat.vn/van-ban/Cong-nghe-thong-tin/Luat-Tri-tue-nhan-tao-2025-so-134-2025-QH15-679013.aspx
+- Luật BVDLCN, Điều 20: https://hethongphapluat.com/luat-bao-ve-du-lieu-ca-nhan-2025/dieu-20 · NĐ 356/2025: https://www.ey.com/vi_vn/technical/tax/tax-and-law-updates/nghi-dinh-so-356-2025-nd-cp-quy-dinh-chi-tiet-mot-so-dieu-va-bien-phap-thi-hanh-luat-bao-ve-du-lieu-ca-nhan

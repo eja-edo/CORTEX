@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [develop, main, cortex-leads-v2]
+  pull_request:
+    branches: [develop, main, cortex-leads-v2]
+
+jobs:
+  cortex-leads:
+    name: cortex-leads tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cortex-leads
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          # Dev-only values, same as docker-compose.yml / .env.test.
+          POSTGRES_USER: cl_owner
+          POSTGRES_PASSWORD: cl_owner_dev
+          POSTGRES_DB: cortex_leads
+        ports:
+          - 5544:5432
+        options: >-
+          --health-cmd="pg_isready -U cl_owner -d cortex_leads"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create database roles (mirrors docker/initdb/01-roles.sh)
+        env:
+          PGPASSWORD: cl_owner_dev
+        run: |
+          psql -v ON_ERROR_STOP=1 -h localhost -p 5544 -U cl_owner -d cortex_leads <<'SQL'
+          CREATE ROLE cl_app LOGIN PASSWORD 'cl_app_dev' NOSUPERUSER NOBYPASSRLS;
+          CREATE ROLE cl_supervisor NOLOGIN NOSUPERUSER NOBYPASSRLS;
+          SQL
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: cortex-leads/pyproject.toml
+
+      - name: Install
+        run: pip install -e '.[dev]'
+
+      - name: Load test env
+        run: grep -Ev '^\s*(#|$)' .env.test >> "$GITHUB_ENV"
+
+      - name: Test
+        run: pytest -q
