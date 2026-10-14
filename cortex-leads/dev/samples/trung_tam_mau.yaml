@@ -1,0 +1,219 @@
+# Bộ dữ liệu MẪU cho chạy thử local (dev.local setup). Toàn bộ là GIẢ LẬP: tên, giá, địa chỉ, chính sách
+# không thuộc doanh nghiệp thật nào. Dùng làm khuôn khi thu dữ liệu của khách thật (bản thật để trong data/,
+# không commit).
+#
+# Quy ước để validator (A7) xác minh được:
+# - Con số khách sẽ nghe (giá, thời lượng, số buổi, %, phút, sĩ số) đặt ở trường SỐ riêng, không nhét vào câu chữ.
+# - Trường chữ tránh chữ số, trừ giờ dạng hh:mm. Ngày khai giảng do setup điền (cách hôm nay N ngày) dạng dd/mm.
+# - Chính sách viết dạng ĐƯỢC / KHÔNG ĐƯỢC cho từng trường hợp, không để suy ngược: AI đọc đúng từng chữ.
+#   (Đã xảy ra: "từ buổi thứ ba không hoàn" -> AI nói học hai buổi vẫn được hoàn.)
+# - Mục `thong_tin` (không có giá) là kiến thức chung: đăng ký, ưu đãi, hoàn phí, cơ sở, học online...
+business:
+  name: Anh ngữ Thử Nghiệm
+  timezone: Asia/Ho_Chi_Minh
+
+courses:
+  - code: IE-NEN
+    name: IELTS Nền tảng (mất gốc lên 4.0)
+    category: ielts
+    price: 3200000
+    unit: khoá
+    start_in_days: [7, 28]
+    attrs:
+      thoi_luong_thang: 3
+      so_buoi_moi_tuan: 3
+      phut_moi_buoi: 90
+      si_so_toi_da: 12
+      so_buoi_thi_thu: 1
+      dau_vao: mất gốc hoặc chưa từng thi
+      muc_tieu: lên khoảng 4.0, không cam kết điểm
+      lich_hoc: tối thứ Hai, Tư, Sáu 19:30–21:00
+      hinh_thuc: tại cơ sở hoặc online qua Zoom
+      bao_gom: giáo trình, bài tập online, chữa bài viết hằng tuần
+
+  - code: IE-3T
+    name: IELTS 3 tháng (4.5 lên 5.5)
+    category: ielts
+    price: 4500000
+    unit: khoá
+    start_in_days: [10, 31]
+    attrs:
+      thoi_luong_thang: 3
+      so_buoi_moi_tuan: 3
+      phut_moi_buoi: 90
+      si_so_toi_da: 12
+      so_buoi_thi_thu: 2
+      dau_vao: đã có nền khoảng 4.5
+      muc_tieu: lên khoảng 5.5, không cam kết điểm
+      lich_hoc: tối thứ Ba, Năm 19:30–21:00 và sáng Chủ nhật 09:00–10:30
+      hinh_thuc: tại cơ sở hoặc online qua Zoom
+      bao_gom: giáo trình, thi thử có chấm chữa, chữa bài viết và nói hằng tuần
+
+  - code: IE-TT
+    name: IELTS Tăng tốc 6.5+ (du học, định cư)
+    category: ielts
+    price: 6900000
+    unit: khoá
+    start_in_days: [14]
+    attrs:
+      thoi_luong_thang: 3
+      so_buoi_moi_tuan: 4
+      phut_moi_buoi: 120
+      si_so_toi_da: 8
+      so_buoi_thi_thu: 3
+      dau_vao: đã có khoảng 5.5
+      muc_tieu: hướng tới 6.5, không cam kết điểm
+      lich_hoc: tối thứ Hai đến thứ Năm 19:00–21:00
+      hinh_thuc: chỉ học tại cơ sở
+      bao_gom: giáo trình, thi thử trên giấy theo format thật, chữa nói một kèm một hằng tuần
+
+  - code: IE-1K1
+    name: IELTS một kèm một (lịch linh hoạt)
+    category: ielts
+    price: 9600000
+    unit: gói
+    attrs:
+      so_buoi_trong_goi: 20
+      phut_moi_buoi: 90
+      dau_vao: mọi trình độ, có bài kiểm tra trước khi xếp giáo viên
+      lich_hoc: tự chọn giờ trong khung 08:00–21:00 hằng ngày
+      hinh_thuc: online qua Zoom hoặc tại cơ sở
+      bao_gom: lộ trình riêng, giáo viên cố định
+
+  - code: GT-CB
+    name: Giao tiếp cơ bản cho người đi làm
+    category: giao_tiep
+    price: 2800000
+    unit: khoá
+    start_in_days: [12, 33]
+    attrs:
+      thoi_luong_thang: 2
+      so_buoi_moi_tuan: 2
+      phut_moi_buoi: 90
+      si_so_toi_da: 10
+      dau_vao: nói còn ngại, vốn từ ít
+      muc_tieu: tự tin giới thiệu bản thân, hỏi đáp công việc hằng ngày
+      lich_hoc: tối thứ Ba, Năm 19:30–21:00
+      hinh_thuc: tại cơ sở hoặc online qua Zoom
+      giao_vien: giáo viên Việt Nam
+
+  - code: GT-PX
+    name: Giao tiếp phản xạ với giáo viên bản ngữ
+    category: giao_tiep
+    price: 3900000
+    unit: khoá
+    start_in_days: [19]
+    attrs:
+      thoi_luong_thang: 2
+      so_buoi_moi_tuan: 2
+      phut_moi_buoi: 90
+      si_so_toi_da: 8
+      dau_vao: đã giao tiếp được câu cơ bản
+      muc_tieu: phản xạ nhanh, nói tự nhiên trong họp và gọi điện
+      lich_hoc: tối thứ Hai, Tư 19:30–21:00
+      hinh_thuc: chỉ học tại cơ sở
+      giao_vien: giáo viên bản ngữ, có trợ giảng Việt Nam
+
+  - code: TN-KIDS
+    name: Tiếng Anh thiếu nhi (sáu đến mười tuổi)
+    category: thieu_nhi
+    price: 1900000
+    unit: tháng
+    start_in_days: [5, 19]
+    attrs:
+      so_buoi_moi_tuan: 2
+      phut_moi_buoi: 75
+      si_so_toi_da: 10
+      muc_tieu: nghe nói qua trò chơi, phát âm chuẩn, làm quen chứng chỉ Cambridge
+      lich_hoc: chiều thứ Bảy và sáng Chủ nhật 09:00–10:15
+      hinh_thuc: chỉ học tại cơ sở
+      giao_vien: giáo viên Việt Nam và giáo viên bản ngữ xen kẽ
+      ghi_chu: có sổ liên lạc gửi phụ huynh sau mỗi buổi
+
+  - code: THCS
+    name: Tiếng Anh THCS lớp sáu đến lớp chín
+    category: thcs
+    price: 1600000
+    unit: tháng
+    start_in_days: [5]
+    attrs:
+      so_buoi_moi_tuan: 2
+      phut_moi_buoi: 90
+      si_so_toi_da: 15
+      muc_tieu: bám sát chương trình trên lớp, ôn thi vào lớp mười
+      lich_hoc: tối thứ Hai, Tư hoặc tối thứ Ba, Năm 18:00–19:30
+      hinh_thuc: tại cơ sở hoặc online qua Zoom
+      giao_vien: giáo viên Việt Nam
+
+  - code: THI-THU
+    name: Thi thử IELTS lẻ bốn kỹ năng
+    category: ielts
+    price: 350000
+    unit: lượt
+    attrs:
+      so_ngay_tra_ket_qua: 3
+      lich_hoc: sáng thứ Bảy hằng tuần 08:00–11:30
+      bao_gom: chấm và nhận xét chi tiết phần viết và nói
+
+info:
+  - code: TT-DANGKY
+    name: Cách đăng ký và thanh toán
+    attrs:
+      cach_dang_ky: nhắn tên khoá và lịch mong muốn, bạn tư vấn gửi phiếu đăng ký online để điền
+      giu_cho: giữ chỗ bằng tiền đặt cọc, phần còn lại đóng trước buổi học đầu tiên
+      dat_coc: 500000
+      thanh_toan: chuyển khoản theo thông tin trên phiếu đăng ký, hoặc tiền mặt tại quầy
+      tra_gop_so_dot: 2
+      ghi_chu: khoá từ ba tháng trở lên được chia hai đợt đóng
+
+  - code: TT-HOCTHU
+    name: Học thử và kiểm tra đầu vào
+    attrs:
+      hoc_thu_mien_phi_so_buoi: 1
+      kiem_tra_dau_vao_phut: 60
+      kiem_tra: miễn phí, làm tại cơ sở hoặc online, có kết quả và tư vấn lộ trình ngay sau khi làm
+      dat_lich: bạn tư vấn hẹn giờ với học viên
+
+  - code: TT-UUDAI
+    name: Ưu đãi đang áp dụng
+    attrs:
+      giam_nhom_hai_nguoi_phan_tram: 5
+      giam_hoc_vien_cu_phan_tram: 10
+      ghi_chu: không cộng dồn các ưu đãi, áp dụng khi đóng đủ học phí; ưu đãi khác do bạn tư vấn xác nhận
+
+  - code: TT-HOANPHI
+    name: Hoàn học phí và bảo lưu
+    attrs:
+      hoan_toan_bo_neu_bao_truoc_ngay: 3
+      sau_khai_giang: đã khai giảng thì KHÔNG hoàn học phí trong mọi trường hợp, chỉ được bảo lưu
+      truoc_khai_giang: báo trước ngày khai giảng ít nhất ba ngày thì được hoàn toàn bộ; báo muộn hơn thì chỉ bảo lưu
+      bao_luu_toi_da_thang: 3
+      so_lan_bao_luu: 1
+
+  - code: TT-COSO
+    name: Địa chỉ, giờ làm việc, gửi xe
+    attrs:
+      dia_chi: Cơ sở Thử Nghiệm (địa chỉ giả lập của bản demo)
+      gio_lam_viec: 08:00–21:00 tất cả các ngày
+      gui_xe: có chỗ gửi xe máy miễn phí cho học viên
+
+  - code: TT-GIAOVIEN
+    name: Giáo viên và sĩ số lớp
+    attrs:
+      giao_vien_ielts: giáo viên Việt Nam có chứng chỉ IELTS từ 7.5, đã dạy ít nhất hai năm
+      giao_vien_ban_ngu: dạy các lớp giao tiếp phản xạ và thiếu nhi
+      si_so: lớp nhỏ, tối đa theo từng khoá (xem khoá cụ thể)
+      vang_hoc: nghỉ có báo trước được học bù ở lớp cùng trình độ
+
+  - code: TT-CAMKET
+    name: Cam kết đầu ra
+    attrs:
+      cam_ket: không cam kết điểm số; học viên đi học đủ chuyên cần mà chưa đạt mục tiêu được học lại miễn phí một lần
+      chuyen_can_toi_thieu_phan_tram: 90
+
+  - code: TT-ONLINE
+    name: Học online
+    attrs:
+      nen_tang: Zoom, có ghi hình buổi học để xem lại
+      tai_lieu: gửi qua Google Drive, bài tập nộp online
+      khoa_co_online: IELTS Nền tảng, IELTS 3 tháng, IELTS một kèm một, Giao tiếp cơ bản, THCS

@@ -1,0 +1,22 @@
+# Dev only. Passwords here are throwaway and never reused anywhere else.
+name: cortex-leads
+services:
+  pg:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: cortex_leads
+      POSTGRES_USER: cl_owner
+      POSTGRES_PASSWORD: cl_owner_dev
+      CL_APP_PASSWORD: cl_app_dev
+    ports:
+      - "5544:5432"
+    volumes:
+      - cl_pgdata:/var/lib/postgresql/data
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cl_owner -d cortex_leads"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+volumes:
+  cl_pgdata:

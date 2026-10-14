@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Hàng chờ — Cortex Leads{% endblock %}
+{% block body %}<h1>Việc cần làm ({{ cards|length + facts|length }})</h1>
+{% for c in cards %}<section class="card">
+<b><a href="/staff/c/{{ c.conv_id }}">{{ c.name }}</a></b> <span class="meta">· im {{ c.silent }}{% if c.intent %} · {{ c.intent }}{% endif %}</span>
+{% if c.needs_human %}<p class="bad"><b>Cần người trả lời</b> — gợi ý bên dưới, hệ thống không tự gửi</p>{% elif c.turn %}<p class="warn"><b>Khách đang chờ trả lời</b></p>{% endif %}
+{% if c.asked %}<p class="ask">Khách hỏi: “{{ c.asked }}”</p>{% endif %}
+<p class="meta">Đoán: {{ c.reason }}</p>
+<div class="draft">{{ c.text }}</div>
+{% if c.offchannel %}<p class="bad">Cửa sổ {{ c.chan }} đã đóng — hãy gọi điện hoặc nhắn Zalo (nội dung trên là gợi ý để đọc/copy)</p>
+<form method="post" action="/staff/draft/{{ c.id }}">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<button name="action" value="sent">Đã liên hệ</button>
+<button class="sec" name="action" value="zalo">Đã chuyển Zalo</button>
+<button class="sec" name="action" value="self">Tôi tự làm</button>
+<button class="sec" name="action" value="skipped">Bỏ</button>
+{% else %}<p class="{{ c.window.cls }}">{{ c.window.text }}</p>
+<form method="post" action="/staff/draft/{{ c.id }}">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<details><summary>Sửa nháp</summary><textarea name="edited_text" rows="4">{{ c.text }}</textarea></details>
+{% if c.can_send and not c.needs_human %}<button name="action" value="approved">Duyệt &amp; gửi</button>
+{% endif %}<button {% if c.can_send and not c.needs_human %}class="sec" {% endif %}name="action" value="sent">Đã gửi</button>
+<button name="action" value="edited">Sửa rồi gửi</button>
+<button class="sec" name="action" value="self">Tôi tự làm</button>
+<button class="sec" name="action" value="skipped">Bỏ</button>
+{% endif %}</form></section>{% endfor %}
+{% for f in facts %}<section class="card">
+<b>{{ f.name }}</b> <span class="meta">· cần xác nhận</span>
+<p>{{ f.fact_kind }}: {{ f.value }}</p>
+<form method="post"><input type="hidden" name="csrf" value="{{ csrf }}">
+<button formaction="/staff/fact/{{ f.id }}/confirm">Xác nhận</button>
+<button class="sec" formaction="/staff/fact/{{ f.id }}/reject">Bác</button></form></section>{% endfor %}
+{% if not cards and not facts %}<p class="card">Không có việc nào đang chờ.</p>{% endif %}
+{% endblock %}

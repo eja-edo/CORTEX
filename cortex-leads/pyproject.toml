@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cortex_leads"
+version = "0.0.1"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi",
+  "uvicorn",
+  "sqlalchemy[asyncio]>=2",
+  "asyncpg",
+  "alembic",
+  "pydantic>=2",
+  "pydantic-settings",
+  "httpx",
+  "pyyaml",
+  "openai",
+  "cryptography",
+  "mcp>=2,<3",
+  "jinja2",            # WP13 trang duyệt
+  "python-multipart",  # WP13 form
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio>=0.24", "ruff"]
+
+[tool.setuptools.package-data]
+"cortex_leads.staff_ui" = ["templates/*.html"]
+
+[tool.setuptools.packages.find]
+include = ["cortex_leads*", "bridges*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+# One loop for the whole session so pooled asyncpg connections survive across tests.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"

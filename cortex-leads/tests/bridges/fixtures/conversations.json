@@ -1,0 +1,6 @@
+{"conversations": [
+  {"id": "psid_1001", "type": "INBOX", "page_id": "page123", "snippet": "Dạ em gửi báo giá ạ",
+   "message_count": 4, "updated_at": "2026-10-09T03:10:00",
+   "from": {"id": "psid_1001", "name": "Nguyễn Văn An", "email": null},
+   "last_sent_by": {"id": "page123", "admin_id": "adm_7", "admin_name": "Linh"}}
+]}

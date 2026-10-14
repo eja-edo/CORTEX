@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% block title %}Cortex Leads{% endblock %}</title>
+<style>
+body{font:17px/1.45 system-ui,sans-serif;margin:0;background:#f4f5f7;color:#1c1e21}
+main{max-width:640px;margin:0 auto;padding:12px}
+h1{font-size:22px;margin:8px 0}
+.card{background:#fff;border-radius:12px;padding:14px;margin:12px 0;box-shadow:0 1px 3px #0002}
+.draft{background:#eef6ff;border-radius:8px;padding:10px;white-space:pre-wrap}
+.ask{color:#444}.meta{color:#666;font-size:16px}
+.ok{color:#116b2f}.warn{color:#9a5b00;font-weight:600}.bad{color:#b3261e;font-weight:600}
+.flash{background:#fff7d6;padding:10px;border-radius:8px}
+button,input,textarea,select{font:inherit;padding:12px;border-radius:8px;border:1px solid #bbb;margin:4px 4px 4px 0}
+button{background:#1a73e8;color:#fff;border:0;min-height:44px}
+button.sec{background:#e4e6ea;color:#1c1e21}
+textarea{width:100%;box-sizing:border-box}
+nav{display:flex;justify-content:space-between;align-items:center}
+a{color:#1a73e8}
+</style></head><body><main>
+<nav><a href="/staff">Hàng chờ</a>{% if csrf and not login %}<form method="post" action="/staff/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="sec">Đăng xuất</button></form>{% endif %}</nav>
+{% if msg %}<p class="flash">{{ msg }}</p>{% endif %}
+{% block body %}{% endblock %}
+</main></body></html>

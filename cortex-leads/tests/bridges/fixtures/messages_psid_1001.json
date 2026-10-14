@@ -1,0 +1,21 @@
+{"success": true, "conversation_id": "psid_1001",
+ "conv_from": {"id": "psid_1001", "name": "Nguyễn Văn An", "email": null},
+ "messages": [
+  {"id": "m4", "conversation_id": "psid_1001", "page_id": "page123", "type": "INBOX",
+   "message": "<div>Dạ em gửi báo giá ạ</div>", "original_message": "Dạ em gửi báo giá ạ",
+   "from": {"id": "page123", "name": "Page", "admin_id": "adm_7", "admin_name": "Linh", "uid": "u-7"},
+   "inserted_at": "2026-10-09T03:10:00", "attachments": []},
+  {"id": "m3", "conversation_id": "psid_1001", "page_id": "page123", "type": "INBOX",
+   "message": "Cảm ơn bạn đã nhắn tin", "original_message": "Cảm ơn bạn đã nhắn tin",
+   "from": {"id": "page123", "name": "Page", "is_automated": true},
+   "inserted_at": "2026-10-09T03:05:00", "attachments": []},
+  {"id": "m2", "conversation_id": "psid_1001", "page_id": "page123", "type": "INBOX",
+   "message": "", "original_message": "",
+   "from": {"id": "psid_1001", "name": "Nguyễn Văn An"},
+   "inserted_at": "2026-10-09T03:04:00",
+   "attachments": [{"type": "photo", "url": "https://cdn.example/a.jpg"}]},
+  {"id": "m1", "conversation_id": "psid_1001", "page_id": "page123", "type": "INBOX",
+   "message": "Học phí bao nhiêu? SĐT 0912345678", "original_message": "Học phí bao nhiêu? SĐT 0912345678",
+   "from": {"id": "psid_1001", "name": "Nguyễn Văn An", "email": null},
+   "inserted_at": "2026-10-09T03:00:00", "attachments": []}
+ ]}

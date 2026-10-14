@@ -1,0 +1,22 @@
+# Domain pack of the customer_care sandbox (DESIGN A6). Sync: python -m cortex_leads.cli sync-domain
+intents:
+  hoi_gia:
+    label: Hỏi giá
+    keywords: [giá, bao nhiêu, học phí, chi phí, price]
+  hoi_lich:
+    label: Hỏi lịch
+    keywords: [lịch, lịch học, khai giảng, khi nào, schedule]
+priority_intents: [hoi_gia]
+reason_codes:
+  so_sanh: Đang so sánh nơi khác
+  soc_gia: Có thể sốc giá
+  chua_san_sang: Chưa sẵn sàng
+  hoi_nguoi_nha: Cần hỏi người nhà
+  da_mua: Có thể đã mua
+  khong_ro: Chưa rõ lý do
+decision_maker_roles: [ban_than, vo_chong, bo_me, con, sep, khac]
+fact_kinds: [decision_maker, need, budget, objection, preference]
+outcome_keywords:
+  booked: [đặt lịch, hẹn lịch, đã đặt, book]
+  won: [đã đăng ký, đã chuyển khoản, đã thanh toán, đã mua, chốt]
+  lost: [không cần nữa, thôi nhé, không đăng ký, hủy, đã học chỗ khác]

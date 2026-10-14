@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}{{ name }} — Cortex Leads{% endblock %}
+{% block body %}<h1>{{ name }}</h1>
+<p class="{{ window.cls }}">{{ window.text }}</p>
+<section class="card">{% for x in msgs %}<p><b>{{ x.who }}</b> <span class="meta">{{ x.at }}</span><br>{{ x.text }}</p>{% endfor %}</section>
+<section class="card"><b>Đã biết về khách</b>
+{% for f in facts %}<p>{{ f.kind }}: {{ f.value }} <span class="meta">({{ f.status }})</span>
+{% if f.status == "candidate" %}<form method="post"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="back" value="/staff/c/{{ conv.id }}">
+<button formaction="/staff/fact/{{ f.id }}/confirm">Xác nhận</button><button class="sec" formaction="/staff/fact/{{ f.id }}/reject">Bác</button></form>{% endif %}</p>
+{% else %}<p class="meta">Chưa có.</p>{% endfor %}</section>
+{% if has_memory %}<section class="card">
+<form method="post" action="/staff/c/{{ conv.id }}/do"><input type="hidden" name="csrf" value="{{ csrf }}">
+<input type="hidden" name="op" value="promise"><label>Khách hẹn ngày <input type="date" name="value" required></label><button>Lưu</button></form>
+<form method="post" action="/staff/c/{{ conv.id }}/do"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="op" value="offchannel">
+<button name="value" value="phone">Đã gọi</button><button name="value" value="zalo_personal">Đã chuyển Zalo</button></form>
+<form method="post" action="/staff/c/{{ conv.id }}/do"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="op" value="outcome">
+{% for k, label in outcomes.items() %}<button class="sec" name="value" value="{{ k }}">{{ label }}</button>{% endfor %}</form>
+</section>{% endif %}
+{% endblock %}
