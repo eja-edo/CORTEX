@@ -833,6 +833,7 @@ Tổng ước tính ≈ 2.810 + 1.890 ≈ **4.700 / 5.000**.
 | 2026-10-09 | G0 | 0 | — | 0 | — | — | — |
 | 2026-10-10 | G0 | 0 | v0 xây xong (175 test) | 2.810 / 4.000 | R13, R15 cần quyết (xem cortex-leads/REVIEW.md) | — (v0 trong phạm vi L3 sửa đổi) | — |
 | 2026-10-12 | G0 | 0 | Đợt 2 xây xong tới WP8 + F1, F2 (327 test; kịch bản chuẩn giả lập chạy trọn, gồm auto/manual) | 4.627 / 5.000 | Còn WP14 (cần Page thật, API key); R13/R27 phải kiểm trên Page thật | Chưa có cuộc nói chuyện nào với khách — L8 bắt đầu tính từ 17/10 | — |
+| 2026-10-14 | G0 | 0 | **Khép giai đoạn xây + thử local.** WP15 (giọng văn), F3, WP16 (trả lời lượt khách); nhập vai auto với LLM thật trên kênh giả + dữ liệu mẫu đầy đủ: 16/16 tin được đáp, 12 tự trả lời; 371 test | 4.943 / 5.000 | Chưa đạt A1 (Page thật), nhóm B (chưa đo ~30 hội thoại; demo lộ 2 lỗi dữ kiện đã sửa: hoàn phí do dữ liệu mơ hồ, chữ Trung), nhóm C (repo công khai, server cũ, DPA, backup). R58 thông báo đẩy cần quyết | Chưa có cuộc nói chuyện nào với khách — G0 hạn 16/10, L8 tính từ 17/10 | Phase kế: WP14 Page thật + đo nhóm B; phỏng vấn G1; code đóng băng trừ sửa lỗi khi chạy thật |
 
 ---
 
