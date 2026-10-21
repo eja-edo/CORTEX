@@ -5,6 +5,7 @@ Tenant / actor / scope come from RunContext only (DESIGN A3); tool args forbid e
 LLM that passes `tenant_id` gets INVALID_ARGS."""
 import logging
 import re
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -43,6 +44,7 @@ class ToolSpec:
     effect: Effect
     tier: str
     handler: Handler
+    taints: bool = False  # its result is untrusted outside data: after it, this run may not write (DESIGN §5.8)
 
 
 def mask_args(args: Any, depth: int = 0) -> Any:
@@ -59,9 +61,13 @@ def mask_args(args: Any, depth: int = 0) -> Any:
     return args
 
 
+TAINT_MEMORY = 2048  # runs remembered; a run is minutes long, so this is far more than enough
+
+
 class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, ToolSpec] = {}
+        self._tainted: OrderedDict[UUID, None] = OrderedDict()
 
     def register(self, spec: ToolSpec) -> None:
         if spec.effect == "customer" and spec.name != "send_message":  # DESIGN A9: one path only
@@ -92,6 +98,8 @@ class ToolRegistry:
             return ToolResult(status="error", error=ErrorInfo(code=ErrorCode.NOT_FOUND))
         if _RANK[spec.effect] > _RANK[effect_ceiling]:
             return _blocked(BlockedCode.EFFECT_CEILING, f"{spec.effect} > {effect_ceiling}")
+        if spec.effect != "read" and ctx.run_id in self._tainted:  # it read outside data: no writes after that
+            return _blocked(BlockedCode.NOT_ALLOWED, "tainted_by_external_data")
         try:
             args = spec.input_model.model_validate(raw_args)
         except ValidationError as e:
@@ -116,6 +124,10 @@ class ToolRegistry:
         except Exception:
             log.exception("tool %s failed", name)
             result = ToolResult(status="error", error=ErrorInfo(code=ErrorCode.INTERNAL))
+        if spec.taints and result.status == "ok":
+            self._tainted[ctx.run_id] = None
+            while len(self._tainted) > TAINT_MEMORY:
+                self._tainted.popitem(last=False)
         if result.status == "ok" and is_empty(result.data) and not result.note:
             result = result.model_copy(update={"note": empty_note(f"{name} không có kết quả")})
         if spec.effect != "read":
@@ -158,6 +170,12 @@ def default_registry(clock: Callable[[], Any] | None = None) -> ToolRegistry:
     from cortex_leads.tools.memory import register_memory
     from cortex_leads.tools.send import register_send
 
+    from cortex_leads.tools.booking import register_booking
+
     register_memory(reg, clock)
     register_send(reg, clock)
+    register_booking(reg, clock)
+    from cortex_leads.tools.external import register_external
+
+    register_external(reg)
     return reg

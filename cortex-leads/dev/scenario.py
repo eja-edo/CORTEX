@@ -113,7 +113,7 @@ async def seed() -> dict[str, Any]:
     async with tenant_session(tid) as s:
         await sync_dir(s, tid, sid, CARE / "skills")
         for status in ("shadow", "live"):
-            await promote(s, sid, "hoi-lai-khach-im", 3, status)
+            await promote(s, sid, "hoi-lai-khach-im", 4, status)
     return {"tenant": tid, "connector": cid, "secret": secret, "staff": {"X-Api-Key": staff_key},
             "sup": {"X-Api-Key": sup_key}}
 

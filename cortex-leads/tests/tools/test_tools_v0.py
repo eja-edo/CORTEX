@@ -14,7 +14,7 @@ from cortex_leads.tools.refs import resolve
 from cortex_leads.tools.registry import ToolRegistry, ToolSpec, default_registry
 
 NOW = datetime(2026, 10, 12, 3, 0, tzinfo=UTC)
-ALL = ["read_messages", "read_contact", "lookup_catalog", "list_dropped_leads", "draft_followup"]
+ALL = ["read_messages", "read_contact", "lookup_catalog", "study_plan", "list_dropped_leads", "draft_followup"]
 reg = default_registry(clock=lambda: NOW)
 
 
@@ -304,3 +304,28 @@ async def test_naming_a_course_cites_it(world, catalog_factory):
     assert (await call(t, make_ctx(t, sb, conv), "draft_followup", args)).status == "proposed"
     bad = {**args, "text": "Dạ khoá IELTS 3 tháng chỉ 4 tháng thôi ạ"}  # a number on no row still blocks
     assert (await call(t, make_ctx(t, sb, conv), "draft_followup", bad)).status == "blocked"
+
+
+async def test_study_plan_picks_the_catalog_row_and_flags_overload(world, catalog_factory):
+    t, sb, cn, conv = world
+    await catalog_factory(t, code="TT-THOIGIAN", name="Thời gian", attrs={
+        "gio_tu_hoc_toi_da_moi_ngay": 3,
+        "tang_2_0_band_trong_3_thang_tu_hoc_gio_moi_ngay": 4,
+        "tang_2_0_band_trong_6_thang_tu_hoc_gio_moi_ngay": 2})
+    r = await call(t, make_ctx(t, sb, conv), "study_plan",
+                   {"from_band": 4.5, "to_band": 6.5, "months": 3}, ceiling="read")
+    assert r.status == "ok", r
+    assert r.data["hours_per_day"] == 4 and r.data["within_limit"] is False
+    assert r.data["months_that_fit"] == 6 and r.data["hours_per_day_there"] == 2
+    assert r.data["source_id"] == "TT-THOIGIAN"
+
+
+async def test_masked_name_placeholder_never_reaches_the_draft(world):
+    t, sb, cn, conv = world
+    args = {"text": "Khoá hợp với mục tiêu của [NAME_1] là KH01, [NAME_1] điền phiếu nhé", "reason_code": "khong_ro",
+            "has_new_info": True, "claims": []}
+    r = await call(t, make_ctx(t, sb, conv), "draft_followup", args)
+    assert r.status in ("proposed", "blocked"), r
+    async with tenant_session(t.id) as s:
+        text = (await s.execute(select(m.Draft.text).order_by(m.Draft.created_at.desc()))).scalars().first()
+    assert "[NAME_" not in text and "của mình" in text

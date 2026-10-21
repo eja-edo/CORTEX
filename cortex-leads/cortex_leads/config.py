@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     LLM_BASE_URL: str | None = None
     LLM_API_KEY: str | None = None
     LLM_MODEL_LITE: str | None = None
+    TELEGRAM_BOT_TOKEN: str | None = None  # staff push (WP17); unset = notifications are skipped
+    PUBLIC_BASE_URL: str | None = None  # link in the push, e.g. https://cortex.example.vn
+    CELL: str = "c1"  # which cell this process serves (own database, own workers); see cells/router.py
     INGEST_MAX_SKEW_S: int = 300
     INGEST_MAX_BATCH: int = 100
 

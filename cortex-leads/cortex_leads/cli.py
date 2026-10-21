@@ -39,8 +39,65 @@ async def cmd_create_tenant(a: argparse.Namespace) -> None:
     print(f"tenant_id={tid}\nsandbox_id={sid}")
 
 
+PROFILES = {"customer_care": "customer_drafter@1", "owner_digest": "digest_template@1"}
+
+
+async def cmd_create_sandbox(a: argparse.Namespace) -> None:
+    """A second sandbox for a tenant, e.g. `--purpose owner_digest` for the owner's weekly numbers."""
+    sid = uuid7()
+    async with tenant_session(a.tenant) as s:
+        s.add(m.Sandbox(id=sid, tenant_id=a.tenant, name=a.name or a.purpose, purpose=a.purpose,
+                        profile_ref=PROFILES[a.purpose], budget=DEFAULT_BUDGET))
+    print(f"sandbox_id={sid}")
+
+
+async def cmd_add_http_connector(a: argparse.Namespace) -> None:
+    """A read-only HTTPS source (T1). `--url` holds {q} where the query goes; the host must be --allow-host."""
+    from cortex_leads.connectors.http_readonly import pin_of, validate_source
+
+    source: dict = {"url": a.url, "allow_hosts": a.allow_host, **({"auth_header": a.auth_header} if a.auth_header else {})}
+    validate_source(source)
+    secret = Fernet(get_settings().CONNECTOR_SECRET_KEY).encrypt(a.secret.encode()) if a.secret else None
+    async with tenant_session(a.tenant) as s:
+        s.add(m.ToolConnector(tenant_id=a.tenant, sandbox_id=a.sandbox, name=a.name, source=source,
+                              description=a.description or "", secret_enc=secret, pin_sha256=pin_of("http_readonly", source)))
+    print(f"tool_connector {a.name} (pinned)")
+
+
+async def cmd_add_mcp_connector(a: argparse.Namespace) -> None:
+    """A remote MCP server (T2), read-only. Without --tool it only lists what the server offers; with --tool the
+    definition you just read is pinned, and any later change to it makes the connector refuse to run."""
+    from cortex_leads.connectors import mcp_remote
+    from cortex_leads.connectors.http_readonly import pin_of
+
+    source: dict = {"url": a.url, "allow_hosts": a.allow_host, **({"auth_header": a.auth_header} if a.auth_header else {})}
+    tools = await mcp_remote.describe({**source, "expose": [], "tool_pin": ""}, a.secret.encode() if a.secret else None)
+    if not a.tool:
+        for t in tools:
+            print(f"{t['name']}: {t.get('description', '')[:120]}  annotations={t.get('annotations')}")
+        return
+    chosen = next((t for t in tools if t["name"] == a.tool), None)
+    if chosen is None:
+        raise SystemExit(f"the server has no tool {a.tool!r}")
+    if not mcp_remote.read_only(chosen):
+        raise SystemExit("the server marks this tool as writing or destructive: refused")
+    source |= {"expose": [{"remote": a.tool, "arg": a.arg}], "tool_pin": mcp_remote.tool_pin([chosen])}
+    mcp_remote.validate_source(source)
+    secret = Fernet(get_settings().CONNECTOR_SECRET_KEY).encrypt(a.secret.encode()) if a.secret else None
+    async with tenant_session(a.tenant) as s:
+        s.add(m.ToolConnector(tenant_id=a.tenant, sandbox_id=a.sandbox, name=a.name, kind="mcp", source=source,
+                              description=a.description or "", secret_enc=secret, pin_sha256=pin_of("mcp", source)))
+    print(f"tool_connector {a.name} (mcp, tool {a.tool} pinned)")
+
+
+async def cmd_cron(a: argparse.Namespace) -> None:
+    from cortex_leads.cron.runner import cron_once
+
+    print(f"made={await cron_once(datetime.now(UTC), _gateway() if a.llm else None)}")
+
+
 async def cmd_create_connector(a: argparse.Namespace) -> None:
-    cid, secret = new_connector_id(), secrets.token_urlsafe(32)
+    cid, secret = new_connector_id(get_settings().CELL), secrets.token_urlsafe(32)
     async with system_session() as s:
         s.add(m.Connector(id=cid, tenant_id=a.tenant, sandbox_id=a.sandbox, channel_kind=a.channel_kind,
                           trust=a.trust, secret_enc=Fernet(get_settings().CONNECTOR_SECRET_KEY).encrypt(secret.encode())))
@@ -94,9 +151,16 @@ async def worker_once(gateway) -> tuple[int, int, int]:
     from cortex_leads.outbound.worker import deliver_once
     from cortex_leads.runner.customer_run import run_pending
 
+    from cortex_leads.notify.worker import notify_once
+
     fired = await sweep_once(datetime.now(UTC))
     runs = await run_pending(datetime.now(UTC), gateway)
-    return fired, runs, await deliver_once(datetime.now(UTC))
+    sent = await deliver_once(datetime.now(UTC))
+    from cortex_leads.cron.runner import cron_once
+
+    await cron_once(datetime.now(UTC), gateway)  # morning list, weekly digest, supervisor signals (WP19, WP21)
+    await notify_once(datetime.now(UTC))  # staff push (WP17): not part of the customer-facing counts
+    return fired, runs, sent
 
 
 async def cmd_worker(a: argparse.Namespace) -> None:
@@ -141,6 +205,13 @@ async def cmd_deliver_outbox(a: argparse.Namespace) -> None:
     print(f"delivered={await deliver_once(datetime.now(UTC))}")
 
 
+async def cmd_add_notify_target(a: argparse.Namespace) -> None:
+    """A Telegram chat that receives staff pushes. Needs CL_TELEGRAM_BOT_TOKEN on the worker."""
+    async with tenant_session(a.tenant) as s:
+        s.add(m.NotifyTarget(tenant_id=a.tenant, kind="telegram", address=a.chat_id, label=a.label))
+    print(f"notify_target telegram:{a.chat_id}")
+
+
 async def cmd_import_catalog(a: argparse.Namespace) -> None:
     """CSV columns: code,name,category,price,unit,valid_until(ISO). A changed row becomes version+1."""
     new = same = 0
@@ -177,6 +248,16 @@ def main(argv: list[str] | None = None) -> None:
     uid = {"type": UUID, "required": True}
     add("create-tenant", cmd_create_tenant, ("--name", {"required": True}),
         ("--timezone", {"default": "Asia/Ho_Chi_Minh"}))
+    add("create-sandbox", cmd_create_sandbox, ("--tenant", uid), ("--purpose", {"required": True, "choices": sorted(PROFILES)}),
+        ("--name", {"default": None}))
+    add("add-mcp-connector", cmd_add_mcp_connector, ("--tenant", uid), ("--sandbox", uid), ("--name", {"required": True}),
+        ("--url", {"required": True}), ("--allow-host", {"required": True, "action": "append"}), ("--tool", {"default": None}),
+        ("--arg", {"default": "query"}), ("--description", {"default": None}), ("--secret", {"default": None}),
+        ("--auth-header", {"default": None}))
+    add("cron", cmd_cron, ("--llm", {"action": "store_true", "help": "also write the weekly summary with the LLM"}))
+    add("add-http-connector", cmd_add_http_connector, ("--tenant", uid), ("--sandbox", uid), ("--name", {"required": True}),
+        ("--url", {"required": True}), ("--allow-host", {"required": True, "action": "append"}),
+        ("--description", {"default": None}), ("--secret", {"default": None}), ("--auth-header", {"default": None}))
     add("create-connector", cmd_create_connector, ("--tenant", uid), ("--sandbox", uid),
         ("--channel-kind", {"required": True}), ("--trust", {"default": "custom"}))
     add("create-api-key", cmd_create_api_key, ("--tenant", uid),
@@ -193,6 +274,8 @@ def main(argv: list[str] | None = None) -> None:
     add("set-send-mode", cmd_set_send_mode, ("--tenant", uid), ("--sandbox", uid),
         ("mode", {"choices": ["auto", "manual"]}))
     add("deliver-outbox", cmd_deliver_outbox)
+    add("add-notify-target", cmd_add_notify_target, ("--tenant", uid), ("--chat-id", {"required": True}),
+        ("--label", {"default": None}))
     add("import-catalog", cmd_import_catalog, ("csv", {}), ("--tenant", uid))
     args = p.parse_args(argv)
     try:

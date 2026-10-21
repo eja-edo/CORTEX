@@ -38,7 +38,7 @@ async def select_jobs(session: AsyncSession, sandbox: m.Sandbox, now: datetime
     used = dict((await session.execute(
         select(owner_col, func.count())
         .select_from(m.Draft).join(m.Conversation, m.Conversation.id == m.Draft.conversation_id)
-        .where(m.Draft.sandbox_id == sandbox.id, m.Draft.created_at >= day,
+        .where(m.Draft.sandbox_id == sandbox.id, m.Draft.created_at >= day, m.Draft.status != "shadow",
                or_(m.Draft.run_id.is_(None), m.Draft.run_id.not_in(
                    select(m.TriggerRun.id).where(m.TriggerRun.event_type == TURN_EVENT))))
         .group_by(owner_col))).all())

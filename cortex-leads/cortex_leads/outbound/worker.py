@@ -53,12 +53,49 @@ async def _end(session: AsyncSession, row: m.Outbox, status: str, reason: str, n
         _log(session, row, "fallback_manual", reason, now)
 
 
+async def _post_mark(session: AsyncSession, client: httpx.AsyncClient, row: m.Outbox, conv: m.Conversation,
+                     cn: m.Connector, now: datetime) -> None:
+    """add_tag / add_note (WP24). Same signed door as a message; none of the customer-facing rules apply."""
+    out = cn.outbound or {}
+    if row.kind not in (out.get("capabilities") or []):
+        return await _end(session, row, "cancelled", "OUTBOUND_DISABLED", now, "send_cancelled")
+    row.status = "sending"
+    await session.flush()
+    body, headers = encode(build_action(row, conv, cn, window_state(conv.channel_kind, conv.last_customer_at, now)),
+                           Fernet(get_settings().CONNECTOR_SECRET_KEY).decrypt(cn.secret_enc), now)
+    try:
+        r = await client.post(out["url"], content=body, headers=headers, timeout=15)
+        try:
+            data = r.json()
+        except ValueError:
+            data = None
+        kind, reason, _ = parse_result(r.status_code, data)
+    except httpx.HTTPError:
+        kind, reason = "error", "RETRY"
+    if kind == "sent":
+        row.status, row.sent_at, row.reason = "sent", now, None
+        _log(session, row, "mark_sent", None, now)
+    elif kind == "refused":  # a bridge that has no tags (Messenger) says NOT_SUPPORTED: that is its answer, not an error
+        await _end(session, row, "refused", reason, now, "mark_refused")
+    else:
+        row.attempts += 1
+        if reason == "RETRY" and row.attempts < MAX_ATTEMPTS:
+            row.status, row.not_before = "queued", now + timedelta(seconds=BACKOFF_S * 4 ** (row.attempts - 1))
+        else:
+            await _end(session, row, "error", "RETRIES_EXHAUSTED" if reason == "RETRY" else "BRIDGE_ERROR", now, "mark_error")
+
+
 async def _deliver(session: AsyncSession, client: httpx.AsyncClient, row: m.Outbox, now: datetime) -> None:
     conv = await session.get(m.Conversation, row.conversation_id)
     cn = await session.get(m.Connector, row.connector_id)
     sandbox = await session.get(m.Sandbox, conv.sandbox_id)
     ai = row.actor.startswith("ai:")
     out = cn.outbound or {}
+    if row.kind != "message":
+        if sandbox.status == "paused" or cn.status != "active" or not (out.get("enabled") and out.get("url")):
+            return await _end(session, row, "cancelled", "PAUSED" if sandbox.status == "paused" else "OUTBOUND_DISABLED",
+                              now, "send_cancelled")
+        return await _post_mark(session, client, row, conv, cn, now)
     window = window_state(conv.channel_kind, conv.last_customer_at, now)  # recomputed: it may have closed
     if sandbox.status == "paused" or cn.status != "active":  # kill switch, checked again at send time
         return await _end(session, row, "cancelled", "PAUSED", now, "send_cancelled")

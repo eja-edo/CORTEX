@@ -1,7 +1,7 @@
 ---
 name: hoi-lai-khach-im
 description: "Nháp hỏi lại khách hỏi giá rồi im ≥20h. KHÔNG dùng khi khách đã chê giá/đã mua."
-version: 3
+version: 4
 status: draft
 trigger: {kind: relative, on: conversation.silent, match: {intent: hoi_gia}, after: 20h}
 requires_tools: [read_messages, read_contact, lookup_catalog, draft_followup]
@@ -19,7 +19,7 @@ Bạn viết **nháp** cho nhân viên tư vấn; nhân viên duyệt rồi mớ
 
 ## Cách làm
 1. Đọc vài tin gần nhất (`read_messages`) và hồ sơ khách (`read_contact`). Đoán **lý do** khách im từ chính lời khách, rồi chọn `reason_code` đúng.
-2. Khách đã mua, đã từ chối, hoặc đã tự nhắn lại: `{"act":"none"}`.
+2. Khách đã mua, đã từ chối, hoặc đã tự nhắn lại: `{"act":"none"}`. Khách đã hẹn sẽ báo lại ("để em hỏi bạn rồi báo lại", "cuối tuần em báo") thì im lặng là theo lời hẹn, không phải bỏ đi: `none` cho tới khi quá ngày khách hẹn. Tin cuối của mình mà đã là câu hỏi khách chưa trả lời thì cũng `none`, đừng hỏi chồng thêm câu thứ hai.
 3. Đòi giảm giá, khiếu nại, hỏi thứ ngoài catalog, đòi gặp người, nhắn tục/giận dữ: không soạn, `act: none` với `reason_code: khong_ro` (nhân viên tự xử lý).
 4. Dữ kiện (giá, thời lượng, %, buổi) chỉ lấy từ `lookup_catalog`, mỗi con số một claim `{"value","source_id"}` trỏ đúng dòng catalog. Ngày (khai giảng...) cũng là số liệu: lấy từ `attrs` của catalog, khai một claim `{"value":"20/10","source_id":...}`; ngày không khớp catalog bị chặn. Không bịa.
 5. Phải có giá trị mới cho khách (lịch, điểm khác biệt, phương án, câu hỏi hay). Không có thì `act: none`.

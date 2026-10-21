@@ -48,7 +48,7 @@ def cb_now():
 @pytest.mark.parametrize("name", V3)
 def test_v3_skills_lint_clean_and_block_ai_voice(name):
     manifest, body = parse_skill_md(SKILLS / name / "SKILL.md")
-    assert manifest.version == 3 and manifest.field_count() <= 15
+    assert manifest.version >= 3 and manifest.field_count() <= 15
     assert lint(manifest, load_profile("customer_drafter@1"), PACK) == []
     assert body.count("**") // 2 >= 6 and "reason_code" in body and "Lần chạm cuối" in body
     for text in BANNED:

@@ -15,6 +15,7 @@ from cortex_leads.core.errors import CortexError
 from cortex_leads.core.ids import uuid7
 from cortex_leads.db import models as m
 from cortex_leads.domain.pack import DomainPack, load_pack
+from cortex_leads.outbound.annotate import annotate
 from cortex_leads.guard.facts import HORIZON_DAYS, extract_date_candidates, is_vague
 
 ContactFact = m.ContactFact
@@ -183,10 +184,42 @@ async def _apply_outcome(session: AsyncSession, conv: m.Conversation, status: st
         .values(status="fulfilled" if status in ("won", "booked") else "cancelled", updated_at=now)
         .returning(ContactFact.id))).all()
     conv.state, conv.promised_date, conv.next_check_at = STATE_OF[status], None, None
+    if STATE_OF[status] in ("won", "lost"):
+        await annotate(session, conv, STATE_OF[status], conv.id, now)  # WP24: mark it on the platform if the business asked
     jobs, drafts = await _cancel_work(session, conv, now, drafts=True)
     session.add(m.DecisionLog(  # counts only: no customer text in decision_log
         tenant_id=conv.tenant_id, conversation_id=conv.id, decision="promise_closed_by_outcome",
         reason_code=status, detail={"promises": len(closed), "jobs": jobs, "drafts": drafts}, at=now))
+
+
+BOOKING_SOURCE = "system:booking"
+
+
+async def note_appointment(session: AsyncSession, *, conversation_id: UUID, on: date, now: datetime
+                           ) -> ContactFact | None:
+    """A seat the system itself holds (WP18) is the strongest evidence of a promise: it becomes the
+    active `promised_date`, so follow-up waits and the "đúng hẹn" skill fires that morning. A date
+    outside the horizon (today, or too far) is not noted: the booking stands, only the clock does not move."""
+    conv = await _conv(session, conversation_id)
+    today = await local_today(session, conv.tenant_id, now)
+    if not today < on <= today + timedelta(days=HORIZON_DAYS):
+        return None
+    return await _new_fact(session, conv, "promised_date", {"date": on.isoformat()}, [],
+                           BOOKING_SOURCE, "active", now)
+
+
+async def release_appointment(session: AsyncSession, *, conversation_id: UUID, now: datetime) -> bool:
+    """The booking behind the promise was cancelled: the promise goes with it (only if the system made it)."""
+    conv = await _conv(session, conversation_id)
+    gone = (await session.execute(update(ContactFact).where(
+        ContactFact.conversation_id == conv.id, ContactFact.kind == "promised_date",
+        ContactFact.source == BOOKING_SOURCE, ContactFact.status == "active")
+        .values(status="cancelled", updated_at=now).returning(ContactFact.id))).all()
+    if gone:
+        conv.promised_date = None
+        if conv.state == "open":
+            await _rearm(session, conv, now)
+    return bool(gone)
 
 
 async def record_outcome(session, *, conversation_id: UUID, status: Outcome, source: str,

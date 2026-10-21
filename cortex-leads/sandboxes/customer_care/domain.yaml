@@ -15,7 +15,7 @@ reason_codes:
   da_mua: Có thể đã mua
   khong_ro: Chưa rõ lý do
 decision_maker_roles: [ban_than, vo_chong, bo_me, con, sep, khac]
-fact_kinds: [decision_maker, need, budget, objection, preference]
+fact_kinds: [decision_maker, need, budget, objection, preference, goal, current_level, study_time, deadline]
 outcome_keywords:
   booked: [đặt lịch, hẹn lịch, đã đặt, book]
   won: [đã đăng ký, đã chuyển khoản, đã thanh toán, đã mua, chốt]

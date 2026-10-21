@@ -29,7 +29,7 @@ OFF_HOURS = NOW + timedelta(hours=18)  # 04:00 in Vietnam: outside business_hour
 async def tw(world):
     async with tenant_session(world.t.id) as s:
         for st in ("shadow", "live"):
-            await promote(s, world.sb.id, "tra-loi-khach", 6, st)
+            await promote(s, world.sb.id, "tra-loi-khach", 16, st)
         await s.execute(update(m.Conversation).values(next_check_at=None))  # the fixture's old silent lead
     return world
 
@@ -138,6 +138,8 @@ async def test_handoff_is_never_sent_even_in_auto(tw, owner_engine) -> None:
     await run_pending(NOW + timedelta(seconds=40), gateway(reply(hand))[0])
     d, hold = sorted(await rows(tw, m.Draft), key=lambda x: not x.needs_human)
     assert d.status == "proposed" and d.needs_human
+    (note,) = await rows(tw, m.Notification)  # R58: a person is pushed, once, for the card only
+    assert (note.kind, note.ref_id, note.status) == ("handoff", d.id, "queued")
     (ob,) = await rows(tw, m.Outbox)  # only the holding line went out, never the note for staff
     assert ob.draft_id == hold.id and not hold.needs_human
     # defence in depth: the send tool itself refuses an ai caller on a handoff draft
@@ -271,7 +273,7 @@ async def test_handoff_tells_the_customer_in_the_models_words_else_the_fixed_lin
     # a promise slipped into the model's line is caught: the fixed, honest line goes instead
     await say(tw, "b", "customer", "alo shop", NOW + timedelta(minutes=2))
     await sweep_once(NOW + timedelta(minutes=3))
-    bad = {**hand, "customer_text": "Dạ em giữ chỗ cho mình rồi ạ."}
+    bad = {**hand, "customer_text": "Dạ em xếp lớp cho mình rồi ạ."}
     await run_pending(NOW + timedelta(minutes=3), gateway(reply(bad))[0])
     texts = {d.id: d.text for d in await rows(tw, m.Draft)}
     last = max(await rows(tw, m.Outbox), key=lambda o: o.created_at)

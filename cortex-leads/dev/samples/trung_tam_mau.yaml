@@ -30,6 +30,9 @@ courses:
       lich_hoc: tối thứ Hai, Tư, Sáu 19:30–21:00
       hinh_thuc: tại cơ sở hoặc online qua Zoom
       bao_gom: giáo trình, bài tập online, chữa bài viết hằng tuần
+      hoc_cach_nao: học từ phát âm và ngữ pháp nền, mỗi buổi luyện đủ nghe nói đọc viết ở mức đơn giản, có bài tập về nhà chấm chữa
+      hop_voi: người mất gốc, lâu không học tiếng Anh, chưa từng thi IELTS
+      buoc_tiep_theo: sau khoá này học tiếp IELTS 3 tháng
 
   - code: IE-3T
     name: IELTS 3 tháng (4.5 lên 5.5)
@@ -48,6 +51,9 @@ courses:
       lich_hoc: tối thứ Ba, Năm 19:30–21:00 và sáng Chủ nhật 09:00–10:30
       hinh_thuc: tại cơ sở hoặc online qua Zoom
       bao_gom: giáo trình, thi thử có chấm chữa, chữa bài viết và nói hằng tuần
+      hoc_cach_nao: mỗi tuần xoay vòng bốn kỹ năng, học theo dạng đề thật, viết và nói được giáo viên chữa chi tiết, thi thử giữa và cuối khoá để đo tiến bộ
+      hop_voi: người đã có nền cơ bản muốn thi lấy chứng chỉ để xét tuyển, tốt nghiệp hoặc đi làm
+      buoc_tiep_theo: muốn lên cao hơn thì học tiếp IELTS Tăng tốc
 
   - code: IE-TT
     name: IELTS Tăng tốc 6.5+ (du học, định cư)
@@ -66,6 +72,9 @@ courses:
       lich_hoc: tối thứ Hai đến thứ Năm 19:00–21:00
       hinh_thuc: chỉ học tại cơ sở
       bao_gom: giáo trình, thi thử trên giấy theo format thật, chữa nói một kèm một hằng tuần
+      hoc_cach_nao: luyện đề theo đúng format thi thật, mỗi tuần một buổi chữa nói một kèm một, tập trung chiến thuật làm bài và sửa lỗi từng học viên
+      hop_voi: người cần điểm cao để du học, định cư hoặc xét học bổng
+      buoc_tiep_theo: cần kèm sát hơn thì có thể kết hợp gói một kèm một
 
   - code: IE-1K1
     name: IELTS một kèm một (lịch linh hoạt)
@@ -79,6 +88,9 @@ courses:
       lich_hoc: tự chọn giờ trong khung 08:00–21:00 hằng ngày
       hinh_thuc: online qua Zoom hoặc tại cơ sở
       bao_gom: lộ trình riêng, giáo viên cố định
+      phan_bo_buoi: khách tự chọn số buổi mỗi tuần, thường học một đến hai buổi mỗi tuần, tập trung kèm đúng phần yếu; phần còn lại học viên tự học theo bài giáo viên giao
+      hoc_cach_nao: giáo viên cố định thiết kế lộ trình riêng sau bài kiểm tra, học theo tốc độ của học viên, tập trung đúng kỹ năng đang yếu
+      hop_voi: người bận lịch không theo được lớp, cần học nhanh hoặc yếu một kỹ năng cụ thể
 
   - code: GT-CB
     name: Giao tiếp cơ bản cho người đi làm
@@ -96,6 +108,9 @@ courses:
       lich_hoc: tối thứ Ba, Năm 19:30–21:00
       hinh_thuc: tại cơ sở hoặc online qua Zoom
       giao_vien: giáo viên Việt Nam
+      hoc_cach_nao: học qua tình huống công việc, thực hành nói theo cặp và nhóm nhỏ, giáo viên sửa phát âm ngay trong buổi
+      hop_voi: người đi làm ngại nói, vốn từ ít, cần giao tiếp cơ bản với đồng nghiệp hoặc khách hàng
+      buoc_tiep_theo: sau khoá này học tiếp Giao tiếp phản xạ
 
   - code: GT-PX
     name: Giao tiếp phản xạ với giáo viên bản ngữ
@@ -113,6 +128,8 @@ courses:
       lich_hoc: tối thứ Hai, Tư 19:30–21:00
       hinh_thuc: chỉ học tại cơ sở
       giao_vien: giáo viên bản ngữ, có trợ giảng Việt Nam
+      hoc_cach_nao: ít ngữ pháp, nhiều thực hành nghe nói với giáo viên bản ngữ, mô phỏng họp và gọi điện, ép phản xạ trả lời nhanh
+      hop_voi: người đã giao tiếp được câu cơ bản, muốn nói tự nhiên hơn trong công việc
 
   - code: TN-KIDS
     name: Tiếng Anh thiếu nhi (sáu đến mười tuổi)
@@ -129,6 +146,8 @@ courses:
       hinh_thuc: chỉ học tại cơ sở
       giao_vien: giáo viên Việt Nam và giáo viên bản ngữ xen kẽ
       ghi_chu: có sổ liên lạc gửi phụ huynh sau mỗi buổi
+      hoc_cach_nao: học qua trò chơi, bài hát và hoạt động nhóm, luyện nghe nói trước rồi mới làm quen đọc viết
+      hop_voi: trẻ sáu đến mười tuổi, chưa cần biết chữ trước, nhút nhát cũng theo được
 
   - code: THCS
     name: Tiếng Anh THCS lớp sáu đến lớp chín
@@ -144,6 +163,8 @@ courses:
       lich_hoc: tối thứ Hai, Tư hoặc tối thứ Ba, Năm 18:00–19:30
       hinh_thuc: tại cơ sở hoặc online qua Zoom
       giao_vien: giáo viên Việt Nam
+      hoc_cach_nao: ôn theo sát sách giáo khoa trên lớp, bổ sung nghe nói, luyện đề kiểm tra định kỳ và đề vào lớp mười
+      hop_voi: học sinh lớp sáu đến lớp chín cần củng cố điểm trên lớp hoặc ôn thi vào lớp mười
 
   - code: THI-THU
     name: Thi thử IELTS lẻ bốn kỹ năng
@@ -155,16 +176,27 @@ courses:
       lich_hoc: sáng thứ Bảy hằng tuần 08:00–11:30
       bao_gom: chấm và nhận xét chi tiết phần viết và nói
 
+# Lịch học thử (WP18): mỗi dòng là một slot; setup tạo dòng catalog category `lich_hoc_thu`,
+# valid_until = giờ bắt đầu, attrs.ngay = dd/mm, attrs.gio, attrs.suc_chua. Giả lập.
+slots:
+  - {in_days: 3, time: "19:00", capacity: 6, label: Buổi học thử tối}
+  - {in_days: 5, time: "19:00", capacity: 6, label: Buổi học thử tối}
+  - {in_days: 6, time: "09:00", capacity: 4, label: Buổi học thử sáng}
+
 info:
+  - code: TT-PHIEU
+    name: Phiếu đăng ký online
+    attrs:
+      url: https://thu-nghiem.example.vn/dang-ky
+      cach_dung: khách điền tên khoá và lịch mong muốn, bạn tư vấn liên hệ xác nhận sau khi nhận phiếu
+
   - code: TT-DANGKY
     name: Cách đăng ký và thanh toán
     attrs:
       cach_dang_ky: nhắn tên khoá và lịch mong muốn, bạn tư vấn gửi phiếu đăng ký online để điền
-      giu_cho: giữ chỗ bằng tiền đặt cọc, phần còn lại đóng trước buổi học đầu tiên
-      dat_coc: 500000
-      thanh_toan: chuyển khoản theo thông tin trên phiếu đăng ký, hoặc tiền mặt tại quầy
+      thanh_toan: đóng học phí trước buổi học đầu tiên, chuyển khoản theo thông tin trên phiếu đăng ký hoặc tiền mặt tại quầy
       tra_gop_so_dot: 2
-      ghi_chu: khoá từ ba tháng trở lên được chia hai đợt đóng
+      ghi_chu: khoá từ ba tháng trở lên được chia hai đợt đóng; không cần đặt cọc trước
 
   - code: TT-HOCTHU
     name: Học thử và kiểm tra đầu vào
@@ -193,7 +225,7 @@ info:
   - code: TT-COSO
     name: Địa chỉ, giờ làm việc, gửi xe
     attrs:
-      dia_chi: Cơ sở Thử Nghiệm (địa chỉ giả lập của bản demo)
+      dia_chi: đường Nguyễn Văn Mẫu, phường Thử Nghiệm (địa chỉ giả lập của bản demo); khách ngại nhắn tin có thể ghé quầy hoặc để bạn tư vấn gọi điện
       gio_lam_viec: 08:00–21:00 tất cả các ngày
       gui_xe: có chỗ gửi xe máy miễn phí cho học viên
 
@@ -217,3 +249,81 @@ info:
       nen_tang: Zoom, có ghi hình buổi học để xem lại
       tai_lieu: gửi qua Google Drive, bài tập nộp online
       khoa_co_online: IELTS Nền tảng, IELTS 3 tháng, IELTS một kèm một, Giao tiếp cơ bản, THCS
+
+  - code: TT-LOTRINH
+    name: Lộ trình học IELTS
+    attrs:
+      lo_trinh: mất gốc học IELTS Nền tảng, rồi IELTS 3 tháng, rồi IELTS Tăng tốc nếu cần điểm cao cho du học hoặc định cư
+      xep_lop: làm bài kiểm tra đầu vào miễn phí để biết nên vào khoá nào, không chắc trình độ thì làm bài này trước
+      hoc_nhanh: người cần học nhanh hoặc lịch bận chọn gói một kèm một
+      thoi_gian_tong_quat: mỗi khoá khoảng ba tháng, tuỳ điểm đầu vào và mục tiêu mà học một hay nhiều khoá liên tiếp
+      ghi_chu: bên em không hứa số điểm cụ thể, chỉ tư vấn lộ trình hợp trình độ
+
+  - code: TT-PHUONGPHAP
+    name: Phương pháp học và cách dạy
+    attrs:
+      cach_day: giáo viên chữa bài viết và nói chi tiết cho từng học viên, không chỉ đưa đáp án
+      theo_doi: có nhận xét tiến bộ định kỳ, thi thử để đo điểm, giáo viên báo điểm yếu cần luyện thêm
+      bai_tap: bài tập về nhà nộp online, được chữa lại, có tài liệu ôn riêng
+      lop_hoc: lớp nhỏ để giáo viên kèm được từng người, mỗi buổi đều có thực hành nói
+      hoc_bu: nghỉ có báo trước được học bù ở lớp cùng trình độ
+
+  - code: TT-DOITUONG
+    name: Ai nên học khoá nào
+    attrs:
+      mat_goc: IELTS Nền tảng hoặc Giao tiếp cơ bản, tuỳ mục tiêu thi hay đi làm
+      thi_chung_chi: IELTS 3 tháng nếu đã có nền, IELTS Tăng tốc nếu cần điểm cao
+      di_lam: Giao tiếp cơ bản hoặc Giao tiếp phản xạ
+      con_nho: Tiếng Anh thiếu nhi cho trẻ sáu đến mười tuổi, Tiếng Anh THCS cho lớp sáu đến lớp chín
+      khong_biet_trinh_do: làm bài kiểm tra đầu vào miễn phí rồi được tư vấn khoá phù hợp
+
+  - code: TT-THOIGIAN
+    name: Thời gian cần để đạt mục tiêu IELTS và giờ tự học mỗi ngày
+    attrs:
+      cach_tinh: tăng một band cần khoảng hai trăm giờ học có hướng dẫn cộng tự học (ước tính phổ biến từ Cambridge English và British Council, chỉ để tham khảo, mỗi người một khác); giờ trên lớp được trừ đi, phần còn lại là giờ tự học mỗi ngày
+      gio_can_moi_band: 200
+      gio_tren_lop_moi_khoa_ba_thang: 60
+      gio_tu_hoc_toi_da_moi_ngay: 3
+      gio_tu_hoc_nguoi_di_lam: 2
+      neu_vuot_gioi_han: nếu số giờ tự học mỗi ngày cao hơn mức tối đa thì nói thẳng là học như vậy rất khó đạt mục tiêu vì quá sức, giải thích vì sao, rồi đề nghị kéo dài thời gian hoặc chọn lớp kèm sát hơn
+      tu_hoc_cach_nao: nghe và nhắc lại mỗi ngày, mỗi tuần một bài viết nộp để giáo viên chữa, thi thử định kỳ để đo tiến bộ, ôn từ vựng theo chủ đề, học đều mỗi ngày tốt hơn dồn một buổi
+      giao_vien_theo_sat: giáo viên chữa bài viết và nói, giao bài về nhà, báo phần yếu sau mỗi lần thi thử
+      tang_0_5_band_trong_3_thang_tu_hoc_gio_moi_ngay: 0.5
+      tang_0_5_band_trong_6_thang_tu_hoc_gio_moi_ngay: 0
+      tang_0_5_band_trong_9_thang_tu_hoc_gio_moi_ngay: 0
+      tang_0_5_band_trong_12_thang_tu_hoc_gio_moi_ngay: 0
+      tang_1_0_band_trong_3_thang_tu_hoc_gio_moi_ngay: 2
+      tang_1_0_band_trong_6_thang_tu_hoc_gio_moi_ngay: 0.5
+      tang_1_0_band_trong_9_thang_tu_hoc_gio_moi_ngay: 0.5
+      tang_1_0_band_trong_12_thang_tu_hoc_gio_moi_ngay: 0
+      tang_1_5_band_trong_3_thang_tu_hoc_gio_moi_ngay: 3
+      tang_1_5_band_trong_6_thang_tu_hoc_gio_moi_ngay: 1
+      tang_1_5_band_trong_9_thang_tu_hoc_gio_moi_ngay: 0.5
+      tang_1_5_band_trong_12_thang_tu_hoc_gio_moi_ngay: 0.5
+      tang_2_0_band_trong_3_thang_tu_hoc_gio_moi_ngay: 4
+      tang_2_0_band_trong_6_thang_tu_hoc_gio_moi_ngay: 2
+      tang_2_0_band_trong_9_thang_tu_hoc_gio_moi_ngay: 1
+      tang_2_0_band_trong_12_thang_tu_hoc_gio_moi_ngay: 0.5
+      tang_2_5_band_trong_3_thang_tu_hoc_gio_moi_ngay: 5
+      tang_2_5_band_trong_6_thang_tu_hoc_gio_moi_ngay: 2.5
+      tang_2_5_band_trong_9_thang_tu_hoc_gio_moi_ngay: 1.5
+      tang_2_5_band_trong_12_thang_tu_hoc_gio_moi_ngay: 1
+      tang_3_0_band_trong_3_thang_tu_hoc_gio_moi_ngay: 6
+      tang_3_0_band_trong_6_thang_tu_hoc_gio_moi_ngay: 3
+      tang_3_0_band_trong_9_thang_tu_hoc_gio_moi_ngay: 2
+      tang_3_0_band_trong_12_thang_tu_hoc_gio_moi_ngay: 1
+
+  - code: TT-PHAMVI
+    name: Trung tâm dạy gì, chưa dạy gì
+    attrs:
+      dang_day: IELTS, giao tiếp cho người đi làm, tiếng Anh thiếu nhi, tiếng Anh THCS
+      chua_day: TOEIC, tiếng Nhật, tiếng Hàn, tiếng Trung, dạy kèm tại nhà
+      ghi_chu: chưa có thì nói thẳng là bên em chưa có và chỉ khoá gần nhất đang dạy; không chuyển người
+
+  - code: TT-CHUNGCHI
+    name: Kiến thức chung về chứng chỉ (để giải thích cho khách)
+    attrs:
+      ielts_toeic: IELTS thi đủ bốn kỹ năng nghe nói đọc viết, hay dùng cho du học, định cư và hồ sơ quốc tế; TOEIC thiên về tiếng Anh môi trường công sở, thường thi nghe và đọc
+      b1_la_gi: B1 là mức trung cấp theo khung châu Âu, thường tương đương IELTS khoảng bốn đến năm điểm; mỗi trường quy định riêng nên khách nên hỏi phòng đào tạo để biết chính xác
+      tuoi_tac: người lớn tuổi vẫn học được, chỉ cần lớp học chậm, nhiều thực hành nói và học đều đặn
+      chon_chung_chi: không biết trường hay công ty cần chứng chỉ nào thì hỏi nơi yêu cầu trước khi học

@@ -20,11 +20,14 @@ from cortex_leads.llm.gateway import LLMGateway
 from cortex_leads.llm.shape import parse_json_object
 from cortex_leads.llm.types import LLMError, ShapeError
 from cortex_leads.memory.service import has_pending_outcome, local_today
+from cortex_leads.notify import service as notify
+from cortex_leads.outbound.annotate import annotate
 from cortex_leads.runner.context_builder import build_messages, recent_messages
 from cortex_leads.sandbox.policy import check_budget
 from cortex_leads.skills.manifest import SkillManifest
 from cortex_leads.skills.profile import load_profile
 from cortex_leads.skills.registry import TURN_EVENT, LoadedSkill
+from cortex_leads.tools.booking import cancel_booking
 from cortex_leads.tools.registry import ToolRegistry, default_registry
 from cortex_leads.tools.send import effective_mode
 from cortex_leads.triggers.select import select_jobs
@@ -83,6 +86,7 @@ async def run_job(session: AsyncSession, job: m.FollowupJob, gateway: LLMGateway
         m.SkillVersion.sandbox_id == sandbox.id, m.SkillVersion.name == job.skill_name,
         m.SkillVersion.version == job.skill_version))).scalar_one()
     skill = LoadedSkill(sv.name, sv.version, SkillManifest(**sv.manifest), sv.body, sv.checksum)
+    shadow = sv.status == "shadow"  # a trial: everything but the model's words stays out of the real world (DESIGN §5.8)
     profile = load_profile(sandbox.profile_ref)
     # The run row exists before anything else: draft.run_id needs it (WP2).
     run = m.TriggerRun(
@@ -134,6 +138,23 @@ async def run_job(session: AsyncSession, job: m.FollowupJob, gateway: LLMGateway
                      trigger_event_id=job.dedupe_key)
     allowed = [n for n in profile.tool_allowlist if n in skill.manifest.requires_tools]
     read_allow = [s.name for s in registry.specs_for(allowed) if s.effect == "read"]
+    async def flag_human(draft_id: str, **extra: Any) -> None:  # a person's card + a push (WP17, R58)
+        await session.execute(update(m.Draft).where(m.Draft.id == UUID(draft_id)).values(
+            needs_human=True, **extra))
+        await notify.enqueue(session, job.tenant_id, "handoff", UUID(draft_id), now)
+        await annotate(session, conv, "handoff", UUID(draft_id), now)
+
+    async def try_book(o: dict[str, Any], key: str) -> tuple[str | None, str | None]:
+        """(booking id, None) | (None, why) | (None, None) when the reply books nothing. WP18."""
+        code = o.get("book")
+        if not (isinstance(code, str) and code.strip()):
+            return None, None
+        r = await registry.execute(ctx, session, "book_slot", {"slot_code": code.strip()}, allowlist=allowed,
+                                   effect_ceiling="internal", idempotency_key=key)
+        if r.status == "ok":
+            return r.data["booking_id"], None
+        return None, ", ".join(f"{v.code.value} {v.span or ''}".strip() for v in r.violations) or r.status
+
     async def hold() -> None:  # a person takes over, but the waiting customer is not left unanswered
         fixed = skill.manifest.handoff_reply
         if not (turn and fixed and route == "channel" and effective_mode(skill.manifest, sandbox) == "auto"):
@@ -153,14 +174,22 @@ async def run_job(session: AsyncSession, job: m.FollowupJob, gateway: LLMGateway
             _log(session, run, conv, "turn_hold_sent" if sent.status == "ok" else "turn_hold_failed", now,
                  skill=skill.name)
 
+    booked: str | None = None
     try:
         recent = await recent_messages(session, conv)
-        messages = await build_messages(session, profile, skill, conv, contact, window, recent, turn=turn)
-        final = await _loop(session, gateway, registry, ctx, run, messages, read_allow,
-                            profile.max_tool_calls, profile.timeout_s)
-        out = parse_json_object(final)
+        for attempt in (0, 1):  # one retry for a non-JSON answer (the gateway already retries transient errors)
+            try:
+                messages = await build_messages(session, profile, skill, conv, contact, window, recent, turn=turn)
+                final = await _loop(session, gateway, registry, ctx, run, messages, read_allow,
+                                    profile.max_tool_calls, profile.timeout_s)
+                out = parse_json_object(final)
+                break
+            except ShapeError:
+                if attempt:
+                    raise
+                log.warning("customer run: model answer was not usable JSON, retrying once")
         # Facts first (N5): what the customer said can end this run before any draft.
-        if isinstance(out.get("facts"), list) and out["facts"]:
+        if isinstance(out.get("facts"), list) and out["facts"] and not shadow:
             labels = {f"m{i}": r.id for i, r in enumerate(recent, 1)}
             raw = [{"kind": f.get("kind"), "value": f.get("value"), "evidence_msg_ids": [
                        str(labels[e]) for e in f.get("evidence") or [] if e in labels]}
@@ -179,6 +208,9 @@ async def run_job(session: AsyncSession, job: m.FollowupJob, gateway: LLMGateway
             await session.refresh(conv, ["last_customer_msg_id", "last_staff_at"])  # spoke during the LLM call?
             if conv.last_customer_msg_id != turn_msg or conv.last_staff_at != staff_at:
                 return finish("none", decision="turn_stale")
+        if turn and act == "wait" and shadow:
+            run.act = "none"
+            return finish("none", decision="shadow_wait")
         if turn and act == "wait":
             # Conditional on the same turn: a message that arrived meanwhile has already re-armed the mark.
             waited = await session.execute(update(m.Conversation).where(
@@ -196,6 +228,22 @@ async def run_job(session: AsyncSession, job: m.FollowupJob, gateway: LLMGateway
         limits = skill.manifest.limits
         if turn and out.get("reason_code") not in reason_codes:
             out["reason_code"] = "khong_ro"  # the turn skill asks no reason from the model
+        if turn and not handoff and not shadow:  # WP18: the seat is held BEFORE the reply that confirms it is written
+            booked, why = await try_book(out, f"book:{job.id}")
+            if why:
+                messages += [{"role": "assistant", "content": final}, {"role": "user", "content": (
+                    f"Không giữ được chỗ ({why}). Đừng xác nhận lịch đó với khách. Gọi list_open_slots, chọn lịch "
+                    'khác còn chỗ (ghi "book") rồi viết lại cùng JSON; không có lịch hợp thì act handoff.')}]
+                out2 = parse_json_object(await _loop(session, gateway, registry, ctx, run, messages, read_allow,
+                                                     profile.max_tool_calls, profile.timeout_s))
+                if out2.get("act") == "reply" and isinstance(out2.get("text"), str):
+                    out = {**out2, "reason_code": out["reason_code"]}
+                    booked, why = await try_book(out, f"book:{job.id}:2")
+                if why or booked is None and out2.get("act") != "reply":  # no seat to promise: a person's call
+                    note = out2.get("text") if out2.get("act") == "handoff" and isinstance(out2.get("text"), str) else (
+                        "Khách muốn đặt lịch học thử nhưng hệ thống chưa giữ được chỗ. Nhờ anh/chị xếp lịch cho khách.")
+                    out, handoff, booked = {"reason_code": out["reason_code"], "text": note, "claims": [],
+                                            "customer_text": out2.get("customer_text")}, True, None
         res = await registry.execute(  # the validator runs inside this tool (A7)
             ctx, session, "draft_followup",
             {"text": out["text"], "reason_code": out.get("reason_code"),
@@ -211,16 +259,27 @@ async def run_job(session: AsyncSession, job: m.FollowupJob, gateway: LLMGateway
                 "Không chắc thì act handoff.")}]
             out2 = parse_json_object(await _loop(session, gateway, registry, ctx, run, messages, read_allow,
                                                  profile.max_tool_calls, profile.timeout_s))
-            if out2.get("act") == "reply" and isinstance(out2.get("text"), str):
+            if out2.get("act") == "reply" and isinstance(out2.get("text"), str) \
+                    and (not out2.get("book") or out2.get("book") == out.get("book")):  # the seat is the one held
                 out = {**out2, "reason_code": out["reason_code"]}
                 res = await registry.execute(ctx, session, "draft_followup", {
                     "text": out["text"], "reason_code": out["reason_code"], "has_new_info": True,
                     "claims": out.get("claims", []), "max_touches": TURN_MAX_TOUCHES,
                     "never_say": skill.manifest.never_say, "route": route},
                     allowlist=allowed, effect_ceiling="internal", idempotency_key=f"{job.id}:rewrite")
+        if shadow:  # written and validated like a real one, then put where only the owner reads it
+            if res.status == "proposed":
+                await session.execute(update(m.Draft).where(m.Draft.id == UUID(res.data["draft_id"])).values(status="shadow"))
+                run.act = "draft"
+                return finish("ok", decision="shadow_draft", draft_id=res.data["draft_id"])
+            return finish("blocked", "done", *[v.code.value for v in res.violations], decision="shadow_blocked")
+        if booked and res.status != "proposed":  # the confirming reply was blocked: do not keep a seat nobody was told of
+            await cancel_booking(session, UUID(booked), by=ctx.actor, now=now)
     except (LLMError, ShapeError) as e:
         job.attempts += 1
-        if turn:  # the model failed, the customer is still waiting: a person's card + the fixed line
+        if booked:  # the model failed after a seat was held: the customer was told nothing
+            await cancel_booking(session, UUID(booked), by=ctx.actor, now=now)
+        if turn and not shadow:  # the model failed, the customer is still waiting: a person's card + the fixed line
             out, handoff = {"reason_code": "khong_ro"}, True
             card = await registry.execute(ctx, session, "draft_followup", {
                 "text": "Hệ thống chưa soạn được câu trả lời cho lượt này, nhờ anh/chị trả lời khách.",
@@ -228,16 +287,14 @@ async def run_job(session: AsyncSession, job: m.FollowupJob, gateway: LLMGateway
                 "never_say": [], "route": route}, allowlist=allowed, effect_ceiling="internal",
                 idempotency_key=f"{job.id}:error")
             if card.status == "proposed":
-                await session.execute(update(m.Draft).where(m.Draft.id == UUID(card.data["draft_id"])).values(
-                    needs_human=True))
+                await flag_human(card.data["draft_id"])
                 await hold()
         return finish("error", "failed", decision="run_error", error=type(e).__name__)
     run.act, run.reason_code = "draft", out.get("reason_code") if out.get("reason_code") in reason_codes else None
 
     if res.status == "proposed":
         if handoff:  # DESIGN §5.7: a person's call (discount, complaint, out of catalog): never auto
-            await session.execute(update(m.Draft).where(m.Draft.id == UUID(res.data["draft_id"])).values(
-                needs_human=True))
+            await flag_human(res.data["draft_id"])
             await hold()
         if route == "offchannel":
             return finish("ok", decision="draft_offchannel", channel=conv.channel_kind)
@@ -253,14 +310,12 @@ async def run_job(session: AsyncSession, job: m.FollowupJob, gateway: LLMGateway
             codes = [f"{v.code.value}:{v.detail}" for v in sent.violations] or [sent.status]
             _log(session, run, conv, "fallback_manual", now, skill=skill.name, codes=codes)
             if turn:  # refused at the send floor (must_handoff, window…): a person's card, the customer told
-                await session.execute(update(m.Draft).where(m.Draft.id == UUID(res.data["draft_id"])).values(
-                    needs_human=True))
+                await flag_human(res.data["draft_id"])
                 await hold()
         return finish("ok", decision="draft_proposed", basis=window["basis"],
                       human_typed_only=window["basis"] == "human_agent")
     if res.status == "blocked" and turn and res.data:  # R50: a customer is waiting; silence drops them
-        await session.execute(update(m.Draft).where(m.Draft.id == UUID(res.data["draft_id"])).values(
-            status="proposed", needs_human=True))  # a person's card, never sent by AI (send.py)
+        await flag_human(res.data["draft_id"], status="proposed")  # a person's card, never sent by AI (send.py)
         await hold()
         return finish("ok", decision="turn_handoff_blocked", codes=[v.code.value for v in res.violations])
     if res.status == "blocked":

@@ -3,11 +3,11 @@ version: 1
 audience: customer
 input_trust: untrusted
 context_sources: ["conversation:{scope}", "contact_profile:{scope}", "catalog:tenant", "skill:{id}@{ver}"]
-tool_allowlist: [read_messages, read_contact, lookup_catalog, draft_followup, send_message]
+tool_allowlist: [read_messages, read_contact, lookup_catalog, study_plan, list_open_slots, book_slot, draft_followup, send_message]
 effect_ceiling: customer  # send_message only; the runner offers the model read tools alone
 memory_scope: contact
 output_schema: DraftResult
 model: lite
-max_tool_calls: 3
+max_tool_calls: 4
 timeout_s: 30
 token_budget: 8000

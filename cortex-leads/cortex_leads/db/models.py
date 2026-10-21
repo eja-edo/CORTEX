@@ -331,7 +331,7 @@ class Draft(Base):
     staff_ref: Mapped[str | None] = mapped_column(Text)
     __table_args__ = (
         _enum("status", "proposed", "approved", "sent", "edited", "self", "skipped", "expired",
-              "blocked", "failed"),
+              "blocked", "failed", "shadow"),  # shadow: a skill on trial wrote it; nobody is shown it, nothing is sent
         _enum("route", "channel", "offchannel"),
         Index("ix_draft_conv", "tenant_id", "conversation_id", "status"),
     )
@@ -428,6 +428,7 @@ class Outbox(Base):
     conversation_id: Mapped[UUID] = mapped_column(ForeignKey("conversation.id"))
     connector_id: Mapped[str] = mapped_column(ForeignKey("connector.id"))
     draft_id: Mapped[UUID | None] = mapped_column(ForeignKey("draft.id"))
+    kind: Mapped[str] = mapped_column(Text, server_default="message")  # message | add_tag | add_note (WP24)
     actor: Mapped[str] = mapped_column(Text)
     text: Mapped[str] = mapped_column(Text)
     disclosure: Mapped[str | None] = mapped_column(Text)
@@ -442,12 +443,161 @@ class Outbox(Base):
     sent_at: Mapped[datetime | None]
     __table_args__ = (
         _enum("status", "queued", "sending", "sent", "refused", "error", "cancelled"),
+        _enum("kind", "message", "add_tag", "add_note"),
         Index("ix_outbox_pick", "tenant_id", "status", "not_before"),
     )
 
 
-# Wave-2 tables are created by migration 0002 (0001 stays the v0 schema).
-WAVE2_TABLES = {"contact_fact", "deal", "outbox"}
+class NotifyTarget(Base):
+    """Where staff pushes go (WP17). `address` is a Telegram chat id; the bot token is global config."""
+
+    __tablename__ = "notify_target"
+    id: Mapped[UUID] = pk()
+    tenant_id: Mapped[UUID] = tid()
+    kind: Mapped[str] = mapped_column(Text, server_default="telegram")
+    address: Mapped[str] = mapped_column(Text)
+    label: Mapped[str | None] = mapped_column(Text)
+    active: Mapped[bool] = mapped_column(Boolean, server_default=sql_text("true"))
+    created_at: Mapped[datetime] = created()
+    __table_args__ = (_enum("kind", "telegram"), UniqueConstraint("tenant_id", "kind", "address"))
+
+
+class Notification(Base):
+    """A push owed to staff. No customer text: `kind` + `ref_id` only (the message is built from counts)."""
+
+    __tablename__ = "notification"
+    id: Mapped[UUID] = pk()
+    tenant_id: Mapped[UUID] = tid()
+    kind: Mapped[str] = mapped_column(Text)
+    ref_id: Mapped[UUID]
+    status: Mapped[str] = mapped_column(Text, server_default="queued")
+    attempts: Mapped[int] = mapped_column(Integer, server_default="0")
+    not_before: Mapped[datetime | None]
+    created_at: Mapped[datetime] = created()
+    sent_at: Mapped[datetime | None]
+    __table_args__ = (
+        _enum("kind", "handoff", "booking", "task", "digest", "proposal"),
+        _enum("status", "queued", "sent", "failed", "skipped"),
+        UniqueConstraint("tenant_id", "kind", "ref_id"),
+        Index("ix_notification_pick", "tenant_id", "status", "not_before"),
+    )
+
+
+class Booking(Base):
+    """A trial-class seat (WP18). The slot is a catalog row; one confirmed booking per conversation."""
+
+    __tablename__ = "booking"
+    id: Mapped[UUID] = pk()
+    tenant_id: Mapped[UUID] = tid()
+    sandbox_id: Mapped[UUID] = mapped_column(ForeignKey("sandbox.id"))
+    conversation_id: Mapped[UUID] = mapped_column(ForeignKey("conversation.id"))
+    contact_id: Mapped[UUID] = mapped_column(ForeignKey("contact.id"))
+    slot_code: Mapped[str] = mapped_column(Text)
+    starts_at: Mapped[datetime]
+    status: Mapped[str] = mapped_column(Text, server_default="confirmed")
+    actor: Mapped[str] = mapped_column(Text)
+    run_id: Mapped[UUID | None]
+    created_at: Mapped[datetime] = created()
+    cancelled_at: Mapped[datetime | None]
+    cancelled_by: Mapped[str | None] = mapped_column(Text)
+    __table_args__ = (
+        _enum("status", "confirmed", "cancelled"),
+        Index("ix_booking_slot", "tenant_id", "slot_code", "status"),
+        Index("uq_booking_one_live", "tenant_id", "conversation_id", unique=True,
+              postgresql_where=sql_text("status = 'confirmed'")),
+    )
+
+
+class StaffTask(Base):
+    """A cron-made to-do for staff (WP19): the morning list of customers to look after. Ids and counts
+    only; names are read at view time under RLS."""
+
+    __tablename__ = "staff_task"
+    id: Mapped[UUID] = pk()
+    tenant_id: Mapped[UUID] = tid()
+    sandbox_id: Mapped[UUID] = mapped_column(ForeignKey("sandbox.id"))
+    kind: Mapped[str] = mapped_column(Text)
+    for_date: Mapped[date] = mapped_column(Date)
+    payload: Mapped[dict[str, Any]] = mapped_column(server_default=sql_text("'{}'::jsonb"))
+    status: Mapped[str] = mapped_column(Text, server_default="open")
+    done_by: Mapped[str | None] = mapped_column(Text)
+    done_at: Mapped[datetime | None]
+    created_at: Mapped[datetime] = created()
+    __table_args__ = (
+        _enum("kind", "morning_list"),
+        _enum("status", "open", "done"),
+        UniqueConstraint("tenant_id", "sandbox_id", "kind", "for_date"),
+    )
+
+
+class Digest(Base):
+    """The owner's weekly numbers (WP19), built by a template from counts: no text, no LLM."""
+
+    __tablename__ = "digest"
+    id: Mapped[UUID] = pk()
+    tenant_id: Mapped[UUID] = tid()
+    sandbox_id: Mapped[UUID] = mapped_column(ForeignKey("sandbox.id"))
+    kind: Mapped[str] = mapped_column(Text)
+    period_start: Mapped[date] = mapped_column(Date)
+    period_end: Mapped[date] = mapped_column(Date)
+    payload: Mapped[dict[str, Any]] = mapped_column(server_default=sql_text("'{}'::jsonb"))
+    created_at: Mapped[datetime] = created()
+    __table_args__ = (
+        _enum("kind", "weekly"),
+        UniqueConstraint("tenant_id", "sandbox_id", "kind", "period_start"),
+    )
+
+
+class Proposal(Base):
+    """What the supervisor (AI tổng) suggests; only a person's click changes anything (DESIGN §5.6).
+    `evidence` holds numbers and enum codes read from the metadata views: never a word a customer wrote."""
+
+    __tablename__ = "proposal"
+    id: Mapped[UUID] = pk()
+    tenant_id: Mapped[UUID] = tid()
+    sandbox_id: Mapped[UUID] = mapped_column(ForeignKey("sandbox.id"))
+    kind: Mapped[str] = mapped_column(Text)
+    signal: Mapped[str] = mapped_column(Text)
+    target: Mapped[dict[str, Any]] = mapped_column(server_default=sql_text("'{}'::jsonb"))
+    evidence: Mapped[dict[str, Any]] = mapped_column(server_default=sql_text("'{}'::jsonb"))
+    status: Mapped[str] = mapped_column(Text, server_default="pending")
+    decided_by: Mapped[str | None] = mapped_column(Text)
+    decided_at: Mapped[datetime | None]
+    created_at: Mapped[datetime] = created()
+    __table_args__ = (
+        _enum("kind", "rollback_skill", "pause_sandbox", "review_skill", "tune_skill"),
+        _enum("status", "pending", "accepted", "dismissed", "stale"),
+        Index("uq_proposal_open", "tenant_id", "sandbox_id", "signal", sql_text("coalesce(target->>'skill', '')"),
+              unique=True, postgresql_where=sql_text("status = 'pending'")),
+    )
+
+
+class ToolConnector(Base):
+    """A read-only HTTP source the business configured (T1 `http_readonly`, DESIGN §5.8). The config is
+    pinned by `pin_sha256`; a row whose config no longer hashes to the pin is refused at call time."""
+
+    __tablename__ = "tool_connector"
+    id: Mapped[UUID] = pk()
+    tenant_id: Mapped[UUID] = tid()
+    sandbox_id: Mapped[UUID] = mapped_column(ForeignKey("sandbox.id"))
+    name: Mapped[str] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(Text, server_default="http_readonly")
+    source: Mapped[dict[str, Any]] = mapped_column(server_default=sql_text("'{}'::jsonb"))
+    description: Mapped[str] = mapped_column(Text, server_default="")
+    secret_enc: Mapped[bytes | None] = mapped_column(LargeBinary)  # Fernet token of the auth header value
+    pin_sha256: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, server_default="active")
+    created_at: Mapped[datetime] = created()
+    __table_args__ = (
+        _enum("kind", "http_readonly", "mcp"),
+        _enum("status", "active", "disabled"),
+        UniqueConstraint("tenant_id", "sandbox_id", "name"),
+    )
+
+
+# Tables created by migrations after 0001 (0001 builds only the v0 schema from these models).
+WAVE2_TABLES = {"contact_fact", "deal", "outbox", "notify_target", "notification", "booking",
+                "staff_task", "digest", "tool_connector", "proposal"}
 # Supervisor views (no free-text column). DESIGN §5.6. view -> (table, columns it reads).
 SUPERVISOR_VIEWS = {
     "supervisor_fact_view": ("contact_fact", ["tenant_id", "kind", "source", "status", "created_at"]),

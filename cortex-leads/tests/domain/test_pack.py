@@ -39,7 +39,8 @@ async def call(t, ctx, name, args):
 def test_shipped_pack_loads_and_vocabulary_is_structural():
     assert set(PACK.intents) == {"hoi_gia", "hoi_lich"} and len(PACK.reason_codes) == 6
     assert PACK.all_fact_kinds == CORE_FACT_KINDS | {
-        "decision_maker", "need", "budget", "objection", "preference"}
+        "decision_maker", "need", "budget", "objection", "preference",
+        "goal", "current_level", "study_time", "deadline"}
     assert {"conversation.silent", "conversation.promised_date_reached"} <= EVENT_TYPES
     assert not any(e.startswith("lead.") for e in EVENT_TYPES)
 

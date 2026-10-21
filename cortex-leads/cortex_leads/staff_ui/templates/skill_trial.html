@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Bản nháp thử — Cortex Leads{% endblock %}
+{% block body %}<h1>{{ skill.name }} <span class="meta">bản {{ skill.version }}</span></h1>
+<p class="meta">Đây là những gì kỹ năng đã viết khi chạy thử. Không có nháp nào được gửi hay hiện cho nhân viên. Đọc kỹ rồi mới bật.</p>
+{% for i in items %}<section class="card">{% if i.asked %}<p class="ask">Khách hỏi: “{{ i.asked }}”</p>{% endif %}
+{% if i.blocked %}<p class="bad">Bị chặn bởi bộ kiểm</p>{% endif %}<div class="draft">{{ i.text }}</div></section>
+{% else %}<p class="card">Chưa có nháp thử nào.</p>{% endfor %}
+<p><a href="/staff/skills">← Quay lại</a></p>
+{% endblock %}

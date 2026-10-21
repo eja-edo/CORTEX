@@ -14,6 +14,10 @@
 | 2026-10-12 | **Giọng văn trả lời khách** (§5.8): `STYLE.md` theo sandbox, ví dụ giọng thật của doanh nghiệp, skill v3 có bảng chiến thuật theo `reason_code`, bộ eval 25 tình huống | Chủ dự án yêu cầu tin nhắn không giống AI; tham khảo agency-agents (MIT) |
 | 2026-10-13 | **Trả lời lượt khách khi chưa có người trả lời** (WP16, §5.7 loại `turn`): tin của khách được gom thành *lượt* (chờ khách nhắn xong, mặc định 30 giây), rồi LLM đọc cả lượt và quyết định `reply` / `wait` / `handoff` / `none`. Auto → gửi ngay trong cửa sổ tự do, kèm dòng xưng AI; manual → nháp trả lời hiện ngay ở đầu trang duyệt. Không bắn khi nhân viên đang trực hội thoại đó. A2, N7, §1.1, §1.4, §11 sửa theo. **Ghi lại để trung thực:** N7 cũ cấm đúng việc này vì đối thủ cho miễn phí; ranh giới mới là AI *lấp chỗ chưa có người*, không thay nhân viên, và điểm bán vẫn là không để rơi + trí nhớ + theo sát | Quyết định của chủ dự án: "đó là vấn đề cơ bản trong chăm sóc khách hàng" — khách nhắn mà không ai trả lời là kiểu rơi khách đầu tiên |
 | 2026-10-12 | **Cửa sổ kênh đã đóng → nháp tuyến `offchannel`** (`draft.route`): nhân viên gọi điện/nhắn Zalo theo gợi ý, không bao giờ vào outbox (kể cả `auto`, kể cả nút duyệt). Validator kiểm cả **ngày** (dd/mm) như số liệu | R39: lời hẹn xa trên Messenger tới ngày thì cửa sổ đã đóng, hệ thống im → rơi khách; R38: ngày khai giảng sai lọt tới khách |
+| 2026-10-14 | **Mục tiêu đầu tiên: AI tự tư vấn khoá học và hỗ trợ khách, giảm tối đa việc nhân viên phải can thiệp.** Handoff chỉ còn cho: ưu đãi/giảm giá ngoài catalog, khiếu nại, thứ catalog không ghi, đòi gặp người. Đăng ký, học thử, hoàn phí, ưu đãi trong catalog, cách học, lộ trình do AI tự trả lời; nhân viên chỉ còn việc thao tác thật (gửi phiếu, xếp giờ). **Bỏ khoản đặt cọc giữ chỗ** khỏi dữ liệu mẫu. Catalog mẫu được làm giàu (phương pháp, lộ trình, đối tượng từng khoá). Chất lượng đo bằng hội thoại kịch bản mơ hồ chạy LLM thật rồi đọc tay, không dùng thang chấm tự động. Skill `tra-loi-khach` v8. **Chưa làm:** tool AI tự gửi phiếu/chốt lịch (cần thiết kế riêng, chạm ngân sách L3) | Quyết định của chủ dự án 2026-10-14. Chưa có bằng chứng từ khách thật |
+| 2026-10-17 | **Bỏ L3: không còn đóng băng code tới G2.** Xây toàn bộ roadmap T1/T2 (§7.1, §7.3) song song với việc đi tìm khách, vì chưa đưa được khách thật vào để chạy G1.5. Cổng G1/G1.5/G2 và mốc giết (L4, L6), L8, các bất biến A1–A9, nhóm C trước khi chạm dữ liệu thật **vẫn giữ nguyên**. **Ghi lại để trung thực:** đây là lần thứ hai chủ dự án chọn xây trước khi có khách, trái khuyến nghị của hội đồng và của LESSONS (hướng cũ chết vì đúng kiểu này). Rủi ro chịu có chủ đích: phần xây thêm không có bằng chứng từ khách, và có thể thành `workflow_service` bản mới | Quyết định của chủ dự án 2026-10-17: "hiện tại không thể đưa khách thật vào, hãy xây hệ thống hoàn chỉnh trước và trong thời gian xây dựng vừa đi tìm khách" |
+| 2026-10-17 | **Xây xong đợt 2–6 của §7.3 trên dữ liệu giả lập** (497 test, cortex-leads ≈ 7.990 dòng gồm bridge — vượt ngân sách v0 5.000 vì L3 đã bỏ): WP17 thông báo đẩy Telegram (R58), WP18 AI giữ chỗ học thử + validator kiểm giờ/URL, WP19 cron mẫu + sandbox `owner_digest`, WP20 `http_readonly`, WP21 AI tổng (tín hiệu 0 token → đề xuất, người duyệt; LLM chỉ viết tóm tắt tuần từ số), WP22 form skill + giai đoạn shadow thật, WP23 MCP ngoài chỉ đọc có ghim định nghĩa, WP24 `add_tag`/`add_note` qua outbox, WP25 thẻ chiến lược, WP26 multi-cell (router). **Chưa kiểm trên thế giới thật:** Page Pancake/Messenger, LLM thật cho các đoạn mới, MCP server thật, bridge nào hỗ trợ nhãn/ghi chú (REVIEW R70–R84). Đây là *khả năng*, không phải bằng chứng: G1 vẫn chưa có cuộc nói chuyện nào | Quyết định của chủ dự án 2026-10-17 (dòng trên). Chưa có bằng chứng từ khách |
+| 2026-10-21 | **G0: chốt ngành khoá học / du học** (mặc định của §2.3, vì chưa có ngành nào đạt quy tắc ≥ 15 chủ quen). **Hướng mở rộng đã chọn, chưa phải phạm vi:** sau tư vấn, hỗ trợ học viên (lịch, học bù, học phí, kết quả); chờ khách xác nhận theo G2.5. **Yêu cầu của chủ dự án:** hoàn thiện đầy đủ tính năng trước rồi mới giao trung tâm dùng. **Ghi trung thực:** yêu cầu này mâu thuẫn với mốc G1 (23/10) và L4 (trượt G1 thì dừng code mới); chưa sửa mốc, chủ dự án cần quyết rõ | Quyết định của chủ dự án 2026-10-21. Chưa có bằng chứng từ khách |
 
 > **Chưa có bằng chứng nào từ người thật.** Phần sản phẩm (§1–4) là giả thuyết cho tới khi §3 có số. Phần nền tảng (§5) được xây theo §7.2, và **chỉ đúng phạm vi v0**. Mọi thứ ngoài v0 vẫn mở theo cổng.
 
@@ -35,11 +39,7 @@ Cortex đã đổi hướng bốn lần, lần nào cũng theo cùng một kiể
 
 **L2 — Đổi hướng thì sửa tài liệu trước, code sau.** Thêm một dòng vào bảng sửa đổi, kèm bằng chứng hoặc lý do. Các câu kiểu "tôi nghĩ là", "chuyên gia nói", "mô phỏng cho thấy" không được tính là bằng chứng *từ khách*.
 
-**L3 (sửa 2026-10-10) — Ngoài phạm vi v0 (§7.2), code sản phẩm đóng băng tới cổng G2.** Phạm vi v0 có **ngân sách cứng ≤ 5.000 dòng code** (không tính test, migration, công cụ dev trong `dev/`; nới từ 4.000 ngày 2026-10-12). Chạm ngân sách là dừng, không nới. Ngoài v0, chỉ có ba ngoại lệ:
-
-- sửa bảo mật;
-- script phục vụ việc làm tay;
-- gỡ code.
+**L3 (BỎ 2026-10-17) — ~~Ngoài phạm vi v0, code sản phẩm đóng băng tới cổng G2.~~** Không còn đóng băng. Ngân sách 5.000 dòng chỉ còn là mốc đo phạm vi v0, không chặn code mới. Thay vào đó, mỗi gói việc mới vẫn phải qua L1 (thuộc cổng nào, đưa tới cổng bằng cách nào) và L7 (phiếu / manifest trước code). Mốc giết L4/L6 vẫn có hiệu lực: trượt G1 thì **dừng mọi code mới**, không gia hạn.
 
 **L4 — Mốc giết là mốc giết.** Trượt mốc thì làm đúng điều cột "không đạt" ghi, không gia hạn.
 
@@ -99,7 +99,7 @@ Danh sách lead rơi là **danh sách việc cho nhân viên**, không phải b�
 - **Lưu ý từ mô phỏng:** chủ spa và shop online neo giá theo phần mềm, khoảng 0,3–2 triệu. Mức 3–4 triệu chỉ hợp với ngành khoá học hoặc nha khoa.
 - **Kênh bán thử đầu tiên:** agency chạy quảng cáo tin nhắn, chia 20–30%.
 
-### 2.3 Ngành — ⏳ **CHƯA CHỐT, hạn 2026-10-16**
+### 2.3 Ngành — ✅ **ĐÃ CHỐT 2026-10-21: khoá học / du học** (theo mặc định; chưa có danh sách ≥ 15 chủ doanh nghiệp)
 
 **Quy tắc:** chọn ngành mà người xây quen được **≥ 15 chủ doanh nghiệp**. Nếu không có ngành nào như vậy, mặc định là **khoá học / du học**.
 
@@ -811,6 +811,26 @@ Tổng ước tính ≈ 2.810 + 1.890 ≈ **4.700 / 5.000**.
 - phỏng vấn cho G1;
 - tạo page Pancake thử để xác minh API.
 
+### 7.3 Xây toàn bộ roadmap trong lúc tìm khách (từ 2026-10-17)
+
+Thứ tự theo **mức chặn việc nhận khách thật**, rồi tới độ phụ thuộc kỹ thuật. Mỗi gói vẫn cần phiếu / manifest (L7) trước khi code, và ghi giờ code vào §9 (L8).
+
+| Đợt | Gói | Nội dung | Trạng thái 2026-10-17 |
+|---|---|---|---|
+| 1 | **WP14 Page thật** | Bridge Pancake / Messenger trên Page thử, xác minh R13/R27, đo nhóm B ~30 hội thoại | ⏳ **Cần tài khoản + Page thử**, code không tự làm được |
+| 1 | **Vận hành** | Kill switch < 1 phút, backup DB hằng ngày, checklist thiết lập ≤ 2 giờ, gitleaks pre-commit | ⏳ Chưa làm (nhóm C) |
+| 2 | **WP17 + WP18** | Thông báo đẩy (R58); AI giữ chỗ học thử, phiếu đăng ký là dòng catalog | ✅ Xây xong, test giả lập |
+| 3 | **WP19 + WP20** | Cron mẫu (`morning_list`, `weekly_digest`), sandbox `owner_digest`; connector `http_readonly` | ✅ |
+| 4 | **WP21** | AI tổng: tín hiệu 0 token → đề xuất → chủ duyệt; tóm tắt tuần do LLM viết từ số | ✅ |
+| 5 | **WP22** | Form skill (mẫu cố định, không tự gửi) + shadow thật | ✅ |
+| 6 | **WP23–26** | MCP ngoài chỉ đọc có ghim; `add_tag`/`add_note`; thẻ chiến lược; multi-cell | ✅ Lõi xong; chưa bridge nào thi hành nhãn/ghi chú (R82) |
+
+Chi tiết từng gói và bất biến nó giữ: [`cortex-leads/PLAN.md`](../cortex-leads/PLAN.md) §9. Rủi ro còn mở: REVIEW R70–R84.
+
+**Vẫn không làm** (§11): người dùng tự gắn MCP, adapter từng kênh trong lõi, bot Zalo cá nhân, AI tổng đọc văn bản, `$or` / biểu thức trong trigger.
+
+**Mốc giết thay cho đóng băng:** trượt G1 (2026-10-23) → dừng mọi code mới, chỉ sửa lỗi, thử ngành thứ hai đúng một lần (§7.1).
+
 ---
 
 ## 8. Cam kết hành vi
@@ -819,7 +839,7 @@ Tổng ước tính ≈ 2.810 + 1.890 ≈ **4.700 / 5.000**.
 |---|---|
 | 10 giờ/tuần nói chuyện với chủ doanh nghiệp hoặc nhân viên trong ngành | Số file mới trong `docs/customers/` |
 | Giờ code ≤ giờ nói chuyện với khách (L8) | Ghi ở §9 |
-| Không viết code ngoài v0 trước G2 (L3) | `git log` |
+| ~~Không viết code ngoài v0 trước G2 (L3)~~ — bỏ 2026-10-17; thay bằng: trượt G1 thì dừng code mới | `git log` |
 | Chỉ tính tiền thật | Chuyển khoản |
 
 **Người giữ mốc:** *(điền tên trước 2026-10-16)*
@@ -834,6 +854,7 @@ Tổng ước tính ≈ 2.810 + 1.890 ≈ **4.700 / 5.000**.
 | 2026-10-10 | G0 | 0 | v0 xây xong (175 test) | 2.810 / 4.000 | R13, R15 cần quyết (xem cortex-leads/REVIEW.md) | — (v0 trong phạm vi L3 sửa đổi) | — |
 | 2026-10-12 | G0 | 0 | Đợt 2 xây xong tới WP8 + F1, F2 (327 test; kịch bản chuẩn giả lập chạy trọn, gồm auto/manual) | 4.627 / 5.000 | Còn WP14 (cần Page thật, API key); R13/R27 phải kiểm trên Page thật | Chưa có cuộc nói chuyện nào với khách — L8 bắt đầu tính từ 17/10 | — |
 | 2026-10-14 | G0 | 0 | **Khép giai đoạn xây + thử local.** WP15 (giọng văn), F3, WP16 (trả lời lượt khách); nhập vai auto với LLM thật trên kênh giả + dữ liệu mẫu đầy đủ: 16/16 tin được đáp, 12 tự trả lời; 371 test | 4.943 / 5.000 | Chưa đạt A1 (Page thật), nhóm B (chưa đo ~30 hội thoại; demo lộ 2 lỗi dữ kiện đã sửa: hoàn phí do dữ liệu mơ hồ, chữ Trung), nhóm C (repo công khai, server cũ, DPA, backup). R58 thông báo đẩy cần quyết | Chưa có cuộc nói chuyện nào với khách — G0 hạn 16/10, L8 tính từ 17/10 | Phase kế: WP14 Page thật + đo nhóm B; phỏng vấn G1; code đóng băng trừ sửa lỗi khi chạy thật |
+| 2026-10-17 | G0 | 0 | **Bỏ L3, xây đợt 2–6** (một ngày, 497 test); L8 bắt đầu tính hôm nay | ≈ 7.990 (không còn trần) | Hệ thống rộng hơn nhiều nhưng **vẫn 0 cuộc nói chuyện với khách và 0 bằng chứng**: rủi ro lớn nhất không phải kỹ thuật. Mốc G1 23/10 vẫn là mốc giết | **L8: giờ code ≫ giờ khách trong tuần này** (ghi đỏ). Nếu tuần tới vẫn vậy, L8 yêu cầu dừng code | Chưa có |
 
 ---
 
@@ -870,7 +891,7 @@ Tổng ước tính ≈ 2.810 + 1.890 ≈ **4.700 / 5.000**.
 | Không làm | Vì sao |
 |---|---|
 | Định vị sản phẩm là chatbot trả lời 24/7 *thay* nhân viên | Hàng miễn phí. Trả lời lượt khách (WP16) chỉ lấp chỗ chưa có người; điểm bán vẫn là không để rơi + trí nhớ + theo sát (§1.3) |
-| Xây nền tảng **vượt phạm vi v0** trước G2 | Bản tái sinh của `workflow_service` / planning-v3. Nền tảng chỉ lớn lên theo cổng (§7.1) |
+| ~~Xây nền tảng vượt phạm vi v0 trước G2~~ — **gỡ 2026-10-17** | Rủi ro cũ vẫn còn: bản tái sinh của `workflow_service` / planning-v3. Giữ kỷ luật bằng L1, L7, L8 và mốc giết G1 |
 | Sandbox thứ hai trước G2.5 | Chưa có khách nào xin |
 | Người dùng tự gắn MCP trước G4 | Tool poisoning; dữ liệu khách |
 | Adapter từng kênh trong lõi | Code riêng của kênh nằm ở bridge (§5.2) |

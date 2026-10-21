@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from cortex_leads.skills.loader import load_yaml
 from dev.local import env
 
-LIVE_SKILLS = ("hoi-lai-khach-im", "hoi-lai-dung-hen", "thu-nhanh", "tra-loi-khach")
+LIVE_SKILLS = ("hoi-lai-khach-im", "hoi-lai-dung-hen", "tra-loi-khach")
 TZ = "Asia/Ho_Chi_Minh"
 SAMPLE_FILE = env.ROOT / "dev/samples/trung_tam_mau.yaml"  # dữ liệu giả lập đầy đủ: khoá học + thông tin chung
 SAMPLE = load_yaml(SAMPLE_FILE.read_text(encoding="utf-8"))
@@ -27,9 +27,15 @@ def _catalog(today):
         attrs = dict(c.get("attrs") or {})
         if c.get("start_in_days"):
             attrs["lich_khai_giang"] = [f"{today + timedelta(days=d):%d/%m}" for d in c["start_in_days"]]
-        yield c["code"], c["name"], c.get("category"), c.get("price"), c.get("unit"), attrs
+        yield c["code"], c["name"], c.get("category"), c.get("price"), c.get("unit"), attrs, None
     for i in SAMPLE.get("info") or []:
-        yield i["code"], i["name"], "thong_tin", None, None, dict(i.get("attrs") or {})
+        yield i["code"], i["name"], "thong_tin", None, None, dict(i.get("attrs") or {}), None
+    for n, sl in enumerate(SAMPLE.get("slots") or [], 1):  # WP18: valid_until = the start
+        day = today + timedelta(days=sl["in_days"])
+        hh, mm = map(int, sl["time"].split(":"))
+        start = datetime(day.year, day.month, day.day, hh, mm, tzinfo=ZoneInfo(TZ))
+        yield (f"LH-{day:%d-%m}-{sl['time'][:2]}", f"{sl['label']} {day:%d/%m}", "lich_hoc_thu", None, None,
+               {"ngay": f"{day:%d/%m}", "gio": sl["time"], "suc_chua": sl["capacity"]}, start)
 
 
 async def _recreate_db(admin_url: str, name: str) -> None:
@@ -66,11 +72,11 @@ async def _seed(connector_secret: str, staff_key: str, sup_key: str) -> dict[str
         s.add(m.Sandbox(
             id=sid, tenant_id=tid, name="customer_care", profile_ref="customer_drafter@1",
             domain_pack=load_pack_file(care / "domain.yaml").model_dump(mode="json"),
-            budget={"runs_per_day": 500, "drafts_per_staff_per_day": 100, "tokens_per_day": 2_000_000},
+            budget={"runs_per_day": 500, "drafts_per_staff_per_day": 100, "tokens_per_day": 20_000_000},
             business_hours={"start": "00:00", "end": "23:59"}, send_mode="manual"))
-        for code, name, cat, price, unit, attrs in _catalog(today):
+        for code, name, cat, price, unit, attrs, until in _catalog(today):
             s.add(m.CatalogItem(tenant_id=tid, code=code, name=name, category=cat, unit=unit, attrs=attrs,
-                                price=Decimal(str(price)) if price is not None else None, valid_until=None))
+                                price=Decimal(str(price)) if price is not None else None, valid_until=until))
     async with system_session() as s:
         s.add(m.Connector(
             id=cid, tenant_id=tid, sandbox_id=sid, channel_kind="messenger", trust="official",

@@ -7,13 +7,13 @@
 > 2. Nó đưa tới cổng đó bằng cách nào?
 > 3. Bằng chứng nào trong `docs/customers/` cho thấy cần làm?
 >
-> **Ngoài phạm vi v0, code sản phẩm đóng băng tới cổng G2** (L3, ngân sách v0 ≤ 5.000 dòng — nới ngày 2026-10-12). Ngoại lệ chỉ có: sửa bảo mật, script phục vụ việc làm tay, gỡ code.
+> **L3 đã bỏ ngày 2026-10-17:** code ngoài v0 được phép xây theo roadmap T1/T2, nhưng mỗi gói việc vẫn qua L1 và L7. **Trượt G1 (2026-10-23) thì dừng mọi code mới.** Nhóm C (an toàn/pháp lý) vẫn bắt buộc trước khi chạm dữ liệu khách thật.
 
 ## Repo này chứa gì
 
 | Thư mục | Nội dung |
 |---|---|
-| [`cortex-leads/`](cortex-leads/) | **Dự án duy nhất.** Nền tảng v0 "không để rơi khách tiềm năng — AI đứng sau nhân viên tư vấn". **Trạng thái 2026-10-12:** đã xây tới WP16 (371 test, 4.943/5.000 dòng), mới chạy trên dữ liệu giả lập — chưa nối nền tảng thật (WP14) |
+| [`cortex-leads/`](cortex-leads/) | **Dự án duy nhất.** Nền tảng v0 "không để rơi khách tiềm năng — AI đứng sau nhân viên tư vấn". **Trạng thái 2026-10-17:** đã xây tới WP26 (497 test, ≈ 7.990 dòng gồm bridge; L3 đã bỏ), mới chạy trên dữ liệu giả lập — chưa nối nền tảng thật (WP14), chưa có khách |
 | [`docs/DESIGN.md`](docs/DESIGN.md) | Thiết kế bản 2.1, nguồn sự thật |
 | [`docs/LESSONS.md`](docs/LESSONS.md) | Bài học đã trả giá: hướng đã chết, số đã đo, lỗi đã gặp |
 | [`docs/customers/`](docs/customers/) | Bằng chứng từ người thật. **Chỉ bản ẩn danh**, vì repo này đang công khai |

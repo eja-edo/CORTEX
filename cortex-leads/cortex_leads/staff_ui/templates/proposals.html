@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Đề xuất của AI tổng — Cortex Leads{% endblock %}
+{% block body %}<h1>Đề xuất của AI tổng</h1>
+<p class="meta">AI tổng chỉ đọc số liệu, không đọc tin nhắn. Nó đề xuất, bạn quyết định.</p>
+{% for p in items %}<section class="card"><b>{{ p.signal }}</b> <span class="meta">· {{ p.sandbox }}{% if p.skill %} · {{ p.skill }}{% endif %}</span>
+<p class="meta">{{ p.evidence|join(" · ") }}</p>
+{% if p.change %}<p><b>Thay đổi đề xuất:</b> {{ p.change.field }}: {{ p.change["from"] }} → {{ p.change.to }}<br><span class="meta">Chỉ tạo một bản thử của kỹ năng; bản đang chạy giữ nguyên cho tới khi bạn bật bản mới sau khi đọc nháp thử.</span></p>{% endif %}
+<form method="post"><input type="hidden" name="csrf" value="{{ csrf }}">
+<button formaction="/staff/proposal/{{ p.id }}/accept">{{ p.action }}</button>
+<button class="sec" formaction="/staff/proposal/{{ p.id }}/dismiss">Bỏ qua</button></form></section>
+{% else %}<p class="card">Không có đề xuất nào đang chờ.</p>{% endfor %}
+{% endblock %}

@@ -38,7 +38,7 @@ def _errs(**changes) -> list[str]:
 
 def test_profile_and_samples_lint_clean():
     profile = load_profile("customer_drafter@1")
-    assert profile.effect_ceiling == "customer" and profile.max_tool_calls == 3
+    assert profile.effect_ceiling == "customer" and profile.max_tool_calls == 4
     for p in SKILLS.glob("*/SKILL.md"):
         manifest, body = parse_skill_md(p)
         assert lint(manifest, profile, PACK) == []
@@ -142,37 +142,40 @@ async def test_promote_and_rollback_keep_one_live(env, seed):
     t, sb = env
     async with tenant_session(t.id) as s:
         await sync_dir(s, t.id, sb.id, SKILLS)
-    # fabricate v4 from v3's row to exercise the lifecycle
+    # fabricate the next version from the synced row to exercise the lifecycle
     v1 = next(r for r in await _rows(t, sb) if r.name == "hoi-lai-khach-im")
-    await seed(m.SkillVersion(tenant_id=t.id, sandbox_id=sb.id, name=v1.name, version=4,
+    n0, n1 = v1.version, v1.version + 1
+    await seed(m.SkillVersion(tenant_id=t.id, sandbox_id=sb.id, name=v1.name, version=n1,
                               manifest=v1.manifest, body=v1.body, checksum="c3"))
     async with tenant_session(t.id) as s:
         with pytest.raises(SkillError):  # draft cannot jump to live
-            await promote(s, sb.id, v1.name, 3, "live")
+            await promote(s, sb.id, v1.name, n0, "live")
     async with tenant_session(t.id) as s:
-        await promote(s, sb.id, v1.name, 3, "shadow")
+        await promote(s, sb.id, v1.name, n0, "shadow")
         assert await live_skills_for(s, sb.id, "conversation.silent") == []  # shadow is not live
-        await promote(s, sb.id, v1.name, 3, "live")
-        await promote(s, sb.id, v1.name, 4, "shadow")
-        await promote(s, sb.id, v1.name, 4, "live")
+        await promote(s, sb.id, v1.name, n0, "live")
+        await promote(s, sb.id, v1.name, n1, "shadow")
+        await promote(s, sb.id, v1.name, n1, "live")
     live = [r for r in await _rows(t, sb) if r.status == "live"]
-    assert [r.version for r in live] == [4]
+    assert [r.version for r in live] == [n1]
     async with tenant_session(t.id) as s:
         await rollback(s, sb.id, v1.name)
     rows = {(r.version): r.status for r in await _rows(t, sb) if r.name == v1.name}
-    assert rows == {3: "live", 4: "retired"}
+    assert rows == {n0: "live", n1: "retired"}
     async with tenant_session(t.id) as s:
-        assert [x.version for x in await live_skills_for(s, sb.id, "conversation.silent")] == [3]
+        assert [x.version for x in await live_skills_for(s, sb.id, "conversation.silent")] == [n0]
         assert await live_skills_for(s, sb.id, "customer.message") == []
 
+
+_V = {"hoi-lai-khach-im": 4, "hoi-lai-dung-hen": 3}  # live version of each follow-up skill
 
 async def test_match_equality_only(env):
     t, sb = env
     async with tenant_session(t.id) as s:
         await sync_dir(s, t.id, sb.id, SKILLS)
         for n in ("hoi-lai-khach-im", "hoi-lai-dung-hen"):
-            await promote(s, sb.id, n, 3, "shadow")
-            await promote(s, sb.id, n, 3, "live")
+            await promote(s, sb.id, n, _V[n], "shadow")
+            await promote(s, sb.id, n, _V[n], "live")
         silent = (await live_skills_for(s, sb.id, "conversation.silent"))[0]
         promised = (await live_skills_for(s, sb.id, "conversation.promised_date_reached"))[0]
     assert match(silent, SimpleNamespace(intent="hoi_gia", channel_kind="web", state="open"))

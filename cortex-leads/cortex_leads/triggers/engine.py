@@ -15,6 +15,7 @@ from cortex_leads.skills.registry import (
     LoadedSkill,
     live_skills_for,
     match,
+    shadow_skills_for,
     silent_after,
 )
 
@@ -94,12 +95,15 @@ async def on_conversation_event(session: AsyncSession, conversation: m.Conversat
             conversation.reply_check_at = conversation.last_staff_at + STAFF_ACTIVE
         _log(session, conversation, "event_ignored", why, now, {"event": event_type})
         return []
+    touch = await _last_touch(session, conversation)
+    for sk in (s for s in await shadow_skills_for(session, sandbox.id, event_type) if match(s, conversation)):
+        if _ready(sk, conversation, event_type, touch, now)[1] is None:  # a trial runs beside the live skill, never instead of it
+            await _enqueue(session, conversation, sandbox, sk, event_type, now, shadow=True)
     matched = [s for s in await live_skills_for(session, sandbox.id, event_type)
                if match(s, conversation)]
     if not matched:
         _log(session, conversation, "no_matching_skill", None, now, {"event": event_type})
         return []
-    touch = await _last_touch(session, conversation)
     ready, later = [], []
     for sk in matched:
         at, why = _ready(sk, conversation, event_type, touch, now)
@@ -115,17 +119,26 @@ async def on_conversation_event(session: AsyncSession, conversation: m.Conversat
     # One job per event (DESIGN §5.5): the most specific match wins, name breaks ties; a skill that
     # already fired for this silence is skipped so a later-due sibling can still go.
     for skill in sorted(ready, key=lambda s: (-len(s.manifest.trigger.match), s.name)):
-        row = (await session.execute(pg_insert(m.FollowupJob).values(
-            id=uuid7(), tenant_id=conversation.tenant_id, sandbox_id=sandbox.id,
-            conversation_id=conversation.id, skill_name=skill.name, skill_version=skill.version,
-            event_type=event_type, dedupe_key=dedupe_key(conversation, event_type), status="pending",
-            not_before=now, created_at=now, updated_at=now)
-            .on_conflict_do_nothing(index_elements=["tenant_id", "sandbox_id", "skill_name", "dedupe_key"])
-            .returning(m.FollowupJob.id))).first()
-        if row is None:  # already fired for this silence
-            continue
-        job = (await session.execute(select(m.FollowupJob).where(m.FollowupJob.id == row[0]))).scalar_one()
-        _log(session, conversation, "job_created", None, now,
-             {"skill": skill.name, "version": skill.version, "event": event_type})
-        return [job]
+        if job := await _enqueue(session, conversation, sandbox, skill, event_type, now):
+            return [job]
     return []
+
+
+async def _enqueue(session: AsyncSession, conversation: m.Conversation, sandbox: m.Sandbox, skill: LoadedSkill,
+                   event_type: str, now: datetime, *, shadow: bool = False) -> m.FollowupJob | None:
+    """One job per (skill, silence). A shadow job has its own key, so a trial of a new version of a live
+    skill does not take the live one's place."""
+    key = dedupe_key(conversation, event_type)
+    row = (await session.execute(pg_insert(m.FollowupJob).values(
+        id=uuid7(), tenant_id=conversation.tenant_id, sandbox_id=sandbox.id,
+        conversation_id=conversation.id, skill_name=skill.name, skill_version=skill.version,
+        event_type=event_type, dedupe_key=f"shadow:{key}" if shadow else key, status="pending",
+        not_before=now, created_at=now, updated_at=now)
+        .on_conflict_do_nothing(index_elements=["tenant_id", "sandbox_id", "skill_name", "dedupe_key"])
+        .returning(m.FollowupJob.id))).first()
+    if row is None:  # already fired for this silence
+        return None
+    job = (await session.execute(select(m.FollowupJob).where(m.FollowupJob.id == row[0]))).scalar_one()
+    _log(session, conversation, "shadow_job_created" if shadow else "job_created", None, now,
+         {"skill": skill.name, "version": skill.version, "event": event_type})
+    return job

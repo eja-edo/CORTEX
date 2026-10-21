@@ -35,6 +35,11 @@ _DATE = re.compile(
     r"|(?P<d>\d{1,2})\s?[/\-]\s?(?P<m>\d{1,2})(?:\s?[/\-]\s?\d{2,4})?)"
     r"(?![\d:/]|\s?(?:tháng|tuần|buổi|năm|ngày|giờ|phút|người|bạn|lần|%|k\b|tr\b|triệu))",
     re.IGNORECASE)
+# Clock times: 19:00, 19h30, "7 giờ tối". A bare "2h" / "3 giờ" is a duration, never scanned (WP18).
+_TIME = re.compile(
+    r"(?<![\d/.])(?:(?P<h1>\d{1,2})\s?(?::|h)\s?(?P<m1>[0-5]\d)"
+    r"|(?P<h2>\d{1,2})\s?(?:giờ|h)\s?(?P<per>sáng|trưa|chiều|tối|đêm)(?!\w))(?!\d)", re.IGNORECASE)
+_URL = re.compile(r"(?:https?://|www\.)[^\s<>\"']+", re.IGNORECASE)
 _ALTS = ("phone", "trd", "tr", "k", "pct", "dur", "grp", "big")
 
 
@@ -59,6 +64,40 @@ def scan_dates(text: str) -> tuple[list[tuple[str, str]], str]:
         found.append((f"{d:02d}/{mo:02d}", m.group(0).strip()))
         return " "
     return found, _DATE.sub(take, re.sub(_PHONE, " ", text))
+
+
+def scan_times(text: str) -> tuple[list[tuple[str, str]], str]:
+    """([("HH:MM", span)], text with the times blanked). 19h and "7 giờ tối" both read 19:00."""
+    found: list[tuple[str, str]] = []
+
+    def take(m: re.Match[str]) -> str:
+        h, mi = int(m.group("h1") or m.group("h2")), int(m.group("m1") or 0)
+        per = (m.group("per") or "").casefold()
+        if per in ("chiều", "tối") and h < 12 or per == "đêm" and 8 <= h <= 11:
+            h += 12
+        if not (0 <= h <= 23):
+            return m.group(0)
+        found.append((f"{h:02d}:{mi:02d}", m.group(0).strip()))
+        return " "
+    return found, _TIME.sub(take, text)
+
+
+def _attr_times(v: Any) -> set[str]:
+    if isinstance(v, str):
+        return {t for t, _ in scan_times(v)[0]}
+    return {t for x in v for t in _attr_times(x)} if isinstance(v, list | tuple) else set()
+
+
+def _urls(text: str) -> list[str]:
+    return [u.rstrip(".,;:!?)").rstrip("/").casefold() for u in _URL.findall(text)]
+
+
+def _attr_urls(v: Any) -> set[str]:
+    if isinstance(v, str):
+        return set(_urls(v))
+    if isinstance(v, dict):
+        v = list(v.values())
+    return {u for x in v for u in _attr_urls(x)} if isinstance(v, list | tuple) else set()
 
 
 def _attr_dates(v: Any) -> set[str]:
@@ -138,8 +177,9 @@ def _check_claim(claim: dict[str, Any], rows: Sequence[CatalogItem], now: dateti
     """Returns (verified (value, kind) pairs, failure reason). A date claim's value is "dd/mm"."""
     raw = claim.get("value")
     cdates = scan_dates(raw)[0] if isinstance(raw, str) else []
-    value, kind = (None, "date") if cdates else _claim_value(raw)
-    if value is None and not cdates:
+    ctimes = scan_times(scan_dates(raw)[1])[0] if isinstance(raw, str) else []
+    value, kind = (None, "date") if cdates or ctimes else _claim_value(raw)
+    if value is None and not cdates and not ctimes:
         return set(), "claim value is not a number"
     sid = str(claim.get("source_id", ""))
     matches = [r for r in rows if sid in (str(r.id), r.code)]
@@ -150,9 +190,12 @@ def _check_claim(claim: dict[str, Any], rows: Sequence[CatalogItem], now: dateti
         return set(), "catalog item is inactive or expired"
     ok: set[tuple[Any, str]] = set()
     for r in live:
-        if cdates:
-            have = set().union(*(_attr_dates(v) for v in (r.attrs or {}).values()))
-            ok |= {(d, "date") for d, _ in cdates if d in have}
+        if cdates or ctimes:
+            vals = list((r.attrs or {}).values())
+            have_d, have_t = set().union(set(), *(_attr_dates(v) for v in vals)), \
+                set().union(set(), *(_attr_times(v) for v in vals))
+            ok |= {(d, "date") for d, _ in cdates if d in have_d}
+            ok |= {(t, "time") for t, _ in ctimes if t in have_t}
             continue
         if r.price is not None and Decimal(str(r.price)) == value and kind in (None, "money"):
             ok.add((value, "money"))
@@ -191,6 +234,18 @@ def validate_draft(
     for c in claims:  # a claim only vouches; one that vouches for nothing ("giáo viên Việt Nam") blocks
         verified |= _check_claim(c, catalog_rows, now)[0]  # nothing — the text scan below is the guard
     dates, plain = scan_dates(text)
+    times, plain = scan_times(plain)
+    for canon, span in times:  # WP18: a class time the customer will turn up for comes from a catalog row
+        if (canon, "time") not in verified:
+            v.append(Violation(code=BlockedCode.UNVERIFIED_CLAIM, span=span,
+                               detail="time in text has no verified claim"))
+    cited_urls = set().union(set(), *(_attr_urls(list((r.attrs or {}).values()))
+                                      for r in catalog_rows if r.active and (r.valid_until is None
+                                                                             or _aware(r.valid_until) > now)))
+    for url in _urls(text):  # WP18: a link (registration form) is only ever one a business put in its catalog
+        if url not in cited_urls:
+            v.append(Violation(code=BlockedCode.UNVERIFIED_CLAIM, span=url,
+                               detail="url in text is not on a cited catalog row"))
     for canon, span in dates:  # R38: a date the customer will act on must come from a catalog row
         if (canon, "date") not in verified:
             v.append(Violation(code=BlockedCode.UNVERIFIED_CLAIM, span=span,

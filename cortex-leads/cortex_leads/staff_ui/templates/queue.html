@@ -1,6 +1,11 @@
 {% extends "base.html" %}
 {% block title %}Hàng chờ — Cortex Leads{% endblock %}
 {% block body %}<h1>Việc cần làm ({{ cards|length + facts|length }})</h1>
+{% for t in tasks %}<section class="card"><b>Việc sáng nay ({{ t.date }})</b>
+{% for l in t.leads %}<p><a href="/staff/c/{{ l.conv_id }}">{{ l.name }}</a> <span class="meta">· chưa ai trả lời {{ l.silent }}</span></p>
+{% else %}<p class="meta">Không còn khách nào chờ.</p>{% endfor %}
+{% if t.bookings_today %}<p>{{ t.bookings_today }} lịch học thử hôm nay.</p>{% endif %}
+<form method="post" action="/staff/task/{{ t.id }}/done"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="sec">Xong</button></form></section>{% endfor %}
 {% for c in cards %}<section class="card">
 <b><a href="/staff/c/{{ c.conv_id }}">{{ c.name }}</a></b> <span class="meta">· im {{ c.silent }}{% if c.intent %} · {{ c.intent }}{% endif %}</span>
 {% if c.needs_human %}<p class="bad"><b>Cần người trả lời</b> — gợi ý bên dưới, hệ thống không tự gửi</p>{% elif c.turn %}<p class="warn"><b>Khách đang chờ trả lời</b></p>{% endif %}
@@ -30,5 +35,8 @@
 <form method="post"><input type="hidden" name="csrf" value="{{ csrf }}">
 <button formaction="/staff/fact/{{ f.id }}/confirm">Xác nhận</button>
 <button class="sec" formaction="/staff/fact/{{ f.id }}/reject">Bác</button></form></section>{% endfor %}
-{% if not cards and not facts %}<p class="card">Không có việc nào đang chờ.</p>{% endif %}
+{% if bookings %}<h1>Lịch học thử sắp tới ({{ bookings|length }})</h1>
+{% for b in bookings %}<section class="card"><b><a href="/staff/c/{{ b.conv_id }}">{{ b.name }}</a></b> · {{ b.at }} <span class="meta">· {{ b.slot }}{% if b.by_ai %} · AI giữ chỗ{% endif %}</span></section>{% endfor %}{% endif %}
+{% if owner %}<p><a href="/staff/digest">Báo cáo tuần</a> · <a href="/staff/skills">Kỹ năng</a>{% if proposals %} · <a href="/staff/proposals"><b>{{ proposals }} đề xuất của AI tổng</b></a>{% endif %}</p>{% endif %}
+{% if not cards and not facts and not tasks %}<p class="card">Không có việc nào đang chờ.</p>{% endif %}
 {% endblock %}

@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Kỹ năng tự tạo — Cortex Leads{% endblock %}
+{% block body %}<h1>Kỹ năng tự tạo</h1>
+<p class="meta">Mỗi kỹ năng chạy thử trên tin thật trước (AI viết nháp nhưng không ai được nhắn, không gửi gì), bạn đọc rồi mới bật.</p>
+{% if has_sandbox %}<p>{% for k, label in templates.items() %}<a href="/staff/skills/new?template={{ k }}"><button>+ {{ label }}</button></a> {% endfor %}</p>{% endif %}
+{% for k in items %}<section class="card"><b>{{ k.name }}</b> <span class="meta">· bản {{ k.version }} · {{ k.status_text }}</span>
+<p class="meta">{{ k.description }}</p>
+{% if k.status in ("shadow", "live") %}<p class="meta">{{ k.runs }} lượt chạy{% if k.status == "shadow" and not k.ready %} — cần ít nhất {{ min_runs }} lượt mới bật được{% endif %}</p>{% endif %}
+<form method="post"><input type="hidden" name="csrf" value="{{ csrf }}">
+{% if k.status == "draft" %}<button formaction="/staff/skills/{{ k.id }}/trial">Chạy thử</button>{% endif %}
+{% if k.status == "shadow" %}<a href="/staff/skills/{{ k.id }}/trial"><button type="button" class="sec">Đọc bản nháp thử</button></a>
+{% if k.ready %}<button formaction="/staff/skills/{{ k.id }}/live">Bật</button>{% endif %}{% endif %}
+{% if k.status in ("shadow", "live") %}<button class="sec" formaction="/staff/skills/{{ k.id }}/off">Tắt</button>{% endif %}
+{% if k.status == "retired" %}<button class="sec" formaction="/staff/skills/{{ k.id }}/again">Bật lại</button>{% endif %}
+</form></section>
+{% else %}<p class="card">Chưa có kỹ năng nào.</p>{% endfor %}
+{% endblock %}

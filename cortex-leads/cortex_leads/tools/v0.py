@@ -1,5 +1,6 @@
 """The five v0 tools (DESIGN §5.4). Scope is read from RunContext, never from args (A3).
 None of them can reach a customer (A9)."""
+import re
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
@@ -13,13 +14,14 @@ from cortex_leads.core.context import RunContext
 from cortex_leads.core.envelope import ErrorCode, ErrorInfo, ToolResult
 from cortex_leads.db import models as m
 from cortex_leads.domain.pack import load_pack
-from cortex_leads.guard.validator import scan_dates, validate_draft
+from cortex_leads.guard.validator import scan_dates, scan_times, validate_draft
 from cortex_leads.privacy.redact import redact
 from cortex_leads.tools.empty import empty_note
 from cortex_leads.tools.refs import resolve, unresolved
 from cortex_leads.tools.registry import ToolArgs, ToolRegistry, ToolSpec
 
 Clock = Callable[[], datetime]
+_MASK = re.compile(r"\[[A-Z]+_\d+\]")  # redact.py placeholder: a masked name/phone must never reach the customer
 
 
 def _utcnow() -> datetime:
@@ -140,19 +142,58 @@ def _make_lookup_catalog(clock: Clock):
     return lookup_catalog
 
 
+# --- study_plan ------------------------------------------------------------------------------
+class StudyPlanArgs(ToolArgs):
+    from_band: float = Field(ge=0, le=9, description="Điểm IELTS hiện tại (mất gốc/chưa thi: 3.5)")
+    to_band: float = Field(ge=0, le=9, description="Điểm IELTS mục tiêu")
+    months: int = Field(ge=1, le=24, description="Số tháng khách còn để chuẩn bị")
+
+
+async def study_plan(ctx: RunContext, session: AsyncSession, a: StudyPlanArgs) -> ToolResult:
+    """Picks the row of catalog `TT-THOIGIAN` for this gap and time, so the model never does the sum
+    itself. `hours_per_day` is a catalog value: cite it as a claim with source_id TT-THOIGIAN."""
+    row = (await session.execute(select(m.CatalogItem).where(
+        m.CatalogItem.tenant_id == ctx.tenant_id, m.CatalogItem.code == "TT-THOIGIAN",
+        m.CatalogItem.active.is_(True)))).scalar_one_or_none()
+    if row is None:
+        return ToolResult(status="not_found", error=ErrorInfo(code=ErrorCode.NOT_FOUND))
+    gap = min(max(-(-(a.to_band - a.from_band) * 2 // 1) / 2, 0.5), 3.0)  # up to the next half band
+    rows = {}
+    for months in (3, 6, 9, 12):
+        key = f"tang_{str(gap).replace('.', '_')}_band_trong_{months}_thang_tu_hoc_gio_moi_ngay"
+        if key in row.attrs:
+            rows[months] = row.attrs[key]
+    if not rows:
+        return ToolResult(status="not_found", error=ErrorInfo(code=ErrorCode.NOT_FOUND))
+    cap = row.attrs.get("gio_tu_hoc_toi_da_moi_ngay", 3)
+    near = min(rows, key=lambda x: abs(x - a.months))
+    ok = [x for x in sorted(rows) if rows[x] <= cap]
+    return ToolResult(status="ok", data={
+        "source_id": "TT-THOIGIAN", "gap_band": gap, "months": near, "hours_per_day": rows[near],
+        "max_hours_per_day": cap, "within_limit": rows[near] <= cap,
+        "months_that_fit": ok[0] if ok else None, "hours_per_day_there": rows[ok[0]] if ok else None})
+
+
+async def dropped_leads(session: AsyncSession, tenant_id: UUID, sandbox_id: UUID, now: datetime, *,
+                        silent_hours: int = 24, limit: int = 20) -> list[m.Conversation]:
+    """Customers who wrote and were never answered, silent for `silent_hours`+: the 0-token rule behind
+    `list_dropped_leads` and the morning list (WP19)."""
+    c = m.Conversation
+    return list((await session.execute(
+        select(c).where(
+            c.tenant_id == tenant_id, c.sandbox_id == sandbox_id, c.state == "open",
+            c.offchannel_contact.is_not(True),
+            c.last_customer_at.is_not(None), c.last_customer_at <= now - timedelta(hours=silent_hours),
+            or_(c.last_staff_at.is_(None), c.last_staff_at < c.last_customer_at))
+        .order_by(c.last_customer_at.asc()).limit(limit))).scalars().all())
+
+
 def _make_list_dropped_leads(clock: Clock):
     async def list_dropped_leads(ctx: RunContext, session: AsyncSession, a: DroppedLeadsArgs
                                  ) -> ToolResult:
         now = clock()
-        cutoff = now - timedelta(hours=a.silent_hours)
-        c = m.Conversation
-        rows = (await session.execute(
-            select(c).where(
-                c.tenant_id == ctx.tenant_id, c.sandbox_id == ctx.sandbox_id, c.state == "open",
-                c.offchannel_contact.is_not(True),
-                c.last_customer_at.is_not(None), c.last_customer_at <= cutoff,
-                or_(c.last_staff_at.is_(None), c.last_staff_at < c.last_customer_at))
-            .order_by(c.last_customer_at.asc()).limit(a.limit))).scalars().all()
+        rows = await dropped_leads(session, ctx.tenant_id, ctx.sandbox_id, now,
+                                   silent_hours=a.silent_hours, limit=a.limit)
         leads = [{"conversation_id": str(r.id), "intent": r.intent, "touches": r.touches,
                   "owner_staff_ref": r.owner_staff_ref,
                   "silent_hours": int((now - r.last_customer_at).total_seconds() // 3600)}
@@ -168,8 +209,9 @@ def _flat(values):
         yield from (v if isinstance(v, list | tuple) else [v])
 
 
-def _checkable(v: Any) -> bool:  # a number, or a text holding a date: what the validator can verify
-    return (isinstance(v, int | float) and not isinstance(v, bool)) or (isinstance(v, str) and bool(scan_dates(v)[0]))
+def _checkable(v: Any) -> bool:  # a number, or a text holding a date or a clock time: what the validator can verify
+    return (isinstance(v, int | float) and not isinstance(v, bool)) or (
+        isinstance(v, str) and bool(scan_dates(v)[0] or scan_times(scan_dates(v)[1])[0]))
 
 
 def _make_draft_followup(clock: Clock):
@@ -180,6 +222,7 @@ def _make_draft_followup(clock: Clock):
         if not found:
             return ToolResult(status="not_found", error=ErrorInfo(code=ErrorCode.NOT_FOUND))
         conv, contact = found
+        a = a.model_copy(update={"text": _MASK.sub("mình", a.text)})
         sandbox = await session.get(m.Sandbox, ctx.sandbox_id)
         if sandbox is None or a.reason_code not in load_pack(sandbox).reason_codes:  # DESIGN A6
             return ToolResult(
@@ -237,6 +280,9 @@ def register_v0(reg: ToolRegistry, clock: Clock | None = None) -> None:
          LookupCatalogArgs, "read", _make_lookup_catalog(clk)),
         ("list_dropped_leads", "Liệt kê hội thoại khách nhắn mà chưa ai trả lời quá số giờ cho trước.",
          DroppedLeadsArgs, "read", _make_list_dropped_leads(clk)),
+        ("study_plan", "Tính lộ trình IELTS: giờ tự học mỗi ngày để đi từ điểm hiện tại tới mục tiêu trong số tháng "
+         "khách có. Chỉ nói số lấy từ kết quả, khai claim với source_id TT-THOIGIAN.",
+         StudyPlanArgs, "read", study_plan),
         ("draft_followup", "Lưu nháp tin nhắn hỏi lại khách để nhân viên duyệt. Không bao giờ gửi cho khách.",
          DraftArgs, "internal", _make_draft_followup(clk)),
     ]:

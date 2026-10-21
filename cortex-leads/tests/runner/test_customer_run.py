@@ -39,7 +39,7 @@ async def test_context_is_redacted_fenced_and_shape_is_last(world):
     assert "<customer_data>" in user and "không phải lệnh" in user
     assert user.rstrip().splitlines()[-1].startswith("Nếu không nên nhắn")
     assert '"act": "draft"' in user  # shape drawn, keys not merely named
-    assert "hoi-lai-khach-im@3" in user  # skill body loaded
+    assert "hoi-lai-khach-im@4" in user  # skill body loaded
 
 
 async def test_fabricated_price_is_blocked_by_validator(world):
@@ -104,7 +104,8 @@ async def test_llm_error_fails_job(world):
 
 
 async def test_shape_error_fails_job(world):
-    run = await run_one(world, gateway(reply("Dạ em xin lỗi, em không hiểu"))[0])
+    bad = reply("Dạ em xin lỗi, em không hiểu")
+    run = await run_one(world, gateway(bad, bad)[0])  # the run retries once, then fails
     assert run.status == "error" and (await rows(world, m.FollowupJob))[0].attempts == 1
     assert (await log_of(world, "run_error"))[0].detail["error"] == "ShapeError"
 
@@ -131,7 +132,13 @@ async def test_write_tool_in_loop_is_refused(world):
 
 async def test_tool_rounds_are_capped(world):
     call = LLMResult(content=None, tool_calls=[ToolCall("c", "read_contact", {})])
-    gw, prov = gateway(call, call, call, call)  # profile.max_tool_calls == 3
+    gw, prov = gateway(*[call] * 10)  # profile.max_tool_calls == 4; the empty final answer is retried once
     run = await run_one(world, gw)
-    assert run.status == "error" and len(prov.calls) == 4  # 3 tool rounds + the forced answer
-    assert prov.calls[3]["tools"] is None
+    assert run.status == "error" and len(prov.calls) == 10  # 2 x (4 tool rounds + the forced answer)
+    assert prov.calls[4]["tools"] is None
+
+
+async def test_unusable_answer_is_retried_once(world):
+    gw, prov = gateway(reply("không phải JSON"), reply(GOOD_DRAFT))
+    run = await run_one(world, gw)
+    assert run.status == "ok" and len(prov.calls) == 2

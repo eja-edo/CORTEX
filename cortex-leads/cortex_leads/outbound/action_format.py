@@ -18,6 +18,11 @@ REFUSALS = {"OUTBOUND_DISABLED", "AI_SEND_DISABLED", "WINDOW_CLOSED", "PLATFORM_
 def build_action(row: m.Outbox, conv: m.Conversation, connector: m.Connector,
                  window: WindowState) -> dict[str, Any]:
     out = connector.outbound or {}
+    if row.kind != "message":  # a mark on the platform, not a message: no text to the customer, no window, no disclosure
+        return {"format": FORMAT, "action_id": str(row.action_id), "type": row.kind,
+                "channel": {"kind": conv.channel_kind, "account_ref": out.get("account_ref") or connector.id},
+                "conversation": {"external_id": conv.external_id}, "actor": row.actor,
+                ("tag" if row.kind == "add_tag" else "note"): row.text, "source": row.source}
     action: dict[str, Any] = {
         "format": FORMAT, "action_id": str(row.action_id), "type": "send_message",
         "channel": {"kind": conv.channel_kind, "account_ref": out.get("account_ref") or connector.id},

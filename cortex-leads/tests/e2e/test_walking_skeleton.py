@@ -79,8 +79,8 @@ async def env(tenant_factory, sandbox_factory, connector_factory, catalog_factor
     await catalog_factory(e.t, code="KH01", name="Khóa IELTS", price=2_500_000)
     async with tenant_session(e.t.id) as s:  # only the silence skill is live at first
         await sync_dir(s, e.t.id, e.sb.id, SKILLS)
-        await promote(s, e.sb.id, "hoi-lai-khach-im", 3, "shadow")
-        await promote(s, e.sb.id, "hoi-lai-khach-im", 3, "live")
+        await promote(s, e.sb.id, "hoi-lai-khach-im", 4, "shadow")
+        await promote(s, e.sb.id, "hoi-lai-khach-im", 4, "live")
     _, e.staff_key = await api_key_factory(e.t, "staff", "nv1")
     _, e.sup_key = await api_key_factory(e.t, "supervisor", None)
     e.t0 = datetime.now(UTC)
@@ -199,19 +199,22 @@ def test_a9_one_send_path_tool_outbox_worker():
              "/review/confirmations"}
     assert {p for p in create_app().openapi()["paths"] if not p.startswith("/staff")} == known
 
-    # Network libraries are imported only by the LLM provider and the outbound worker.
+    # Network libraries are imported only by the LLM provider, the outbound worker (customers, A9) and the
+    # staff push worker (WP17: fixed text built from counts, no customer data, never a customer's address) and
+    # the read-only connectors (WP20/23: one request to a host the business listed, query redacted, no customer
+    # address) and the cell router (WP25: forwards a bridge's signed batch untouched, holds no data).
     root = Path(__file__).resolve().parents[2] / "cortex_leads"
     net = {"httpx", "requests", "aiohttp", "urllib3", "smtplib", "socket", "openai", "http"}
     offenders = []
     for py in root.rglob("*.py"):
-        if py.parent.name in ("llm", "outbound"):
+        if py.parent.name in ("llm", "outbound", "notify", "connectors", "cells"):
             continue
         for node in ast.walk(ast.parse(py.read_text())):
             names = [a.name for a in node.names] if isinstance(node, ast.Import) else \
                 [node.module or ""] if isinstance(node, ast.ImportFrom) else []
             if {n.split(".")[0] for n in names} & net:
                 offenders.append(str(py.relative_to(root)))
-    assert offenders == [], f"network libraries outside llm/ and outbound/: {offenders}"
+    assert offenders == [], f"network libraries outside llm/, outbound/, notify/, connectors/ and cells/: {offenders}"
 
 
 # --- A1/A3: tenant isolation ---------------------------------------------------------------------------

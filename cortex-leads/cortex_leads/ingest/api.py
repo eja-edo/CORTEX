@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 
 from cortex_leads.config import get_settings
+from cortex_leads.core.ids import cell_of
 from cortex_leads.db import models as m
 from cortex_leads.db.session import system_session, tenant_session
 from cortex_leads.ingest.format import Event, EventEnvelope
@@ -34,6 +35,8 @@ async def ingest_events(request: Request, now: datetime = Depends(get_now)) -> d
     if len(body) > MAX_BODY_BYTES:
         raise HTTPException(413, "body too large")
     cid = request.headers.get("X-Connector-Id", "")
+    if (cell := cell_of(cid)) is not None and cell != settings.CELL:  # another cell's connector: say where, do not guess
+        raise HTTPException(421, f"connector belongs to cell {cell}")
     sig = request.headers.get("X-Signature", "")
     try:
         ts = int(request.headers.get("X-Timestamp", ""))

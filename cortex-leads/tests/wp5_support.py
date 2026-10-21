@@ -31,12 +31,14 @@ class World:
     conv: m.Conversation
 
 
+_V = {"hoi-lai-khach-im": 4, "hoi-lai-dung-hen": 3}  # live version of each follow-up skill
+
 async def live_skills(t: m.Tenant, sb: m.Sandbox) -> None:
     async with tenant_session(t.id) as s:
         await sync_dir(s, t.id, sb.id, SKILLS)
         for name in ("hoi-lai-khach-im", "hoi-lai-dung-hen"):
-            await promote(s, sb.id, name, 3, "shadow")
-            await promote(s, sb.id, name, 3, "live")
+            await promote(s, sb.id, name, _V[name], "shadow")
+            await promote(s, sb.id, name, _V[name], "live")
 
 
 @pytest.fixture

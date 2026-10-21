@@ -29,6 +29,15 @@ async def live_skills_for(session: AsyncSession, sandbox_id: UUID, event_type: s
     return [s for s in skills if s.manifest.trigger.on == event_type]
 
 
+async def shadow_skills_for(session: AsyncSession, sandbox_id: UUID, event_type: str) -> list[LoadedSkill]:
+    """Skills on trial (DESIGN §5.8): they see real events, write drafts nobody is shown, send nothing."""
+    rows = (await session.execute(select(SkillVersion).where(
+        SkillVersion.sandbox_id == sandbox_id, SkillVersion.status == "shadow",
+    ).order_by(SkillVersion.name))).scalars()
+    skills = [LoadedSkill(r.name, r.version, SkillManifest(**r.manifest), r.body, r.checksum) for r in rows]
+    return [s for s in skills if s.manifest.trigger.on == event_type]
+
+
 DEFAULT_SILENT_AFTER = timedelta(hours=24)
 
 
@@ -98,3 +107,13 @@ async def rollback(session: AsyncSession, sandbox_id: UUID, name: str) -> SkillV
     if prev is None:
         raise SkillError(f"{name}: no earlier version to roll back to")
     return await promote(session, sandbox_id, name, prev.version, "live")
+
+
+async def retire(session: AsyncSession, sandbox_id: UUID, name: str, version: int) -> SkillVersion:
+    """Switch a skill off (live or on trial). A retired version can be made live again (rollback)."""
+    row = await _get(session, sandbox_id, name, version)
+    if row.status not in ("live", "shadow"):
+        raise SkillError(f"{name}@{version}: only a live or shadow skill can be switched off, it is {row.status}")
+    row.status = "retired"
+    await session.flush()
+    return row

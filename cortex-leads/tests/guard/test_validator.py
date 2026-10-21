@@ -109,7 +109,8 @@ def test_wrong_or_unclaimed_date_is_blocked_with_its_span():
 def test_times_phones_and_ranges_are_not_dates():
     for text in ("Em gọi chị lúc 9:30 nha", "Chị gọi 0901 234 567 hoặc 0901-234-567 nha",
                  "Em nhắn lúc 14:05 ngày mai nha"):
-        assert run(text) == [], text
+        # since WP18 a clock time needs a catalog row (A7), but it is never mistaken for a date or a number
+        assert [v for v in run(text) if "time" not in (v.detail or "")] == [], text
     assert scan_dates("Khoá 3-6 tháng, 2-3 buổi, 12-18 tuổi, 1-2 lần")[0] == []
     assert codes(run("Khoá 3 tháng khai giảng ngày 20 tháng 10", [
         {"value": "3 tháng", "source_id": "IELTS-3M"}, {"value": "20/10", "source_id": "IELTS-3M"}],
@@ -121,3 +122,41 @@ def test_a_foreign_script_leak_is_blocked() -> None:  # seen with a real model: 
     v = validate_draft("Dạ mình cứ yên tâm啦.", [], [], never_say=[], touches=0, max_touches=3,
                        opted_out=False, has_new_info=True, now=datetime.now(UTC))
     assert [(x.code.value, x.span) for x in v] == [("FORBIDDEN_PHRASE", "啦")]
+
+
+# --- WP18: class times and links ----------------------------------------------------------------
+SLOT = dict(code="LH-20-10", price=None, attrs={"ngay": "20/10", "gio": "19:00-20:30", "suc_chua": 6})
+FORM = dict(code="PHIEU", price=None, attrs={"url": "https://tt.example.vn/dang-ky"})
+
+
+def test_scan_times_forms_and_non_times():
+    from cortex_leads.guard.validator import scan_times
+    got = lambda t: [x for x, _ in scan_times(t)[0]]  # noqa: E731
+    assert got("19:00") == ["19:00"] and got("19h30") == ["19:30"] and got("7 giờ tối") == ["19:00"]
+    assert got("lúc 7 giờ sáng") == ["07:00"] and got("19:00-20:30") == ["19:00", "20:30"]
+    assert got("học 2h mỗi ngày, 3 giờ tự học, ngày 20/10, 2.500.000đ") == []  # durations are not times
+
+
+def test_time_in_text_needs_a_verified_claim():
+    row = item(**SLOT)
+    ok = run("Lớp học thử 20/10 lúc 19:00 nhé ạ", [{"value": "20/10", "source_id": "LH-20-10"},
+                                                   {"value": "19:00", "source_id": "LH-20-10"}], [row])
+    assert ok == []
+    bad = run("Lớp học thử 20/10 lúc 20:00 nhé ạ", [{"value": "20/10", "source_id": "LH-20-10"},
+                                                    {"value": "19:00", "source_id": "LH-20-10"}], [row])
+    assert [(v.code, v.span) for v in bad] == [(BlockedCode.UNVERIFIED_CLAIM, "20:00")]
+    assert codes(run("Lớp học lúc 19:00 ạ", [], [row])) == [BlockedCode.UNVERIFIED_CLAIM]  # no claim at all
+    # "7 giờ tối" is 19:00; a range in the row vouches for both ends
+    assert run("Mình vào lúc 7 giờ tối", [{"value": "19:00", "source_id": "LH-20-10"}], [row]) == []
+    assert run("hết lúc 20h30", [{"value": "20:30", "source_id": "LH-20-10"}], [row]) == []
+
+
+def test_url_must_be_on_a_cited_catalog_row():
+    form = item(**FORM)
+    assert run("Mình điền phiếu ở https://tt.example.vn/dang-ky nhé", [{"value": 1, "source_id": "PHIEU"}], [form]) == []
+    assert run("Phiếu đây: https://tt.example.vn/dang-ky.", [], [form]) == []  # trailing dot, row was named
+    bad = run("Mình điền phiếu ở https://tt-example.vn/dang-ky nhé", [], [form])
+    assert [(v.code, v.span) for v in bad] == [(BlockedCode.UNVERIFIED_CLAIM, "https://tt-example.vn/dang-ky")]
+    assert codes(run("Xem www.evil.example nhé", [], [])) == [BlockedCode.UNVERIFIED_CLAIM]
+    expired = item(**FORM, valid_until=NOW - timedelta(days=1))
+    assert codes(run("https://tt.example.vn/dang-ky", [], [expired])) == [BlockedCode.UNVERIFIED_CLAIM]
