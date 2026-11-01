@@ -167,10 +167,9 @@ def default_registry(clock: Callable[[], Any] | None = None) -> ToolRegistry:
 
     reg = ToolRegistry()
     register_v0(reg, clock)
+    from cortex_leads.tools.booking import register_booking
     from cortex_leads.tools.memory import register_memory
     from cortex_leads.tools.send import register_send
-
-    from cortex_leads.tools.booking import register_booking
 
     register_memory(reg, clock)
     register_send(reg, clock)

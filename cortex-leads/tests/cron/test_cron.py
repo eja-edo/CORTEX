@@ -9,7 +9,7 @@ from wp5_support import NOW, rows
 
 from cortex_leads.core.ids import uuid7
 from cortex_leads.cron.runner import cron_once
-from cortex_leads.cron.schedule import morning_slot, weekly_slot
+from cortex_leads.cron.schedule import monthly_slot, morning_slot, weekly_slot
 from cortex_leads.db import models as m
 from cortex_leads.db.session import tenant_session
 from cortex_leads.notify import worker
@@ -95,8 +95,8 @@ async def test_weekly_digest_counts_the_week_that_just_ended(world, sandbox_fact
                         actor="staff:nv1", text="x", status="sent", sent_at=now - timedelta(days=1)))
     await seed(m.Booking(tenant_id=world.t.id, sandbox_id=world.sb.id, conversation_id=world.conv.id,
                          contact_id=world.conv.contact_id, slot_code="LH", starts_at=now + timedelta(days=3), actor="ai:x"))
-    assert await cron_once(now) == 2  # the morning list and the digest
-    (d,) = await rows(world, m.Digest)
+    assert await cron_once(now) == 3  # the morning list, the weekly digest and the monthly one for the month before
+    (d,) = [x for x in await rows(world, m.Digest) if x.kind == "weekly"]
     assert d.sandbox_id == owner.id and d.kind == "weekly"
     assert (d.period_start, d.period_end) == (slot - timedelta(days=7), slot - timedelta(days=1))
     this = d.payload["this"]
@@ -105,7 +105,7 @@ async def test_weekly_digest_counts_the_week_that_just_ended(world, sandbox_fact
     assert this["bookings"] == 1 and this["bookings_cancelled"] == 0
     assert d.payload["prev"]["new_conversations"] == 0 and d.payload["dropped_now"] >= 0
     assert all(isinstance(v, int) for v in this.values())  # numbers only: nothing a customer wrote
-    assert await cron_once(now + timedelta(hours=2)) == 0 and len(await rows(world, m.Digest)) == 1
+    assert await cron_once(now + timedelta(hours=2)) == 0 and len(await rows(world, m.Digest)) == 2
 
 
 async def test_digest_counts_outcomes_by_kind(world, sandbox_factory, seed):
@@ -116,7 +116,7 @@ async def test_digest_counts_outcomes_by_kind(world, sandbox_factory, seed):
         await seed(m.ContactFact(tenant_id=world.t.id, contact_id=world.conv.contact_id, conversation_id=world.conv.id,
                                  kind="outcome", value={"status": st}, status="done"))
     await cron_once(now)
-    this = (await rows(world, m.Digest))[0].payload["this"]
+    this = next(x for x in await rows(world, m.Digest) if x.kind == "weekly").payload["this"]
     assert (this["outcome_won"], this["outcome_lost"], this["outcome_booked"]) == (2, 1, 1)
 
 
@@ -141,9 +141,125 @@ async def test_task_and_digest_pushes_carry_numbers_only(world, sandbox_factory,
     now = datetime.combine(slot, datetime.min.time(), tzinfo=UTC) + timedelta(hours=3)
     await owner_sandbox(world, sandbox_factory)
     await cron_once(now)
-    assert await worker.notify_once(now, client=client) == 2
+    assert await worker.notify_once(now, client=client) == 3
+    sent = [t for t in sent if not t.startswith("📊 Báo cáo tháng")]  # the monthly push is checked on its own
     assert sorted(sent) == sorted([
         "📋 Việc sáng nay: 1 khách chưa được trả lời, 0 lịch học thử hôm nay.\nMở: https://cx.example.vn/staff",
         "📊 Báo cáo tuần: 1 khách mới, 0 lịch học thử, 0 tin AI tự gửi, 1 khách đang bị bỏ rơi.\n"
         "Chi tiết: https://cx.example.vn/staff/digest"])
     assert not any("Nguyễn" in t for t in sent)
+
+
+# --- the morning list also names what is owed, not only who is unanswered ------------------------------
+async def _conv(world, conversation_factory, ext, **kw):
+    return await conversation_factory(world.cn, external_id=ext, display_name=ext, intent="hoi_gia", **kw)
+
+
+async def test_morning_list_names_due_promises_quiet_customers_and_jobs_the_cap_dropped(
+        world, conversation_factory, seed):
+    h = lambda n: NOW - timedelta(hours=n)
+    quiet = await _conv(world, conversation_factory, "quiet", last_customer_at=h(60), last_staff_at=h(48))
+    long_gone = await _conv(world, conversation_factory, "long-gone", last_customer_at=h(300), last_staff_at=h(240))
+    due = await _conv(world, conversation_factory, "due", last_customer_at=h(30), last_staff_at=h(29),
+                      promised_date=date(2026, 10, 12))
+    later = await _conv(world, conversation_factory, "later", last_customer_at=h(60), last_staff_at=h(48),
+                        promised_date=date(2026, 10, 20))
+    pending = await _conv(world, conversation_factory, "pending", last_customer_at=h(60), last_staff_at=h(48))
+    off = await _conv(world, conversation_factory, "off", last_customer_at=h(60), last_staff_at=h(48),
+                      offchannel_contact=True)
+    capped = await _conv(world, conversation_factory, "capped", last_customer_at=h(10))
+    answered = await _conv(world, conversation_factory, "answered", last_customer_at=h(10), last_staff_at=h(1))
+    await seed(m.ContactFact(tenant_id=world.t.id, contact_id=pending.contact_id, conversation_id=pending.id,
+                             kind="outcome", value={"status": "lost"}, status="candidate", source="ai:x@1"))
+    for conv, at in ((capped, h(5)), (answered, h(5))):  # `answered`: staff spoke after the cap dropped it
+        await seed(m.DecisionLog(tenant_id=world.t.id, conversation_id=conv.id, decision="job_skipped_budget",
+                                 reason_code="staff_cap", detail={}, at=at))
+    assert await cron_once(NOW) == 1
+    (task,) = await rows(world, m.StaffTask)
+    ids = lambda key: set(task.payload[key])
+    assert ids("leads") == {str(world.conv.id)}  # unchanged: nobody answered yet
+    assert ids("due") == {str(due.id)}  # promise reached today; not the one set for next week
+    assert ids("quiet") == {str(quiet.id)}  # staff answered, then silence; not the 10-day-old one, the AI-pending one, offchannel
+    assert ids("capped") == {str(capped.id)}
+    assert {str(x.id) for x in (long_gone, later, pending, off, answered)}.isdisjoint(
+        ids("leads") | ids("due") | ids("quiet") | ids("capped"))
+
+
+async def test_a_conversation_is_listed_once_in_its_most_urgent_group(world, conversation_factory):
+    due = await _conv(world, conversation_factory, "due", last_customer_at=NOW - timedelta(hours=60),
+                      last_staff_at=NOW - timedelta(hours=48), promised_date=date(2026, 10, 12))
+    await cron_once(NOW)
+    (task,) = await rows(world, m.StaffTask)
+    assert str(due.id) in task.payload["due"] and str(due.id) not in task.payload["quiet"]
+
+
+async def test_task_push_counts_what_is_owed(world, conversation_factory, telegram):
+    sent, client = telegram
+    async with tenant_session(world.t.id) as s:
+        s.add(m.NotifyTarget(tenant_id=world.t.id, kind="telegram", address="9"))
+    await _conv(world, conversation_factory, "due", last_customer_at=NOW - timedelta(hours=60),
+                last_staff_at=NOW - timedelta(hours=48), promised_date=date(2026, 10, 12))
+    await cron_once(NOW)
+    assert await worker.notify_once(NOW, client=client) == 1
+    assert sent == [("📋 Việc sáng nay: 1 khách chưa được trả lời, 1 khách tới hạn hẹn hoặc im sau khi đã trả lời, "
+                     "0 lịch học thử hôm nay.\nMở: https://cx.example.vn/staff")]
+
+
+# --- monthly digest -------------------------------------------------------------------------------------
+def test_monthly_slot_is_the_first_once_0800_has_passed():
+    assert monthly_slot(VN(2026, 11, 1, 7, 59), TZ) is None  # the 1st, too early
+    assert monthly_slot(VN(2026, 11, 1, 8, 0), TZ) == date(2026, 11, 1)
+    assert monthly_slot(VN(2026, 11, 17, 15), TZ) == date(2026, 11, 1)  # a missed 1st runs when we are back
+    assert monthly_slot(VN(2026, 11, 30, 23, 59), TZ) == date(2026, 11, 1)
+    assert monthly_slot(datetime(2026, 10, 31, 20, 0, tzinfo=UTC), TZ) is None  # 03:00 on the 1st, local
+    assert monthly_slot(VN(2027, 1, 1, 8, 0), TZ) == date(2027, 1, 1)
+
+
+def first_of_next_month() -> date:
+    today = datetime.now(UTC).date()
+    return (today.replace(day=1) + timedelta(days=32)).replace(day=1)
+
+
+async def test_monthly_digest_counts_the_month_that_just_ended_once(world, sandbox_factory):
+    slot = first_of_next_month()  # the month before it holds the real clock the fixtures stamp
+    now = datetime.combine(slot, datetime.min.time(), tzinfo=UTC) + timedelta(hours=3)  # the 1st, 10:00 local
+    await owner_sandbox(world, sandbox_factory)
+    await cron_once(now)
+    (d,) = [x for x in await rows(world, m.Digest) if x.kind == "monthly"]
+    last_day = slot - timedelta(days=1)
+    assert (d.period_start, d.period_end) == (last_day.replace(day=1), last_day)
+    assert d.payload["kind"] == "monthly" and d.payload["this"]["new_conversations"] == 1
+    assert d.payload["prev"]["new_conversations"] == 0 and "narrative" not in d.payload
+    assert all(isinstance(v, int) for v in d.payload["this"].values())  # numbers only
+    await cron_once(now + timedelta(hours=2))
+    assert len([x for x in await rows(world, m.Digest) if x.kind == "monthly"]) == 1  # same slot: nothing new
+
+
+async def test_monthly_period_follows_the_calendar_not_thirty_days(world, sandbox_factory):
+    await owner_sandbox(world, sandbox_factory)
+    await cron_once(VN(2027, 3, 1, 9))  # February 2027 has 28 days; the slot is a past one, so the counts are zero
+    (d,) = [x for x in await rows(world, m.Digest) if x.kind == "monthly"]
+    assert (d.period_start, d.period_end) == (date(2027, 2, 1), date(2027, 2, 28))
+    await cron_once(VN(2027, 1, 1, 9))
+    jan = [x for x in await rows(world, m.Digest) if x.kind == "monthly" and x.period_start.month == 12]
+    assert jan and (jan[0].period_start, jan[0].period_end) == (date(2026, 12, 1), date(2026, 12, 31))  # across the year
+
+
+async def test_monthly_push_says_month(world, sandbox_factory, telegram):
+    sent, client = telegram
+    async with tenant_session(world.t.id) as s:
+        s.add(m.NotifyTarget(tenant_id=world.t.id, kind="telegram", address="9"))
+    await owner_sandbox(world, sandbox_factory)
+    await cron_once(VN(2027, 3, 1, 9))
+    await worker.notify_once(VN(2027, 3, 1, 9), client=client)
+    assert any(t.startswith("📊 Báo cáo tháng:") for t in sent) and any(t.startswith("📋 Việc sáng nay") for t in sent)
+
+
+async def test_a_promise_that_came_due_beats_nobody_answered(world, conversation_factory):
+    """The customer wrote last ("em báo lại thứ 6"), so he is also "unanswered"; the reason that matters is the date."""
+    due = await _conv(world, conversation_factory, "due", last_customer_at=NOW - timedelta(hours=26),
+                      last_staff_at=NOW - timedelta(hours=27), promised_date=date(2026, 10, 12))
+    await cron_once(NOW)
+    (task,) = await rows(world, m.StaffTask)
+    assert str(due.id) in task.payload["due"] and str(due.id) not in task.payload["leads"]
+    assert task.payload["leads"] == [str(world.conv.id)]  # the plain unanswered lead is still there

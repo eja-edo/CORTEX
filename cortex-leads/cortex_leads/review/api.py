@@ -13,6 +13,7 @@ from cortex_leads.channels.policy import window_state
 from cortex_leads.core.context import RunContext, Scope, StaffPrincipal
 from cortex_leads.core.envelope import BlockedCode, ToolResult
 from cortex_leads.core.ids import uuid7
+from cortex_leads.core.timefmt import wire
 from cortex_leads.db import models as m
 from cortex_leads.db.session import tenant_session
 from cortex_leads.ingest.api import get_now
@@ -50,10 +51,10 @@ async def list_drafts(caller: Caller = STAFF, status: DraftStatus = "proposed",
                           status="ok", evidence={"count": len(rows)}))
     return {"drafts": [{
         "id": str(d.id), "conversation_id": str(c.id), "status": d.status, "route": d.route, "text": d.text,
-        "claims": d.claims, "reason_code": d.reason_code, "created_at": d.created_at.isoformat(),
+        "claims": d.claims, "reason_code": d.reason_code, "created_at": wire(d.created_at),
         # Evaluated now, not when drafted: basis "human_agent" means a person must type it (R6).
         "window": {**(w := window_state(c.channel_kind, c.last_customer_at, now)),
-                   "expires_at": w["expires_at"].isoformat() if w["expires_at"] else None},
+                   "expires_at": wire(w["expires_at"])},
     } for d, c in rows]}
 
 

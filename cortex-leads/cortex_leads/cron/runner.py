@@ -6,15 +6,12 @@ from typing import Any
 
 from sqlalchemy import select
 
-from cortex_leads.cron.jobs import morning_list, scan_signals, weekly_digest
-from cortex_leads.cron.schedule import morning_slot, weekly_slot
 from cortex_leads.db import models as m
 from cortex_leads.db.session import system_session, tenant_session
+from cortex_leads.sandbox.kinds import kind_of
 from cortex_leads.supervisor.narrative import narrate
 
 log = logging.getLogger(__name__)
-JOBS = {"customer_care": [(morning_slot, morning_list)],
-        "owner_digest": [(morning_slot, scan_signals), (weekly_slot, weekly_digest)]}
 
 
 async def cron_once(now: datetime, gateway: Any = None) -> int:
@@ -25,14 +22,14 @@ async def cron_once(now: datetime, gateway: Any = None) -> int:
     for tid, tz in tenants:
         async with tenant_session(tid) as session:
             for sb in (await session.execute(select(m.Sandbox).where(m.Sandbox.status == "active"))).scalars().all():
-                for slot_of, job in JOBS.get(sb.purpose, []):
+                for slot_of, job in (kind_of(sb.purpose).jobs() if kind_of(sb.purpose) else []):
                     if (slot := slot_of(now, tz)) is None:
                         continue
                     try:
                         async with session.begin_nested():  # one failing job costs itself, not the tenant
                             out = await job(session, sb, tz, now, slot)
                         made += out is not None
-                        if gateway is not None and isinstance(out, m.Digest):
+                        if gateway is not None and isinstance(out, m.Digest) and out.kind == "weekly":
                             async with session.begin_nested():  # the summary is a bonus: its failure keeps the digest
                                 await narrate(session, sb, out, gateway, now)
                     except Exception:

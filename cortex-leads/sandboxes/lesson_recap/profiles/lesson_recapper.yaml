@@ -1,0 +1,15 @@
+# Sandbox lesson_recap (WP31): a lesson recording becomes a recap for the teaching team. No tool, no customer
+# channel: the only thing that leaves is a notify push to the team's own channel (DESIGN §5.6, A9 untouched).
+id: lesson_recapper
+version: 1
+audience: staff
+input_trust: untrusted  # a transcript is whatever a room said, and may carry instructions meant for the model
+context_sources: ["lesson:{scope}"]
+tool_allowlist: []
+effect_ceiling: internal
+memory_scope: none
+output_schema: LessonRecap
+model: lite
+max_tool_calls: 0
+timeout_s: 180  # per model call; a 90-minute lesson is several calls
+token_budget: 40000

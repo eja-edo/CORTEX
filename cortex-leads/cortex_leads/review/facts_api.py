@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cortex_leads.core.ids import uuid7
+from cortex_leads.core.timefmt import wire
 from cortex_leads.db import models as m
 from cortex_leads.db.session import tenant_session
 from cortex_leads.memory import service as mem
@@ -44,7 +45,7 @@ def _audit(s: AsyncSession, c: Caller, tool: str, **evidence: Any) -> None:
 def _out(f: m.ContactFact) -> dict[str, Any]:
     return {"id": str(f.id), "conversation_id": str(f.conversation_id), "kind": f.kind,
             "value": f.value, "source": f.source, "status": f.status,
-            "created_at": f.created_at.isoformat()}
+            "created_at": wire(f.created_at)}
 
 
 async def _guard(coro: Any) -> Any:

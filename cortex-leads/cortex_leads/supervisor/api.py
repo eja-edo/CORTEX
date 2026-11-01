@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter
 from sqlalchemy import text
 
+from cortex_leads.core.timefmt import wire
 from cortex_leads.db.session import supervisor_session
 from cortex_leads.review.auth import Caller, require
 
@@ -25,7 +26,7 @@ async def summary(caller: Caller = SUPERVISOR, since: datetime | None = None
                   ) -> dict[str, Any]:
     since = since or datetime.now(UTC) - timedelta(days=7)
     since = since if since.tzinfo else since.replace(tzinfo=UTC)
-    out: dict[str, Any] = {"since": since.isoformat()}
+    out: dict[str, Any] = {"since": wire(since)}
     async with supervisor_session(caller.tenant_id) as s:
         p = {"since": since}
         total = (await s.execute(text(

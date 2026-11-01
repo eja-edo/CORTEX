@@ -4,6 +4,8 @@
 {% for t in tasks %}<section class="card"><b>Việc sáng nay ({{ t.date }})</b>
 {% for l in t.leads %}<p><a href="/staff/c/{{ l.conv_id }}">{{ l.name }}</a> <span class="meta">· chưa ai trả lời {{ l.silent }}</span></p>
 {% else %}<p class="meta">Không còn khách nào chờ.</p>{% endfor %}
+{% for g in t.owed %}<p class="meta"><b>{{ g.label }}</b></p>
+{% for l in g.rows %}<p><a href="/staff/c/{{ l.conv_id }}">{{ l.name }}</a>{% if l.since %} <span class="meta">· {{ l.since }}</span>{% endif %}</p>{% endfor %}{% endfor %}
 {% if t.bookings_today %}<p>{{ t.bookings_today }} lịch học thử hôm nay.</p>{% endif %}
 <form method="post" action="/staff/task/{{ t.id }}/done"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="sec">Xong</button></form></section>{% endfor %}
 {% for c in cards %}<section class="card">

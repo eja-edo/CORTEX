@@ -144,6 +144,55 @@ python -m cortex_leads.cli add-http-connector --tenant <T> --sandbox <S> --name 
 ```
 Tool `external_lookup` đọc nguồn này cho các lượt chạy nội bộ; lượt chạy với khách không bao giờ được dùng (kết quả là dữ liệu không đáng tin).
 
+### Tổng kết buổi học (sandbox `lesson_recap`, WP31)
+
+Thả bản ghi buổi học vào một thư mục (Drive hoặc thư mục máy); Cortex chuyển thành chữ, viết tổng kết + bài tập về nhà, và đăng vào kênh Mezon của đội. Cần `ffmpeg`; chuyển chữ tại chỗ cần `pip install faster-whisper` (hoặc `CL_TRANSCRIBER=api` + `CL_WHISPER_API_KEY`, nhưng khi đó âm thanh rời máy: xem R117).
+
+```bash
+.venv/bin/python -m cortex_leads.cli create-sandbox --tenant $T --purpose lesson_recap
+.venv/bin/python -m cortex_leads.cli add-lesson-source --tenant $T --sandbox $S --ref ~/bai-ghi   # thư mục trên máy, để thử; thư mục Drive nối ở console (Cài đặt → Kết nối Google)
+.venv/bin/python -m cortex_leads.cli add-notify-target --tenant $T --kind mezon --chat-id https://<webhook của kênh>
+.venv/bin/python -m cortex_leads.cli lessons           # vòng lặp riêng, --once để chạy một lượt
+```
+
+Địa chỉ webhook phải là `https`, host nằm trong `CL_WEBHOOK_ALLOW_HOSTS` (mặc định `webhook.mezon.ai`) và phân giải ra IP công cộng; để thử với Mezon giả trên máy, đặt `CL_WEBHOOK_ALLOW_LOCAL=true`. Muốn tải bản ghi lên từ console: nối một tài khoản Google ở **Cài đặt → Kết nối Google** (tick «Drive»), rồi tạo lớp ở trang **Buổi học**. Trang **Buổi học** có ô tải lên: chọn bản ghi, ngôn ngữ, bấm **Tải lên Drive**. Trình duyệt gửi tệp **thẳng lên Google Drive** (Cortex chỉ cấp phiên tải; khi chạy thật nên đặt `CL_PUBLIC_BASE_URL` đúng địa chỉ mở console (chạy local thì bỏ trống, Cortex dùng địa chỉ đang mở); hạn mức `CL_UPLOAD_PER_USER_DAY`/`CL_UPLOAD_PER_TENANT_DAY`). Tải lên **chỉ đưa tệp vào thư mục Drive**; từ đó vòng theo dõi tự nhặt, chuyển thành chữ và viết tổng kết, giống tệp thả tay vào thư mục (một đường xử lý duy nhất). Cortex không giữ bản ghi: trang phát lại bằng cách lấy tệp từ Drive (tệp tải lên tối đa `CL_UPLOAD_MAX_MB`, mặc định 1024). Cần vòng xử lý nền đang chạy (`cortex_leads.cli lessons`). Chỉ bản ghi từ thư mục tạo **sau khi** gắn nguồn mới được xử lý. Tổng kết chỉ gửi tới đích `mezon`, không bao giờ tới Telegram hay khách. Chưa thử với Mezon và Drive thật (R115, R116).
+
+**Kết nối Google bằng giao diện (WP37).** Mục **Kết nối Google** trong **Cài đặt** (chỉ chủ) thay cho `classroom-login`, `add-classroom-source` và `add-drive-target`: bấm đăng nhập, chọn lớp Classroom hoặc nối Drive, không cần dòng lệnh. Một lần đăng nhập là một `google_account`; nhiều lớp và Drive cùng trỏ vào nó, và hai giáo viên nối hai tài khoản riêng. Ngắt một tài khoản thì mọi lớp và Drive dùng nó dừng, lịch sử giữ nguyên. Máy chủ cần một OAuth client loại *Web application* trong Google Cloud, với địa chỉ chuyển hướng `<địa chỉ console>/api/v1/google/callback`, rồi đặt `CL_GOOGLE_OAUTH_CLIENT_ID`, `CL_GOOGLE_OAUTH_CLIENT_SECRET` và `CL_PUBLIC_BASE_URL` (chỉ phần địa chỉ trang, không kèm `/app`). Drive nối từ giao diện **tự tạo thư mục riêng** trong Drive của giáo viên (quyền `drive.file`); muốn vòng theo dõi nhặt bản ghi từ đó thì chia sẻ thư mục ấy cho tài khoản dịch vụ đang theo dõi. **Lớp học (WP38).** Trang **Buổi học** có khung **Lớp học** (chỉ chủ): mỗi lớp là một thư mục Drive riêng (Cortex tạo trong Drive của giáo viên, hoặc một thư mục có sẵn chỉ để đọc) cùng một webhook Mezon riêng (tuỳ chọn). Tải lên chọn lớp; danh sách buổi học lọc được theo lớp; tổng kết của lớp chỉ gửi vào webhook của lớp đó (lớp không có webhook thì dùng kênh chung của sandbox, và kênh của một lớp không bao giờ nhận tin của lớp khác). Địa chỉ webhook là bí mật nên giao diện chỉ hiện tên máy chủ. Drive Targets đã bỏ (migration 0030).
+
+**Không còn nguồn nối bằng khoá riêng:** các lệnh `classroom-login`, `add-classroom-source`, `add-drive-target` và đọc thư mục bằng tài khoản dịch vụ đã gỡ (migration 0029 tắt các nguồn cũ, giữ lịch sử). Mọi lớp, Drive và thư mục đều đi qua một tài khoản Google nối ở console.
+
+### Chấm bài và giao bài trên Google Classroom (sandbox `classroom_grader`, WP33)
+
+AI đọc bài nộp, **đề xuất** điểm theo thang điểm của giáo viên (mỗi tiêu chí kèm trích dẫn nguyên văn từ bài, được kiểm có thật); giáo viên xem và duyệt ở màn **Chấm bài**. Chỉ khi duyệt, điểm mới được lưu hoặc ghi lên Classroom, và **chỉ với bài do chính ứng dụng tạo** (Google không cho ghi điểm bài khác; bài giáo viên tạo tay chỉ được gợi ý điểm). Màn **Bài tập** soạn đề (tự soạn hoặc nhờ AI) rồi tạo trên Classroom sau khi duyệt, kèm thang điểm nên chấm được ngay.
+
+Thử không cần tài khoản Google (Classroom giả có sẵn 3 học sinh, 2 bài tập):
+```bash
+.venv/bin/python -m dev.local.fake_classroom 8302 &
+export CL_CLASSROOM_API_BASE=http://127.0.0.1:8302/v1 CL_GOOGLE_TOKEN_URL=http://127.0.0.1:8302/token
+.venv/bin/python -m cortex_leads.cli create-sandbox --tenant $T --purpose classroom_grader
+# nối lớp: console, Cài đặt → Kết nối Google (không còn lệnh dòng lệnh)
+.venv/bin/python -m cortex_leads.cli import-grading-guide --tenant $T --source $SRC --coursework-id w1 --file guide.yaml
+.venv/bin/python -m cortex_leads.cli classroom --once     # chấm; vòng lặp: bỏ --once
+```
+`guide.yaml`: `title`, `max_points`, `criteria` (mỗi tiêu chí `id`, `label`, `points`, `descriptor`; **tổng điểm tiêu chí phải bằng `max_points`**), `answer_key` (tuỳ chọn). `check_prompt` (tuỳ chọn): lời giáo viên viết về **cách kiểm tra bài so với đáp án** (ví dụ chép chính tả: phải đủ các đoạn, đúng từng từ, bỏ qua dấu câu; bài của buổi khác thì 0 điểm), đưa nguyên văn cho AI khi chấm. Màn **Bài tập** có hai ô *Đáp án* và *Cách kiểm tra*. **Không có thang điểm thì bài không được chấm.**
+
+**Thông báo:** mỗi bài nộp có đề xuất điểm gửi một tin vào kênh Mezon, mở đầu bằng dòng **Lớp: tên lớp** (tên khoá học trên Classroom, kèm phần nếu có), ghi rõ **học sinh, bài tập, điểm đề xuất theo từng tiêu chí, nguồn bài (PDF, bản ghi âm…), lưu ý**, trạng thái (**chưa phải điểm chính thức**: chưa duyệt, chưa ghi lên Classroom, học sinh chưa thấy điểm) và hai link: trang duyệt trong console (cần `CL_PUBLIC_BASE_URL`) và bài nộp trên Classroom. Link console mở thẳng bài đó (`/app/grading/<id>`, tự chuyển tới `/app/classes/<lớp>/assignments/<bài>?item=<id>`). Từ WP38 mọi thứ xoay quanh **Lớp học** (`class`): mỗi lớp có chế độ tổng kết (`recap_mode`: `auto`/`review`) và chế độ chấm (`grading_mode`: `manual`/`review`/`auto_write`), đổi ở "Sửa lớp"; mặc định `review`. Muốn tin chấm bài vào một kênh riêng: `add-notify-target --kind mezon --chat-id <webhook> --sandbox <id sandbox chấm bài>`; kênh gắn với sandbox thì thay cho kênh chung, và không nhận gì của sandbox khác.
+
+**Định dạng bài nộp đọc được:** Google Docs, văn bản, PDF có chữ, Word (.docx), âm thanh và video (chỉ lấy tiếng, tối đa 15 phút, chép lời bằng Whisper như sandbox buổi học; cần `ffmpeg`). **Ảnh chụp (jpeg, png, webp)** chỉ đọc khi bật `CL_GRADER_SEND_IMAGES=true`: ảnh được gửi **nguyên bản** cho mô hình (tên trong ảnh không che được, xem REVIEW R134), mô hình chép lại chữ đọc được vào `transcript` (hiện ở màn Chấm bài, giáo viên đối chiếu với ảnh gốc) và chấm theo đáp án cùng `check_prompt`; trích dẫn chỉ được kiểm trên bản chép đó. Tắt công tắc thì ảnh bị bỏ qua như trước. PDF scan, slide chưa đọc được: bài được bỏ qua kèm lý do thay vì chấm một phần. Bài nói chỉ chấm theo **nội dung** (có bản chép lời), không chấm phát âm. Thử bài nói với Classroom giả: `python -m dev.local.fake_classroom 8302 --audio tiếng-nói.mp3`.
+
+Nối Classroom thật: `--kind delegated` (service account hành động thay giáo viên `--subject`, cần quản trị miền cho phép uỷ quyền toàn miền) hoặc `--kind oauth` (client OAuth và refresh token của giáo viên). Chưa thử với Google thật (R124); bài và điểm học sinh thuộc nhóm C (R125): chỉ chạy dữ liệu giả hoặc lớp thử.
+
+### Giao diện chính (console, WP27)
+
+Giao diện cho chủ và nhân viên nằm ở `web/` (React + TypeScript + Vite + Tailwind), thiết kế ở `pencil/`. Cần Node 22+.
+
+```bash
+make web-install && make web-build         # bản build ở web/dist; chính API phục vụ nó ở http://localhost:8200/app/
+make web-test                              # build (kiểm kiểu) + vitest
+make web-dev                               # khi sửa giao diện: http://localhost:5173/app/, tự chuyển /api về :8200
+```
+Đăng nhập bằng API key (`create-api-key --role owner` cho chủ, `--role staff` cho nhân viên). Chủ thấy thêm: AI tổng, tạo sandbox, đổi trạng thái kỹ năng, **Dừng khẩn cấp**. Kill switch cũng có bản dòng lệnh: `python -m cortex_leads.cli pause --tenant <T> [--sandbox <S>]` / `resume`. API JSON ở `/api/v1` (xem `cortex_leads/console/`); mọi thao tác gọi lại đúng các hàm nghiệp vụ đã có, không có đường thi hành thứ hai. Chưa có màn Việc hôm nay, Dữ liệu, Báo cáo, Cài đặt (hiện là mục xám "Sắp có").
+
 ### Gắn MCP (chỉ đọc) vào Claude Desktop
 
 Máy chủ MCP chỉ có 4 công cụ đọc (`list_dropped_leads`, `read_conversation`, `lookup_catalog`, `list_drafts`), SĐT/email/tên đã che. Thêm vào `claude_desktop_config.json`:
@@ -168,3 +217,26 @@ Máy chủ MCP chỉ có 4 công cụ đọc (`list_dropped_leads`, `read_conver
 ```
 
 Sau `pip install -e .` các lệnh `python -m bridges.pancake.run` và `python -m cortex_leads.*` chạy được từ mọi thư mục (nhưng `data/` là đường dẫn tương đối theo cwd).
+
+## Nhật ký hoạt động (WP28)
+
+Mọi đăng nhập (kể cả thất bại), đăng xuất, bị từ chối, và mọi việc người làm trong console được ghi vào `audit_event`
+(IP, trình duyệt, mã yêu cầu, `metadata` JSON). Chủ xem ở `/app/audit` (lọc, phân trang, xuất CSV, "Kiểm tra toàn vẹn");
+nhân viên chỉ xem dòng của mình. Kiểm chuỗi băm từ terminal: `python -m cortex_leads.cli audit-verify --tenant <uuid>`.
+Đặt `CL_TRUST_PROXY_HEADERS=true` khi chạy sau reverse proxy để IP lấy từ `X-Forwarded-For`. Chi tiết: DESIGN §5.14.
+
+## Kỹ năng, công cụ và nguồn dữ liệu (WP29)
+
+- **Sửa kỹ năng tại chỗ:** `/app/skills/<id>/edit`. Form gốc được lưu (`skill_version.form_spec`), mỗi lần sửa ghi nội dung trước đó vào nhật ký và khôi phục được từ trang chi tiết. Kỹ năng đang bật/chạy thử chỉ chủ sửa.
+- **Xoá là khoá:** kỹ năng từ form và nguồn dữ liệu chỉ bị ẩn và ngừng chạy; tab "Đã xoá" khôi phục được. Kỹ năng hệ thống không xoá được.
+- **Công cụ & kết nối** (`/app/tools`, chỉ chủ): danh mục công cụ theo mức quyền, nguồn dữ liệu/MCP, kênh. Mỗi sandbox có ma trận "AI được dùng công cụ nào" ở `/app/sandboxes/<id>?tab=tools`; chủ tắt/bật công cụ theo sandbox.
+- **Nguồn dữ liệu ngoài:** chỉ https, chỉ đọc, ghim cấu hình (và với MCP, định nghĩa công cụ). Định nghĩa đổi sau khi duyệt thì nguồn tự khoá cho tới khi chủ duyệt lại. Chỉ gắn được cho sandbox không nói chuyện với khách.
+
+## Đăng nhập console (WP30)
+
+Console đăng nhập bằng **email + mật khẩu**, không phải khoá API. Tạo tài khoản đầu tiên (chủ) bằng dòng lệnh, các nhân viên sau đó do chủ thêm ở `/app/team`:
+```bash
+python -m cortex_leads.cli create-user --tenant <uuid> --email chu@trungtam.vn --name "Chủ trung tâm" --role owner   # in mật khẩu tạm, phải đổi ở lần đầu
+python -m cortex_leads.cli reset-password --email chu@trungtam.vn                                                 # chủ quên mật khẩu
+```
+`python -m dev.local setup` tạo sẵn một chủ và một nhân viên và in email + mật khẩu. Phiên hết sau 12 giờ hoặc 2 giờ không hoạt động; 5 lần sai khoá email 15 phút. Sau reverse proxy đặt `CL_TRUST_PROXY_HEADERS=true` để chống đoán theo địa chỉ đúng. Chi tiết: DESIGN §5.15.

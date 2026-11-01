@@ -197,6 +197,27 @@ def test_a9_one_send_path_tool_outbox_worker():
              "/review/conversations/{conversation_id}/outcome",
              "/review/conversations/{conversation_id}/offchannel", "/review/facts/{fact_id}/{op}",
              "/review/confirmations"}
+    # WP27 console: the same actions as above plus owner-only controls; each is behind the session (tested in tests/console)
+    known |= {"/api/v1/assistant/chat", "/api/v1/bookings/{booking_id}/cancel", "/api/v1/conversations",
+              "/api/v1/conversations/{conversation_id}", "/api/v1/conversations/{conversation_id}/booking",
+              "/api/v1/conversations/{conversation_id}/outcome", "/api/v1/conversations/{conversation_id}/reply",
+              "/api/v1/drafts/{draft_id}/action", "/api/v1/facts/{fact_id}/{verb}", "/api/v1/kill-switch", "/api/v1/proposals",
+              "/api/v1/proposals/{proposal_id}/{verb}", "/api/v1/sandboxes", "/api/v1/sandboxes/{sandbox_id}/{verb}",
+              "/api/v1/session", "/api/v1/session/login", "/api/v1/session/logout", "/api/v1/skills", "/api/v1/skills/form-options",
+              "/api/v1/skills/preview", "/api/v1/skills/{skill_id}", "/api/v1/skills/{skill_id}/{verb}",
+              "/api/v1/sandboxes/{sandbox_id}", "/api/v1/sandboxes/{sandbox_id}/send-mode", "/api/v1/sandboxes/{sandbox_id}/tools/{tool}", "/api/v1/sandboxes/{sandbox_id}/tools/{tool}/{state}",
+              "/api/v1/skills/{skill_id}/revert", "/api/v1/sources", "/api/v1/sources/mcp/describe", "/api/v1/sources/{source_id}", "/api/v1/sources/{source_id}/review",
+              "/api/v1/sources/{source_id}/sandbox", "/api/v1/sources/{source_id}/{verb}", "/api/v1/tools",
+              "/api/v1/session/password", "/api/v1/session/sessions", "/api/v1/session/sessions/{session_id}/revoke", "/api/v1/session/logout-all",
+              "/api/v1/team", "/api/v1/team/{user_id}", "/api/v1/team/{user_id}/reset-password", "/api/v1/team/{user_id}/end-sessions",
+              "/api/v1/audit", "/api/v1/audit/export", "/api/v1/audit/verify", "/api/v1/audit/{event_id}",
+              "/api/v1/lessons", "/api/v1/lessons/{lesson_id}", "/api/v1/lessons/upload/session", "/api/v1/lessons/{lesson_id}/media", "/api/v1/grading", "/api/v1/grading/{item_id}", "/api/v1/grading/{item_id}/decision",
+              "/api/v1/assignments", "/api/v1/assignments/ai", "/api/v1/assignments/{draft_id}/decision",
+              "/api/v1/google/accounts", "/api/v1/google/accounts/connect", "/api/v1/google/accounts/{account_id}/revoke", "/api/v1/google/accounts/{account_id}/courses",
+              "/api/v1/google/callback", "/api/v1/google/classroom-sources", "/api/v1/classes", "/api/v1/classes/{class_id}",
+              "/api/v1/google/accounts/{account_id}/folders", "/api/v1/google/lesson-sources", "/api/v1/google/sources/{kind}/{source_id}/active",
+         "/api/v1/google/accounts/{account_id}", "/api/v1/google/accounts/{account_id}/reconnect", "/api/v1/classes/{class_id}/relink",
+         "/api/v1/classes/{class_id}/assignments", "/api/v1/assignments/{assignment_id}/grade", "/api/v1/grading/{item_id}/grade", "/api/v1/lessons/{lesson_id}/release"}
     assert {p for p in create_app().openapi()["paths"] if not p.startswith("/staff")} == known
 
     # Network libraries are imported only by the LLM provider, the outbound worker (customers, A9) and the

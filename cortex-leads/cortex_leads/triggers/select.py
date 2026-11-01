@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from cortex_leads.core.timefmt import day_start, tenant_tz
 from cortex_leads.db import models as m
 from cortex_leads.domain.pack import load_pack
 from cortex_leads.sandbox.policy import check_budget
@@ -33,7 +34,7 @@ async def select_jobs(session: AsyncSession, sandbox: m.Sandbox, now: datetime
     gate = await check_budget(session, sandbox, "runs", now)
     if gate is not None and gate.code == "PAUSED":
         return []  # kill switch: leave the jobs alone
-    day = now.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    day = day_start(now, await tenant_tz(session, sandbox.tenant_id))
     owner_col = func.coalesce(m.Conversation.owner_staff_ref, UNASSIGNED)
     used = dict((await session.execute(
         select(owner_col, func.count())

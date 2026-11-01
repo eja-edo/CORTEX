@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from cortex_leads.channels.policy import WindowState
+from cortex_leads.core.timefmt import wire
 from cortex_leads.db import models as m
 from cortex_leads.ingest.signing import sign
 
@@ -28,7 +29,7 @@ def build_action(row: m.Outbox, conv: m.Conversation, connector: m.Connector,
         "channel": {"kind": conv.channel_kind, "account_ref": out.get("account_ref") or connector.id},
         "conversation": {"external_id": conv.external_id}, "actor": row.actor, "text": row.text,
         "window": {"open": window["open"], "basis": window["basis"],
-                   "expires_at": window["expires_at"].isoformat() if window["expires_at"] else None},
+                   "expires_at": wire(window["expires_at"])},
         "source": row.source}
     if row.disclosure:  # mandatory whenever the actor is ai:* (Luật AI 134/2025)
         action["disclosure"] = row.disclosure

@@ -170,7 +170,7 @@ async def test_new_message_cancels_pending_jobs_and_expires_drafts(
     r = await post(app_client, c, [ev("new1", text="Chào shop, còn khóa không?")])
     assert r.json()["results"][0]["status"] == "accepted"
     async with tenant_session(t.id) as s:
-        st = lambda model, i: s.scalar(select(model.status).where(model.id == i))  # noqa: E731
+        st = lambda model, i: s.scalar(select(model.status).where(model.id == i))
         assert await st(m.FollowupJob, job.id) == "skipped"
         assert await st(m.FollowupJob, running.id) == "running"
         assert await st(m.Draft, draft.id) == "expired"
@@ -180,3 +180,30 @@ async def test_new_message_cancels_pending_jobs_and_expires_drafts(
     assert by["job_cancelled_new_message"].detail == {"count": 1, "sender_role": "customer"}
     assert by["draft_expired"].detail["count"] == 1
     assert "Chào shop" not in json.dumps([x.detail for x in logs])
+
+
+async def test_a_request_to_stop_silences_the_contact_at_once(app_client, env, conversation_factory, seed) -> None:
+    t, sb, c = env
+    conv = await conversation_factory(c, external_id="c1")
+    job = await seed(m.FollowupJob(tenant_id=t.id, sandbox_id=sb.id, conversation_id=conv.id,
+                                   skill_name="s", skill_version=1, event_type="conversation.silent", dedupe_key="k1"))
+    draft = await seed(m.Draft(tenant_id=t.id, sandbox_id=sb.id, conversation_id=conv.id, text="nháp", status="proposed"))
+    r = await post(app_client, c, [ev("stop1", text="Đừng nhắn tin cho mình nữa nhé")])
+    assert r.json()["results"][0]["status"] == "accepted"
+    async with tenant_session(t.id) as s:
+        got = await s.get(m.Conversation, conv.id)
+        assert got.state == "opted_out" and got.next_check_at is None and got.reply_check_at is None
+        assert (await s.get(m.Contact, got.contact_id)).opted_out is True
+        assert await s.scalar(select(m.FollowupJob.status).where(m.FollowupJob.id == job.id)) == "skipped"
+        assert await s.scalar(select(m.Draft.status).where(m.Draft.id == draft.id)) == "expired"
+        logs = (await s.execute(select(m.DecisionLog).where(m.DecisionLog.decision == "contact_opted_out"))).scalars().all()
+    assert len(logs) == 1 and "nhắn tin" not in json.dumps(logs[0].detail)  # a count, never the customer's words
+
+
+async def test_ordinary_message_does_not_opt_out(app_client, env, conversation_factory) -> None:
+    t, _, c = env
+    conv = await conversation_factory(c, external_id="c1")
+    await post(app_client, c, [ev("hi1", text="Em không gửi được ảnh, khóa IELTS giá bao nhiêu?")])
+    async with tenant_session(t.id) as s:
+        got = await s.get(m.Conversation, conv.id)
+        assert got.state == "open" and not (await s.get(m.Contact, got.contact_id)).opted_out

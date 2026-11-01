@@ -12,7 +12,7 @@ from cortex_leads.db.session import tenant_session
 from cortex_leads.tools.booking import cancel_booking
 
 START = datetime(2026, 10, 15, 12, 0, tzinfo=UTC)  # 19:00 in Vietnam, three days out
-ALLOW = ["list_open_slots", "book_slot"]
+ALLOW = ["list_open_slots", "book_slot", "draft_followup"]
 
 
 def ctx_for(w, conv=None) -> RunContext:
@@ -147,3 +147,24 @@ async def test_the_model_is_not_offered_book_slot(world):
     names = {s["function"]["name"] for s in REG.openai_schemas(
         [x.name for x in REG.specs_for(ALLOW) if x.effect == "read"])}
     assert names == {"list_open_slots"}
+
+
+async def test_the_slot_a_customer_is_offered_is_read_off_its_real_start_not_its_typed_text(world, catalog_factory):
+    await catalog_factory(world.t, code="LH-LIE", name="Học thử", price=None, category="lich_hoc_thu", valid_until=START,
+                          attrs={"ngay": "16/10", "gio": "20:00", "suc_chua": 2})  # typed text disagrees with START (19:00, 15/10 in VN)
+    (slot_,) = (await call(world, "list_open_slots", {})).data["slots"]
+    assert (slot_["ngay"], slot_["gio"]) == ("15/10", "19:00")
+    booked = await call(world, "book_slot", {"slot_code": "LH-LIE"})
+    assert booked.data["slot"]["ngay"] == "15/10" and booked.data["slot"]["gio"] == "19:00"
+
+
+async def test_a_draft_that_repeats_the_typed_text_instead_of_the_real_start_is_blocked(world, catalog_factory):
+    await catalog_factory(world.t, code="LH-LIE", name="Học thử", price=None, category="lich_hoc_thu", valid_until=START,
+                          attrs={"ngay": "16/10", "gio": "20:00", "suc_chua": 2})
+    def draft(text, d, t):
+        return call(world, "draft_followup", {"text": text, "reason_code": "khong_ro", "has_new_info": True,
+                                              "claims": [{"value": d, "source_id": "LH-LIE"}, {"value": t, "source_id": "LH-LIE"}]})
+    ok = await draft("Em giữ chỗ học thử ngày 15/10 lúc 19:00 cho mình ạ", "15/10", "19:00")
+    assert ok.status == "proposed"
+    wrong = await draft("Em giữ chỗ học thử ngày 16/10 lúc 20:00 cho mình ạ", "16/10", "20:00")
+    assert wrong.status == "blocked" and {v.span for v in wrong.violations} == {"16/10", "20:00"}

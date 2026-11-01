@@ -1,0 +1,28 @@
+@import "tailwindcss";
+
+/* Design tokens from pencil/untitled.pen */
+@theme {
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --color-app: #f4f5f8;
+  --color-surface: #ffffff;
+  --color-line: #e4e7ec;
+  --color-ink: #101828;
+  --color-ink-2: #475467;
+  --color-ink-3: #98a2b3;
+  --color-accent: #4f46e5;
+  --color-accent-soft: #eef0ff;
+  --color-ok: #067647;
+  --color-ok-soft: #e7f8ef;
+  --color-warn: #b54708;
+  --color-warn-soft: #fef0dc;
+  --color-bad: #b42318;
+  --color-bad-soft: #fdecea;
+  --color-ai: #6941c6;
+  --color-ai-soft: #f4eeff;
+}
+
+html, body, #root { height: 100%; }
+body { margin: 0; background: var(--color-app); color: var(--color-ink); font-family: var(--font-sans); font-size: 14px; }
+button { font: inherit; cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }

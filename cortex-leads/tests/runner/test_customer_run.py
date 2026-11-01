@@ -1,6 +1,6 @@
 from datetime import timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import update
 from wp5_support import GOOD_DRAFT, NOW, gateway, make_job, reply, rows, run_one, set_conv
 
 from cortex_leads.core.envelope import BlockedCode
@@ -120,6 +120,15 @@ async def test_tool_loop_reads_catalog_then_drafts(world):
     assert offered == {"read_messages", "read_contact", "lookup_catalog"}  # read only, no draft
     tool_msg = prov.calls[1]["messages"][-1]
     assert tool_msg["role"] == "tool" and "2500000" in tool_msg["content"]
+
+
+async def test_a_tool_the_owner_switched_off_is_not_offered_to_the_model(world):
+    async with tenant_session(world.t.id) as s:
+        (await s.get(m.Sandbox, world.sb.id)).tools_off = ["lookup_catalog"]
+    gw, prov = gateway(reply(GOOD_DRAFT))
+    await run_one(world, gw)
+    offered = {t["function"]["name"] for t in prov.calls[0]["tools"]}
+    assert offered == {"read_messages", "read_contact"}
 
 
 async def test_write_tool_in_loop_is_refused(world):

@@ -33,7 +33,9 @@ make migrate
 make test       # pytest trên Postgres thật
 ```
 
-Hướng dẫn chạy thử đầy đủ (tenant, connector, skill, bridge Pancake, MCP) nằm trong [`cortex-leads/README.md`](cortex-leads/README.md).
+Hướng dẫn chạy thử đầy đủ (tenant, connector, skill, bridge Pancake, MCP, console) nằm trong [`cortex-leads/README.md`](cortex-leads/README.md).
+
+**Giao diện chính** (`cortex-leads/web/`, React + TS + Vite + Tailwind; thiết kế ở `pencil/`): cần Node 22+ (`~/.nvm/versions/node/v22.*/bin` nếu chưa trong PATH). `make web-test` build + vitest; API của nó ở `cortex_leads/console/` (`/api/v1`) và FastAPI phục vụ bản build ở `/app`. Thêm màn mới = thêm endpoint ở `console/` (gọi lại hàm nghiệp vụ có sẵn) + test pytest + test vitest.
 
 ### Cách làm việc khi code
 
@@ -59,10 +61,13 @@ Chi tiết ở DESIGN §5.0.
 | A3 | Tenant, actor, scope do server điền: lấy từ connector key, API key, hoặc `RunContext`. Không bao giờ lấy từ body hay tham số LLM |
 | A7 | Validator chạy **bên trong** tool ghi. Mọi con số khách nhìn thấy phải trỏ về một dòng catalog |
 | A9 | **Chỉ một đường gửi tin cho khách:** tool `send_message` → `outbox` → worker → bridge. Hai lớp chặn do người cấu hình: skill (`send_policy` auto/manual) và bridge (`outbound`). Chế độ manual không bao giờ sinh outbox khi chưa có người duyệt; AI chỉ gửi trong cửa sổ tự do, kèm dòng xưng AI |
+| — | **Console đăng nhập bằng tài khoản** (email + mật khẩu, phiên phía server), mọi endpoint `console/` khai `need("quyền")` trong `auth/perms.py`; test `test_every_endpoint_has_been_given_a_decision` chặn endpoint không có quyết định. Mật khẩu không bao giờ vào log, nhật ký hay API |
 | — | Dữ liệu cá nhân (tên, SĐT, email) được che trước mọi lời gọi LLM |
+| — | **Ngày giờ chỉ viết qua `core/timefmt.py` / `format.ts`** (DESIGN §5.13): UTC `Z` qua API, hiển thị theo múi giờ doanh nghiệp, giờ trong ngày không lưu thành chữ. Test `tests/core/test_conventions.py` cấm `isoformat`/`strftime` ngoài mô-đun đó |
 
 ### Bẫy đã gặp
 
+- **Test TRUNCATE mọi bảng của DB mà nó trỏ tới.** Biến môi trường đã export thắng `.env.test`, nên chạy `pytest` trong shell đã `source data/lessons.env` (hoặc bất kỳ env DB demo nào) sẽ **xoá sạch DB demo** (đã xảy ra 2026-10-23: mất tài khoản, sandbox, lớp Classroom đã nối). `tests/conftest.py` giờ từ chối DB có chữ `demo`/`prod`/`staging` trong tên; dựng lại demo bằng `cortex-leads/data/rebuild_demo.sh`.
 - **PyYAML đọc khoá `on` thành `True`** (YAML 1.1). Parse frontmatter skill **chỉ** qua `cortex_leads.skills.loader`, không gọi `yaml.safe_load` trực tiếp.
 - **`mcp` là bản 2.x** (`mcp>=2,<3`). API khác bản 1.x: dùng `mcp.server.mcpserver.MCPServer`, không có `mcp.server.fastmcp`.
 - **Owner trong Docker là superuser**, nên view bỏ qua RLS. View của supervisor dùng `security_invoker = true`.

@@ -12,6 +12,7 @@ from sqlalchemy import select
 
 from cortex_leads.core.context import RunContext, Scope, SystemPrincipal
 from cortex_leads.core.ids import uuid7
+from cortex_leads.core.timefmt import wire
 from cortex_leads.db import models as m
 from cortex_leads.db.session import tenant_session
 from cortex_leads.privacy.redact import redact
@@ -66,7 +67,7 @@ class ReadOnlyHandlers:
                 .order_by(m.Draft.created_at.desc()).limit(max(1, min(limit, 50))))).all()
         drafts = [{"draft_id": str(d.id), "conversation_id": str(d.conversation_id),
                    "status": d.status, "reason_code": d.reason_code,
-                   "created_at": d.created_at.isoformat(),
+                   "created_at": wire(d.created_at),
                    "text": redact(d.text, [name] if name else []).text} for d, name in rows]
         return {"status": "ok", "data": {"drafts": drafts},
                 **({} if drafts else {"note": "Không có nháp nào ở trạng thái này."})}

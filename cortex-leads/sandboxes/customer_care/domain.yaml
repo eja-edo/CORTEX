@@ -17,6 +17,6 @@ reason_codes:
 decision_maker_roles: [ban_than, vo_chong, bo_me, con, sep, khac]
 fact_kinds: [decision_maker, need, budget, objection, preference, goal, current_level, study_time, deadline]
 outcome_keywords:
-  booked: [đặt lịch, hẹn lịch, đã đặt, book]
-  won: [đã đăng ký, đã chuyển khoản, đã thanh toán, đã mua, chốt]
+  booked: [đặt lịch, hẹn lịch, đã đặt, book, đặt lịch rồi]
+  won: [đã đăng ký, đã chuyển khoản, đã thanh toán, đã mua, chốt, đăng ký rồi, chuyển khoản rồi, thanh toán rồi, đóng tiền rồi, đóng học phí rồi]
   lost: [không cần nữa, thôi nhé, không đăng ký, hủy, đã học chỗ khác]

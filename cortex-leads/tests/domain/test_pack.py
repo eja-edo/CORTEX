@@ -182,3 +182,11 @@ def test_reason_codes_accept_list_and_labelled_dict():
     assert "a" in labelled.reason_codes and "b" not in labelled.reason_codes
     assert labelled.reason_label("a") == "Nhãn A" and labelled.reason_label("zz") == "zz"
     assert PACK.reason_label("soc_gia") == "Có thể sốc giá"
+
+
+@pytest.mark.parametrize(("text", "outcome"), [
+    ("Mình đăng ký rồi nhé", "won"), ("em chuyển khoản rồi ạ", "won"), ("Mình đã đăng ký", "won"),
+    ("em đặt lịch rồi", "booked"), ("chị chưa đăng ký đâu", None), ("khoá này giá bao nhiêu", None),
+])
+def test_shipped_pack_reads_how_people_say_it_is_done(text, outcome):
+    assert PACK.match_outcome(text) == outcome

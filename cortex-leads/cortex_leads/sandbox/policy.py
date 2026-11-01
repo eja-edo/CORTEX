@@ -1,11 +1,12 @@
 """Sandbox rules: when one is mandatory, kill switch, hard budgets (DESIGN §5.6)."""
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, Literal
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cortex_leads.core.envelope import BlockedCode, Violation
+from cortex_leads.core.timefmt import day_start, tenant_tz
 from cortex_leads.db.models import Draft, Sandbox, TriggerRun
 
 # Any one of these forces the config into a sandbox.
@@ -22,10 +23,10 @@ def is_paused(sandbox: Sandbox) -> bool:
 
 async def check_budget(session: AsyncSession, sandbox: Sandbox,
                        kind: Literal["runs", "drafts", "tokens"], now: datetime) -> Violation | None:
-    """None = allowed. Counts since 00:00 UTC of `now`; budgets live in sandbox.budget."""
+    """None = allowed. Counts since the business's local midnight (DESIGN §5.13); budgets live in sandbox.budget."""
     if is_paused(sandbox):
         return Violation(code=BlockedCode.PAUSED, detail=f"sandbox {sandbox.name} is paused")
-    day = now.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    day = day_start(now, await tenant_tz(session, sandbox.tenant_id))
     key, used = {
         "runs": ("runs_per_day", select(func.count()).select_from(TriggerRun).where(
             TriggerRun.sandbox_id == sandbox.id, TriggerRun.started_at >= day)),

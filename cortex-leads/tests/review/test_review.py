@@ -113,7 +113,7 @@ async def test_rls_other_tenant_key_sees_nothing(app_client, world, api_key_fact
 
 async def test_touch_counts_only_when_staff_sends(app_client, world, api_key_factory, seed):  # R36
     _, key = await api_key_factory(world.t, staff_ref="nv1")
-    touches = lambda: _touches(world)  # noqa: E731
+    touches = lambda: _touches(world)
     for act, text, want in (("skipped", None, 0), ("self", None, 0), ("sent", None, 1), ("edited", "Chào chị ạ", 2)):
         d = await make_draft(world, seed)
         r = await app_client.post(f"/review/drafts/{d.id}/action",

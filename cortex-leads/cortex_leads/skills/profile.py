@@ -5,6 +5,7 @@ import yaml
 from pydantic import BaseModel
 
 from cortex_leads.core.errors import CortexError
+from cortex_leads.sandbox.kinds import kind_of
 
 SANDBOXES_DIR = Path(__file__).resolve().parents[2] / "sandboxes"
 
@@ -33,3 +34,10 @@ def load_profile(ref: str, root: Path = SANDBOXES_DIR) -> AgentProfile:
         if not ver or profile.version == int(ver):
             return profile
     raise CortexError(f"profile not found: {ref}")
+
+
+def template_dir(sandbox: object) -> str:
+    """Which `sandboxes/<dir>/` holds this sandbox's skills, style and domain pack. By purpose, not by name:
+    the owner may call a sandbox anything ("Chăm sóc khách – cơ sở 2")."""
+    kind = kind_of(getattr(sandbox, "purpose", ""))
+    return kind.directory if kind else getattr(sandbox, "name", "")

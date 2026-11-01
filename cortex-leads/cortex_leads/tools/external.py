@@ -34,6 +34,8 @@ def _make_external_lookup(client_factory: Callable[[], Any], resolver: Any):
             run = mcp_remote.call if conn.kind == "mcp" else fetch
             data = await run(conn, a.query, client=client_factory(), resolve=resolver)
         except ConnectorError as e:
+            if e.code in ("TOOL_CHANGED", "PIN_MISMATCH", "NOT_READ_ONLY"):
+                conn.status, conn.alert = "disabled", e.code  # stopped for good until a person reviews it; the console says why
             return ToolResult(status="error", note=f"Nguồn ngoài không trả lời được ({e.code}). Đừng đoán kết quả.",
                               error=ErrorInfo(code=ErrorCode.UPSTREAM_UNAVAILABLE, retryable=e.code == "UPSTREAM"))
         return ToolResult(status="ok", data=data)

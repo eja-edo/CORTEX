@@ -7,6 +7,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cortex_leads.core.ids import uuid7
+from cortex_leads.core.timefmt import wire
 from cortex_leads.db import models as m
 from cortex_leads.sandbox.policy import is_paused
 from cortex_leads.skills.manifest import parse_duration
@@ -29,7 +30,7 @@ def dedupe_key(conv: m.Conversation, event_type: str) -> str:
         return f"promised:{conv.id}:{conv.promised_date}"
     if event_type == TURN_EVENT:  # once per turn; a `wait` bumps reply_waits so the turn may fire again
         return f"turn:{conv.id}:{conv.last_customer_msg_id}:{conv.reply_waits}"
-    anchor = conv.last_customer_msg_id or (conv.last_staff_at.isoformat() if conv.last_staff_at else "none")
+    anchor = conv.last_customer_msg_id or (wire(conv.last_staff_at) if conv.last_staff_at else "none")
     return f"silent:{conv.id}:{anchor}"
 
 
@@ -111,7 +112,7 @@ async def on_conversation_event(session: AsyncSession, conversation: m.Conversat
             ready.append(sk)
         else:
             later.append(at)
-            _log(session, conversation, why, None, now, {"skill": sk.name, "at": at.isoformat()})
+            _log(session, conversation, why, None, now, {"skill": sk.name, "at": wire(at)})
     if later:  # re-time the clock to the earliest skill that is not ready yet (the sweeper cleared it)
         conversation.next_check_at = min(later)
     if not ready:

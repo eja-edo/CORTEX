@@ -15,6 +15,11 @@ from cortex_leads.supervisor.signals import MIN_N, read_findings, record
 REAL = datetime.now(UTC)  # trigger_run.started_at defaults to the DB clock, so the window is the real one
 
 
+
+def weekly(digests):  # the monthly digest is a second row on the first run of a month
+    return [d for d in digests if d.kind == "weekly"]
+
+
 async def runs(w, seed, n, *, skill="s", ver=2, **kw):
     for _ in range(n):
         await seed(m.TriggerRun(**{**dict(
@@ -177,7 +182,7 @@ async def test_weekly_summary_keeps_only_numbers_it_was_given(world, seed, sandb
     await owner_sandbox(world, sandbox_factory)
     gw, prov = gateway(reply({"summary": "Tuần này có 1 khách mới và 1 khách đang bị bỏ rơi, nên xem danh sách sáng nay."}))
     await cron_once(now, gw)
-    (d,) = await rows(world, m.Digest)
+    (d,) = weekly(await rows(world, m.Digest))
     assert d.payload["narrative"].startswith("Tuần này có 1 khách mới")
     sent = json.dumps(prov.calls[0]["messages"], ensure_ascii=False)
     assert "Nguyễn" not in sent and "0901" not in sent and "tuan_nay" in sent  # numbers only went out
@@ -189,7 +194,7 @@ async def test_a_summary_with_a_number_of_its_own_is_dropped_and_the_digest_surv
     await owner_sandbox(world, sandbox_factory)
     gw, _ = gateway(reply({"summary": "Khách mới tăng 250% so với tuần trước, rất tốt, chủ nên ăn mừng thôi."}))
     await cron_once(monday_now(), gw)
-    (d,) = await rows(world, m.Digest)
+    (d,) = weekly(await rows(world, m.Digest))
     assert "narrative" not in d.payload
     (run,) = [r for r in await rows(world, m.TriggerRun) if r.skill_name == "tom-tat-tuan"]
     assert (run.status, run.blocked_codes) == ("blocked", ["UNVERIFIED_CLAIM"])
@@ -199,7 +204,7 @@ async def test_llm_failure_or_exhausted_budget_never_loses_the_digest(world, san
     await owner_sandbox(world, sandbox_factory)
     gw, _ = gateway(reply("not json at all"))
     await cron_once(monday_now(), gw)
-    assert len(await rows(world, m.Digest)) == 1
+    assert len(weekly(await rows(world, m.Digest))) == 1
     assert [r.status for r in await rows(world, m.TriggerRun) if r.skill_name == "tom-tat-tuan"] == ["error"]
 
 

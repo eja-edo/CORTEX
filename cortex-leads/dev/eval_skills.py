@@ -97,7 +97,7 @@ async def run_case(case: dict[str, Any], provider_factory) -> dict[str, Any]:
     msgs = case["conversation"]
     last_c = max((x for x in msgs if x["role"] == "customer"), key=lambda x: x["at"])
     last_s = max((x for x in msgs if x["role"] == "staff"), key=lambda x: x["at"], default=None)
-    at = lambda x: NOW + timedelta(hours=x["at"])  # noqa: E731
+    at = lambda x: NOW + timedelta(hours=x["at"])
     async with tenant_session(tid) as s:
         contact = m.Contact(tenant_id=tid, connector_id=cid, external_id="c1", display_name="Khách Eval")
         s.add(contact)
@@ -158,7 +158,7 @@ def report(cases, results, scores, provider: str, price: tuple[float, float]) ->
     tin = sum(r["tokens"][0] for r in results)
     tout = sum(r["tokens"][1] for r in results)
     cost = (tin * price[0] + tout * price[1]) / 1e6
-    mark = lambda v: "-" if v is None else ("ok" if v else "SAI")  # noqa: E731
+    mark = lambda v: "-" if v is None else ("ok" if v else "SAI")
     lines = [f"# Eval giọng trả lời ({provider})", "",
              f"{ok}/{n} case đạt tự động. Token vào/ra: {tin}/{tout}, chi phí ước tính ${cost:.4f} "
              f"(giá/1M token: vào {price[0]}, ra {price[1]}). Chấm tự động chỉ bắt lỗi hiển nhiên; hãy đọc từng nháp.", "",

@@ -16,6 +16,7 @@ from cortex_leads.channels.policy import window_state
 from cortex_leads.core.context import CustomerPrincipal, RunContext, StaffPrincipal
 from cortex_leads.core.envelope import BlockedCode, ErrorCode, ErrorInfo, ToolResult, Violation
 from cortex_leads.core.ids import uuid7
+from cortex_leads.core.timefmt import wire
 from cortex_leads.db import models as m
 from cortex_leads.guard.validator import validate_draft
 from cortex_leads.privacy.redact import _fold
@@ -149,7 +150,7 @@ def _make_send(clock: Clock):
             text=a.text if (a.text and not ai) else draft.text,
             disclosure=f"Trợ lý AI của {tenant.name}" if ai else None,  # Luật AI 134/2025
             window={"open": window["open"], "basis": window["basis"], "expires_at": (
-                window["expires_at"].isoformat() if window["expires_at"] else None)},
+                wire(window["expires_at"]))},
             source={"skill": f"{run.skill_name}@{run.skill_version}" if run else None,
                     "run_id": str(draft.run_id or ctx.run_id), "turn": turn},
             status="queued", not_before=not_before, created_at=now)
@@ -157,7 +158,7 @@ def _make_send(clock: Clock):
         draft.status, draft.decided_at = "approved", now
         await session.flush()
         return ToolResult(status="ok", action_id=action_id, data={
-            "outbox_id": str(row.id), "status": "queued", "not_before": not_before.isoformat()})
+            "outbox_id": str(row.id), "status": "queued", "not_before": wire(not_before)})
 
     return send_message
 

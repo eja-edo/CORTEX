@@ -1,6 +1,6 @@
 """WP13: staff review page. Login, CSRF, RLS, reuse of review.api's decision logic."""
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from sqlalchemy import select, update
@@ -396,3 +396,53 @@ async def test_a_strategy_card_shows_its_one_change_and_leads_to_a_trial_the_own
     shadow = next(v for v in await rows(world, m.SkillVersion) if v.name == live.name and v.status == "shadow")
     assert (await app_client.get(f"/staff/skills/{shadow.id}/trial")).status_code == 200
     assert [v.status for v in await rows(world, m.SkillVersion) if v.id == live.id] == ["live"]  # the old one still runs
+
+
+async def test_morning_list_shows_what_is_owed_and_drops_whoever_was_touched_since(app_client, world, api_key_factory, seed):
+    now = datetime.now(UTC)
+
+    async def conv(ext, **kw):
+        return await seed(m.Conversation(
+            tenant_id=world.t.id, sandbox_id=world.sb.id, connector_id=world.cn.id, external_id=ext,
+            contact_id=world.conv.contact_id, channel_kind="messenger", **kw))
+    due = await conv("due", last_customer_at=now - timedelta(days=3), last_staff_at=now - timedelta(days=2))
+    quiet = await conv("quiet", last_customer_at=now - timedelta(days=3), last_staff_at=now - timedelta(days=2))
+    touched = await conv("touched", last_customer_at=now - timedelta(days=3), last_staff_at=now + timedelta(minutes=5))
+    await seed(m.StaffTask(tenant_id=world.t.id, sandbox_id=world.sb.id, kind="morning_list", for_date=now.date(),
+                           payload={"leads": [], "due": [str(due.id)], "quiet": [str(quiet.id), str(touched.id)]}))
+    _, key = await api_key_factory(world.t)
+    await login(app_client, key)
+    html = (await app_client.get("/staff")).text
+    assert "Đến hạn khách hẹn" in html and "Im sau khi đã trả lời" in html
+    assert f"/staff/c/{due.id}" in html and f"/staff/c/{quiet.id}" in html
+    assert f"/staff/c/{touched.id}" not in html  # staff spoke after the list was made
+    assert "Hôm qua chưa kịp soạn nháp" not in html  # an empty group is not shown
+
+
+async def test_staff_can_mark_a_customer_as_not_wanting_messages_and_undo_it(app_client, world, api_key_factory):
+    _, key = await api_key_factory(world.t)
+    await login(app_client, key)
+    url = f"/staff/c/{world.conv.id}"
+    page = await app_client.get(url)
+    assert "Khách không muốn nhận tin nữa" in page.text
+    r = await app_client.post(f"{url}/do", data={"csrf": csrf_of(page.text), "op": "optout"})
+    assert r.headers["location"].endswith("msg=ok") or r.status_code == 303
+    (conv,) = await rows(world, m.Conversation)
+    (ct,) = await rows(world, m.Contact)
+    assert conv.state == "opted_out" and ct.opted_out is True
+    page = await app_client.get(url)
+    assert "Cho phép nhắn lại" in page.text and "hệ thống không gửi gì nữa" in page.text
+    await app_client.post(f"{url}/do", data={"csrf": csrf_of(page.text), "op": "optin"})
+    (conv,) = await rows(world, m.Conversation)
+    (ct,) = await rows(world, m.Contact)
+    assert conv.state == "open" and ct.opted_out is False
+
+
+async def test_digest_page_lists_a_monthly_report_in_its_own_words(app_client, world, api_key_factory, seed):
+    await seed(m.Digest(tenant_id=world.t.id, sandbox_id=world.sb.id, kind="monthly", period_start=date(2026, 9, 1),
+                        period_end=date(2026, 9, 30), payload={"kind": "monthly", "this": {"new_conversations": 40},
+                                                               "prev": {"new_conversations": 30}, "dropped_now": 2}))
+    _, key = await api_key_factory(world.t, "owner", None)
+    await login(app_client, key)
+    page = (await app_client.get("/staff/digest")).text
+    assert "Báo cáo tháng" in page and "Tháng này" in page and "Tháng trước" in page and "<b>40</b>" in page

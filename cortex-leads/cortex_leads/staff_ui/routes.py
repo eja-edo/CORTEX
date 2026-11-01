@@ -14,15 +14,16 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from pydantic import ValidationError
 from fastapi.responses import HTMLResponse, RedirectResponse
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from pydantic import ValidationError
 from sqlalchemy import func, or_, select
 
 from cortex_leads.channels.policy import window_state
 from cortex_leads.config import get_settings
 from cortex_leads.core.errors import CortexError
 from cortex_leads.core.ids import uuid7
+from cortex_leads.core.timefmt import vi_date, vi_datetime, wire_date
 from cortex_leads.db import models as m
 from cortex_leads.db.session import system_session, tenant_session
 from cortex_leads.domain.pack import load_pack
@@ -127,7 +128,7 @@ def _ago(then: datetime | None, now: datetime) -> str:
 
 def _window(kind: str, last: datetime | None, now: datetime, tz: ZoneInfo) -> dict[str, str]:
     w = window_state(kind, last, now)
-    until = w["expires_at"].astimezone(tz).strftime("%H:%M %d/%m") if w["expires_at"] else ""
+    until = vi_datetime(w["expires_at"], tz, now) if w["expires_at"] else ""
     if w["basis"] == "human_agent":  # R6: only a person typing by hand
         return {"cls": "warn", "text": f"Chỉ người gõ tay được gửi (đến {until})"}
     if w["open"]:
@@ -182,7 +183,11 @@ async def logout(sess: Session = S, csrf: str = Form("")) -> RedirectResponse:
     return resp
 
 
-async def _tasks(s: Any, now: datetime) -> list[dict[str, Any]]:
+OWED_GROUPS = (("due", "Đến hạn khách hẹn"), ("quiet", "Im sau khi đã trả lời"),
+               ("capped", "Hôm qua chưa kịp soạn nháp"))
+
+
+async def _tasks(s: Any, now: datetime, tz: ZoneInfo) -> list[dict[str, Any]]:
     """The morning list (WP19). Names are read now, under RLS, and anyone answered since is dropped."""
     out = []
     for t in (await s.execute(select(m.StaffTask).where(m.StaffTask.status == "open")
@@ -195,7 +200,20 @@ async def _tasks(s: Any, now: datetime) -> list[dict[str, Any]]:
             ct = await s.get(m.Contact, conv.contact_id)
             leads.append({"conv_id": conv.id, "name": (ct.display_name if ct else None) or "Khách",
                           "silent": _ago(conv.last_customer_at, now)})
-        out.append({"id": t.id, "date": t.for_date.strftime("%d/%m"), "leads": leads,
+        owed = []
+        for key, label in OWED_GROUPS:
+            rows = []
+            for cid in t.payload.get(key, []):
+                conv = await s.get(m.Conversation, UUID(cid))
+                last = max((x for x in (conv.last_staff_at, conv.last_customer_at) if x), default=None) if conv else None
+                if conv is None or conv.state != "open" or (last and last > t.created_at):
+                    continue  # closed, or somebody spoke since the list was made
+                ct = await s.get(m.Contact, conv.contact_id)
+                rows.append({"conv_id": conv.id, "name": (ct.display_name if ct else None) or "Khách",
+                             "since": _ago(last, now) if last else ""})
+            if rows:
+                owed.append({"label": label, "rows": rows})
+        out.append({"id": t.id, "date": vi_date(t.for_date, tz, now), "leads": leads, "owed": owed,
                     "bookings_today": t.payload.get("bookings_today", 0)})
     return out
 
@@ -208,7 +226,7 @@ async def _bookings(s: Any, now: datetime, tz: ZoneInfo, conv_id: UUID | None = 
     if conv_id:
         q = q.where(m.Booking.conversation_id == conv_id)
     return [{"id": b.id, "conv_id": b.conversation_id, "name": name or "Khách", "slot": b.slot_code,
-             "at": b.starts_at.astimezone(tz).strftime("%H:%M %d/%m"), "by_ai": b.actor.startswith("ai:")}
+             "at": vi_datetime(b.starts_at, tz, now), "by_ai": b.actor.startswith("ai:")}
             for b, name in (await s.execute(q)).all()]
 
 
@@ -247,7 +265,7 @@ async def queue(request: Request, msg: str = "", sess: Session = S) -> HTMLRespo
                 facts.append({"kind": "fact", "id": f.id, "conv_id": f.conversation_id, "fact_kind": f.kind,
                               "value": f.value, "name": (ct.display_name if ct else None) or "Khách"})
         bookings = await _bookings(s, now, sess.tz)
-        tasks = await _tasks(s, now)
+        tasks = await _tasks(s, now, sess.tz)
         pending_proposals = (await s.execute(select(func.count()).select_from(m.Proposal).where(
             m.Proposal.status == "pending"))).scalar_one() if c.role == "owner" else 0
         await _audit(s, c, "staff_ui.queue", {"drafts": len(cards), "facts": len(facts), "bookings": len(bookings)})
@@ -324,7 +342,7 @@ async def skills(msg: str = "", sess: Session = S) -> HTMLResponse:
 
 
 def _spec_from_form(f: dict[str, str]) -> FormSpec:
-    lines = lambda k: [x.strip() for x in f.get(k, "").splitlines() if x.strip()]  # noqa: E731
+    lines = lambda k: [x.strip() for x in f.get(k, "").splitlines() if x.strip()]
     examples = [{"khach": f[f"ex{i}_khach"], "tra_loi": f[f"ex{i}_tra_loi"]} for i in (1, 2)
                 if f.get(f"ex{i}_khach", "").strip() and f.get(f"ex{i}_tra_loi", "").strip()]
     data: dict[str, Any] = {"template": f.get("template"), "slug": f.get("slug", "").strip(),
@@ -443,13 +461,14 @@ DIGEST_ROWS = [("new_conversations", "Khách mới"), ("customer_messages", "Tin
 
 @router.get("/digest", response_class=HTMLResponse)
 async def digest(sess: Session = S) -> HTMLResponse:
-    c = sess.caller
+    c, now = sess.caller, datetime.now(UTC)
     if c.role != "owner":  # the owner's numbers (DESIGN §2.1: the rows about a person go to that person first)
         return _redirect("/staff?msg=bad")  # type: ignore[return-value]
     async with tenant_session(c.tenant_id) as s:
-        found = (await s.execute(select(m.Digest).order_by(m.Digest.period_start.desc()).limit(4))).scalars().all()
+        found = (await s.execute(select(m.Digest).order_by(m.Digest.period_start.desc()).limit(6))).scalars().all()
         await _audit(s, c, "staff_ui.digest", {"weeks": len(found)})
-    weeks = [{"label": f"{d.period_start:%d/%m} – {d.period_end:%d/%m}", "dropped": d.payload.get("dropped_now", 0),
+    weeks = [{"label": f"{vi_date(d.period_start, sess.tz, now)} – {vi_date(d.period_end, sess.tz, now)}", "dropped": d.payload.get("dropped_now", 0),
+              "unit": "tháng" if d.kind == "monthly" else "tuần",
               "narrative": d.payload.get("narrative"),
               "rows": [{"name": label, "now": d.payload["this"].get(k, 0), "before": d.payload["prev"].get(k, 0)}
                        for k, label in DIGEST_ROWS]} for d in found]
@@ -492,9 +511,10 @@ async def conversation(conv_id: UUID, msg: str = "", sess: Session = S) -> HTMLR
         await _audit(s, c, "staff_ui.conversation", {"conversation_id": str(conv_id)})
     return page("conversation.html", conv=conv, bookings=bookings, name=(ct.display_name if ct else None) or "Khách",
                 msgs=[{"who": {"customer": "Khách", "staff": "Nhân viên"}.get(x.sender_role, "Bot"),
-                       "text": x.text, "at": x.occurred_at.astimezone(sess.tz).strftime("%H:%M %d/%m")}
+                       "text": x.text, "at": vi_datetime(x.occurred_at, sess.tz, now)}
                       for x in msgs], facts=facts, outcomes=OUTCOMES, csrf=sess.csrf, msg=MSGS.get(msg, ""),
-                window=_window(conv.channel_kind, conv.last_customer_at, now, sess.tz), has_memory=mem is not None)
+                window=_window(conv.channel_kind, conv.last_customer_at, now, sess.tz), has_memory=mem is not None,
+                opted_out=bool(ct and ct.opted_out))
 
 
 @router.post("/c/{conv_id}/do")
@@ -509,12 +529,16 @@ async def conversation_do(conv_id: UUID, op: str = Form(...), value: str = Form(
         async with tenant_session(c.tenant_id) as s:
             if op == "promise":
                 await mem.record_fact(s, conversation_id=conv_id, kind="promised_date", source=who, now=now,
-                                      value={"date": date.fromisoformat(value).isoformat()}, evidence_msg_ids=[])
+                                      value={"date": wire_date(date.fromisoformat(value))}, evidence_msg_ids=[])
             elif op == "offchannel" and value in ("phone", "zalo_personal"):
                 await mem.mark_offchannel(s, conversation_id=conv_id, channel=value, staff_ref=_staff(c), now=now)
             elif op == "cancel_booking":  # WP18: the seat goes back to the slot, the promise it made goes away
                 if not await cancel_booking(s, UUID(value), by=who, now=now):
                     return _redirect(f"{to}?msg=NOT_PROPOSED")
+            elif op == "optout":
+                await mem.opt_out(s, await s.get(m.Conversation, conv_id), source=who, now=now)
+            elif op == "optin":
+                await mem.opt_in(s, conv_id, source=who, now=now)
             elif op == "outcome" and value in OUTCOMES:
                 await mem.record_outcome(s, conversation_id=conv_id, status=value, source=who,
                                          evidence_msg_ids=[], now=now)

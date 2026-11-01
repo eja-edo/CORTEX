@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% block title %}Báo cáo tuần — Cortex Leads{% endblock %}
-{% block body %}<h1>Báo cáo tuần</h1>
-{% for w in weeks %}<section class="card"><b>{{ w.label }}</b> <span class="meta">· {{ w.dropped }} khách đang bị bỏ rơi</span>
+{% block title %}Báo cáo — Cortex Leads{% endblock %}
+{% block body %}<h1>Báo cáo tuần và tháng</h1>
+{% for w in weeks %}<section class="card"><b>Báo cáo {{ w.unit }}: {{ w.label }}</b> <span class="meta">· {{ w.dropped }} khách đang bị bỏ rơi</span>
 {% if w.narrative %}<p>{{ w.narrative }} <span class="meta">(AI viết từ các con số bên dưới)</span></p>{% endif %}
 <table style="width:100%;border-collapse:collapse">
-<tr class="meta"><td></td><td align="right">Tuần này</td><td align="right">Tuần trước</td></tr>
+<tr class="meta"><td></td><td align="right">{{ w.unit|capitalize }} này</td><td align="right">{{ w.unit|capitalize }} trước</td></tr>
 {% for r in w.rows %}<tr><td>{{ r.name }}</td><td align="right"><b>{{ r.now }}</b></td><td align="right" class="meta">{{ r.before }}</td></tr>{% endfor %}
 </table></section>
-{% else %}<p class="card">Chưa có báo cáo nào. Báo cáo tuần được tạo mỗi sáng thứ Hai nếu doanh nghiệp có sandbox owner_digest.</p>{% endfor %}
+{% else %}<p class="card">Chưa có báo cáo nào. Báo cáo tuần được tạo mỗi sáng thứ Hai và báo cáo tháng vào ngày 1 hằng tháng nếu doanh nghiệp có sandbox owner_digest.</p>{% endfor %}
 {% endblock %}

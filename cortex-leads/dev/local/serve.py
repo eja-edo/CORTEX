@@ -42,7 +42,7 @@ def _port_free(port: int) -> bool:
 
 
 class Clock:
-    """sweep_once -> run_pending -> deliver_once, mỗi lần một người chạy (khoá)."""
+    """sweep_once -> run_pending -> deliver_once -> cron_once -> notify_once (như `cli worker`), mỗi lần một người chạy (khoá)."""
 
     def __init__(self, gateway: Any) -> None:
         self.gateway, self.lock = gateway, asyncio.Lock()
@@ -57,6 +57,8 @@ class Clock:
 
     async def __call__(self) -> dict[str, Any]:
         from cortex_leads.clock.sweeper import sweep_once
+        from cortex_leads.cron.runner import cron_once
+        from cortex_leads.notify.worker import notify_once
         from cortex_leads.outbound.worker import deliver_once
         from cortex_leads.runner.customer_run import run_pending
 
@@ -65,12 +67,14 @@ class Clock:
             fired = await sweep_once(datetime.now(UTC))
             runs = await run_pending(datetime.now(UTC), self.gateway)
             sent = await deliver_once(datetime.now(UTC))
+            made = await cron_once(datetime.now(UTC), self.gateway)  # danh sách sáng nay, báo cáo tuần/tháng
+            await notify_once(datetime.now(UTC))  # đẩy Telegram nếu có token; không có thì bỏ qua
             d1, e1 = await self.counts()
         res = {"hoi_thoai_den_gio": fired, "job_da_chay": runs, "nhap_moi": d1 - d0,
-               "tin_xu_ly_gui": sent, "job_loi": e1 - e0}
+               "tin_xu_ly_gui": sent, "cron_moi": made, "job_loi": e1 - e0}
         if any(res.values()):
             print(f"[đồng hồ {datetime.now():%H:%M:%S}] {fired} hội thoại tới giờ, {runs} job chạy, "
-                  f"{d1 - d0} nháp mới, {sent} tin gửi" + (f", {e1 - e0} job LỖI (xem log)" if e1 - e0 else ""))
+                  f"{d1 - d0} nháp mới, {sent} tin gửi, {made} kết quả cron" + (f", {e1 - e0} job LỖI (xem log)" if e1 - e0 else ""))
         return res
 
 

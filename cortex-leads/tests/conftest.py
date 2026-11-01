@@ -40,13 +40,28 @@ from cortex_leads.domain.pack import load_pack_file
 def db_ready() -> None:
     """Needs `make db-up`. Migrates to head with the owner URL."""
     get_settings.cache_clear()
+    refuse_protected(get_settings().DATABASE_OWNER_URL)
     cfg = Config(str(ROOT / "alembic.ini"))
     cfg.set_main_option("script_location", str(ROOT / "migrations"))
     command.upgrade(cfg, "head")
 
 
+PROTECTED = ("demo", "prod", "staging")  # a database with one of these in its name holds data somebody is using
+
+
+def refuse_protected(url: str) -> None:
+    """Every test starts by TRUNCATE-ing every table of the database it is pointed at. Pointed at a demo database by an exported
+    CL_DATABASE_OWNER_URL (the environment beats .env.test), it wiped a live demo: the accounts, sandboxes, connected Google classes
+    and channels. So it refuses, loudly, before touching anything."""
+    name = url.rsplit("/", 1)[-1].split("?")[0].lower()
+    if any(word in name for word in PROTECTED):
+        pytest.exit(f"REFUSING to run the tests on database {name!r}: they TRUNCATE every table. Use a throwaway database "
+                    "(createdb cortex_leads_<name>), and do not source the demo env file in the shell that runs pytest.", returncode=3)
+
+
 @pytest_asyncio.fixture
 async def owner_engine(db_ready: None) -> AsyncIterator[AsyncEngine]:
+    refuse_protected(get_settings().DATABASE_OWNER_URL)
     engine = create_async_engine(get_settings().DATABASE_OWNER_URL, poolclass=NullPool)
     names = ", ".join(t.name for t in m.Base.metadata.sorted_tables)
     async with engine.begin() as c:

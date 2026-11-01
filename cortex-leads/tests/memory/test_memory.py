@@ -35,7 +35,7 @@ async def fact(w, **kw):
 
 
 def test_date_phrases():
-    f = lambda t: extract_date_candidates(t, NOW, TZ)  # noqa: E731
+    f = lambda t: extract_date_candidates(t, NOW, TZ)
     assert f("mình rảnh 15/10 nhé") == {date(2026, 10, 15)}
     assert f("ngày 20 mình qua") == {date(2026, 10, 20)}
     assert f("ngày mai") == {date(2026, 10, 13)} and f("ngày kia") == {date(2026, 10, 14)}
@@ -281,3 +281,16 @@ async def test_rule_outcome_candidate_never_blocks_the_runner(world, message_fac
     gw, prov = gateway(reply({"act": "none"}))
     await run_one(world, gw, await make_job(world))
     assert len(prov.calls) == 1
+
+
+async def test_only_a_person_can_lift_an_opt_out(world):
+    async with tenant_session(world.t.id) as s:
+        await mem.opt_out(s, await s.get(m.Conversation, world.conv.id), source="rule", now=NOW)
+    for who in ("ai:x@1", "rule"):
+        async with tenant_session(world.t.id) as s:
+            with pytest.raises(mem.MemoryError):
+                await mem.opt_in(s, world.conv.id, source=who, now=NOW)
+    async with tenant_session(world.t.id) as s:
+        await mem.opt_in(s, world.conv.id, source="staff:s1", now=NOW)
+    c = await conv_of(world)
+    assert c.state == "open" and c.next_check_at is not None

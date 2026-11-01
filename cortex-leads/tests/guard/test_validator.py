@@ -131,7 +131,7 @@ FORM = dict(code="PHIEU", price=None, attrs={"url": "https://tt.example.vn/dang-
 
 def test_scan_times_forms_and_non_times():
     from cortex_leads.guard.validator import scan_times
-    got = lambda t: [x for x, _ in scan_times(t)[0]]  # noqa: E731
+    got = lambda t: [x for x, _ in scan_times(t)[0]]
     assert got("19:00") == ["19:00"] and got("19h30") == ["19:30"] and got("7 giờ tối") == ["19:00"]
     assert got("lúc 7 giờ sáng") == ["07:00"] and got("19:00-20:30") == ["19:00", "20:30"]
     assert got("học 2h mỗi ngày, 3 giờ tự học, ngày 20/10, 2.500.000đ") == []  # durations are not times
@@ -160,3 +160,32 @@ def test_url_must_be_on_a_cited_catalog_row():
     assert codes(run("Xem www.evil.example nhé", [], [])) == [BlockedCode.UNVERIFIED_CLAIM]
     expired = item(**FORM, valid_until=NOW - timedelta(days=1))
     assert codes(run("https://tt.example.vn/dang-ky", [], [expired])) == [BlockedCode.UNVERIFIED_CLAIM]
+
+
+# --- DESIGN §5.13: a slot's date and time come from its real start, never from text typed beside it -----------
+def lying_slot():
+    from datetime import UTC
+    from datetime import datetime as dt
+    return item(code="LH-A", price=None, category="lich_hoc_thu", valid_until=dt(2026, 10, 15, 12, 0, tzinfo=UTC),
+                attrs={"ngay": "16/10", "gio": "20:00", "suc_chua": 6})  # the text disagrees with the real start
+
+
+def test_a_slot_is_verified_against_its_real_start_in_the_business_zone():
+    row, vn = lying_slot(), "Asia/Ho_Chi_Minh"  # 12:00 UTC is 19:00 on the 15th in Vietnam
+    ok = run("Lớp học thử 15/10 lúc 19:00 ạ", [{"value": "15/10", "source_id": "LH-A"}, {"value": "19:00", "source_id": "LH-A"}],
+             [row], tz=vn)
+    assert ok == []
+
+
+def test_the_typed_text_beside_a_slot_vouches_for_nothing_once_the_zone_is_known():
+    row, vn = lying_slot(), "Asia/Ho_Chi_Minh"
+    bad = run("Lớp học thử 16/10 lúc 20:00 ạ", [{"value": "16/10", "source_id": "LH-A"}, {"value": "20:00", "source_id": "LH-A"}],
+              [row], tz=vn)
+    assert sorted(v.span for v in bad) == ["16/10", "20:00"] and all(v.code == BlockedCode.UNVERIFIED_CLAIM for v in bad)
+
+
+def test_the_same_instant_reads_differently_in_another_zone():
+    row = lying_slot()
+    ok = run("Lớp học thử 15/10 lúc 08:00 ạ", [{"value": "15/10", "source_id": "LH-A"}, {"value": "08:00", "source_id": "LH-A"}],
+             [row], tz="America/New_York")  # 12:00 UTC = 08:00 EDT
+    assert ok == []

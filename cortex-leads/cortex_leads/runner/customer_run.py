@@ -136,7 +136,7 @@ async def run_job(session: AsyncSession, job: m.FollowupJob, gateway: LLMGateway
                      principal=CustomerPrincipal(contact_id=conv.contact_id),
                      scope=Scope(conversation_id=conv.id, job_id=job.id),
                      trigger_event_id=job.dedupe_key)
-    allowed = [n for n in profile.tool_allowlist if n in skill.manifest.requires_tools]
+    allowed = [n for n in profile.tool_allowlist if n in skill.manifest.requires_tools and n not in (sandbox.tools_off or [])]
     read_allow = [s.name for s in registry.specs_for(allowed) if s.effect == "read"]
     async def flag_human(draft_id: str, **extra: Any) -> None:  # a person's card + a push (WP17, R58)
         await session.execute(update(m.Draft).where(m.Draft.id == UUID(draft_id)).values(

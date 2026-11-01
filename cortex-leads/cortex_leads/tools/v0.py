@@ -12,9 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from cortex_leads.core.context import RunContext
 from cortex_leads.core.envelope import ErrorCode, ErrorInfo, ToolResult
+from cortex_leads.core.timefmt import stamp, tenant_tz, wire, wire_date
+from cortex_leads.core.vocabulary import SLOT_CATEGORY
 from cortex_leads.db import models as m
 from cortex_leads.domain.pack import load_pack
-from cortex_leads.guard.validator import scan_dates, scan_times, validate_draft
+from cortex_leads.guard.validator import scan_dates, scan_times, slot_date_time, validate_draft
 from cortex_leads.privacy.redact import redact
 from cortex_leads.tools.empty import empty_note
 from cortex_leads.tools.refs import resolve, unresolved
@@ -65,7 +67,8 @@ async def read_messages(ctx: RunContext, session: AsyncSession, a: ReadMessagesA
                                 m.Message.tenant_id == ctx.tenant_id)
         .order_by(m.Message.occurred_at.desc()).limit(a.last_n))).scalars().all()
     names = [contact.display_name] if contact.display_name else []
-    msgs = [{"id": str(r.id), "role": r.sender_role, "at": r.occurred_at.isoformat(),
+    zone = await tenant_tz(session, ctx.tenant_id)  # a model reads the business's local time, never UTC
+    msgs = [{"id": str(r.id), "role": r.sender_role, "at": stamp(r.occurred_at, zone),
              "text": redact(r.text, names).text} for r in reversed(rows)]
     return ToolResult(status="ok", data={"messages": msgs},
                       note=None if msgs else empty_note("Hội thoại chưa có tin nhắn"))
@@ -88,7 +91,7 @@ async def read_contact(ctx: RunContext, session: AsyncSession, a: NoArgs) -> Too
         "channel_kind": conv.channel_kind, "intent": conv.intent, "touches": conv.touches,
         "state": conv.state, "owner_staff_ref": conv.owner_staff_ref,
         "offchannel_contact": conv.offchannel_contact,
-        "promised_date": conv.promised_date.isoformat() if conv.promised_date else None})
+        "promised_date": wire_date(conv.promised_date)})
 
 
 # --- lookup_catalog / list_dropped_leads / draft_followup (need a clock) ---------------------
@@ -121,7 +124,7 @@ class DraftArgs(ToolArgs):
 def _brief(i: m.CatalogItem) -> dict[str, Any]:
     return {"id": str(i.id), "code": i.code, "name": i.name, "category": i.category,
             "price": float(i.price) if i.price is not None else None, "unit": i.unit,
-            "attrs": i.attrs, "valid_until": i.valid_until.isoformat() if i.valid_until else None}
+            "attrs": i.attrs, "valid_until": wire(i.valid_until)}
 
 
 def _make_lookup_catalog(clock: Clock):
@@ -245,12 +248,20 @@ def _make_draft_followup(clock: Clock):
             if r not in rows and r.name.split("(")[0].strip().casefold() in folded]
         # Citing a row vouches for that row's own numbers (models forget one claim of three); any
         # number in the text that is not on a cited row is still UNVERIFIED (A7, N2).
+        tz = await tenant_tz(session, ctx.tenant_id)
+
+        def vouched(r: m.CatalogItem) -> list[Any]:  # a slot vouches for its real start, not for text typed beside it
+            if r.category == SLOT_CATEGORY and r.valid_until:
+                d, t = slot_date_time(r, tz)
+                return [*d, *t, *[v for k, v in (r.attrs or {}).items() if k not in ("ngay", "gio")]]
+            return list(_flat((r.attrs or {}).values()))
+
         claims += [{"value": v, "source_id": r.code} for r in rows if r.active
-                   for v in [r.price and float(r.price), *_flat((r.attrs or {}).values())] if _checkable(v)]
+                   for v in [r.price and float(r.price), *vouched(r)] if _checkable(v)]
         violations = validate_draft(  # DESIGN A7: the validator lives inside the write tool
             a.text, claims, rows, never_say=a.never_say, touches=conv.touches,
             max_touches=a.max_touches, opted_out=contact.opted_out or conv.state == "opted_out",
-            has_new_info=a.has_new_info, now=clock())
+            has_new_info=a.has_new_info, now=clock(), tz=tz)
         run_exists = (await session.execute(
             select(m.TriggerRun.id).where(m.TriggerRun.id == ctx.run_id))).scalar()
         draft = m.Draft(

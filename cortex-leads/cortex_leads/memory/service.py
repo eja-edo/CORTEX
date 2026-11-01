@@ -13,10 +13,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from cortex_leads.clock.schedule import compute_next_check_at
 from cortex_leads.core.errors import CortexError
 from cortex_leads.core.ids import uuid7
+from cortex_leads.core.timefmt import wire_date
 from cortex_leads.db import models as m
 from cortex_leads.domain.pack import DomainPack, load_pack
-from cortex_leads.outbound.annotate import annotate
 from cortex_leads.guard.facts import HORIZON_DAYS, extract_date_candidates, is_vague
+from cortex_leads.outbound.annotate import annotate
 
 ContactFact = m.ContactFact
 CONV_SCOPED = {"promised_date", "outcome", "offchannel"}  # one live fact per conversation
@@ -93,7 +94,7 @@ def _check_value(kind: str, value: Any, pack: DomainPack, today: date) -> dict[s
             raise MemoryError("BAD_VALUE", "date must be YYYY-MM-DD") from None
         if not today < d <= today + timedelta(days=HORIZON_DAYS):
             raise MemoryError("DATE_OUT_OF_RANGE")
-        return {"date": d.isoformat()}
+        return {"date": wire_date(d)}
     if kind == "decision_maker" and value.get("role") not in pack.decision_maker_roles:
         raise MemoryError("BAD_VALUE", "role")
     if kind == "outcome" and value.get("status") not in {*STATE_OF, "reopen"}:
@@ -204,7 +205,7 @@ async def note_appointment(session: AsyncSession, *, conversation_id: UUID, on: 
     today = await local_today(session, conv.tenant_id, now)
     if not today < on <= today + timedelta(days=HORIZON_DAYS):
         return None
-    return await _new_fact(session, conv, "promised_date", {"date": on.isoformat()}, [],
+    return await _new_fact(session, conv, "promised_date", {"date": wire_date(on)}, [],
                            BOOKING_SOURCE, "active", now)
 
 
@@ -304,7 +305,7 @@ async def capture_from_message(session: AsyncSession, conv: m.Conversation, mess
     pack, tz = await _pack(session, conv), await _tz(session, conv.tenant_id)
     guesses: list[tuple[str, dict[str, Any]]] = []
     if dates := extract_date_candidates(text, now, tz):
-        guesses.append(("promised_date", {"date": min(dates).isoformat()}))
+        guesses.append(("promised_date", {"date": wire_date(min(dates))}))
     if status := pack.match_outcome(text):
         guesses.append(("outcome", {"status": status}))
     for kind, value in guesses:
@@ -314,3 +315,30 @@ async def capture_from_message(session: AsyncSession, conv: m.Conversation, mess
                                   evidence_msg_ids=[message_id], source="rule", now=now)
         except MemoryError:
             pass
+
+
+async def opt_out(session: AsyncSession, conv: m.Conversation, *, source: str, now: datetime) -> None:
+    """The contact does not want to be written to. The flag is on the contact (every conversation, every
+    sender checks it); this conversation leaves every list and its pending work is dropped."""
+    contact = await session.get(m.Contact, conv.contact_id)
+    if contact.opted_out and conv.state == "opted_out":
+        return
+    contact.opted_out = True
+    conv.state, conv.next_check_at, conv.reply_check_at = "opted_out", None, None
+    jobs, drafts = await _cancel_work(session, conv, now, drafts=True)
+    session.add(m.DecisionLog(  # counts only: no customer text in decision_log
+        tenant_id=conv.tenant_id, conversation_id=conv.id, decision="contact_opted_out",
+        reason_code=source.split(":")[0], detail={"jobs": jobs, "drafts": drafts}, at=now))
+
+
+async def opt_in(session: AsyncSession, conversation_id: UUID, *, source: str, now: datetime) -> None:
+    """A person undoes a wrong or changed opt-out. Only a person: the AI never calls this."""
+    if not source.startswith("staff:"):
+        raise MemoryError("BAD_VALUE", "source")
+    conv = await _conv(session, conversation_id)
+    (await session.get(m.Contact, conv.contact_id)).opted_out = False
+    if conv.state == "opted_out":
+        conv.state = "open"
+        await _rearm(session, conv, now)
+    session.add(m.DecisionLog(tenant_id=conv.tenant_id, conversation_id=conv.id, decision="contact_opted_in",
+                              reason_code="staff", detail={}, at=now))

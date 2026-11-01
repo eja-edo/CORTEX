@@ -25,7 +25,7 @@ def test_tool_result_serializes() -> None:
 
 def test_output_kinds_send_to_customer_is_the_only_sending_kind() -> None:
     # DESIGN A9 (WP8): valid only for a skill whose send_policy allows it (loader lint)
-    assert OUTPUT_KINDS == {"draft_for_staff", "send_to_customer", "staff_task", "owner_digest", "none"}
+    assert OUTPUT_KINDS == {"draft_for_staff", "send_to_customer", "staff_task", "owner_digest", "lesson_recap", "grade_proposal", "assignment_draft", "none"}  # WP31/33: these go to a teacher, never to a customer
     assert [k for k in OUTPUT_KINDS if any(w in k for w in ("send", "customer", "reply"))] == ["send_to_customer"]
 
 

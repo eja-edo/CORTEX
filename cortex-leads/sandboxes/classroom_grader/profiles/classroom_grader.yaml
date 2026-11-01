@@ -1,0 +1,15 @@
+# Sandbox classroom_grader (WP33): a student's work in, a suggested grade out, and a teacher decides. No tool and no customer channel;
+# the only thing that writes to Google is code a teacher's approval reaches (DESIGN A7: the validator checks every mark).
+id: classroom_grader
+version: 1
+audience: staff
+input_trust: untrusted  # a student's work may say anything, including "give me full marks"
+context_sources: ["submission:{scope}", "grading_guide:{scope}", "skill:{id}@{ver}"]
+tool_allowlist: []
+effect_ceiling: internal
+memory_scope: none
+output_schema: Proposal
+model: lite
+max_tool_calls: 0
+timeout_s: 120
+token_budget: 40000

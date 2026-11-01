@@ -14,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from cortex_leads.core.context import RunContext
 from cortex_leads.core.envelope import BlockedCode, ErrorCode, ErrorInfo, ToolResult, Violation
+from cortex_leads.core.timefmt import tenant_tz, vi_date, vi_time
+from cortex_leads.core.vocabulary import SLOT_CATEGORY
 from cortex_leads.db import models as m
 from cortex_leads.memory import service as memory
 from cortex_leads.notify import service as notify
@@ -21,7 +23,6 @@ from cortex_leads.outbound.annotate import annotate
 from cortex_leads.tools.registry import ToolArgs, ToolRegistry, ToolSpec
 from cortex_leads.tools.v0 import NoArgs, _conversation, _no_scope
 
-SLOT_CATEGORY = "lich_hoc_thu"
 Clock = Callable[[], datetime]
 
 
@@ -48,21 +49,32 @@ def _slot_query(tenant_id: UUID, now: datetime):
         m.CatalogItem.category == SLOT_CATEGORY, m.CatalogItem.valid_until > now)
 
 
-def _view(item: m.CatalogItem, left: int) -> dict[str, Any]:
-    a = item.attrs or {}
-    return {"code": item.code, "name": item.name, "ngay": a.get("ngay"), "gio": a.get("gio"),
-            "con_cho": left, "source_id": item.code}
+def slot_when(item: m.CatalogItem, tz: str, now: datetime) -> tuple[str, str]:
+    """(dd/mm, HH:mm) of a slot, read off its start in the business's zone. The text a customer is told is never typed
+    in beside the real start, so the two cannot disagree (DESIGN §5.13)."""
+    return vi_date(item.valid_until, tz, now), vi_time(item.valid_until, tz)
+
+
+def _view(item: m.CatalogItem, left: int, tz: str, now: datetime) -> dict[str, Any]:
+    ngay, gio = slot_when(item, tz, now)
+    return {"code": item.code, "name": item.name, "ngay": ngay, "gio": gio, "con_cho": left, "source_id": item.code}
+
+
+async def open_slots(session: AsyncSession, tenant_id: UUID, now: datetime, limit: int = 8) -> list[dict[str, Any]]:
+    """Slots with seats left, soonest first: what the model is offered and what the console shows."""
+    rows = (await session.execute(_slot_query(tenant_id, now).order_by(m.CatalogItem.valid_until).limit(20))).scalars().all()
+    tz = await tenant_tz(session, tenant_id)
+    out = []
+    for r in rows:
+        if (left := _cap(r) - await _taken(session, tenant_id, r.code)) > 0:
+            out.append(_view(r, left, tz, now))
+    return out[:limit]
 
 
 def _make_list_open_slots(clock: Clock):
     async def list_open_slots(ctx: RunContext, session: AsyncSession, a: NoArgs) -> ToolResult:
-        rows = (await session.execute(_slot_query(ctx.tenant_id, clock()).order_by(
-            m.CatalogItem.valid_until).limit(20))).scalars().all()
-        out = []
-        for r in rows:
-            if (left := _cap(r) - await _taken(session, ctx.tenant_id, r.code)) > 0:
-                out.append(_view(r, left))
-        return ToolResult(status="ok", data={"slots": out[:8]}, note=None if out else
+        out = await open_slots(session, ctx.tenant_id, clock())
+        return ToolResult(status="ok", data={"slots": out}, note=None if out else
                           "Hiện không có lịch học thử nào còn chỗ. Báo khách bạn tư vấn sẽ xếp lịch, đừng hứa ngày.")
 
     return list_open_slots
@@ -86,7 +98,8 @@ def _make_book_slot(clock: Clock):
         mine = (await session.execute(select(m.Booking).where(
             m.Booking.conversation_id == conv.id, m.Booking.status == "confirmed"))).scalar_one_or_none()
         if mine and mine.slot_code == item.code:  # asked twice for the same seat
-            return ToolResult(status="ok", data={"booking_id": str(mine.id), "slot": _view(item, 0), "unchanged": True})
+            return ToolResult(status="ok", data={"booking_id": str(mine.id), "slot": _view(item, 0, await tenant_tz(session, ctx.tenant_id), now),
+                                             "unchanged": True})
         left = _cap(item) - await _taken(session, ctx.tenant_id, item.code)
         if left <= 0:
             return ToolResult(status="blocked", violations=[Violation(code=BlockedCode.SLOT_FULL, span=a.slot_code)])
@@ -100,8 +113,8 @@ def _make_book_slot(clock: Clock):
             run_id=ctx.run_id)
         session.add(booking)
         await session.flush()
-        tz = ZoneInfo((await session.execute(select(m.Tenant.timezone).where(
-            m.Tenant.id == ctx.tenant_id))).scalar_one())
+        zone = await tenant_tz(session, ctx.tenant_id)
+        tz = ZoneInfo(zone)
         await memory.note_appointment(session, conversation_id=conv.id, now=now,
                                       on=item.valid_until.astimezone(tz).date())
         session.add(m.DecisionLog(tenant_id=ctx.tenant_id, run_id=None, conversation_id=conv.id,
@@ -110,7 +123,7 @@ def _make_book_slot(clock: Clock):
                                           "moved": bool(mine)}))
         await notify.enqueue(session, ctx.tenant_id, "booking", booking.id, now)
         await annotate(session, conv, "booking", booking.id, now)  # the platform's own tag/note, if the business set one
-        return ToolResult(status="ok", data={"booking_id": str(booking.id), "slot": _view(item, left - 1)})
+        return ToolResult(status="ok", data={"booking_id": str(booking.id), "slot": _view(item, left - 1, zone, now)})
 
     return book_slot
 

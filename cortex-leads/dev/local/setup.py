@@ -35,7 +35,7 @@ def _catalog(today):
         hh, mm = map(int, sl["time"].split(":"))
         start = datetime(day.year, day.month, day.day, hh, mm, tzinfo=ZoneInfo(TZ))
         yield (f"LH-{day:%d-%m}-{sl['time'][:2]}", f"{sl['label']} {day:%d/%m}", "lich_hoc_thu", None, None,
-               {"ngay": f"{day:%d/%m}", "gio": sl["time"], "suc_chua": sl["capacity"]}, start)
+               {"suc_chua": sl["capacity"]}, start)  # date and time are read off `start`, never typed (DESIGN §5.13)
 
 
 async def _recreate_db(admin_url: str, name: str) -> None:
@@ -91,7 +91,16 @@ async def _seed(connector_secret: str, staff_key: str, sup_key: str) -> dict[str
             latest = max((r for r in rows_sk if r.name == name), key=lambda r: r.version)
             for status in ("shadow", "live"):
                 await promote(s, sid, name, latest.version, status)
-    return {"LOCAL_TENANT_ID": str(tid), "LOCAL_SANDBOX_ID": str(sid), "LOCAL_CONNECTOR_ID": cid,
+    from cortex_leads.auth.passwords import temporary_password
+    from cortex_leads.auth.users import create_user
+
+    logins = {}
+    async with tenant_session(tid) as s:
+        for role, ref, email, name in (("owner", "owner", "chu@trungtam.test", "Chủ trung tâm"), ("staff", "nv1", "nv1@trungtam.test", "Nhân viên một")):
+            pw = temporary_password()
+            await create_user(s, tid, email=email, name=name, role=role, password=pw, created_by="dev.local setup", staff_ref=ref)
+            logins[f"LOCAL_{role.upper()}_EMAIL"], logins[f"LOCAL_{role.upper()}_PASSWORD"] = email, pw
+    return {**logins, "LOCAL_TENANT_ID": str(tid), "LOCAL_SANDBOX_ID": str(sid), "LOCAL_CONNECTOR_ID": cid,
             "LOCAL_CONNECTOR_SECRET": connector_secret, "LOCAL_STAFF_KEY": staff_key,
             "LOCAL_SUPERVISOR_KEY": sup_key, "LOCAL_PAGE_ID": env.PAGE_ID}
 
@@ -123,6 +132,8 @@ async def run() -> None:
     print("[4/4] Xong.\n")
     print(f"  Trang nhân viên : {env.CORE_URL}/staff/login")
     print(f"  Staff API key   : {values['LOCAL_STAFF_KEY']}   (dán vào ô đăng nhập /staff/login)")
+    print(f"  Giao diện chính : {env.CORE_URL}/app/   chủ: {values['LOCAL_OWNER_EMAIL']} / {values['LOCAL_OWNER_PASSWORD']}")
+    print(f"                    nhân viên: {values['LOCAL_STAFF_EMAIL']} / {values['LOCAL_STAFF_PASSWORD']}")
     print(f"  Trang khách giả : {env.CHANNEL_URL}/")
     print(f"  Cấu hình sinh ra: {env.LOCAL_ENV}")
     print("  Tiếp theo       : .venv/bin/python -m dev.local serve")

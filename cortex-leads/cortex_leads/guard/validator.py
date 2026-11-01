@@ -11,6 +11,8 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from cortex_leads.core.envelope import BlockedCode, Violation
+from cortex_leads.core.timefmt import local
+from cortex_leads.core.vocabulary import SLOT_CATEGORY
 from cortex_leads.db.models import CatalogItem
 
 _CUR = r"(?:đ|₫|vnđ|vnd|đồng|dong)(?!\w)"
@@ -172,7 +174,14 @@ def _fold(s: str) -> str:
     return unicodedata.normalize("NFC", s).casefold()
 
 
-def _check_claim(claim: dict[str, Any], rows: Sequence[CatalogItem], now: datetime
+def slot_date_time(row: CatalogItem, tz: str) -> tuple[set[str], set[str]]:
+    """The dd/mm and HH:MM a slot really starts at, in the business's zone. For a slot row these are the ONLY date and
+    time a claim can be verified against: any `ngay`/`gio` text someone typed beside it is ignored (DESIGN §5.13)."""
+    d = local(row.valid_until, tz)
+    return {f"{d.day:02d}/{d.month:02d}"}, {f"{d.hour:02d}:{d.minute:02d}"}
+
+
+def _check_claim(claim: dict[str, Any], rows: Sequence[CatalogItem], now: datetime, tz: str | None = None
                  ) -> tuple[set[tuple[Any, str]], str | None]:
     """Returns (verified (value, kind) pairs, failure reason). A date claim's value is "dd/mm"."""
     raw = claim.get("value")
@@ -191,9 +200,12 @@ def _check_claim(claim: dict[str, Any], rows: Sequence[CatalogItem], now: dateti
     ok: set[tuple[Any, str]] = set()
     for r in live:
         if cdates or ctimes:
-            vals = list((r.attrs or {}).values())
-            have_d, have_t = set().union(set(), *(_attr_dates(v) for v in vals)), \
-                set().union(set(), *(_attr_times(v) for v in vals))
+            if tz and r.category == SLOT_CATEGORY and r.valid_until:
+                have_d, have_t = slot_date_time(r, tz)
+            else:
+                vals = list((r.attrs or {}).values())
+                have_d, have_t = set().union(set(), *(_attr_dates(v) for v in vals)), \
+                    set().union(set(), *(_attr_times(v) for v in vals))
             ok |= {(d, "date") for d, _ in cdates if d in have_d}
             ok |= {(t, "time") for t, _ in ctimes if t in have_t}
             continue
@@ -216,6 +228,7 @@ def validate_draft(
     opted_out: bool,
     has_new_info: bool,
     now: datetime,
+    tz: str | None = None,
 ) -> list[Violation]:
     v: list[Violation] = []
     if opted_out:
@@ -232,7 +245,7 @@ def validate_draft(
 
     verified: set[tuple[Any, str]] = set()
     for c in claims:  # a claim only vouches; one that vouches for nothing ("giáo viên Việt Nam") blocks
-        verified |= _check_claim(c, catalog_rows, now)[0]  # nothing — the text scan below is the guard
+        verified |= _check_claim(c, catalog_rows, now, tz)[0]  # nothing — the text scan below is the guard
     dates, plain = scan_dates(text)
     times, plain = scan_times(plain)
     for canon, span in times:  # WP18: a class time the customer will turn up for comes from a catalog row

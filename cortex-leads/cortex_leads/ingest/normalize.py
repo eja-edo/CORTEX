@@ -11,9 +11,10 @@ from cortex_leads.clock.schedule import compute_next_check_at
 from cortex_leads.core.ids import uuid7
 from cortex_leads.db import models as m
 from cortex_leads.domain.pack import load_pack
+from cortex_leads.guard.optout import wants_to_stop
 from cortex_leads.ingest.deal import apply_deal
 from cortex_leads.ingest.format import ContactRef, Event
-from cortex_leads.memory.service import capture_from_message
+from cortex_leads.memory.service import capture_from_message, opt_out
 from cortex_leads.skills.registry import reply_after_for, silent_after_for
 
 Status = Literal["accepted", "duplicate", "rejected"]
@@ -87,6 +88,8 @@ async def apply_event_detailed(session: AsyncSession, connector: m.Connector, ev
         await _on_message(session, conv, event, now)
         if event.sender and event.sender.role == "customer":  # suggestions only (N5)
             await capture_from_message(session, conv, row[0], event.text or "", now)
+            if wants_to_stop(event.text or ""):  # not a suggestion: acted on at once (see guard/optout.py)
+                await opt_out(session, conv, source="rule", now=now)
     conv.updated_at = now
     await session.flush()
     return "accepted", None

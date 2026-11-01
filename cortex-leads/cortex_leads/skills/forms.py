@@ -19,7 +19,7 @@ from cortex_leads.db.models import Sandbox, SkillVersion, TriggerRun
 from cortex_leads.domain.pack import load_pack
 from cortex_leads.skills.loader import SkillError, lint, parse_skill_md
 from cortex_leads.skills.manifest import SkillManifest, Trigger
-from cortex_leads.skills.profile import SANDBOXES_DIR, load_profile
+from cortex_leads.skills.profile import SANDBOXES_DIR, load_profile, template_dir
 from cortex_leads.skills.registry import promote
 
 PREFIX = "tuy-chinh-"
@@ -86,7 +86,7 @@ def build(spec: FormSpec, version: int, sandbox: Sandbox) -> tuple[SkillManifest
                           match={"intent": spec.intent} if spec.intent else {})
     else:
         trigger = Trigger(kind="relative", on="conversation.promised_date_reached", match={})
-    never = list(dict.fromkeys([*_house_never_say(sandbox.name), *spec.never_say]))  # added to, never removed
+    never = list(dict.fromkeys([*_house_never_say(template_dir(sandbox)), *spec.never_say]))  # added to, never removed
     manifest = SkillManifest(
         name=spec.name, description=spec.description, version=version, status="draft", trigger=trigger,
         requires_tools=TOOLS, output_kind="draft_for_staff",
@@ -118,9 +118,30 @@ async def save_draft(session: AsyncSession, tenant_id: UUID, sandbox_id: UUID, s
     raw = manifest.model_dump_json() + body
     row = SkillVersion(tenant_id=tenant_id, sandbox_id=sandbox_id, name=spec.name, version=top + 1, status="draft",
                        checksum=hashlib.sha256(raw.encode()).hexdigest(), body=body,
-                       manifest=manifest.model_dump(mode="json"))
+                       manifest=manifest.model_dump(mode="json"), form_spec=spec.model_dump(mode="json"))
     session.add(row)
     await session.flush()
+    return row
+
+
+async def update_in_place(session: AsyncSession, row: SkillVersion, spec: FormSpec) -> SkillVersion:
+    """Edit a form skill where it stands: same row, same version, same status (the edit applies at once). The name is its
+    identity, so the slug cannot change. Lint runs on the rebuilt manifest like on a new save."""
+    if row.form_spec is None or not is_custom(row.name):
+        raise SkillError("only a skill made from a form can be edited")
+    if spec.name != row.name:
+        raise SkillError("the short name cannot be changed: make a new skill instead")
+    sandbox = await session.get(Sandbox, row.sandbox_id)
+    manifest, body = build(spec, row.version, sandbox)
+    manifest = manifest.model_copy(update={"status": row.status})
+    if errs := lint(manifest, load_profile(sandbox.profile_ref), load_pack(sandbox)):
+        raise SkillError("; ".join(errs))
+    row.manifest, row.body = manifest.model_dump(mode="json"), body
+    row.checksum = hashlib.sha256((manifest.model_dump_json() + body).encode()).hexdigest()
+    row.form_spec = spec.model_dump(mode="json")
+    row.edited_at = func.now()
+    await session.flush()
+    await session.refresh(row)
     return row
 
 
@@ -132,9 +153,13 @@ MIN_SHADOW_RUNS = 10  # DESIGN §5.8 asks 30 runs / 7 days; a single-business fo
 
 
 async def shadow_runs(session: AsyncSession, sandbox_id: UUID, name: str, version: int) -> int:
-    return (await session.execute(select(func.count()).select_from(TriggerRun).where(
-        TriggerRun.sandbox_id == sandbox_id, TriggerRun.skill_name == name,
-        TriggerRun.skill_version == version))).scalar_one()
+    row = (await session.execute(select(SkillVersion).where(
+        SkillVersion.sandbox_id == sandbox_id, SkillVersion.name == name, SkillVersion.version == version))).scalar_one_or_none()
+    q = select(func.count()).select_from(TriggerRun).where(
+        TriggerRun.sandbox_id == sandbox_id, TriggerRun.skill_name == name, TriggerRun.skill_version == version)
+    if row is not None and row.edited_at is not None:  # an edit changes what is being tried: earlier runs tried other text
+        q = q.where(TriggerRun.started_at >= row.edited_at)
+    return (await session.execute(q)).scalar_one()
 
 
 async def start_trial(session: AsyncSession, sandbox_id: UUID, name: str, version: int) -> SkillVersion:
