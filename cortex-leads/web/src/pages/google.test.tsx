@@ -21,7 +21,7 @@ describe('Kết nối Google', () => {
 
   it('says so when the server cannot sign anyone in, and does not offer the button', async () => {
     server({ 'GET /session': OWNER, 'GET /google/accounts': LIST({ configured: false, items: [] }) })
-    renderApp('/settings')
+    renderApp('/settings?tab=google')
     expect(await screen.findByText(/chưa được cấu hình để đăng nhập Google/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Đăng nhập bằng Google/ })).toBeDisabled()
   })
@@ -30,7 +30,7 @@ describe('Kết nối Google', () => {
     const assign = vi.fn()
     vi.stubGlobal('location', { ...window.location, assign })
     const s = server({ 'GET /session': OWNER, 'GET /google/accounts': LIST({ items: [] }), 'POST /google/accounts/connect': { url: 'https://accounts.google.com/o/oauth2/v2/auth?x=1' } })
-    renderApp('/settings')
+    renderApp('/settings?tab=google')
     await userEvent.type(await screen.findByLabelText('Tên gọi'), 'Thầy Minh')
     await userEvent.click(screen.getByLabelText(/Drive: thư mục của lớp/))
     await userEvent.click(screen.getByLabelText(/Đọc thư mục Drive có sẵn/))
@@ -47,7 +47,7 @@ describe('Kết nối Google', () => {
 
   it('shows what each account may do and says what is missing, with nothing about classes', async () => {
     server({ 'GET /session': OWNER, 'GET /google/accounts': LIST() })
-    renderApp('/settings')
+    renderApp('/settings?tab=google')
     const perms = within(await screen.findByRole('list', { name: 'Quyền đã cấp' }))
     expect(perms.getByText('Chấm bài trên Classroom').closest('li')).toHaveTextContent('Đọc lớp và bài nộp')
     expect(perms.getByText('Đăng tổng kết lên Classroom').closest('li')).toHaveTextContent('Chưa cấp')  // classroom_post is false in the fixture
@@ -57,7 +57,7 @@ describe('Kết nối Google', () => {
   it('asks before it disconnects an account and says what will stop', async () => {
     const refs = [{ kind: 'classroom', id: 'c1', name: 'Lớp 6A', active: true, }] as GoogleAccount['refs']
     const s = server({ 'GET /session': OWNER, 'GET /google/accounts': LIST({ items: [A({ refs })] }), 'POST /google/accounts/g1/revoke': A({ status: 'revoked' }) })
-    renderApp('/settings')
+    renderApp('/settings?tab=google')
     await userEvent.click(await screen.findByRole('button', { name: 'Thêm thao tác' }))
     await userEvent.click(screen.getByRole('menuitem', { name: 'Ngắt kết nối' }))
     const dialog = await screen.findByRole('dialog', { name: /Ngắt kết nối «Google của cô Lan»/ })
@@ -71,7 +71,7 @@ describe('Kết nối Google', () => {
     const assign = vi.fn()
     vi.stubGlobal('location', { ...window.location, assign })
     const s = server({ 'GET /session': OWNER, 'GET /google/accounts': LIST({ items: [A({ status: 'revoked' })] }), 'POST /google/accounts/g1/reconnect': { url: 'https://accounts.google.com/o/oauth2/v2/auth?r=1' } })
-    renderApp('/settings')
+    renderApp('/settings?tab=google')
     await userEvent.click(await screen.findByRole('button', { name: 'Kết nối lại' }))
     await waitFor(() => expect(assign).toHaveBeenCalledWith('https://accounts.google.com/o/oauth2/v2/auth?r=1'))
     expect(s.posted('/google/accounts/g1/reconnect')[0].body).toEqual({ kinds: ['classroom', 'classroom_post', 'drive', 'drive_read'] })
@@ -80,7 +80,7 @@ describe('Kết nối Google', () => {
   it('deletes an account in one confirmation and says what will lose its connection', async () => {
     const refs = [{ kind: 'folder', id: 'f1', name: 'Lớp có thư mục', active: true }] as GoogleAccount['refs']
     const s = server({ 'GET /session': OWNER, 'GET /google/accounts': LIST({ items: [A({ refs })] }), 'DELETE /google/accounts/g1': { deleted: 'g1', sources: 1 } })
-    renderApp('/settings')
+    renderApp('/settings?tab=google')
     await userEvent.click(await screen.findByRole('button', { name: 'Thêm thao tác' }))
     await userEvent.click(screen.getByRole('menuitem', { name: 'Xóa tài khoản' }))
     const dialog = await screen.findByRole('dialog', { name: /Xóa tài khoản «Google của cô Lan»/ })

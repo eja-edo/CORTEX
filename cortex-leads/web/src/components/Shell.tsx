@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { Bot, Boxes, ChartColumn, Database, GraduationCap, Inbox, ListChecks, LogOut, Settings, Sparkles, Brain, ScrollText, UserCog, Wrench } from 'lucide-react'
+import { Bot, Boxes, ChartColumn, Database, GraduationCap, Inbox, ListChecks, LogOut, Rocket, Settings, Sparkles, Brain, ScrollText, UserCog, Wrench } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { useKillSwitch, useLogout } from '../api/hooks'
@@ -70,7 +70,8 @@ export function Shell({ me }: { me: Me }) {
           <Soon icon={<ChartColumn className="size-[18px]" />}>Báo cáo</Soon>
           <Item to="/audit" icon={<ScrollText className="size-[18px]" />}>Nhật ký hoạt động</Item>
           {can(me, 'team.manage') && <Item to="/team" icon={<UserCog className="size-[18px]" />}>Nhân viên & quyền</Item>}
-          {can(me, 'sources.manage') ? <Item to="/settings" icon={<Settings className="size-[18px]" />}>Cài đặt</Item> : <Soon icon={<Settings className="size-[18px]" />}>Cài đặt</Soon>}
+          {can(me, 'settings.manage') && <Item to="/start" icon={<Rocket className="size-[18px]" />}>Bắt đầu</Item>}
+          {can(me, 'settings.manage') ? <Item to="/settings" icon={<Settings className="size-[18px]" />}>Cài đặt</Item> : <Soon icon={<Settings className="size-[18px]" />}>Cài đặt</Soon>}
         </nav>
         <div className="flex shrink-0 flex-col gap-3">
           <AiStatus me={me} />

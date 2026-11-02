@@ -13,7 +13,9 @@ import { GradingLink } from './pages/Grading'
 import { Inbox } from './pages/Inbox'
 import { ClassPage, LessonLink } from './pages/ClassPage'
 import { Lessons } from './pages/Lessons'
+import { Forgot, ResetPassword } from './pages/Recovery'
 import { Login } from './pages/Login'
+import { Onboarding } from './pages/Onboarding'
 import { SandboxDetail } from './pages/SandboxDetail'
 import { Sandboxes } from './pages/Sandboxes'
 import { SkillForm } from './pages/SkillForm'
@@ -47,6 +49,8 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/forgot" element={<Forgot />} />
+      <Route path="/reset" element={<ResetPassword />} />
       <Route element={<Authed />}>
         <Route path="/" element={<Navigate to="/inbox" replace />} />
         <Route path="/inbox/:id?" element={<Inbox />} />
@@ -67,7 +71,8 @@ export default function App() {
         <Route path="/sandboxes/:id" element={<Needs perm="sandboxes.manage"><SandboxDetail /></Needs>} />
         <Route path="/tools" element={<Needs perm="tools.manage"><Tools /></Needs>} />
         <Route path="/tools/sources/new" element={<Needs perm="sources.manage"><SourceNew /></Needs>} />
-        <Route path="/settings" element={<Needs perm="sources.manage"><Settings /></Needs>} />
+        <Route path="/settings" element={<Needs perm="settings.manage"><Settings /></Needs>} />
+        <Route path="/start" element={<Needs perm="settings.manage"><Onboarding /></Needs>} />
         <Route path="/google" element={<Navigate to="/settings" replace />} />
         <Route path="/assistant" element={<Needs perm="assistant.use"><Assistant /></Needs>} />
         <Route path="/audit" element={<Audit />} />

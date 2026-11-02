@@ -11,6 +11,8 @@ make test      # pytest (app role, RLS có hiệu lực)
 
 Cấu hình: biến `CL_*` (xem `.env.test`). Thiếu secret hoặc dùng secret đã lộ -> lỗi khi khởi động.
 
+Quên mật khẩu qua email (tuỳ chọn, mặc định tắt): đặt `CL_PUBLIC_BASE_URL` (địa chỉ công khai của console) và một trong hai: `CL_SMTP_HOST` + `CL_MAIL_FROM` (kèm `CL_SMTP_PORT`, `CL_SMTP_USER`, `CL_SMTP_PASSWORD`, `CL_SMTP_STARTTLS`), hoặc `CL_MAIL_DIR` (phát triển: mỗi thư là một tệp trong thư mục đó, mở tệp lấy liên kết). `python -m dev.local setup` tự đặt `CL_MAIL_DIR=data/mail`. Hồ sơ doanh nghiệp, kênh, nơi nhận thông báo và chế độ gửi chỉnh trong console, mục **Cài đặt**; việc đầu tiên cần làm nằm ở **Bắt đầu**.
+
 ## Chạy thử v0
 
 Chuỗi đầy đủ đã được chứng minh bằng `tests/e2e/test_walking_skeleton.py` (Postgres thật, LLM giả, không mạng).

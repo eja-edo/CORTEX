@@ -218,6 +218,11 @@ def test_a9_one_send_path_tool_outbox_worker():
               "/api/v1/google/accounts/{account_id}/folders", "/api/v1/google/lesson-sources", "/api/v1/google/sources/{kind}/{source_id}/active",
          "/api/v1/google/accounts/{account_id}", "/api/v1/google/accounts/{account_id}/reconnect", "/api/v1/classes/{class_id}/relink",
          "/api/v1/classes/{class_id}/assignments", "/api/v1/assignments/{assignment_id}/grade", "/api/v1/grading/{item_id}/grade", "/api/v1/lessons/{lesson_id}/release"}
+    # WP39-43 settings (owner only, tests/console): none of them sends to a customer; "gửi thử" goes to a staff push destination via notify/
+    known |= {"/api/v1/settings/business", "/api/v1/settings/ai", "/api/v1/settings/notify-targets", "/api/v1/settings/notify-targets/{target_id}",
+              "/api/v1/settings/notify-targets/{target_id}/test", "/api/v1/settings/channels", "/api/v1/settings/channels/{connector_id}",
+              "/api/v1/customers/{conversation_id}/export", "/api/v1/customers/{conversation_id}/erase", "/api/v1/onboarding",
+              "/api/v1/auth/recovery", "/api/v1/auth/forgot", "/api/v1/auth/reset"}
     assert {p for p in create_app().openapi()["paths"] if not p.startswith("/staff")} == known
 
     # Network libraries are imported only by the LLM provider, the outbound worker (customers, A9) and the

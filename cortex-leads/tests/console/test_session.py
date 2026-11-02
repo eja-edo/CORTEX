@@ -90,7 +90,9 @@ async def test_every_console_route_but_login_refuses_a_visitor_with_no_session(a
     paths = app_client._transport.app.openapi()["paths"]
     checked = 0
     for path, ops in paths.items():
-        if not path.startswith("/api/v1") or path in ("/api/v1/session/login", "/api/v1/google/callback"):  # the callback trusts only its signed state (test_google)
+        public = ("/api/v1/session/login", "/api/v1/google/callback",  # the callback trusts only its signed state (test_google)
+                  "/api/v1/auth/recovery", "/api/v1/auth/forgot", "/api/v1/auth/reset")  # for someone who cannot sign in (test_recovery)
+        if not path.startswith("/api/v1") or path in public:
             continue
         for method in ops:
             r = await app_client.request(method.upper(), re.sub(r"\{[^}]+\}", "1", path), json={} if method != "get" else None)

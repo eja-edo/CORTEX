@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from cortex_leads.channels.policy import window_state
 from cortex_leads.core.context import CustomerPrincipal, RunContext, StaffPrincipal
 from cortex_leads.core.envelope import BlockedCode, ErrorCode, ErrorInfo, ToolResult, Violation
+from cortex_leads.core.identity import ai_disclosure
 from cortex_leads.core.ids import uuid7
 from cortex_leads.core.timefmt import wire
 from cortex_leads.db import models as m
@@ -148,7 +149,7 @@ def _make_send(clock: Clock):
             id=uuid7(), tenant_id=ctx.tenant_id, action_id=action_id, conversation_id=conv.id,
             connector_id=connector.id, draft_id=draft.id, actor=ctx.actor,
             text=a.text if (a.text and not ai) else draft.text,
-            disclosure=f"Trợ lý AI của {tenant.name}" if ai else None,  # Luật AI 134/2025
+            disclosure=ai_disclosure(tenant.name, tenant.ai_name) if ai else None,  # Luật AI 134/2025
             window={"open": window["open"], "basis": window["basis"], "expires_at": (
                 wire(window["expires_at"]))},
             source={"skill": f"{run.skill_name}@{run.skill_version}" if run else None,

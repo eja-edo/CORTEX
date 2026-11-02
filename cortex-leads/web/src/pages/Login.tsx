@@ -1,8 +1,8 @@
 import { Brain } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
-import { Navigate } from 'react-router-dom'
+import { Link, Navigate } from 'react-router-dom'
 import { ApiError, explain } from '../api/client'
-import { useLogin, useSession } from '../api/hooks'
+import { useLogin, useRecovery, useSession } from '../api/hooks'
 import { Button, Card } from '../components/ui'
 
 const input = 'rounded-lg border border-line px-3 py-2.5 text-sm font-normal'
@@ -20,6 +20,7 @@ export function loginProblem(e: unknown): string {
 export function Login() {
   const { data: me } = useSession()
   const login = useLogin()
+  const recovery = useRecovery()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   if (me) return <Navigate to="/inbox" replace />
@@ -38,7 +39,9 @@ export function Login() {
             <input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} className={input} /></label>
           {login.isError && <p role="alert" className="text-[13px] text-bad">{loginProblem(login.error)}</p>}
           <Button variant="primary" type="submit" busy={login.isPending} disabled={!email.includes('@') || password.length < 1}>Đăng nhập</Button>
-          <p className="text-xs text-ink-3">Quên mật khẩu? Nhờ chủ trung tâm đặt lại cho bạn.</p>
+          {recovery.data?.enabled
+            ? <p className="text-xs"><Link to="/forgot" className="font-semibold text-accent underline">Quên mật khẩu?</Link></p>
+            : <p className="text-xs text-ink-3">Quên mật khẩu? Nhờ chủ trung tâm đặt lại cho bạn.</p>}
         </form>
       </Card>
     </div>

@@ -19,6 +19,7 @@ OWNER = STAFF | frozenset({
     "assistant.use",      # the owner's AI and its proposals
     "audit.all", "audit.admin",  # everyone's trail, export, integrity check
     "team.manage",        # accounts of the business
+    "settings.manage",    # the business's profile, where pushes go, which channels feed it; erasing a customer's data (WP39-43)
 })
 ROLE_PERMS: dict[str, frozenset[str]] = {"owner": OWNER, "staff": STAFF}
 

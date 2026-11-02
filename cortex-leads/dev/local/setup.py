@@ -125,6 +125,8 @@ async def run() -> None:
                           f"clk_{secrets.token_urlsafe(24)}")
     await get_engine().dispose()
     env.DATA.mkdir(exist_ok=True)
+    # Quên mật khẩu qua email: không có máy chủ thư, mỗi thư thành một tệp trong data/mail (mở tệp để lấy liên kết).
+    values |= {"CL_MAIL_DIR": str(env.DATA / "mail"), "CL_PUBLIC_BASE_URL": env.CORE_URL}
     env.CHAT_FILE.unlink(missing_ok=True)  # lịch sử chat của kênh giả thuộc về DB cũ
     env.LOCAL_ENV.write_text("# Sinh bởi dev.local setup. KHÔNG commit.\n" + "".join(
         f"{k}={v}\n" for k, v in values.items()), encoding="utf-8")
@@ -135,5 +137,6 @@ async def run() -> None:
     print(f"  Giao diện chính : {env.CORE_URL}/app/   chủ: {values['LOCAL_OWNER_EMAIL']} / {values['LOCAL_OWNER_PASSWORD']}")
     print(f"                    nhân viên: {values['LOCAL_STAFF_EMAIL']} / {values['LOCAL_STAFF_PASSWORD']}")
     print(f"  Trang khách giả : {env.CHANNEL_URL}/")
+    print(f"  Thư 'quên mật khẩu' được ghi thành tệp trong {env.DATA / 'mail'}")
     print(f"  Cấu hình sinh ra: {env.LOCAL_ENV}")
     print("  Tiếp theo       : .venv/bin/python -m dev.local serve")

@@ -47,6 +47,17 @@ class Settings(BaseSettings):
     LOGIN_LOCK_MINUTES: int = 15
     LOGIN_IP_MAX_FAILURES: int = 30  # wrong passwords from one address in LOGIN_IP_WINDOW_MINUTES before it is locked
     LOGIN_IP_WINDOW_MINUTES: int = 10
+    # Password reset by email. Off until a mail server (or, for development, a directory to write mails into) is set.
+    SMTP_HOST: str | None = None
+    SMTP_PORT: int = 587
+    SMTP_USER: str | None = None
+    SMTP_PASSWORD: str | None = None
+    SMTP_STARTTLS: bool = True  # False = implicit TLS (port 465)
+    MAIL_FROM: str | None = None  # e.g. "Cortex <no-reply@cortex.example.vn>"
+    MAIL_DIR: str | None = None  # development: write each mail as a file here instead of sending it
+    RESET_LINK_MINUTES: int = 30
+    RESET_MAX_PER_EMAIL_HOUR: int = 3
+    RESET_MAX_PER_IP_HOUR: int = 10
     INGEST_MAX_SKEW_S: int = 300
     INGEST_MAX_BATCH: int = 100
 

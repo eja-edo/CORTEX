@@ -6,7 +6,9 @@ import { explain, post } from '../api/client'
 import { useConversation, useConversations, useInboxAction, useSession } from '../api/hooks'
 import type { ConvFilter, ConvItem, Conversation, Draft } from '../api/types'
 import { ago, dateTime, dayMonth } from '../components/format'
+import { can } from '../components/can'
 import { Time } from '../components/Time'
+import { CustomerData } from './CustomerData'
 import { Avatar, Badge, Button, Empty, ErrorBox, Label, Loading, Notice, Tabs, type Tone } from '../components/ui'
 
 const BADGES: Record<string, [string, Tone]> = {
@@ -138,6 +140,7 @@ function Profile({ conv }: { conv: Conversation }) {
   const cancel = useInboxAction((id: string) => post(`/bookings/${id}/cancel`))
   const outcome = useInboxAction((status: string) => post(`/conversations/${conv.id}/outcome`, { status }))
   const err = book.error ?? cancel.error ?? outcome.error ?? fact.error
+  const { data: me } = useSession()
   return (
     <aside aria-label="Hồ sơ khách" className="flex w-80 shrink-0 flex-col gap-5 overflow-y-auto border-l border-line bg-surface p-5">
       <div className="flex flex-col gap-2.5"><Label>Khách</Label><b className="text-base">{conv.name}</b>
@@ -175,6 +178,7 @@ function Profile({ conv }: { conv: Conversation }) {
         {conv.log.length === 0 ? <p className="text-[13px] text-ink-3">Chưa có gì.</p> : conv.log.map((l, i) => (
           <div key={i} className="flex gap-2.5 text-xs"><Time iso={l.at} className="text-ink-3" /><span className="text-ink-2">{l.label}{l.skill ? ` · ${l.skill}` : ''}</span></div>))}
       </div>
+      {can(me, 'settings.manage') && <CustomerData conversationId={conv.id} />}
     </aside>
   )
 }

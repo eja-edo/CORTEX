@@ -69,6 +69,7 @@ class Tenant(Base):
     name: Mapped[str] = mapped_column(Text)
     timezone: Mapped[str] = mapped_column(Text, server_default="Asia/Ho_Chi_Minh")
     status: Mapped[str] = mapped_column(Text, server_default="active")
+    ai_name: Mapped[str | None] = mapped_column(Text)  # the name the AI introduces itself by (WP39); empty = the business's own name
     created_at: Mapped[datetime] = created()
     __table_args__ = (_enum("status", "active", "paused"),)
 
@@ -877,9 +878,24 @@ class LoginThrottle(Base):
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class PasswordReset(Base):
+    """A link sent by email so a person who lost their password can choose a new one. Only a hash of the token is kept; it works once
+    and for a short time (0039). Looked up by that hash before the business is known, like a session."""
+
+    __tablename__ = "password_reset"
+    id: Mapped[UUID] = pk()
+    tenant_id: Mapped[UUID] = tid()
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("app_user.id"))
+    token_hash: Mapped[str] = mapped_column(Text, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = created()
+    ip: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 # Tables created by migrations after 0001 (0001 builds only the v0 schema from these models).
 WAVE2_TABLES = {"contact_fact", "deal", "outbox", "notify_target", "notification", "booking",
-                "staff_task", "digest", "tool_connector", "proposal", "audit_event", "app_user", "auth_session", "login_throttle",
+                "staff_task", "digest", "tool_connector", "proposal", "audit_event", "app_user", "auth_session", "login_throttle", "password_reset",
                 "lesson_source", "lesson", "drive_target", "classroom_source", "grading_guide", "grade_item", "assignment_draft", "google_account", "class", "assignment"}
 # Supervisor views (no free-text column). DESIGN §5.6. view -> (table, columns it reads).
 SUPERVISOR_VIEWS = {

@@ -427,3 +427,70 @@ export interface ClassAssignment {
   description: string | null; criteria: Criterion[]; materials: Material[]; answer_key: string | null; check_prompt: string | null; language: string | null
 }
 export interface ClassAssignments { class: { id: string; name: string; grading_mode: GradingMode }; items: ClassAssignment[] }
+
+// --- Cài đặt (WP39-43) ---
+export interface BusinessSettings {
+  name: string
+  timezone: string
+  hours: { start: string; end: string }
+  hours_differ: boolean
+  ai_name: string | null
+  disclosure: string
+}
+export interface NotifyTarget {
+  id: string
+  kind: 'telegram' | 'mezon'
+  address: string  // masked by the server
+  label: string | null
+  sandbox_id: string | null
+  sandbox: string | null
+  created_at: string
+}
+export interface NotifyTargets {
+  items: NotifyTarget[]
+  telegram_ready: boolean
+  sandboxes: { id: string; title: string }[]
+}
+export interface ChannelItem {
+  id: string
+  kind: string
+  status: 'active' | 'disabled'
+  sandbox: string | null
+  sandbox_id: string
+  sends: boolean
+  created_at: string
+  last_event_at: string | null
+}
+export interface Channels {
+  items: ChannelItem[]
+  kinds: string[]
+  sandboxes: { id: string; title: string }[]
+  ingest_url: string | null
+}
+export interface NewChannelResult {
+  id: string
+  kind: string
+  secret: string
+  ingest_url: string | null
+}
+export interface AiOverview {
+  disclosure: string
+  sandboxes: { id: string; title: string; send_mode: 'auto' | 'manual'; status: 'active' | 'paused'; skills: { name: string; status: string; sends: boolean }[]; never_say: string[]; must_handoff: string[] }[]
+}
+export interface OnboardingStep {
+  id: string
+  title: string
+  done: boolean
+  count: number
+  href: string | null
+  hint: string
+}
+export interface Onboarding {
+  steps: OnboardingStep[]
+  complete: boolean
+  done: number
+}
+export interface EraseResult {
+  erased: Record<string, number>
+  not_reached: string[]
+}

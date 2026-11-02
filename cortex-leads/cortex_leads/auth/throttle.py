@@ -5,6 +5,7 @@ import hashlib
 from datetime import datetime, timedelta
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cortex_leads.config import get_settings
@@ -27,10 +28,9 @@ async def locked_for(s: AsyncSession, keys: list[str], now: datetime) -> int:
 
 async def fail(s: AsyncSession, key: str, now: datetime, *, limit: int, window: timedelta, lock: timedelta) -> bool:
     """Counts one failure. True when this failure is the one that locks the key."""
-    row = (await s.execute(select(m.LoginThrottle).where(m.LoginThrottle.key == key).with_for_update())).scalar_one_or_none()
-    if row is None:
-        row = m.LoginThrottle(key=key, failures=0, first_at=now)
-        s.add(row)
+    # Insert-if-absent first: two first attempts at the same moment must both be counted, not collide on the primary key.
+    await s.execute(pg_insert(m.LoginThrottle).values(key=key, failures=0, first_at=now).on_conflict_do_nothing(index_elements=["key"]))
+    row = (await s.execute(select(m.LoginThrottle).where(m.LoginThrottle.key == key).with_for_update().execution_options(populate_existing=True))).scalar_one()
     if now - row.first_at > window or (row.locked_until and row.locked_until <= now):
         row.failures, row.first_at, row.locked_until = 0, now, None  # an old streak does not count against a new attempt
     row.failures += 1

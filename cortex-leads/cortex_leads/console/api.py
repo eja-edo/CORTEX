@@ -7,12 +7,16 @@ from cortex_leads.console import (
     assistant,
     audit,
     classes,
+    customer_data,
     google,
     grading,
     inbox,
     lessons,
+    onboarding,
+    recovery,
     sandboxes,
     session,
+    settings,
     skills,
     sources,
     team,
@@ -20,5 +24,5 @@ from cortex_leads.console import (
 )
 
 router = APIRouter()
-for part in (session, inbox, skills, sandboxes, assistant, audit, sources, team, tools, lessons, grading, google, classes):
+for part in (session, inbox, skills, sandboxes, assistant, audit, sources, team, tools, lessons, grading, google, classes, settings, recovery, customer_data, onboarding):
     router.include_router(part.router)

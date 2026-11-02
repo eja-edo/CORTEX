@@ -10,6 +10,9 @@ N, R, P = 2**15, 8, 1
 MIN_LEN, MAX_LEN = 10, 128  # the upper bound keeps one request from making the server hash a megabyte
 _COMMON = {"password", "matkhau", "12345678", "123456789", "1234567890", "qwertyuiop", "iloveyou", "admin12345", "letmein123",
            "welcome123", "password1", "password123", "matkhau123", "abc1234567", "cortex12345"}
+# Words people build a "strong-looking" password from; matched after dropping digits and symbols, so `Qwerty123456!` fails too.
+_WEAK_STEMS = ("qwerty", "qwertyuiop", "asdfgh", "zxcvbn", "password", "passw0rd", "matkhau", "iloveyou", "letmein", "welcome", "admin",
+               "abcdef", "cortex", "trungtam", "monkey", "dragon", "football", "baseball", "123456", "654321", "000000", "111111")
 
 
 def _b64(b: bytes) -> str:
@@ -48,7 +51,8 @@ def strength_errors(password: str, *, email: str = "", name: str = "") -> list[s
         errs.append(f"Mật khẩu tối đa {MAX_LEN} ký tự.")
     low = password.lower()
     local = email.split("@")[0].lower()
-    if low in _COMMON or len(set(low)) < 4:
+    stem = re.sub(r"[^a-zà-ỹ]", "", low)
+    if low in _COMMON or len(set(low)) < 4 or (stem in _WEAK_STEMS) or (not stem and len(set(low)) < 6):
         errs.append("Mật khẩu này quá dễ đoán.")
     if (email and low == email.lower()) or (len(local) >= 4 and local in low):
         errs.append("Mật khẩu không được chứa tên đăng nhập (email).")

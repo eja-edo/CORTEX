@@ -374,6 +374,10 @@ OWNER_ONLY = {
     ("GET", "/api/v1/audit/export"), ("GET", "/api/v1/audit/verify"),
     ("GET", "/api/v1/team"), ("POST", "/api/v1/team"), ("PATCH", "/api/v1/team/{user_id}"), ("POST", "/api/v1/team/{user_id}/reset-password"),
     ("POST", "/api/v1/team/{user_id}/end-sessions"),
+    ("GET", "/api/v1/settings/business"), ("PUT", "/api/v1/settings/business"), ("GET", "/api/v1/settings/ai"), ("GET", "/api/v1/settings/notify-targets"),
+    ("POST", "/api/v1/settings/notify-targets"), ("DELETE", "/api/v1/settings/notify-targets/{target_id}"), ("POST", "/api/v1/settings/notify-targets/{target_id}/test"),
+    ("GET", "/api/v1/settings/channels"), ("POST", "/api/v1/settings/channels"), ("DELETE", "/api/v1/settings/channels/{connector_id}"),
+    ("GET", "/api/v1/customers/{conversation_id}/export"), ("POST", "/api/v1/customers/{conversation_id}/erase"), ("GET", "/api/v1/onboarding"),
 }
 FOR_ANYONE_SIGNED_IN = {
     ("GET", "/api/v1/session"), ("POST", "/api/v1/session/logout"), ("POST", "/api/v1/session/password"), ("GET", "/api/v1/session/sessions"),
@@ -390,7 +394,10 @@ FOR_ANYONE_SIGNED_IN = {
     ("GET", "/api/v1/classes/{class_id}/assignments"), ("POST", "/api/v1/assignments/{assignment_id}/grade"),
     ("GET", "/api/v1/assignments"), ("POST", "/api/v1/assignments"), ("POST", "/api/v1/assignments/ai"), ("POST", "/api/v1/assignments/{draft_id}/decision"),
 }
-PUBLIC = {("POST", "/api/v1/session/login"), ("GET", "/api/v1/google/callback")}  # the callback trusts only its signed state
+# The callback trusts only its signed state. The recovery calls are for someone who cannot sign in: they answer the same whoever asks
+# (forgot), or need the secret link (reset), and both are rate limited.
+PUBLIC = {("POST", "/api/v1/session/login"), ("GET", "/api/v1/google/callback"), ("GET", "/api/v1/auth/recovery"), ("POST", "/api/v1/auth/forgot"),
+          ("POST", "/api/v1/auth/reset")}
 
 
 def _api_routes():
@@ -409,7 +416,8 @@ def test_every_endpoint_has_been_given_a_decision():
 async def test_staff_are_refused_every_owner_endpoint_and_nobody_unsigned_gets_anything(app_client, world, api_key_factory):
     zero = "00000000-0000-0000-0000-000000000000"
     fill = lambda p: (p.replace("{verb}", "lock").replace("{state}", "off").replace("{tool}", "send_message").replace("{proposal_id}", zero)
-                      .replace("{sandbox_id}", zero).replace("{skill_id}", zero).replace("{source_id}", zero).replace("{user_id}", zero).replace("{account_id}", zero).replace("{class_id}", zero))
+                      .replace("{sandbox_id}", zero).replace("{skill_id}", zero).replace("{source_id}", zero).replace("{user_id}", zero).replace("{account_id}", zero).replace("{class_id}", zero)
+                      .replace("{target_id}", zero).replace("{connector_id}", "conn_x").replace("{conversation_id}", zero))
     for method, path in sorted(OWNER_ONLY | FOR_ANYONE_SIGNED_IN):
         r = await app_client.request(method, fill(path).replace("{event_id}", zero).replace("{session_id}", zero).replace("{conversation_id}", zero)
                                      .replace("{draft_id}", zero).replace("{booking_id}", zero).replace("{fact_id}", zero).replace("{lesson_id}", zero).replace("{item_id}", zero).replace("{draft_id}", zero), json={})

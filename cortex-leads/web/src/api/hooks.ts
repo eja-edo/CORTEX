@@ -6,6 +6,7 @@ import type {
   AssignmentList, GradeDecision, GradeDetail, GradeList, LessonDetail, LessonList, NewAssignment, Member, MySession, McpTool, NewSource, SandboxDetail, SourceDetail, SourceList, ToolInSandbox, ToolList,
   AuditDetail, AuditList, AuditQuery, AuditVerify, ChatReply, ChatTurn, ConvFilter, ConvList, Conversation, FormOptions, Me, Proposal, SandboxList, SkillDetail, SkillList,
   SkillPreview, SkillSpec, ClassItem, ClassAssignments, GoogleCourse, GoogleFolder, GoogleList, GradingMode, RecapMode,
+  AiOverview, BusinessSettings, Channels, EraseResult, NewChannelResult, NotifyTargets, Onboarding,
 } from './types'
 
 /** null = not signed in (a 401 is an answer here, not an error). */
@@ -227,6 +228,7 @@ export function useSendMode(sandbox: string) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['sandbox'] })
       qc.invalidateQueries({ queryKey: ['sandboxes'] })
+      qc.invalidateQueries({ queryKey: ['settings', 'ai'] })
       qc.invalidateQueries({ queryKey: ['session'] })
     },
   })
@@ -313,3 +315,47 @@ export const useAddClassroom = () => useGoogleChange((b: { sandbox_id: string; a
 export const useGoogleFolders = (id: string, enabled: boolean) =>
   useQuery({ queryKey: ['google', 'folders', id], enabled, retry: false, queryFn: () => get<{ items: GoogleFolder[]; full: boolean }>(`/google/accounts/${id}/folders`) })
 export const useSwitchSource = () => useGoogleChange((b: { kind: string; id: string; active: boolean }) => post(`/google/sources/${b.kind}/${b.id}/active`, { active: b.active }))
+
+// --- Cài đặt (WP39-43) ---
+export const useBusiness = () => useQuery({ queryKey: ['settings', 'business'], queryFn: () => get<BusinessSettings>('/settings/business') })
+export function useSaveBusiness() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (b: { name: string; timezone: string; hours: { start: string; end: string }; ai_name: string | null }) => put<BusinessSettings>('/settings/business', b),
+    onSuccess: (data) => {
+      qc.setQueryData(['settings', 'business'], data)
+      qc.invalidateQueries({ queryKey: ['session'] })  // the name in the sidebar and the time zone of every time shown
+      qc.invalidateQueries({ queryKey: ['settings', 'ai'] })
+    },
+  })
+}
+export const useNotifyTargets = () => useQuery({ queryKey: ['settings', 'notify'], queryFn: () => get<NotifyTargets>('/settings/notify-targets') })
+function useNotifyChange<V, R>(run: (v: V) => Promise<R>) {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: run, onSuccess: () => qc.invalidateQueries({ queryKey: ['settings', 'notify'] }) })
+}
+export const useAddTarget = () => useNotifyChange((b: { kind: 'telegram' | 'mezon'; address: string; label?: string; sandbox_id?: string | null }) => post('/settings/notify-targets', b))
+export const useRemoveTarget = () => useNotifyChange((id: string) => api('DELETE', `/settings/notify-targets/${id}`))
+export const useTestTarget = () => useMutation({ mutationFn: (id: string) => post<{ ok: boolean }>(`/settings/notify-targets/${id}/test`) })
+
+export const useChannels = () => useQuery({ queryKey: ['settings', 'channels'], queryFn: () => get<Channels>('/settings/channels') })
+function useChannelChange<V, R>(run: (v: V) => Promise<R>) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: run,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['settings', 'channels'] })
+      qc.invalidateQueries({ queryKey: ['onboarding'] })
+      qc.invalidateQueries({ queryKey: ['sandboxes'] })
+    },
+  })
+}
+export const useAddChannel = () => useChannelChange((b: { kind: string; sandbox_id: string }) => post<NewChannelResult>('/settings/channels', b))
+export const useRemoveChannel = () => useChannelChange((id: string) => api('DELETE', `/settings/channels/${id}`))
+export const useAiOverview = () => useQuery({ queryKey: ['settings', 'ai'], queryFn: () => get<AiOverview>('/settings/ai') })
+
+export const useOnboarding = () => useQuery({ queryKey: ['onboarding'], queryFn: () => get<Onboarding>('/onboarding') })
+export const useRecovery = () => useQuery({ queryKey: ['recovery'], queryFn: () => get<{ enabled: boolean }>('/auth/recovery'), retry: false })
+export const useForgot = () => useMutation({ mutationFn: (email: string) => post('/auth/forgot', { email }) })
+export const useResetPassword = () => useMutation({ mutationFn: (b: { token: string; password: string }) => post('/auth/reset', b) })
+export const useEraseCustomer = () => useMutation({ mutationFn: (conversationId: string) => post<EraseResult>(`/customers/${conversationId}/erase`, { confirm: true }), onSuccess: () => undefined })

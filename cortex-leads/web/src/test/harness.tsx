@@ -6,7 +6,7 @@ import App from '../App'
 import type { Me } from '../api/types'
 
 const STAFF_PERMS = ['inbox.use', 'skills.read', 'skills.draft', 'sandboxes.read', 'lessons.read', 'lessons.upload', 'lessons.release', 'grading.use', 'audit.own', 'account.self']
-const OWNER_PERMS = [...STAFF_PERMS, 'ai.pause', 'skills.manage', 'sandboxes.manage', 'tools.manage', 'sources.manage', 'assistant.use', 'audit.all', 'audit.admin', 'team.manage']
+const OWNER_PERMS = [...STAFF_PERMS, 'ai.pause', 'skills.manage', 'sandboxes.manage', 'tools.manage', 'sources.manage', 'assistant.use', 'audit.all', 'audit.admin', 'team.manage', 'settings.manage']
 export const OWNER: Me = { role: 'owner', staff_ref: 'owner', tenant: 'Trung tâm Minh Khai', timezone: 'Asia/Ho_Chi_Minh', csrf: 'csrf-token-1', ai: 'running', mode: 'manual', needs_person: 3,
   email: 'chu@minhkhai.vn', name: 'Chủ Minh Khai', must_change_password: false, permissions: OWNER_PERMS }
 export const STAFF: Me = { ...OWNER, role: 'staff', staff_ref: 'nv1', email: 'nv1@minhkhai.vn', name: 'Nhân viên Một', permissions: STAFF_PERMS }
