@@ -118,6 +118,8 @@ async def import_catalog(session: AsyncSession, tenant_id: UUID, text: str, *, d
             rows.append((reader.line_num, r))
     except csv.Error as e:  # a cell over 131072 characters, or a lone carriage return (Excel's "CSV (Macintosh)")
         raise ImportRefused("BAD_CSV", f"Tệp CSV không đọc được ở gần dòng {reader.line_num + 1}: {e}. Mở bằng Excel rồi lưu lại dạng «CSV UTF-8».") from None
+    if not dry_run:  # two imports at the same moment would both pick version+1 and hit the unique key: take turns per tenant
+        await session.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(f"catalog_import:{tenant_id}", 0))))
     active = {c.code: c for c in (await session.execute(select(m.CatalogItem).where(m.CatalogItem.active.is_(True)))).scalars()}
     top = dict((await session.execute(select(m.CatalogItem.code, func.max(m.CatalogItem.version)).group_by(m.CatalogItem.code))).all())
     out, seen = ImportResult(dry_run=dry_run), set()
