@@ -123,7 +123,8 @@ async def run() -> None:
         print("Server không lên được.")
     else:
         print(f"\nĐang chạy. Trang khách giả: {env.CHANNEL_URL}/   Trang nhân viên: {env.CORE_URL}/staff/login")
-        print(f"Staff API key: {local['LOCAL_STAFF_KEY']}\nĐồng hồ tự chạy mỗi {TICK_EVERY_S}s. Ctrl+C để dừng.\n")
+        # never the key itself: this line ends up in journald / log files that more people can read than data/local.env
+        print(f"Staff API key: {local['LOCAL_STAFF_KEY'][:8]}… (đầy đủ trong {env.LOCAL_ENV})\nĐồng hồ tự chạy mỗi {TICK_EVERY_S}s. Ctrl+C để dừng.\n")
     await stop.wait()
     print("Đang dừng...")
     core.should_exit = chan.should_exit = True
