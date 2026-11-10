@@ -14,10 +14,13 @@ from sqlalchemy import select
 from cortex_leads.auth.roles import ApiRole, Role
 from cortex_leads.config import get_settings
 from cortex_leads.core.ids import new_connector_id, uuid7
+from cortex_leads.core.logs import setup_logging
 from cortex_leads.db import models as m
 from cortex_leads.db.session import system_session, tenant_session
 from cortex_leads.sandbox.kinds import KINDS
 from cortex_leads.skills.profile import SANDBOXES_DIR, template_dir
+
+log = logging.getLogger(__name__)
 
 DEFAULT_BUDGET = {"runs_per_day": 200, "drafts_per_staff_per_day": 20, "tokens_per_day": 500_000}
 
@@ -347,18 +350,18 @@ async def worker_once(gateway) -> tuple[int, int, int]:
 async def cmd_worker(a: argparse.Namespace) -> None:
     """DESIGN §5.7 `turn` needs seconds, not a 10-minute cron. Ctrl+C stops it between passes."""
     gateway = _gateway()
-    print(f"worker: sweep -> run -> deliver every {a.interval}s (Ctrl+C to stop)")
+    log.info("worker: sweep -> run -> deliver every %ss (Ctrl+C to stop)", a.interval)
     try:
         while True:
             try:
                 fired, runs, sent = await worker_once(gateway)
                 if fired or runs or sent:
-                    print(f"[{datetime.now():%H:%M:%S}] fired={fired} runs={runs} sent={sent}", flush=True)
+                    log.info("worker pass: fired=%s runs=%s sent=%s", fired, runs, sent)
             except Exception:  # one bad pass must not kill the loop
-                logging.getLogger(__name__).exception("worker pass failed")
+                log.exception("worker pass failed")
             await asyncio.sleep(a.interval)
     except asyncio.CancelledError:
-        print("worker stopped")
+        log.info("worker stopped")
 
 
 async def cmd_promote_skill(a: argparse.Namespace) -> None:
@@ -448,9 +451,9 @@ async def cmd_classroom(a: argparse.Namespace) -> None:
             made = await grader_once(datetime.now(UTC), gateway)
             await notify_once(datetime.now(UTC))
             if made:
-                print(f"[{datetime.now():%H:%M:%S}] suggestions={made}", flush=True)
+                log.info("classroom pass: suggestions=%s", made)
         except Exception:
-            logging.getLogger(__name__).exception("classroom pass failed")
+            log.exception("classroom pass failed")
         if a.once:
             return
         await asyncio.sleep(a.interval)
@@ -469,9 +472,9 @@ async def cmd_lessons(a: argparse.Namespace) -> None:
             await post_once(datetime.now(UTC))  # the recap goes to the class's Classroom course; Mezon below is the optional extra
             await notify_once(datetime.now(UTC))
             if made:
-                print(f"[{datetime.now():%H:%M:%S}] recaps={made}", flush=True)
+                log.info("lessons pass: recaps=%s", made)
         except Exception:
-            logging.getLogger(__name__).exception("lessons pass failed")
+            log.exception("lessons pass failed")
         if a.once:
             return
         await asyncio.sleep(a.interval)
@@ -486,6 +489,9 @@ async def cmd_import_catalog(a: argparse.Namespace) -> None:
     for e in r.errors:
         print(e["message"])
     print(f"new_versions={r.new + r.changed} unchanged={r.unchanged}")
+
+
+LONG_RUNNING = {"worker", "lessons", "classroom"}
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -548,6 +554,8 @@ def main(argv: list[str] | None = None) -> None:
         ("--once", {"action": "store_true"}))
     add("import-catalog", cmd_import_catalog, ("csv", {}), ("--tenant", uid))
     args = p.parse_args(argv)
+    if args.cmd in LONG_RUNNING:  # one-shot commands keep print: their output is the answer (and may be a secret shown once), not a log line
+        setup_logging()
     try:
         asyncio.run(args.fn(args))
     except KeyboardInterrupt:

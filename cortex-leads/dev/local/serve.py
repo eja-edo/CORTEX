@@ -11,6 +11,7 @@ import uvicorn
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from cortex_leads.core.logs import setup_logging
 from dev.local import env
 from dev.local.channel import create_channel_app
 from dev.local.fakellm import LocalFakeProvider
@@ -26,13 +27,13 @@ def make_gateway():
     cfg = env.read_env_file(env.LLM_ENV)
     keys = ("CL_LLM_BASE_URL", "CL_LLM_API_KEY", "CL_LLM_MODEL_LITE")
     if all(cfg.get(k) for k in keys):
-        print(f"LLM: THẬT ({cfg['CL_LLM_MODEL_LITE']} @ {cfg['CL_LLM_BASE_URL']}) từ data/llm.env")
-        print("  CẢNH BÁO: chỉ gõ dữ liệu tự bịa. Không dán dữ liệu khách thật nếu endpoint này "
-              "không có DPA (REVIEW R2). SĐT/email/tên được che trước khi gọi, nhưng đó chỉ là lớp giảm thiểu.")
+        log.info("LLM: THẬT (%s @ %s) từ data/llm.env", cfg["CL_LLM_MODEL_LITE"], cfg["CL_LLM_BASE_URL"])
+        log.warning("Chỉ gõ dữ liệu tự bịa. Không dán dữ liệu khách thật nếu endpoint này không có DPA (REVIEW R2). "
+                    "SĐT/email/tên được che trước khi gọi, nhưng đó chỉ là lớp giảm thiểu.")
         return LLMGateway(OpenAICompatibleProvider(
             base_url=cfg["CL_LLM_BASE_URL"], api_key=cfg["CL_LLM_API_KEY"],
             default_model=cfg["CL_LLM_MODEL_LITE"]))
-    print("LLM: giả (chưa có data/llm.env) - nháp soạn sẵn từ catalog, không gọi mạng")
+    log.info("LLM: giả (chưa có data/llm.env) - nháp soạn sẵn từ catalog, không gọi mạng")
     return LLMGateway(LocalFakeProvider(), retry_delay_s=0)
 
 
@@ -73,8 +74,8 @@ class Clock:
         res = {"hoi_thoai_den_gio": fired, "job_da_chay": runs, "nhap_moi": d1 - d0,
                "tin_xu_ly_gui": sent, "cron_moi": made, "job_loi": e1 - e0}
         if any(res.values()):
-            print(f"[đồng hồ {datetime.now():%H:%M:%S}] {fired} hội thoại tới giờ, {runs} job chạy, "
-                  f"{d1 - d0} nháp mới, {sent} tin gửi, {made} kết quả cron" + (f", {e1 - e0} job LỖI (xem log)" if e1 - e0 else ""))
+            log.info("đồng hồ: %d hội thoại tới giờ, %d job chạy, %d nháp mới, %d tin gửi, %d kết quả cron%s", fired, runs, d1 - d0, sent, made,
+                     f", {e1 - e0} job LỖI (xem log)" if e1 - e0 else "")
         return res
 
 
@@ -86,9 +87,8 @@ async def _loop(clock: Clock, stop: asyncio.Event) -> None:
             return
         try:
             await clock()
-        except Exception as e:
-            print(f"[đồng hồ] LỖI: {type(e).__name__}: {e}")
-            log.exception("tick lỗi")
+        except Exception:
+            log.exception("đồng hồ: lượt chạy lỗi")
 
 
 def _server(app: Any, port: int) -> uvicorn.Server:
@@ -98,7 +98,7 @@ def _server(app: Any, port: int) -> uvicorn.Server:
 
 
 async def run() -> None:
-    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
+    setup_logging()
     local = env.load_local()
     for port in (env.CORE_PORT, env.CHANNEL_PORT):
         if not _port_free(port):
@@ -120,13 +120,13 @@ async def run() -> None:
     else:
         stop.set()
     if stop.is_set():
-        print("Server không lên được.")
+        log.error("Server không lên được.")
     else:
-        print(f"\nĐang chạy. Trang khách giả: {env.CHANNEL_URL}/   Trang nhân viên: {env.CORE_URL}/staff/login")
+        log.info("Đang chạy. Trang khách giả: %s/   Trang nhân viên: %s/staff/login", env.CHANNEL_URL, env.CORE_URL)
         # never the key itself: this line ends up in journald / log files that more people can read than data/local.env
-        print(f"Staff API key: {local['LOCAL_STAFF_KEY'][:8]}… (đầy đủ trong {env.LOCAL_ENV})\nĐồng hồ tự chạy mỗi {TICK_EVERY_S}s. Ctrl+C để dừng.\n")
+        log.info("Staff API key: %s… (đầy đủ trong %s). Đồng hồ tự chạy mỗi %ss. Ctrl+C để dừng.", local["LOCAL_STAFF_KEY"][:8], env.LOCAL_ENV, TICK_EVERY_S)
     await stop.wait()
-    print("Đang dừng...")
+    log.info("Đang dừng...")
     core.should_exit = chan.should_exit = True
     await asyncio.wait(tasks, timeout=10)
     for t in tasks:
@@ -135,4 +135,4 @@ async def run() -> None:
     from cortex_leads.db.session import get_engine
 
     await get_engine().dispose()
-    print("Đã dừng.")
+    log.info("Đã dừng.")

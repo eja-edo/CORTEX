@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import csv
 import io
+import logging
 import os
 import sys
 import tempfile
@@ -18,6 +19,9 @@ import httpx
 
 from bridges.pancake.run import post_events
 from cortex_leads.cli import cmd_import_catalog
+from cortex_leads.core.logs import setup_logging
+
+log = logging.getLogger(__name__)
 
 URL = "https://docs.google.com/spreadsheets/d/{id}/export?format=csv&gid={gid}"
 STATUS = {"booked": "booked", "won": "won", "lost": "lost", "cancelled": "cancelled",
@@ -63,12 +67,14 @@ async def main(argv: list[str]) -> None:
                                      UUID(e["CL_TENANT_ID"]))
             if e.get("GSHEET_ORDERS_GID"):
                 evs = orders_to_events(await fetch_csv(http, e["GSHEET_ID"], e["GSHEET_ORDERS_GID"]))
-                print(await post_events(http, e["CL_INGEST_URL"], e["CL_CONNECTOR_ID"],
-                                        e["CL_CONNECTOR_SECRET"], evs))  # re-posting is a no-op: dedupe
+                counts = await post_events(http, e["CL_INGEST_URL"], e["CL_CONNECTOR_ID"],
+                                           e["CL_CONNECTOR_SECRET"], evs)  # re-posting is a no-op: dedupe
+                log.info("orders posted: %s", counts)
             if not interval:
                 return
             await asyncio.sleep(interval)
 
 
 if __name__ == "__main__":
+    setup_logging()
     asyncio.run(main(sys.argv[1:]))
