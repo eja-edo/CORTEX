@@ -92,7 +92,7 @@ async def _loop(clock: Clock, stop: asyncio.Event) -> None:
 
 
 def _server(app: Any, port: int) -> uvicorn.Server:
-    s = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
+    s = uvicorn.Server(uvicorn.Config(app, host=env.HOST, port=port, log_level="warning"))
     s.capture_signals = contextlib.nullcontext  # type: ignore[method-assign]  # ta tự bắt Ctrl+C
     return s
 

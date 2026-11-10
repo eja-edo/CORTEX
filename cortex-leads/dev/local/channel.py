@@ -160,7 +160,7 @@ def create_channel_app(local: dict[str, str], tick: Callable[[], Awaitable[dict[
 
     @app.get("/", response_class=HTMLResponse)
     async def home() -> str:
-        return PAGE_HTML.replace("__PAGE__", env.PAGE_ID).replace("__CORE__", env.CORE_URL)
+        return PAGE_HTML.replace("__PAGE__", env.PAGE_ID).replace("__CORE__", env.PUBLIC_URL or env.CORE_URL)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
