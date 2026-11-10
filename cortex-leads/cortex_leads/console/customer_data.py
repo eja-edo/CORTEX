@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from cortex_leads.auth.perms import Perm
 from cortex_leads.console.auth import Session, need
 from cortex_leads.console.trail import audit
 from cortex_leads.db.session import tenant_session
@@ -16,7 +17,7 @@ router = APIRouter(prefix="/customers")
 
 
 @router.get("/{conversation_id}/export")
-async def export(conversation_id: UUID, sess: Session = need("settings.manage")) -> dict[str, Any]:
+async def export(conversation_id: UUID, sess: Session = need(Perm.SETTINGS_MANAGE)) -> dict[str, Any]:
     async with tenant_session(sess.caller.tenant_id) as s:
         try:
             data = await export_customer(s, conversation_id)
@@ -32,7 +33,7 @@ class Erase(BaseModel):
 
 
 @router.post("/{conversation_id}/erase")
-async def erase(conversation_id: UUID, body: Erase, sess: Session = need("settings.manage")) -> dict[str, Any]:
+async def erase(conversation_id: UUID, body: Erase, sess: Session = need(Perm.SETTINGS_MANAGE)) -> dict[str, Any]:
     async with tenant_session(sess.caller.tenant_id) as s:
         try:
             counts = await erase_customer(s, conversation_id, datetime.now(UTC))

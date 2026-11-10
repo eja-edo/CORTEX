@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { CalendarPlus, Search, Send, Sparkles } from 'lucide-react'
+import { ArrowLeft, CalendarPlus, Search, Send, Sparkles, UserRound } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { explain, post } from '../api/client'
@@ -9,7 +9,9 @@ import { ago, dateTime, dayMonth } from '../components/format'
 import { can } from '../components/can'
 import { Time } from '../components/Time'
 import { CustomerData } from './CustomerData'
-import { Avatar, Badge, Button, Empty, ErrorBox, Label, Loading, Notice, Tabs, type Tone } from '../components/ui'
+import { Avatar, Badge, Button, Empty, ErrorBox, Label, Loading, Menu, Notice, SidePanel, Tabs, type Tone } from '../components/ui'
+import { skillTitle } from '../components/skillName'
+import { Perm } from '../api/enums'
 
 const BADGES: Record<string, [string, Tone]> = {
   need_human: ['Cần người', 'bad'], waiting: ['Khách đang chờ', 'warn'], silent: ['Khách im', 'neutral'], booked: ['Đã đặt lịch', 'ok'],
@@ -23,7 +25,7 @@ function ConversationList({ filter, setFilter, activeId, onOpen }: { filter: Con
   const q = useConversations(filter)
   const c = q.data?.counts
   return (
-    <section aria-label="Danh sách hội thoại" className="flex w-85 shrink-0 flex-col border-r border-line bg-surface">
+    <section aria-label="Danh sách hội thoại" className={clsx('flex w-full shrink-0 flex-col border-line bg-surface md:w-85 md:border-r', activeId && 'max-md:hidden')}>
       <div className="flex flex-col gap-3 px-4 pt-4">
         <div className="flex items-center justify-between"><h1 className="text-xl font-bold">Hộp thư</h1><Search className="size-[18px] text-ink-2" aria-hidden /></div>
         <Tabs tight value={filter} onChange={setFilter} tabs={[
@@ -61,8 +63,8 @@ function DraftCard({ d, conv }: { d: Draft; conv: Conversation }) {
   const run = (action: string, edited?: string) => act.mutate({ action, edited_text: edited })
   return (
     <article aria-label="Nháp của AI" className="flex flex-col gap-3 rounded-xl border border-ai bg-ai-soft p-4">
-      <div className="flex items-center gap-2 text-[13px] font-semibold text-ai">
-        <Sparkles className="size-4" aria-hidden /><span className="flex-1">{d.needs_human ? 'AI chuyển cho bạn · gợi ý' : 'Nháp AI · chờ nhân viên duyệt'}</span>
+      <div className="flex flex-wrap items-center gap-2 text-[13px] font-semibold text-ai">
+        <Sparkles className="size-4 shrink-0" aria-hidden /><span className="min-w-0 flex-1 basis-44">{d.needs_human ? 'AI chuyển cho bạn · gợi ý' : 'Nháp AI · chờ nhân viên duyệt'}</span>
         {d.turn && <Badge tone="warn">Khách đang chờ</Badge>}{d.reason && <Badge tone="ai" className="bg-white">{d.reason}</Badge>}
       </div>
       {editing ? <textarea aria-label="Sửa nháp" value={text} onChange={(e) => setText(e.target.value)} rows={4} className="w-full rounded-lg border border-line bg-white p-2.5 text-sm" />
@@ -71,12 +73,15 @@ function DraftCard({ d, conv }: { d: Draft; conv: Conversation }) {
       {offchannel && <Notice tone="warn">Cửa sổ nhắn đã đóng: nội dung này là gợi ý để bạn gọi điện hoặc nhắn Zalo, không gửi qua kênh được.</Notice>}
       {d.needs_human && <Notice tone="bad">Hệ thống không tự gửi nháp này. Bạn quyết định và tự liên hệ khách.</Notice>}
       {act.isError && <Notice tone="bad">{explain(act.error)}</Notice>}
-      <div className="flex flex-wrap gap-2">
-        {canSend && <Button variant="primary" busy={act.isPending} onClick={() => run('approved', editing ? text : undefined)}>Duyệt &amp; gửi</Button>}
-        {canSend && <Button onClick={() => setEditing((v) => !v)}>{editing ? 'Dùng nháp gốc' : 'Sửa nháp'}</Button>}
-        <Button busy={act.isPending} onClick={() => run('sent')}>{offchannel ? 'Đã liên hệ' : 'Tôi đã gửi tay'}</Button>
-        <Button busy={act.isPending} onClick={() => run('self')}>Tôi tự làm</Button>
-        <Button busy={act.isPending} onClick={() => run('skipped')}>Bỏ</Button>
+      {/* the one or two things done every time are buttons; the rarer answers wait in "⋯" */}
+      <div className="flex flex-wrap items-center gap-2">
+        {canSend ? <>
+          <Button variant="primary" busy={act.isPending} onClick={() => run('approved', editing ? text : undefined)}>Duyệt &amp; gửi</Button>
+          <Button onClick={() => setEditing((v) => !v)}>{editing ? 'Dùng nháp gốc' : 'Sửa nháp'}</Button>
+        </> : <Button variant="primary" busy={act.isPending} onClick={() => run('sent')}>{offchannel ? 'Đã liên hệ' : 'Tôi đã gửi tay'}</Button>}
+        <Menu label="Cách xử lý khác" items={[
+          ...(canSend ? [{ label: 'Tôi đã gửi tay', onClick: () => run('sent') }] : []),
+          { label: 'Tôi tự làm', onClick: () => run('self') }, { label: 'Bỏ nháp này', onClick: () => run('skipped') }]} />
       </div>
     </article>
   )
@@ -88,13 +93,13 @@ function Composer({ conv }: { conv: Conversation }) {
   const submit = () => { const t = text.trim(); if (t) send.mutate(t, { onSuccess: () => setText('') }) }
   const w = conv.window
   return (
-    <div className="flex flex-col gap-2 border-t border-line bg-surface px-6 pt-3 pb-4">
+    <div className="flex flex-col gap-2 border-t border-line bg-surface px-3 pt-3 pb-4 sm:px-6">
       {send.isError && <Notice tone="bad">{explain(send.error)}</Notice>}
       <div className="flex items-center gap-2.5 rounded-[10px] border border-line px-3.5 py-2.5">
         <textarea aria-label="Nhập tin nhắn trả lời khách" rows={1} value={text} disabled={!w.open} placeholder={w.open ? 'Nhập tin nhắn trả lời khách…' : 'Cửa sổ nhắn đã đóng'}
           onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }}
-          className="max-h-28 min-h-6 flex-1 resize-none bg-transparent text-sm outline-none disabled:text-ink-3" />
-        <button aria-label="Gửi" onClick={submit} disabled={!w.open || !text.trim() || send.isPending} className="text-accent disabled:text-ink-3"><Send className="size-[18px]" /></button>
+          className="max-h-28 min-h-6 min-w-0 flex-1 resize-none bg-transparent text-sm outline-none disabled:text-ink-3" />
+        <button aria-label="Gửi" onClick={submit} disabled={!w.open || !text.trim() || send.isPending} className="shrink-0 text-accent disabled:text-ink-3 max-lg:p-1.5"><Send className="size-[18px]" /></button>
       </div>
       <p className="text-xs text-ink-3">{w.open
         ? `${w.basis === 'human_agent' ? 'Quá cửa sổ tự do: chỉ người gõ tay được gửi' : 'Cửa sổ nhắn tự do'}${w.expires_at ? ` · mở đến ${dateTime(w.expires_at)}` : ''} · tin gửi tay không kèm dòng xưng AI`
@@ -103,23 +108,25 @@ function Composer({ conv }: { conv: Conversation }) {
   )
 }
 
-function Center({ conv }: { conv: Conversation }) {
+function Center({ conv, onProfile }: { conv: Conversation; onProfile: () => void }) {
   const end = useRef<HTMLDivElement>(null)
   useEffect(() => { end.current?.scrollIntoView?.({ block: 'end' }) }, [conv.id, conv.messages.length, conv.drafts.length])
   const last = [...conv.messages].reverse().find((m) => m.role === 'customer')
   const waiting = conv.messages.at(-1)?.role === 'customer'
   return (
     <section aria-label="Hội thoại" className="flex min-w-0 flex-1 flex-col bg-app">
-      <header className="flex items-center gap-3 border-b border-line bg-surface px-6 py-3.5">
+      <header className="flex items-center gap-3 border-b border-line bg-surface px-3 py-3 sm:px-6 sm:py-3.5">
+        <Link to="/inbox" aria-label="Về danh sách hội thoại" className="grid size-10 shrink-0 place-items-center rounded-lg text-ink-2 hover:bg-app md:hidden"><ArrowLeft className="size-5" aria-hidden /></Link>
         <Avatar name={conv.name} active />
         <div className="min-w-0 flex-1"><h2 className="truncate text-base font-bold">{conv.name}</h2>
           <p className="flex items-center gap-2 text-xs text-ink-2">{conv.channel === 'messenger' ? 'Messenger' : conv.channel}{waiting && last && <Badge tone="warn">Chờ {ago(last.at)}</Badge>}</p></div>
+        <Button className="shrink-0 xl:hidden" onClick={onProfile}><UserRound className="size-4" aria-hidden /><span className="max-sm:sr-only">Hồ sơ</span></Button>
       </header>
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-6">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3 sm:p-6">
         {conv.messages.map((m) => (
           <div key={m.id} className={clsx('flex gap-2', m.role === 'customer' ? 'items-end' : 'flex-row-reverse items-end')}>
             {m.role === 'customer' && <Avatar name={conv.name} size={28} />}
-            <div className={clsx('max-w-[70%] rounded-xl border px-3.5 py-2.5', m.role === 'customer' ? 'border-line bg-surface' : 'border-accent-soft bg-accent-soft')}>
+            <div className={clsx('max-w-[85%] min-w-0 rounded-xl border px-3.5 py-2.5 [overflow-wrap:anywhere] sm:max-w-[70%]', m.role === 'customer' ? 'border-line bg-surface' : 'border-accent-soft bg-accent-soft')}>
               <p className="text-sm whitespace-pre-wrap">{m.text}</p><p className="mt-1 text-[11px] text-ink-3">{m.role === 'bot' ? 'Hệ thống · ' : m.role === 'staff' ? 'Nhân viên · ' : ''}<Time iso={m.at} /></p>
             </div>
           </div>
@@ -134,7 +141,7 @@ function Center({ conv }: { conv: Conversation }) {
 
 const OUTCOMES: [string, string][] = [['booked', 'Đã đặt lịch'], ['won', 'Đã chốt'], ['lost', 'Mất khách'], ['reopen', 'Mở lại']]
 
-function Profile({ conv }: { conv: Conversation }) {
+function Profile({ conv, open, onClose }: { conv: Conversation; open: boolean; onClose: () => void }) {
   const fact = useInboxAction(({ id, verb }: { id: string; verb: 'confirm' | 'reject' }) => post(`/facts/${id}/${verb}`))
   const book = useInboxAction((code: string) => post(`/conversations/${conv.id}/booking`, { slot_code: code }))
   const cancel = useInboxAction((id: string) => post(`/bookings/${id}/cancel`))
@@ -142,7 +149,8 @@ function Profile({ conv }: { conv: Conversation }) {
   const err = book.error ?? cancel.error ?? outcome.error ?? fact.error
   const { data: me } = useSession()
   return (
-    <aside aria-label="Hồ sơ khách" className="flex w-80 shrink-0 flex-col gap-5 overflow-y-auto border-l border-line bg-surface p-5">
+    <SidePanel label="Hồ sơ khách" open={open} onClose={onClose} className="xl:w-80 xl:shrink-0 xl:overflow-y-auto xl:border-l xl:border-line">
+      <div className="flex flex-col gap-5 p-5 max-xl:pt-0">
       <div className="flex flex-col gap-2.5"><Label>Khách</Label><b className="text-base">{conv.name}</b>
         {([['Ý định', conv.intent], ['Người quyết định', conv.decision_maker], ['Khách hẹn', conv.promised_date && dayMonth(conv.promised_date)], ['Phụ trách', conv.owner ?? 'Chưa gán']] as const).map(([k, v]) =>
           v ? <div key={k} className="flex justify-between text-[13px]"><span className="text-ink-2">{k}</span><span className="font-medium">{v}</span></div> : null)}
@@ -159,7 +167,7 @@ function Profile({ conv }: { conv: Conversation }) {
       <div className="flex flex-col gap-2.5"><Label>Lịch học thử</Label>
         {conv.bookings.map((b) => (
           <div key={b.id} className="flex items-center justify-between gap-2 rounded-[10px] border border-line p-3 text-[13px]">
-            <span><b><Time iso={b.at} as="dateTime" /></b><br /><span className="text-xs text-ink-2">{b.slot}{b.by_ai ? ' · AI giữ chỗ' : ''}</span></span>
+            <span className="min-w-0"><b><Time iso={b.at} as="dateTime" /></b><br /><span className="text-xs text-ink-2">{b.slot}{b.by_ai ? ' · AI giữ chỗ' : ''}</span></span>
             <Button onClick={() => cancel.mutate(b.id)} busy={cancel.isPending}>Huỷ lịch</Button>
           </div>))}
         {conv.bookings.length === 0 && (conv.open_slots.length === 0 ? <p className="text-[13px] text-ink-3">Hiện không có buổi nào còn chỗ.</p> : (
@@ -176,35 +184,37 @@ function Profile({ conv }: { conv: Conversation }) {
         <div className="flex flex-wrap gap-2">{OUTCOMES.map(([k, l]) => <Button key={k} busy={outcome.isPending} onClick={() => outcome.mutate(k)}>{l}</Button>)}</div></div>
       <div className="flex flex-col gap-2.5"><Label>AI đã làm gì</Label>
         {conv.log.length === 0 ? <p className="text-[13px] text-ink-3">Chưa có gì.</p> : conv.log.map((l, i) => (
-          <div key={i} className="flex gap-2.5 text-xs"><Time iso={l.at} className="text-ink-3" /><span className="text-ink-2">{l.label}{l.skill ? ` · ${l.skill}` : ''}</span></div>))}
+          <div key={i} className="flex gap-2.5 text-xs"><Time iso={l.at} className="text-ink-3" /><span className="text-ink-2">{l.label}{l.skill ? ` · ${skillTitle(l.skill)}` : ''}</span></div>))}
       </div>
-      {can(me, 'settings.manage') && <CustomerData conversationId={conv.id} />}
-    </aside>
+      {can(me, Perm.SETTINGS_MANAGE) && <CustomerData conversationId={conv.id} />}
+      </div>
+    </SidePanel>
   )
 }
 
 function Detail({ id }: { id: string }) {
   const q = useConversation(id)
+  const [profile, setProfile] = useState(false)
   if (q.isPending) return <div className="flex-1"><Loading /></div>
   if (q.isError) return <div className="flex-1"><ErrorBox onRetry={() => q.refetch()}>Không mở được hội thoại này.</ErrorBox></div>
-  return <><Center conv={q.data} /><Profile conv={q.data} /></>
+  return <><Center conv={q.data} onProfile={() => setProfile(true)} /><Profile conv={q.data} open={profile} onClose={() => setProfile(false)} /></>
 }
 
-function Welcome({ counts, name, paused }: { counts?: Record<ConvFilter, number>; name: string; paused: boolean }) {
+function Welcome({ counts, name, paused, settings }: { counts?: Record<ConvFilter, number>; name: string; paused: boolean; settings: boolean }) {
   const stat = (n: number | undefined, label: string, tone: string) => (
     <div className="flex flex-col gap-1 rounded-xl border border-line bg-surface px-5 py-4">
       <b className={clsx('text-2xl', tone)}>{n ?? '–'}</b><span className="text-[13px] text-ink-2">{label}</span>
     </div>
   )
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-6 p-8">
+    <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-6 overflow-y-auto p-8 max-md:hidden">
       <div className="text-center"><h2 className="text-xl font-bold">Chào {name}</h2>
         <p className="mt-1 max-w-md text-[13px] text-ink-2">{counts && counts.need_human + counts.waiting + counts.silent === 0
           ? 'Hiện không có khách nào đang chờ. Khi có khách nhắn hoặc AI cần bạn quyết, hội thoại sẽ hiện ở bên trái.'
           : 'Đây là tình hình hộp thư. Chọn một mục ở bên trái để bắt đầu.'}</p></div>
-      <div className="flex gap-3">{stat(counts?.need_human, 'Cần bạn quyết', 'text-bad')}{stat(counts?.waiting, 'Khách đang chờ', 'text-warn')}{stat(counts?.silent, 'Khách im, chưa ai nhắn lại', 'text-ink')}</div>
+      <div className="flex flex-wrap justify-center gap-3">{stat(counts?.need_human, 'Cần bạn quyết', 'text-bad')}{stat(counts?.waiting, 'Khách đang chờ', 'text-warn')}{stat(counts?.silent, 'Khách im, chưa ai nhắn lại', 'text-ink')}</div>
       {paused && <Notice tone="bad">AI đang tạm dừng: khách nhắn sẽ không có nháp cho tới khi bạn bật lại.</Notice>}
-      <div className="flex gap-4 text-[13px]"><Link to="/skills" className="text-accent hover:underline">Xem kỹ năng của AI</Link><Link to="/sandboxes" className="text-accent hover:underline">Xem sandbox</Link></div>
+      <div className="flex gap-4 text-[13px]"><Link to="/skills" className="text-accent hover:underline">Xem kỹ năng của AI</Link>{settings && <Link to="/settings?tab=ai" className="text-accent hover:underline">Cài đặt AI</Link>}</div>
     </div>
   )
 }
@@ -222,14 +232,15 @@ export function Inbox() {
     if (!pick.current || !list.data) return
     pick.current = false
     const first = list.data.items[0]
-    if (first) nav(`/inbox/${first.id}`, { replace: true })
+    // On a phone the list is the page: opening a customer here would hide it.
+    if (first && !window.matchMedia?.('(max-width: 767.98px)').matches) nav(`/inbox/${first.id}`, { replace: true })
   }, [list.data, nav])
   const changeTab = (f: ConvFilter) => { pick.current = true; setFilter(f) }
   return (
     <div className="flex h-full">
       <ConversationList filter={filter} setFilter={changeTab} activeId={id} onOpen={(i) => nav(`/inbox/${i}`)} />
-      {id ? <Detail id={id} /> : (
-        <Welcome counts={list.data?.counts} name={me?.name.split(' ').slice(-1)[0] ?? 'bạn'} paused={me?.ai === 'paused'} />)}
+      {id ? <Detail key={id} id={id} /> : (
+        <Welcome counts={list.data?.counts} name={me?.name.split(' ').slice(-1)[0] ?? 'bạn'} paused={me?.ai === 'paused'} settings={can(me, Perm.SETTINGS_MANAGE)} />)}
     </div>
   )
 }

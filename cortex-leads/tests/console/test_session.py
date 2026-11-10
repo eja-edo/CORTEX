@@ -18,7 +18,7 @@ async def test_login_cookie_flags_and_who_am_i(app_client, world, api_key_factor
     me = (await app_client.get("/api/v1/session")).json()
     assert (me["role"], me["staff_ref"], me["tenant"], me["ai"], me["mode"], me["email"]) == ("staff", "nv1", "Acme", "running", "manual", email)
     assert me["csrf"] == r.json()["csrf"] and me["needs_person"] == 0 and "inbox.use" in me["permissions"] and "team.manage" not in me["permissions"]
-    assert "password" not in str(me).lower().replace("must_change_password", "")
+    assert "password" not in str(me).lower()
 
 
 async def test_unsafe_calls_need_the_csrf_header_and_a_forged_cookie_is_refused(app_client, world, api_key_factory):
@@ -91,6 +91,7 @@ async def test_every_console_route_but_login_refuses_a_visitor_with_no_session(a
     checked = 0
     for path, ops in paths.items():
         public = ("/api/v1/session/login", "/api/v1/google/callback",  # the callback trusts only its signed state (test_google)
+                  "/api/v1/session/mfa",  # the code step: no session yet, only the signed cookie the password step left (test_mfa)
                   "/api/v1/auth/recovery", "/api/v1/auth/forgot", "/api/v1/auth/reset")  # for someone who cannot sign in (test_recovery)
         if not path.startswith("/api/v1") or path in public:
             continue

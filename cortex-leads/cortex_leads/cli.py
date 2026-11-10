@@ -1,18 +1,17 @@
 """Operator CLI: python -m cortex_leads.cli <command> (PLAN §4 WP5)."""
 import argparse
 import asyncio
-import csv
 import hashlib
 import logging
 import secrets
 from datetime import UTC, datetime
-from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 
 from cryptography.fernet import Fernet
-from sqlalchemy import func, select
+from sqlalchemy import select
 
+from cortex_leads.auth.roles import ApiRole, Role
 from cortex_leads.config import get_settings
 from cortex_leads.core.ids import new_connector_id, uuid7
 from cortex_leads.db import models as m
@@ -31,26 +30,108 @@ def _gateway():
 
 
 async def cmd_create_tenant(a: argparse.Namespace) -> None:
-    tid, sid = uuid7(), uuid7()
-    async with system_session() as s:
-        s.add(m.Tenant(id=tid, name=a.name, timezone=a.timezone))
-    from cortex_leads.sandbox.bringup import create_sandbox
-    from cortex_leads.sandbox.kinds import KINDS
+    from cortex_leads.admin.service import AdminError, create_tenant
 
-    async with tenant_session(tid) as s:  # a tenant is useless without its first sandbox, and a sandbox without its skills does nothing
-        await create_sandbox(s, tid, KINDS["customer_care"], name="customer_care", sandbox_id=sid)
+    try:  # the same function as the admin page: the business and every sandbox it comes with
+        tid, sid = await create_tenant(a.name, a.timezone, by="system:cli", role="system")
+    except AdminError as e:
+        raise SystemExit(e.message) from None
     print(f"tenant_id={tid}\nsandbox_id={sid}")
 
 
+def _enroll_totp(email: str) -> tuple[str, int, list[str], list[str]]:
+    """Two-step sign-in for a platform admin, set up here in the terminal (WP47): there is no moment when a password alone opens the admin
+    page. Shows the key to type into an authenticator app, asks for one code to prove it, and returns (sealed secret, step, recovery hashes,
+    recovery codes to show once)."""
+    from cortex_leads.auth import mfa
+
+    secret = mfa.new_secret()
+    print("\nMở ứng dụng xác thực (Google Authenticator, Microsoft Authenticator…) → Thêm tài khoản → Nhập khoá thiết lập:")
+    print("  Tài khoản: Cortex admin (" + email + ")")
+    print("  Khoá:      " + " ".join(secret[i:i + 4] for i in range(0, len(secret), 4)))
+    print("  (hoặc dán URI này vào trình tạo QR trên máy của bạn: " + mfa.otpauth_uri(secret, "admin:" + email) + ")")
+    for _ in range(3):
+        step = mfa.match(secret, input("Nhập mã 6 số ứng dụng đang hiện: "), datetime.now(UTC), None)
+        if step is not None:
+            codes, hashes = mfa.new_recovery_codes()
+            return mfa.seal(secret), step, hashes, codes
+        print("Mã không đúng, thử lại.")
+    raise SystemExit("Không xác nhận được mã: chưa tạo gì. Kiểm tra giờ của điện thoại rồi chạy lại.")
+
+
+def _print_codes(codes: list[str]) -> None:
+    print("\nMã dự phòng (mỗi mã dùng một lần, CHỈ HIỆN LẦN NÀY; cất ở nơi an toàn):")
+    for c in codes:
+        print("  " + c)
+
+
+async def cmd_create_admin(a: argparse.Namespace) -> None:
+    """A platform admin (WP47): signs in at /app/admin. The password is asked for, never printed; two-step sign-in is set up now."""
+    import getpass
+
+    from sqlalchemy.exc import IntegrityError
+
+    from cortex_leads.auth import passwords
+    from cortex_leads.auth.users import AccountError, normalise_email
+
+    try:
+        email = normalise_email(a.email)
+    except AccountError as e:
+        raise SystemExit(e.message) from None
+    pw = getpass.getpass("Mật khẩu của admin: ")
+    if errs := passwords.strength_errors(pw, email=email, name=a.name):
+        raise SystemExit(" ".join(errs))
+    if pw != getpass.getpass("Nhập lại: "):
+        raise SystemExit("hai mật khẩu không giống nhau")
+    sealed, step, hashes, codes = _enroll_totp(email)
+    now = datetime.now(UTC)
+    try:
+        async with system_session() as s:
+            s.add(m.PlatformAdmin(id=uuid7(), email=email, display_name=a.name.strip(), password_hash=passwords.hash_password(pw),
+                                  mfa_secret_enc=sealed, mfa_enabled_at=now, mfa_last_step=step, mfa_recovery=hashes, created_by="system:cli"))
+    except IntegrityError:
+        raise SystemExit("Email này đã là admin.") from None
+    _print_codes(codes)
+    print(f"\nadmin={email}  Đăng nhập tại <PUBLIC_BASE_URL>/app/admin")
+
+
+async def cmd_reset_admin_mfa(a: argparse.Namespace) -> None:
+    """An admin who lost their phone and their recovery codes: a new key is set up here, and every sign-in of that admin ends."""
+    from sqlalchemy import func
+
+    async with system_session() as s:
+        row = (await s.execute(select(m.PlatformAdmin).where(func.lower(m.PlatformAdmin.email) == a.email.strip().lower()))).scalar_one_or_none()
+    if row is None:
+        raise SystemExit("Không có admin với email này.")
+    sealed, step, hashes, codes = _enroll_totp(row.email)
+    async with system_session() as s:
+        r = await s.get(m.PlatformAdmin, row.id, with_for_update=True)
+        r.mfa_secret_enc, r.mfa_pending_enc, r.mfa_enabled_at, r.mfa_last_step, r.mfa_recovery = sealed, None, datetime.now(UTC), step, hashes
+        r.token_version += 1
+    _print_codes(codes)
+    print(f"\nadmin={row.email}: đã đặt khoá mới, mọi phiên quản trị cũ đã kết thúc.")
+
+
 async def cmd_create_sandbox(a: argparse.Namespace) -> None:
-    """A second sandbox for a tenant, e.g. `--purpose owner_digest` for the owner's weekly numbers. It comes up ready: its
-    domain pack loaded and the skills shipped for its kind live."""
+    """One more sandbox of a kind. A new tenant already has one of each, so without a new `--name` this answers with that one
+    instead of making a twin. It comes up ready: its domain pack loaded and the skills shipped for its kind live."""
     from cortex_leads.sandbox.bringup import create_sandbox
     from cortex_leads.sandbox.kinds import KINDS
 
+    name = a.name or a.purpose
     async with tenant_session(a.tenant) as s:
-        sb = await create_sandbox(s, a.tenant, KINDS[a.purpose], name=a.name or a.purpose, sandbox_id=uuid7())
+        sb = (await s.execute(select(m.Sandbox).where(m.Sandbox.purpose == a.purpose, m.Sandbox.name == name))).scalars().first() \
+            or await create_sandbox(s, a.tenant, KINDS[a.purpose], name=name, sandbox_id=uuid7())
     print(f"sandbox_id={sb.id}")
+
+
+async def cmd_ensure_sandboxes(a: argparse.Namespace) -> None:
+    """For a tenant made before every kind came with it. Safe to run again: it adds only what is missing."""
+    from cortex_leads.sandbox.bringup import ensure_sandboxes
+
+    async with tenant_session(a.tenant) as s:
+        made = await ensure_sandboxes(s, a.tenant)
+    print(f"created={','.join(sb.purpose for sb in made) or 'none'}")
 
 
 async def cmd_add_http_connector(a: argparse.Namespace) -> None:
@@ -143,33 +224,74 @@ async def cmd_create_api_key(a: argparse.Namespace) -> None:
 
 
 async def cmd_create_user(a: argparse.Namespace) -> None:
-    """A console account. Without --password one is generated and must be replaced at first sign-in."""
+    """A console account. With --password the account is ready (the first owner of a server with no mail). Without it the person is
+    invited: a link to choose their own password is mailed to them, and nothing is generated or printed."""
+    from cortex_leads.auth import links
     from cortex_leads.auth.users import AccountError, create_user
 
+    if a.password is None and not links.enabled():
+        raise SystemExit("Chưa cấu hình gửi thư (CL_SMTP_HOST, CL_MAIL_FROM hoặc CL_MAIL_DIR, và CL_PUBLIC_BASE_URL): hãy cho --password, hoặc cấu hình thư rồi chạy lại.")
     async with tenant_session(a.tenant) as s:
         try:
-            user, pw = await create_user(s, a.tenant, email=a.email, name=a.name, role=a.role, password=a.password, created_by="system:cli")
+            user = await create_user(s, a.tenant, email=a.email, name=a.name, role=a.role, password=a.password, created_by="system:cli")
         except AccountError as e:
             raise SystemExit(e.message) from None
-    print(f"user={user.email} role={user.role} staff_ref={user.staff_ref}" + (f"\ntemporary_password={pw}  (shown once)" if a.password is None else ""))
+        token = await links.issue(s, user, minutes=links.invite_minutes()) if a.password is None else None
+        tenant = await s.get(m.Tenant, a.tenant)
+        email, name = user.email, user.display_name
+    sent = None
+    if token is not None:
+        subject, body = links.invite_mail(name, links.url(token, invite=True), "Quản trị viên", tenant.name if tenant else "Cortex")
+        sent = await links.deliver(email, subject, body)
+    print(f"user={user.email} role={user.role} staff_ref={user.staff_ref}" + ("" if sent is None else "\ninvite=" + ("sent" if sent else "NOT SENT (mail failed; resend from the console)")))
 
 
 async def cmd_reset_password(a: argparse.Namespace) -> None:
-    """For an owner who lost their password: no email to send, so whoever runs the server resets it. Ends every sign-in."""
+    """For an owner who lost their password and cannot get mail: whoever runs the server types a new one (it is asked for, not printed
+    or generated, so it never appears in a terminal log or a shell history). Ends every sign-in."""
+    import getpass
+
     from cortex_leads.audit.service import record
-    from cortex_leads.auth.passwords import temporary_password
-    from cortex_leads.auth.users import lookup_for_login, set_password
+    from cortex_leads.auth.users import AccountError, lookup_for_login, set_password
 
     found = await lookup_for_login(a.email)
     if found is None:
         raise SystemExit("no such account")
-    temp = temporary_password()
+    pw = getpass.getpass("Mật khẩu mới: ")
+    if pw != getpass.getpass("Nhập lại: "):
+        raise SystemExit("hai mật khẩu không giống nhau")
     async with tenant_session(found.tenant_id) as s:
         user = await s.get(m.AppUser, found.id)
-        await set_password(s, user, temp, must_change=True, now=datetime.now(UTC))
+        try:
+            await set_password(s, user, pw, now=datetime.now(UTC))
+        except AccountError as e:
+            raise SystemExit(e.message) from None
         await record(s, found.tenant_id, actor="system:cli", role="system", category="auth", action="password.reset", summary=f"Đặt lại mật khẩu của {user.email} bằng dòng lệnh",
                      obj=("user", str(user.id), user.display_name))
-    print(f"temporary_password={temp}  (shown once; they must choose their own at the next sign-in)")
+    print("Đã đặt mật khẩu mới; mọi thiết bị đang đăng nhập đã bị đăng xuất.")
+
+
+async def cmd_reset_mfa(a: argparse.Namespace) -> None:
+    """For an owner who lost both phone and recovery codes (the owner turns it off for staff in the console). Signs the person out
+    everywhere; they sign in with their password and may set it up again."""
+    from cortex_leads.audit.service import record
+    from cortex_leads.auth import mfa, sessions
+    from cortex_leads.auth.users import lookup_for_login
+
+    found = await lookup_for_login(a.email)
+    if found is None:
+        raise SystemExit(f"no account with email {a.email}")
+    now = datetime.now(UTC)
+    async with tenant_session(found.tenant_id) as s:
+        u = await s.get(m.AppUser, found.id)
+        if u.mfa_enabled_at is None:
+            print(f"mfa=off email={u.email} (nothing to do)")
+            return
+        mfa.turn_off(u)
+        ended = await sessions.revoke_user(s, u.id, "mfa_reset_by_operator", now)
+        await record(s, u.tenant_id, actor="system:cli", role="system", category="auth", action="mfa.reset",
+                     summary="Người vận hành tắt xác thực 2 lớp (dòng lệnh)", obj=("user", str(u.id), u.display_name), metadata={"sessions_ended": ended})
+    print(f"mfa=off email={u.email} sessions_ended={ended}")
 
 
 async def cmd_sync_skills(a: argparse.Namespace) -> None:
@@ -356,26 +478,14 @@ async def cmd_lessons(a: argparse.Namespace) -> None:
 
 
 async def cmd_import_catalog(a: argparse.Namespace) -> None:
-    """CSV columns: code,name,category,price,unit,valid_until(ISO). A changed row becomes version+1."""
-    new = same = 0
+    """CSV columns: code,name,category,price,unit,valid_until(ISO). A changed row becomes version+1 (same rules as the console's Dữ liệu screen)."""
+    from cortex_leads.catalog.importer import import_catalog
+
     async with tenant_session(a.tenant) as s:
-        for r in csv.DictReader(Path(a.csv).read_text(encoding="utf-8-sig").splitlines()):
-            price = Decimal(r["price"]) if r.get("price") else None
-            cur = (await s.execute(select(m.CatalogItem).where(
-                m.CatalogItem.code == r["code"], m.CatalogItem.active.is_(True)))).scalars().first()
-            if cur and cur.name == r["name"] and (cur.price is None) == (price is None) \
-                    and (price is None or Decimal(cur.price) == price) and (cur.unit or "") == r.get("unit", ""):
-                same += 1
-                continue
-            version = (await s.execute(select(func.coalesce(func.max(m.CatalogItem.version), 0)).where(
-                m.CatalogItem.code == r["code"]))).scalar_one() + 1
-            if cur:
-                cur.active = False
-            vu = datetime.fromisoformat(r["valid_until"]).replace(tzinfo=UTC) if r.get("valid_until") else None
-            s.add(m.CatalogItem(tenant_id=a.tenant, code=r["code"], name=r["name"], category=r.get("category") or None,
-                                price=price, unit=r.get("unit") or None, version=version, valid_until=vu))
-            new += 1
-    print(f"new_versions={new} unchanged={same}")
+        r = await import_catalog(s, a.tenant, Path(a.csv).read_text(encoding="utf-8-sig"))
+    for e in r.errors:
+        print(e["message"])
+    print(f"new_versions={r.new + r.changed} unchanged={r.unchanged}")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -391,6 +501,9 @@ def main(argv: list[str] | None = None) -> None:
     uid = {"type": UUID, "required": True}
     add("create-tenant", cmd_create_tenant, ("--name", {"required": True}),
         ("--timezone", {"default": "Asia/Ho_Chi_Minh"}))
+    add("create-admin", cmd_create_admin, ("--email", {"required": True}), ("--name", {"required": True}))
+    add("reset-admin-mfa", cmd_reset_admin_mfa, ("--email", {"required": True}))
+    add("ensure-sandboxes", cmd_ensure_sandboxes, ("--tenant", uid))
     add("create-sandbox", cmd_create_sandbox, ("--tenant", uid), ("--purpose", {"required": True, "choices": sorted(k.purpose for k in KINDS.values() if k.profile)}),
         ("--name", {"default": None}))
     add("add-mcp-connector", cmd_add_mcp_connector, ("--tenant", uid), ("--sandbox", uid), ("--name", {"required": True}),
@@ -407,10 +520,11 @@ def main(argv: list[str] | None = None) -> None:
     add("create-connector", cmd_create_connector, ("--tenant", uid), ("--sandbox", uid),
         ("--channel-kind", {"required": True}), ("--trust", {"default": "custom"}))
     add("create-api-key", cmd_create_api_key, ("--tenant", uid),
-        ("--role", {"required": True, "choices": ["staff", "owner", "supervisor"]}),
+        ("--role", {"required": True, "choices": [r.value for r in ApiRole]}),
         ("--staff-ref", {"default": None}))
     add("create-user", cmd_create_user, ("--tenant", uid), ("--email", {"required": True}), ("--name", {"required": True}),
-        ("--role", {"required": True, "choices": ["owner", "staff"]}), ("--password", {"default": None}))
+        ("--role", {"required": True, "choices": [r.value for r in Role]}), ("--password", {"default": None}))
+    add("reset-mfa", cmd_reset_mfa, ("--email", {"required": True}))
     add("reset-password", cmd_reset_password, ("--email", {"required": True}))
     add("sync-skills", cmd_sync_skills, ("--tenant", uid), ("--sandbox", uid), ("--dir", {"default": None}))
     add("sync-domain", cmd_sync_domain, ("--tenant", uid), ("--sandbox", uid), ("--file", {"default": None}))

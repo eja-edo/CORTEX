@@ -1,8 +1,8 @@
-import { Pencil, Plus, Power, Trash2 } from 'lucide-react'
-import { useState, type FormEvent } from 'react'
+import { Pencil, Power, Trash2 } from 'lucide-react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { explain } from '../api/client'
-import { useAddClass, useDeleteClass, useDeleteLesson, useEditClass, useGoogle, useGoogleCourses, useGoogleFolders, useRelinkClass } from '../api/hooks'
+import { useDeleteClass, useDeleteLesson, useEditClass, useGoogle, useGoogleCourses, useGoogleFolders, useRelinkClass } from '../api/hooks'
 import type { ClassItem, GradingMode, RecapMode } from '../api/types'
 import { Button, Loading, Menu, Modal } from '../components/ui'
 
@@ -37,54 +37,7 @@ function ClassroomPicker({ value, onChange }: { value: Post; onChange: (p: Post)
   )
 }
 
-function AddClassForm({ onDone }: { onDone: () => void }) {
-  const g = useGoogle()
-  const add = useAddClass()
-  const [name, setName] = useState('')
-  const [account, setAccount] = useState('')
-  const [mode, setMode] = useState<'new' | 'existing'>('new')
-  const [folder, setFolder] = useState('')
-  const [hook, setHook] = useState('')
-  const [post, setPost] = useState<Post>(noPost)
-  const accounts = (g.data?.items ?? []).filter((a) => a.status === 'active' && (a.can.drive || a.can.drive_read))
-  const acct = accounts.find((a) => a.id === (account || accounts[0]?.id))
-  const sandboxes = (g.data?.sandboxes ?? []).filter((s) => s.purpose === 'lesson_recap')
-  const folders = useGoogleFolders(acct?.id ?? '', mode === 'existing' && !!acct)
-  if (g.isPending) return <Loading />
-  if (!accounts.length) return <p className="text-[13px] text-ink-2">Chưa có tài khoản Google nào cấp quyền Drive. Vào <b>Cài đặt → Kết nối Google</b>, kết nối và tick «Drive».</p>
-  if (!sandboxes.length) return <p className="text-[13px] text-ink-2">Chưa có sandbox Tổng kết buổi học để tạo lớp.</p>
-  const canNew = !!acct?.can.drive, canOld = !!acct?.can.drive_read
-  const kind = mode === 'new' && canNew ? 'new' : canOld ? 'existing' : 'new'
-  const ready = name.trim().length >= 2 && (kind === 'new' ? canNew : !!folder)
-  const submit = (e: FormEvent) => {
-    e.preventDefault()
-    add.mutate({ sandbox_id: sandboxes[0].id, account_id: acct!.id, name: name.trim(), folder: kind === 'new' ? 'new' : folder, ...(hook.trim() ? { webhook_url: hook.trim() } : {}),
-      ...(post.id ? { classroom_account_id: post.account, classroom_course_id: post.id, classroom_course_name: post.name } : {}) },
-      { onSuccess: () => { setName(''); setHook(''); setFolder(''); onDone() } })
-  }
-  return (
-    <form onSubmit={submit} className="flex flex-col gap-3">
-      <div className="flex flex-col gap-3">
-        <label className="flex flex-col gap-1.5 text-[13px] font-semibold">Tên lớp<input className={input} value={name} onChange={(e) => setName(e.target.value)} placeholder="IELTS 6.5 - sáng thứ 3" /></label>
-        <label className="flex flex-col gap-1.5 text-[13px] font-semibold">Tài khoản Google<select className={input} value={acct?.id} onChange={(e) => setAccount(e.target.value)}>{accounts.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}</select></label>
-      </div>
-      <fieldset className="flex flex-col gap-1.5 text-[13px]"><legend className="mb-1 font-semibold">Thư mục lưu bản ghi của lớp</legend>
-        <label className="flex items-center gap-2"><input type="radio" name="folder-mode" checked={kind === 'new'} disabled={!canNew} onChange={() => setMode('new')} />Tạo thư mục mới trong Drive (đặt theo tên lớp, tải lên được)</label>
-        <label className="flex items-center gap-2"><input type="radio" name="folder-mode" checked={kind === 'existing'} disabled={!canOld} onChange={() => setMode('existing')} />Dùng thư mục có sẵn (chỉ đọc, ví dụ bản ghi Google Meet)</label>
-        {kind === 'existing' && (folders.isPending ? <Loading /> : folders.isError ? <p role="alert" className="text-bad">{explain(folders.error)}</p>
-          : <select aria-label="Thư mục có sẵn" className={input} value={folder} onChange={(e) => setFolder(e.target.value)}><option value="">Chọn thư mục…</option>{folders.data.items.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</select>)}
-      </fieldset>
-      <ClassroomPicker value={post} onChange={setPost} />
-      <label className="flex flex-col gap-1.5 text-[13px] font-semibold">Webhook Mezon của lớp (tuỳ chọn)
-        <input className={input} value={hook} onChange={(e) => setHook(e.target.value)} placeholder="https://webhook.mezon.ai/..." autoComplete="off" />
-        <span className="text-xs font-normal text-ink-3">Tổng kết của lớp này chỉ gửi vào kênh này. Bỏ trống thì dùng kênh chung của sandbox. Địa chỉ này là bí mật, hệ thống chỉ hiển thị tên máy chủ.</span></label>
-      <div className="flex justify-end gap-2"><Button type="button" onClick={onDone}>Hủy</Button><Button variant="primary" type="submit" busy={add.isPending} disabled={!ready}><Plus className="size-4" aria-hidden />Tạo lớp</Button></div>
-      {add.isError && <p role="alert" className="text-[13px] text-bad">{explain(add.error)}</p>}
-    </form>
-  )
-}
-
-export const AddClassDialog = ({ onClose }: { onClose: () => void }) => <Modal title="Thêm lớp" onClose={onClose} wide><AddClassForm onDone={onClose} /></Modal>
+export { AddClassDialog } from './AddClass'
 
 /** A class whose Google account is gone (deleted or cut off): pick an account and a folder for it again. Its lessons, recaps and webhook stay. */
 export function RelinkDialog({ c, onClose }: { c: ClassItem; onClose: () => void }) {
@@ -129,7 +82,7 @@ const GRADING_MODES: Record<GradingMode, [string, string]> = {
 }
 
 /** One automation row of "Sửa lớp": the choice in words and a button that opens a short list to pick another. */
-function PolicyRow<T extends string>({ title, options, value, onChange, note, disabled }: { title: string; options: Record<T, [string, string]>; value: T; onChange: (v: T) => void; note?: string; disabled?: string }) {
+function PolicyRow<T extends string>({ title, options, choices, value, onChange, note, disabled }: { title: string; options: Record<T, [string, string]>; choices?: T[]; value: T; onChange: (v: T) => void; note?: string; disabled?: string }) {
   const [open, setOpen] = useState(false)
   return (
     <div className="flex items-center gap-3 rounded-lg border border-line px-3 py-2.5 text-[13px]">
@@ -138,7 +91,7 @@ function PolicyRow<T extends string>({ title, options, value, onChange, note, di
       {open && (
         <Modal title={title} onClose={() => setOpen(false)}>
           <div role="radiogroup" aria-label={title} className="flex flex-col gap-2">
-            {(Object.keys(options) as T[]).map((k) => (
+            {(choices ?? (Object.keys(options) as T[])).map((k) => (
               <label key={k} className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-line p-3 text-[13px] has-[:checked]:border-accent has-[:checked]:bg-accent-soft">
                 <input type="radio" name={title} checked={value === k} onChange={() => { onChange(k); setOpen(false) }} className="mt-0.5" />
                 <span><b className="block">{options[k][0]}</b><span className="text-xs text-ink-2">{options[k][1]}</span></span>
@@ -150,8 +103,9 @@ function PolicyRow<T extends string>({ title, options, value, onChange, note, di
   )
 }
 
-/** Rename a class, change where its recaps go, and say how much of its work the AI does by itself. A webhook address is a secret: it is only ever written here, and only its host is shown back. */
-function EditClassDialog({ c, onClose }: { c: ClassItem; onClose: () => void }) {
+/** Rename a class, change where its recaps go, and say how much of its work the AI does by itself. A webhook address is a secret: it is only ever written here, and only its host is shown back.
+ *  `teacher`: what a teacher may change in their own class. The server refuses the rest; this only does not offer it. */
+function EditClassDialog({ c, onClose, teacher }: { c: ClassItem; onClose: () => void; teacher?: boolean }) {
   const edit = useEditClass()
   const [name, setName] = useState(c.name)
   const [hook, setHook] = useState('')
@@ -165,18 +119,18 @@ function EditClassDialog({ c, onClose }: { c: ClassItem; onClose: () => void }) 
   return (
     <Modal title="Sửa lớp" onClose={onClose}>
       <label className="flex flex-col gap-1.5 text-[13px] font-semibold">Tên lớp<input className={input} value={name} onChange={(e) => setName(e.target.value)} /></label>
-      <ClassroomPicker value={post} onChange={setPost} />
-      <label className="flex flex-col gap-1.5 text-[13px] font-semibold">Webhook mới (tuỳ chọn)
+      {!teacher && <ClassroomPicker value={post} onChange={setPost} />}
+      {!teacher && <label className="flex flex-col gap-1.5 text-[13px] font-semibold">Webhook mới (tuỳ chọn)
         <input className={input} value={hook} onChange={(e) => setHook(e.target.value)} placeholder={c.has_webhook ? 'Dán địa chỉ mới để thay' : 'https://webhook.mezon.ai/...'} autoComplete="off" />
-        <span className="text-xs font-normal text-ink-3">{c.has_webhook ? `Đang gửi tới ${c.webhook}. Địa chỉ là bí mật nên chỉ hiện tên máy chủ.` : 'Bỏ trống thì tổng kết đi theo kênh chung của sandbox.'}</span></label>
+        <span className="text-xs font-normal text-ink-3">{c.has_webhook ? `Đang gửi tới ${c.webhook}. Địa chỉ là bí mật nên chỉ hiện tên máy chủ.` : 'Bỏ trống thì tổng kết đi theo kênh chung của sandbox.'}</span></label>}
       <fieldset className="flex flex-col gap-2"><legend className="mb-1.5 text-[13px] font-semibold">Tự động hóa của lớp</legend>
         <PolicyRow title="Tổng kết bài giảng" options={RECAP_MODES} value={recap} onChange={setRecap} disabled={c.sandbox_id ? undefined : 'Lớp này không tổng kết bài giảng'} />
-        <PolicyRow title="Chấm bài tập" options={GRADING_MODES} value={grading} onChange={setGrading} disabled={c.can_grade ? undefined : 'Chưa nối khoá học Classroom để chấm bài'}
+        <PolicyRow title="Chấm bài tập" options={GRADING_MODES} choices={teacher ? ['manual', 'review'] : undefined} value={grading} onChange={setGrading} disabled={c.can_grade ? undefined : 'Chưa nối khoá học Classroom để chấm bài'}
           note="Điểm được ghi lên Classroom. Nhận xét của AI chỉ lưu ở Cortex để giáo viên xem, học sinh không nhận được nhận xét qua Classroom." />
       </fieldset>
       {edit.isError && <p role="alert" className="text-xs text-bad">{explain(edit.error)}</p>}
       <div className="flex flex-wrap justify-end gap-2">
-        {c.has_webhook && <Button variant="danger" busy={edit.isPending} onClick={() => edit.mutate({ id: c.id, webhook_url: null }, { onSuccess: onClose })}>Bỏ webhook riêng</Button>}
+        {c.has_webhook && !teacher && <Button variant="danger" busy={edit.isPending} onClick={() => edit.mutate({ id: c.id, webhook_url: null }, { onSuccess: onClose })}>Bỏ webhook riêng</Button>}
         <Button onClick={onClose}>Hủy</Button>
         <Button variant="primary" busy={edit.isPending} disabled={name.trim().length < 2} onClick={save}>Lưu</Button>
       </div>
@@ -208,6 +162,19 @@ export function DeleteLessonDialog({ id, name, onClose, onDeleted }: { id: strin
   return <ConfirmDialog title={`Xóa «${name}»?`} busy={del.isPending} error={del.isError ? explain(del.error) : null} onClose={onClose}
     question="Tệp được chuyển vào thùng rác của thư mục Drive, bản chữ và tổng kết bị xóa khỏi Cortex."
     onConfirm={() => del.mutate(id, { onSuccess: onDeleted })} />
+}
+
+/** A teacher's way into "Sửa lớp" for a class of theirs. */
+export function TeacherClassEdit({ c, header }: { c: ClassItem; header?: boolean }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      {header
+        ? <Button onClick={() => setOpen(true)}><Pencil className="size-3.5" aria-hidden />Sửa</Button>
+        : <button type="button" aria-label="Sửa" title="Sửa lớp" onClick={() => setOpen(true)} className="grid size-8 place-items-center rounded-lg text-ink-2 hover:bg-app"><Pencil className="size-4" aria-hidden /></button>}
+      {open && <EditClassDialog c={c} teacher onClose={() => setOpen(false)} />}
+    </>
+  )
 }
 
 /** What the owner can do to a class, in one place for the list and for the class page: edit, switch off or on, delete. */

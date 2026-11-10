@@ -21,7 +21,7 @@ export function ClassroomCourses() {
       <div><h2 className="text-[15px] font-bold">Nối khoá học Classroom</h2>
         <p className="text-[13px] text-ink-2">Chọn khoá học để AI đọc bài nộp và đề xuất điểm. Tài khoản Google được kết nối ở <Link to="/settings" className="font-semibold text-accent underline">Cài đặt</Link>.</p></div>
       {!accounts.length ? <p className="text-[13px] text-ink-3">Chưa có tài khoản Google nào cấp quyền chấm bài Classroom. Kết nối ở Cài đặt rồi quay lại.</p>
-        : !sandbox ? <p className="text-[13px] text-ink-3">Chưa có sandbox Chấm bài để nối khoá học vào.</p> : (
+        : !sandbox ? <p className="text-[13px] text-ink-3">Thiếu việc «Chấm bài» của AI. Nhờ người hỗ trợ kỹ thuật thêm.</p> : (
           <>
             {accounts.length > 1 && <select aria-label="Tài khoản Google" className={input} value={account} onChange={(e) => setPicked(e.target.value)}>{accounts.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}</select>}
             {courses.isPending ? <Loading label="Đang lấy danh sách lớp…" /> : courses.isError ? <p role="alert" className="text-[13px] text-bad">{explain(courses.error)}</p>

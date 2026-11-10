@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { GoogleAccount, GoogleList } from '../api/types'
 import { OWNER, STAFF, renderApp, server } from '../test/harness'
 
-const A = (o: Partial<GoogleAccount> = {}): GoogleAccount => ({ id: 'g1', label: 'Google của cô Lan', email: 'co.lan@truong.vn', status: 'active', can: { classroom: true, classroom_post: false, drive: true, drive_read: false },
+const A = (o: Partial<GoogleAccount> = {}): GoogleAccount => ({ id: 'g1', label: 'Google của cô Lan', email: 'co.lan@truong.vn', status: 'active', can: { classroom: true, classroom_post: false, classroom_create: false, drive: true, drive_read: false },
   connected_at: new Date().toISOString(), connected_by: 'staff:owner', used_by: [], refs: [], ...o })
 const LIST = (o: Partial<GoogleList> = {}): GoogleList => ({ configured: true, items: [A()], sources: [], kinds: [],
   sandboxes: [{ id: 'sb1', title: 'Chấm bài', purpose: 'classroom_grader' }, { id: 'sb2', title: 'Tổng kết buổi học', purpose: 'lesson_recap' }], ...o })
@@ -22,7 +22,7 @@ describe('Kết nối Google', () => {
   it('says so when the server cannot sign anyone in, and does not offer the button', async () => {
     server({ 'GET /session': OWNER, 'GET /google/accounts': LIST({ configured: false, items: [] }) })
     renderApp('/settings?tab=google')
-    expect(await screen.findByText(/chưa được cấu hình để đăng nhập Google/)).toBeInTheDocument()
+    expect(await screen.findByText(/Máy chủ chưa bật đăng nhập Google/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Đăng nhập bằng Google/ })).toBeDisabled()
   })
 
@@ -32,11 +32,13 @@ describe('Kết nối Google', () => {
     const s = server({ 'GET /session': OWNER, 'GET /google/accounts': LIST({ items: [] }), 'POST /google/accounts/connect': { url: 'https://accounts.google.com/o/oauth2/v2/auth?x=1' } })
     renderApp('/settings?tab=google')
     await userEvent.type(await screen.findByLabelText('Tên gọi'), 'Thầy Minh')
+    expect(screen.getByText('Classroom và Drive, đủ cho lớp học')).toBeInTheDocument() // the usual choice, without five boxes to read
+    await userEvent.click(screen.getByText('· Tuỳ chỉnh'))
+    expect(screen.getByLabelText(/Đọc thư mục Drive có sẵn/)).not.toBeChecked() // reading all of Drive is opt-in
     await userEvent.click(screen.getByLabelText(/Drive: thư mục của lớp/))
-    await userEvent.click(screen.getByLabelText(/Đọc thư mục Drive có sẵn/))
     await userEvent.click(screen.getByRole('button', { name: /Đăng nhập bằng Google/ }))
     await waitFor(() => expect(assign).toHaveBeenCalledWith('https://accounts.google.com/o/oauth2/v2/auth?x=1'))
-    expect(s.posted('/google/accounts/connect')[0].body).toEqual({ label: 'Thầy Minh', kinds: ['classroom', 'classroom_post'] })
+    expect(s.posted('/google/accounts/connect')[0].body).toEqual({ label: 'Thầy Minh', kinds: ['classroom', 'classroom_post', 'classroom_create'] })
   })
 
   it('tells what came back from Google', async () => {
@@ -74,7 +76,7 @@ describe('Kết nối Google', () => {
     renderApp('/settings?tab=google')
     await userEvent.click(await screen.findByRole('button', { name: 'Kết nối lại' }))
     await waitFor(() => expect(assign).toHaveBeenCalledWith('https://accounts.google.com/o/oauth2/v2/auth?r=1'))
-    expect(s.posted('/google/accounts/g1/reconnect')[0].body).toEqual({ kinds: ['classroom', 'classroom_post', 'drive', 'drive_read'] })
+    expect(s.posted('/google/accounts/g1/reconnect')[0].body).toEqual({ kinds: ['classroom', 'classroom_post', 'classroom_create', 'drive', 'drive_read'] })
   })
 
   it('deletes an account in one confirmation and says what will lose its connection', async () => {

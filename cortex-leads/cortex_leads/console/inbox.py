@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from cortex_leads.auth.perms import Perm
 from cortex_leads.channels.policy import window_state
 from cortex_leads.console.auth import Session, need
 from cortex_leads.console.trail import VIEW_ONCE, audit, audit_new
@@ -68,7 +69,7 @@ async def _sets(s: AsyncSession, now: datetime) -> dict[str, list[m.Conversation
 
 
 @router.get("/conversations")
-async def conversations(filter: Filter = "need_human", sess: Session = need("inbox.use")) -> dict[str, Any]:
+async def conversations(filter: Filter = "need_human", sess: Session = need(Perm.INBOX_USE)) -> dict[str, Any]:
     now = _now()
     async with tenant_session(sess.caller.tenant_id) as s:
         sets = await _sets(s, now)
@@ -99,7 +100,7 @@ def _fact_text(value: Any) -> str:
 
 
 @router.get("/conversations/{conversation_id}")
-async def conversation(conversation_id: UUID, sess: Session = need("inbox.use")) -> dict[str, Any]:
+async def conversation(conversation_id: UUID, sess: Session = need(Perm.INBOX_USE)) -> dict[str, Any]:
     now = _now()
     async with tenant_session(sess.caller.tenant_id) as s:
         conv = await s.get(m.Conversation, conversation_id)
@@ -148,7 +149,7 @@ DRAFT_VERB = {"approved": "duyệt gửi", "sent": "đã gửi tay", "edited": "
 
 
 @router.post("/drafts/{draft_id}/action")
-async def draft_action(draft_id: UUID, body: DraftAction, sess: Session = need("inbox.use")) -> dict[str, Any]:
+async def draft_action(draft_id: UUID, body: DraftAction, sess: Session = need(Perm.INBOX_USE)) -> dict[str, Any]:
     """The same function the old queue used: 'approved' goes send_message -> outbox -> bridge (A9)."""
     out = await act_on_draft(str(draft_id), ActionBody(**body.model_dump()), sess.caller, _now())
     await audit_new(sess, "data", f"draft.{body.action}", f"Xử lý tin nháp: {DRAFT_VERB[body.action]}",
@@ -161,7 +162,7 @@ class Reply(BaseModel):
 
 
 @router.post("/conversations/{conversation_id}/reply")
-async def reply(conversation_id: UUID, body: Reply, sess: Session = need("inbox.use")) -> dict[str, Any]:
+async def reply(conversation_id: UUID, body: Reply, sess: Session = need(Perm.INBOX_USE)) -> dict[str, Any]:
     """A message a person typed in the console: a draft in their name, approved at once, so it still leaves through
     send_message -> outbox -> bridge and is bound by the channel window like everything else."""
     async with tenant_session(sess.caller.tenant_id) as s:
@@ -189,7 +190,7 @@ class Book(BaseModel):
 
 
 @router.post("/conversations/{conversation_id}/booking")
-async def book(conversation_id: UUID, body: Book, sess: Session = need("inbox.use")) -> dict[str, Any]:
+async def book(conversation_id: UUID, body: Book, sess: Session = need(Perm.INBOX_USE)) -> dict[str, Any]:
     now = _now()
     async with tenant_session(sess.caller.tenant_id) as s:
         conv = await s.get(m.Conversation, conversation_id)
@@ -210,7 +211,7 @@ async def book(conversation_id: UUID, body: Book, sess: Session = need("inbox.us
 
 
 @router.post("/bookings/{booking_id}/cancel")
-async def cancel(booking_id: UUID, sess: Session = need("inbox.use")) -> dict[str, str]:
+async def cancel(booking_id: UUID, sess: Session = need(Perm.INBOX_USE)) -> dict[str, str]:
     async with tenant_session(sess.caller.tenant_id) as s:
         if not await cancel_booking(s, booking_id, by=sess.actor, now=_now()):
             raise HTTPException(409, {"code": "NOT_CONFIRMED"})
@@ -223,7 +224,7 @@ class Outcome(BaseModel):
 
 
 @router.post("/conversations/{conversation_id}/outcome")
-async def outcome(conversation_id: UUID, body: Outcome, sess: Session = need("inbox.use")) -> dict[str, str]:
+async def outcome(conversation_id: UUID, body: Outcome, sess: Session = need(Perm.INBOX_USE)) -> dict[str, str]:
     async with tenant_session(sess.caller.tenant_id) as s:
         try:
             conv = await memory.record_outcome(s, conversation_id=conversation_id, status=body.status, source=sess.actor,
@@ -236,7 +237,7 @@ async def outcome(conversation_id: UUID, body: Outcome, sess: Session = need("in
 
 
 @router.post("/facts/{fact_id}/{verb}")
-async def fact_verb(fact_id: UUID, verb: Literal["confirm", "reject"], sess: Session = need("inbox.use")) -> dict[str, str]:
+async def fact_verb(fact_id: UUID, verb: Literal["confirm", "reject"], sess: Session = need(Perm.INBOX_USE)) -> dict[str, str]:
     fn = memory.confirm_fact if verb == "confirm" else memory.reject_fact
     async with tenant_session(sess.caller.tenant_id) as s:
         try:

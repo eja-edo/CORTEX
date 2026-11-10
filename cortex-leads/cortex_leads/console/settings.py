@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from cortex_leads.audit.service import diff
+from cortex_leads.auth.perms import Perm
 from cortex_leads.channels.policy import CHANNEL_POLICIES
 from cortex_leads.config import get_settings
 from cortex_leads.connectors.egress import EgressError, ensure_callable
@@ -78,13 +79,13 @@ async def _business(s: Any, tenant_id: UUID) -> dict[str, Any]:
 
 
 @router.get("/business")
-async def get_business(sess: Session = need("settings.manage")) -> dict[str, Any]:
+async def get_business(sess: Session = need(Perm.SETTINGS_MANAGE)) -> dict[str, Any]:
     async with tenant_session(sess.caller.tenant_id) as s:
         return await _business(s, sess.caller.tenant_id)
 
 
 @router.put("/business")
-async def put_business(body: Business, sess: Session = need("settings.manage")) -> dict[str, Any]:
+async def put_business(body: Business, sess: Session = need(Perm.SETTINGS_MANAGE)) -> dict[str, Any]:
     """The hours go to every sandbox of the business: `send_message` reads them from the sandbox it runs in, and one business has one
     set of opening hours."""
     name, tz, hours, ai_name = _check_business(body)
@@ -118,7 +119,7 @@ def _target(t: m.NotifyTarget, sandboxes: dict[UUID, str]) -> dict[str, Any]:
 
 
 @router.get("/notify-targets")
-async def list_targets(sess: Session = need("settings.manage")) -> dict[str, Any]:
+async def list_targets(sess: Session = need(Perm.SETTINGS_MANAGE)) -> dict[str, Any]:
     cfg = get_settings()
     async with tenant_session(sess.caller.tenant_id) as s:
         sandboxes = {sb.id: label_of(sb) for sb in (await s.execute(select(m.Sandbox))).scalars()}
@@ -135,7 +136,7 @@ class NewTarget(BaseModel):
 
 
 @router.post("/notify-targets", status_code=201)
-async def add_target(body: NewTarget, sess: Session = need("settings.manage")) -> dict[str, Any]:
+async def add_target(body: NewTarget, sess: Session = need(Perm.SETTINGS_MANAGE)) -> dict[str, Any]:
     address = body.address.strip()
     if body.kind == "telegram":
         if not TELEGRAM_CHAT.match(address):
@@ -158,7 +159,7 @@ async def add_target(body: NewTarget, sess: Session = need("settings.manage")) -
 
 
 @router.delete("/notify-targets/{target_id}")
-async def remove_target(target_id: UUID, sess: Session = need("settings.manage")) -> dict[str, str]:
+async def remove_target(target_id: UUID, sess: Session = need(Perm.SETTINGS_MANAGE)) -> dict[str, str]:
     """The role has no DELETE on this table; a target that is switched off receives nothing, and the audit trail still points at it."""
     async with tenant_session(sess.caller.tenant_id) as s:
         t = await s.get(m.NotifyTarget, target_id)
@@ -170,7 +171,7 @@ async def remove_target(target_id: UUID, sess: Session = need("settings.manage")
 
 
 @router.post("/notify-targets/{target_id}/test")
-async def test_target(target_id: UUID, sess: Session = need("settings.manage")) -> dict[str, Any]:
+async def test_target(target_id: UUID, sess: Session = need(Perm.SETTINGS_MANAGE)) -> dict[str, Any]:
     async with tenant_session(sess.caller.tenant_id) as s:
         t = await s.get(m.NotifyTarget, target_id)
         if t is None or not t.active:
@@ -193,7 +194,7 @@ def _ingest_url() -> str | None:
 
 
 @router.get("/channels")
-async def list_channels(sess: Session = need("settings.manage")) -> dict[str, Any]:
+async def list_channels(sess: Session = need(Perm.SETTINGS_MANAGE)) -> dict[str, Any]:
     """`connector` has no row level security (a bridge's signed batch finds its business by connector id), so the business is named here."""
     tid = sess.caller.tenant_id
     async with tenant_session(tid) as s:
@@ -212,7 +213,7 @@ class NewChannel(BaseModel):
 
 
 @router.post("/channels", status_code=201)
-async def add_channel(body: NewChannel, sess: Session = need("settings.manage")) -> dict[str, Any]:
+async def add_channel(body: NewChannel, sess: Session = need(Perm.SETTINGS_MANAGE)) -> dict[str, Any]:
     """The only moment the secret exists in clear: it goes to the bridge's configuration, and what is kept is the encrypted copy."""
     if body.kind not in CHANNEL_POLICIES:
         raise _refuse("UNKNOWN_CHANNEL", "Loại kênh này chưa được hỗ trợ.")
@@ -231,7 +232,7 @@ async def add_channel(body: NewChannel, sess: Session = need("settings.manage"))
 
 
 @router.delete("/channels/{connector_id}")
-async def remove_channel(connector_id: str, sess: Session = need("settings.manage")) -> dict[str, str]:
+async def remove_channel(connector_id: str, sess: Session = need(Perm.SETTINGS_MANAGE)) -> dict[str, str]:
     """Switches the channel off: a bridge's batches are refused from then on. Messages already received keep pointing at it."""
     tid = sess.caller.tenant_id
     async with system_session() as s:
@@ -247,7 +248,7 @@ async def remove_channel(connector_id: str, sess: Session = need("settings.manag
 
 # --- the AI tab --------------------------------------------------------------------------------------
 @router.get("/ai")
-async def ai_overview(sess: Session = need("settings.manage")) -> dict[str, Any]:
+async def ai_overview(sess: Session = need(Perm.SETTINGS_MANAGE)) -> dict[str, Any]:
     """Read only. Changing the send mode or pausing uses the endpoints that already do it; this gathers what decides how far the AI
     may go so the owner sees it in one place."""
     async with tenant_session(sess.caller.tenant_id) as s:

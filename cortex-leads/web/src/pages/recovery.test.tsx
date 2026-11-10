@@ -56,6 +56,17 @@ describe('Đặt mật khẩu mới từ liên kết', () => {
     expect(screen.getByRole('link', { name: 'Đăng nhập' })).toHaveAttribute('href', '/login')
   })
 
+  it('words an invitation as creating a password, and still sends only the token', async () => {
+    const s = server({ ...SIGNED_OUT, 'POST /auth/reset': { status: 'ok' } })
+    renderApp('/reset#token=abc123abc123abc123abc123abc123&kind=invite')
+    expect(await screen.findByRole('heading', { name: 'Tạo mật khẩu' })).toBeInTheDocument()
+    await userEvent.type(screen.getByLabelText(/^Mật khẩu mới/), 'Mat-khau-moi-7391')
+    await userEvent.type(screen.getByLabelText('Nhập lại mật khẩu mới'), 'Mat-khau-moi-7391')
+    await userEvent.click(screen.getByRole('button', { name: 'Đặt mật khẩu' }))
+    expect(await screen.findByText(/Đã tạo mật khẩu/)).toBeInTheDocument()
+    expect(s.posted('/auth/reset')[0].body).toEqual({ token: 'abc123abc123abc123abc123abc123', password: 'Mat-khau-moi-7391' })
+  })
+
   it('does not offer a form without a token', async () => {
     server(SIGNED_OUT)
     renderApp('/reset')

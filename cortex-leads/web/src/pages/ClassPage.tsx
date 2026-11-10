@@ -7,10 +7,13 @@ import { useAssignments, useClasses, useClassAssignments, useLesson, useLessons,
 import type { ClassItem, LessonItem } from '../api/types'
 import { can } from '../components/can'
 import { Time } from '../components/Time'
-import { Badge, Button, Card, Empty, ErrorBox, Label, Loading, Notice, Tabs, type Tone } from '../components/ui'
+import { Badge, Button, Card, Empty, ErrorBox, Label, Loading, Notice, SidePanel, Tabs, type Tone } from '../components/ui'
 import { AssignmentBody, Compose, Draft } from './Assignments'
+import { ManageWork } from './ManageWork'
+import { POSTING, POSTING_SHORT } from './PostingFields'
 import { ClassroomCourses } from './ClassroomCourses'
-import { ClassActions, DeleteLessonDialog, RelinkDialog } from './Classes'
+import { ClassActions, DeleteLessonDialog, RelinkDialog, TeacherClassEdit } from './Classes'
+import { Perm } from '../api/enums'
 
 const TONE: Record<LessonItem['status'], Tone> = { queued: 'neutral', working: 'accent', done: 'ok', failed: 'bad' }
 const ACCEPT = 'video/*,audio/*,.mp4,.mov,.webm,.mkv,.mp3,.m4a,.wav,.ogg'
@@ -109,7 +112,7 @@ function Content({ id, canDelete, onDeleted }: { id: string; canDelete: boolean;
   const [showText, setShowText] = useState(false)
   const [asking, setAsking] = useState(false)
   const release = useReleaseLesson()
-  const canRelease = can(useSession().data, 'lessons.release')
+  const canRelease = can(useSession().data, Perm.LESSONS_RELEASE)
   if (q.isPending) return <Loading />
   if (q.isError) return <ErrorBox onRetry={() => q.refetch()} />
   const d = q.data
@@ -187,11 +190,30 @@ function Info({ c }: { c: ClassItem }) {
       <Fact label="GOOGLE CLASSROOM" icon={<GraduationCap className={clsx('size-[15px]', c.classroom && 'text-accent')} aria-hidden />} value={c.classroom ? (c.classroom.course ?? 'Lớp Classroom') : 'Chưa nối lớp'}
         sub={c.classroom ? (c.policy.recap_mode === 'auto' ? 'Tổng kết tự đăng khi xong' : 'Tổng kết đăng sau khi giáo viên duyệt') : 'Sửa lớp để chọn lớp Classroom'} />
       <Fact label="WEBHOOK MEZON (TÙY CHỌN)" icon={<Webhook className={clsx('size-[15px]', c.has_webhook && 'text-accent')} aria-hidden />} value={c.has_webhook ? c.webhook : 'Kênh chung'}
-        sub={c.has_webhook ? 'Mezon · kênh riêng của lớp' : `Dùng kênh của sandbox ${c.sandbox}`} />
+        sub={c.has_webhook ? 'Mezon · kênh riêng của lớp' : `Dùng kênh chung của «${c.sandbox}»`} />
       <Fact label="TÀI KHOẢN GOOGLE" icon={<UserRound className="size-[15px]" aria-hidden />} value={c.account ?? 'Chưa nối tài khoản'} sub={!c.linked ? 'Mất kết nối Google' : c.owned ? 'Cortex tạo thư mục · tải lên được' : 'Thư mục có sẵn · chỉ đọc'} />
       <Fact last label="BUỔI HỌC" icon={<FileText className="size-[15px]" aria-hidden />} value={`${done} xong`} sub={done + waiting + failed === 0 ? 'Chưa có bản ghi nào' : `${waiting} đang chờ · ${failed} lỗi${c.lessons.held ? ` · ${c.lessons.held} chờ duyệt` : ''}`} />
     </Card>
   )
+}
+
+/** Where this class reads from and writes to, in one line: the full details (account, what each one does) open on request. */
+function Connections({ c }: { c: ClassItem }) {
+  const [open, setOpen] = useState(false)
+  const hook = c.has_webhook ? c.webhook : null
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[13px] text-ink-2">
+        <span className="flex items-center gap-1.5"><Folder className="size-[15px] shrink-0" aria-hidden />{c.folder_url
+          ? <a href={c.folder_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-medium text-accent hover:underline">Mở trong Drive<ExternalLink className="size-3" aria-hidden /></a>
+          : c.owned ? 'Thư mục Drive' : 'Thư mục có sẵn'}</span>
+        <span className="flex min-w-0 items-center gap-1.5"><GraduationCap className={clsx('size-[15px] shrink-0', c.classroom && 'text-accent')} aria-hidden /><span className="truncate">{c.classroom ? (c.classroom.course ?? 'Lớp Classroom') : 'Chưa nối Classroom'}</span></span>
+        <span className="flex min-w-0 items-center gap-1.5"><Webhook className={clsx('size-[15px] shrink-0', hook && 'text-accent')} aria-hidden /><span className="truncate">{hook ?? 'Kênh chung'}</span></span>
+        <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="inline-flex items-center gap-1 font-semibold text-accent hover:underline">
+          {open ? 'Ẩn chi tiết kết nối' : 'Chi tiết kết nối'}<ChevronDown className={clsx('size-4 transition-transform', open && 'rotate-180')} aria-hidden /></button>
+      </div>
+      {open && <Info c={c} />}
+    </div>)
 }
 
 function FileRow({ l, on, pick }: { l: LessonItem; on: boolean; pick: (id: string) => void }) {
@@ -215,14 +237,15 @@ function AssignmentsTab({ c }: { c: ClassItem }) {
   const drafts = useAssignments(c.id)
   const [composing, setComposing] = useState(false)
   const [picked, setPicked] = useState<string | null>(null)
-  const owner = can(useSession().data, 'sources.manage')
+  const owner = can(useSession().data, Perm.SOURCES_MANAGE)
   if (!c.can_grade) return owner ? <ClassroomCourses /> : <Notice tone="warn">Lớp này chưa nối khoá học Classroom để chấm bài. Nhờ chủ trung tâm nối ở trang này.</Notice>
   if (works.isPending || drafts.isPending) return <Loading />
   if (works.isError || drafts.isError) return <ErrorBox onRetry={() => { works.refetch(); drafts.refetch() }} />
   const draft = drafts.data.items.find((d) => d.id === picked && d.status === 'draft')
   const made = works.data.items.find((a) => a.id === picked && a.state === 'created')
+  if (composing) return <Compose sources={[{ id: c.id, label: c.name }]} onDone={() => setComposing(false)} onCancel={() => setComposing(false)} />
   return (
-    <div className="grid gap-5 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+    <div className="grid gap-5 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
       <section aria-label="Bài tập của lớp" className="flex min-w-0 flex-col gap-3">
         <div className="flex items-center justify-between gap-2"><h2 className="text-sm font-semibold">Bài tập</h2>
           <Button variant="primary" onClick={() => { setComposing(true); setPicked(null) }}><Plus className="size-4" aria-hidden />Soạn bài tập</Button></div>
@@ -230,8 +253,8 @@ function AssignmentsTab({ c }: { c: ClassItem }) {
         {works.data.items.map((a) => {
           const body = (
             <>
-              <div className="flex items-center gap-2"><b className="min-w-0 flex-1 truncate text-sm">{a.title}</b>
-                {a.state === 'draft' ? <Badge tone="warn">Bản nháp</Badge> : <Badge tone={a.ours ? 'ok' : 'neutral'}>{a.ours ? 'Cortex tạo' : 'Tạo trên Classroom'}</Badge>}</div>
+              <div className="flex items-start justify-between gap-3"><b className="min-w-0 text-sm leading-snug">{a.title}</b>
+                {a.state === 'draft' ? <Badge tone="warn">Bản nháp</Badge> : a.ours ? <Badge tone={POSTING[a.posting]?.[1] ?? 'ok'}>{POSTING_SHORT[a.posting] ?? 'Cortex tạo'}</Badge> : <Badge tone="neutral">Tạo trên Classroom</Badge>}</div>
               <p className="flex flex-wrap items-center gap-1.5 text-xs text-ink-2">
                 {a.max_points !== null && <span>{a.max_points} điểm</span>}
                 {a.counts.proposed > 0 && <Badge tone="warn">{a.counts.proposed} chờ duyệt</Badge>}
@@ -245,18 +268,20 @@ function AssignmentsTab({ c }: { c: ClassItem }) {
           return <button key={a.id} onClick={() => { setPicked(a.id); setComposing(false) }} aria-pressed={picked === a.id} className={cls}>{body}</button>
         })}
       </section>
-      <Card className="self-start p-5 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto">
-        {composing ? <Compose sources={[{ id: c.id, label: c.name }]} onDone={() => setComposing(false)} />
-          : draft ? <Draft key={draft.id} d={draft} />
+      <SidePanel label="Chi tiết bài tập" open={!!(draft || made)} onClose={() => setPicked(null)} className="rounded-xl border border-line xl:sticky xl:self-start xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto"><div className="p-5 max-xl:pt-0">
+        {draft ? <Draft key={draft.id} d={draft} />
           : made ? (
-            <div key={made.id} className="flex flex-col gap-3">
-              <div><h2 className="text-base font-bold">{made.title}</h2>
-                <div className="mt-1.5 flex flex-wrap gap-1.5"><Badge tone={made.ours ? 'ok' : 'neutral'}>{made.ours ? 'Cortex tạo' : 'Tạo trên Classroom'}</Badge>{made.due && <Badge>Hạn <Time iso={made.due} as="when" /></Badge>}</div></div>
-              <Link to={`/classes/${c.id}/assignments/${made.id}`} className="inline-flex items-center justify-center gap-2 rounded-lg bg-accent px-3 py-2 text-[13px] font-semibold text-white">Mở chi tiết bài tập<ArrowRight className="size-4" aria-hidden />{made.submissions > 0 && <span className="opacity-80">· {made.submissions} học sinh</span>}</Link>
+            <div key={made.id} className="flex flex-col gap-4">
+              <div><h2 className="text-base font-bold leading-snug">{made.title}</h2>
+                <p className="mt-1 text-xs text-ink-2">{[made.max_points !== null && `${made.max_points} điểm`, made.ours ? 'Cortex tạo' : 'Tạo trên Classroom'].filter(Boolean).join(' · ')}{made.due && <> · <span>Hạn <Time iso={made.due} as="when" /></span></>}</p></div>
+              {made.ours ? <ManageWork key={`${made.posting}-${made.scheduled}-${made.title}`} a={made} classId={c.id} />
+                : <p className="text-xs text-ink-3">Bài này tạo trực tiếp trên Classroom nên ở đây chỉ xem và chấm, không sửa hay xoá được.</p>}
+              <Link to={`/classes/${c.id}/assignments/${made.id}`} className={`inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-[13px] font-semibold ${made.posting === 'published' || !made.ours ? 'bg-accent text-white' : 'border border-line text-ink hover:bg-app'}`}>Mở chi tiết bài tập<ArrowRight className="size-4" aria-hidden />{made.submissions > 0 && <span className="opacity-80">· {made.submissions} học sinh</span>}</Link>
+              <hr className="border-line" />
               <AssignmentBody a={made} />
             </div>)
           : <Empty>Chọn một bài tập để xem đề bài, hoặc soạn bài mới.</Empty>}
-      </Card>
+      </div></SidePanel>
     </div>
   )
 }
@@ -273,48 +298,48 @@ export function ClassPage() {
   const picked = params.get('file')
   const tab: ClassTab = params.get('tab') === 'assignments' ? 'assignments' : 'lessons'
   const pick = (id: string | null) => setParams(id ? { file: id } : {}, { replace: true })
-  const owner = can(me, 'sources.manage')
-  if (classes.isPending) return <div className="p-8"><Loading /></div>
-  if (classes.isError) return <div className="p-8"><ErrorBox onRetry={() => classes.refetch()} /></div>
+  const owner = can(me, Perm.SOURCES_MANAGE)
+  if (classes.isPending) return <div className="p-4 sm:p-8"><Loading /></div>
+  if (classes.isError) return <div className="p-4 sm:p-8"><ErrorBox onRetry={() => classes.refetch()} /></div>
   const c = classes.data.items.find((x) => x.id === classId)
-  if (!c) return <div className="flex flex-col gap-4 p-8"><Link to="/classes" className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-accent"><ArrowLeft className="size-4" aria-hidden />Tất cả lớp</Link><Notice tone="warn">Không có lớp này. Có thể nó đã bị xóa.</Notice></div>
+  if (!c) return <div className="flex flex-col gap-4 p-4 sm:p-8"><Link to="/classes" className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-accent"><ArrowLeft className="size-4" aria-hidden />Tất cả lớp</Link><Notice tone="warn">Không có lớp này. Có thể nó đã bị xóa.</Notice></div>
   const ready = !!lessons.data && !lessons.isPlaceholderData  // another class's files must not show while this one loads
   const items = ready ? lessons.data!.items : []
   const shown = items.filter((l) => plain(l.name).includes(plain(term.trim())))
   const canUpload = c.can_upload && ready
   const hero = ready && items.length === 0
   return (
-    <div className="flex h-full flex-col gap-5 overflow-y-auto p-6 lg:px-10 lg:py-7 [&>*]:shrink-0">
-      <nav aria-label="Vị trí" className="flex items-center gap-2 text-[13px]">
+    <div className="flex h-full flex-col gap-5 overflow-y-auto p-4 sm:p-6 lg:px-10 lg:py-7 [&>*]:shrink-0">
+      <nav aria-label="Vị trí" className="flex min-w-0 flex-wrap items-center gap-2 text-[13px]">
         <ArrowLeft className="size-3.5 text-ink-2" aria-hidden /><Link to="/classes" className="font-medium text-ink-2 hover:text-accent">Lớp học</Link><span className="text-ink-3">/</span><b>{c.name}</b>
       </nav>
       <header className="flex flex-wrap items-center gap-3.5">
         <span className="grid size-12 shrink-0 place-items-center rounded-xl bg-accent-soft text-accent"><Folder className="size-[22px]" aria-hidden /></span>
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2.5"><h1 className="truncate text-2xl font-bold">{c.name}</h1><Badge tone={c.active ? 'ok' : 'neutral'}>{c.active ? 'Đang chạy' : 'Đã tắt'}</Badge></div>
+          <div className="flex flex-wrap items-center gap-2.5"><h1 className="min-w-0 text-xl font-bold [overflow-wrap:anywhere] sm:text-2xl">{c.name}</h1><Badge tone={c.active ? 'ok' : 'neutral'}>{c.active ? 'Đang chạy' : 'Đã tắt'}</Badge></div>
           <p className="mt-1 text-[13px] text-ink-2">Lớp này nhận bản ghi từ thư mục Drive và gửi tổng kết qua webhook bên dưới.</p>
         </div>
-        <div className="flex items-center gap-2">
-          {owner && <ClassActions c={c} header onDeleted={() => nav('/classes', { replace: true })} />}
+        <div className="flex flex-wrap items-center gap-2">
+          {owner ? <ClassActions c={c} header onDeleted={() => nav('/classes', { replace: true })} /> : can(me, Perm.CLASSES_EDIT) && <TeacherClassEdit c={c} header />}
           {canUpload && <Button variant="primary" className="py-2.5" onClick={() => document.getElementById('lesson-file')?.click()}><Upload className="size-4" aria-hidden />Tải bản ghi lên</Button>}
         </div>
       </header>
       {!c.linked && <Notice tone="bad" action={owner && <Button variant="primary" onClick={() => setRelink(true)}>Nối lại với Google</Button>}>
         Tài khoản Google của lớp {c.account ? `«${c.account}» đã bị ngắt kết nối` : 'đã bị xóa'}, nên lớp tạm dừng đọc thư mục và tải lên. Các buổi học và tổng kết vẫn được giữ.</Notice>}
       {relink && <RelinkDialog c={c} onClose={() => setRelink(false)} />}
-      <Info c={c} />
+      <Connections c={c} />
       <Tabs value={tab} onChange={(t) => setParams(t === 'assignments' ? { tab: t } : {}, { replace: true })} tabs={[
         { id: 'lessons', label: 'Bài giảng', count: c.lessons.done + c.lessons.waiting + c.lessons.failed },
         { id: 'assignments', label: 'Bài tập', count: c.can_grade ? c.grading.assignments : undefined }]} />
       {tab === 'assignments' ? <AssignmentsTab c={c} />
         : !ready && !lessons.isError ? <Loading /> : lessons.isError ? <ErrorBox onRetry={() => lessons.refetch()} /> : hero ? (
-        <Card className="flex min-h-96 items-center justify-center p-8">
+        <Card className="flex min-h-96 items-center justify-center p-4 sm:p-8">
           {canUpload ? <UploadBox hero maxMb={lessons.data!.max_mb} classId={c.id} />
             : <Notice tone="warn">{c.owned ? 'Chưa tải lên được: lớp đang tắt hoặc tài khoản Google cần kết nối lại.' : 'Thư mục có sẵn chỉ đọc: thả bản ghi vào thư mục trong Drive để nó được tổng kết.'}</Notice>}
         </Card>
       ) : (
-        <Card className="grid min-h-[34rem] overflow-hidden lg:grid-cols-[23.75rem_minmax(0,1fr)]">
-          <section aria-label="Các tệp của lớp" className="flex min-w-0 flex-col border-line max-lg:border-b lg:border-r">
+        <Card className="grid overflow-hidden xl:min-h-[34rem] xl:grid-cols-[23.75rem_minmax(0,1fr)]">
+          <section aria-label="Các tệp của lớp" className="flex min-w-0 flex-col border-line xl:border-r">
             <div className="flex flex-col gap-3 p-4">
               <div className="flex items-center justify-between gap-2"><h2 className="text-sm font-semibold">Tệp trong thư mục</h2><Badge>{items.length} tệp</Badge></div>
               <label className="relative block"><Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-ink-3" aria-hidden />
@@ -325,13 +350,13 @@ export function ClassPage() {
             {shown.length === 0 && <p className="p-6 text-center text-[13px] text-ink-3">Không có tệp nào khớp «{term}».</p>}
             <ul className="border-t border-line">{shown.map((l) => <FileRow key={l.id} l={l} on={picked === l.id} pick={pick} />)}</ul>
           </section>
-          <div className="min-w-0">
-            {picked ? <Content key={picked} id={picked} canDelete={c.owned && can(me, 'lessons.upload')} onDeleted={() => pick(null)} /> : (
+          <SidePanel label="Nội dung tệp" open={!!picked} onClose={() => pick(null)} className="min-w-0">
+            {picked ? <Content key={picked} id={picked} canDelete={c.owned && can(me, Perm.LESSONS_UPLOAD)} onDeleted={() => pick(null)} /> : (
               <div className="flex h-full min-h-72 flex-col items-center justify-center gap-2 p-8 text-center">
                 <span className="grid size-10 place-items-center rounded-full bg-accent-soft text-accent"><Sparkles className="size-5" aria-hidden /></span>
                 <p className="max-w-56 text-[13px] text-ink-3">Chọn một tệp để xem lại bản ghi và đọc tổng kết.</p>
               </div>)}
-          </div>
+          </SidePanel>
         </Card>)}
     </div>
   )
@@ -341,7 +366,7 @@ export function ClassPage() {
 export function LessonLink() {
   const { id = '' } = useParams()
   const q = useLesson(id)
-  if (q.isPending) return <div className="p-8"><Loading /></div>
-  if (q.isError) return <div className="p-8"><ErrorBox onRetry={() => q.refetch()} /></div>
+  if (q.isPending) return <div className="p-4 sm:p-8"><Loading /></div>
+  if (q.isError) return <div className="p-4 sm:p-8"><ErrorBox onRetry={() => q.refetch()} /></div>
   return <Navigate to={`/classes/${q.data.class_id}?file=${id}`} replace />
 }

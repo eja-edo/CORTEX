@@ -10,7 +10,7 @@ const input = 'rounded-lg border border-line px-3 py-2.5 text-sm font-normal'
 function Frame({ title, sub, children }: { title: string; sub: string; children: ReactNode }) {
   return (
     <div className="flex h-full items-center justify-center p-6">
-      <Card className="w-full max-w-sm p-8">
+      <Card className="w-full max-w-sm p-6 sm:p-8">
         <div className="mb-6 flex items-center gap-3">
           <span className="flex size-10 items-center justify-center rounded-lg bg-accent text-white" aria-hidden><Brain className="size-5" /></span>
           <div><h1 className="text-xl font-bold">{title}</h1><p className="text-xs text-ink-2">{sub}</p></div>
@@ -30,7 +30,7 @@ export function Forgot() {
   const off = status.isSuccess && !status.data.enabled
   return (
     <Frame title="Quên mật khẩu" sub="Chúng tôi gửi liên kết đặt lại qua email">
-      {off ? <Notice tone="warn">Chưa bật gửi thư trên máy chủ này. Hãy nhờ chủ trung tâm đặt lại mật khẩu cho bạn (Nhân viên &amp; quyền).</Notice>
+      {off ? <Notice tone="warn">Chưa bật gửi thư trên máy chủ này. Hãy liên hệ người quản trị máy chủ để đặt lại mật khẩu cho bạn.</Notice>
         : forgot.isSuccess ? <Notice tone="ok">Nếu email này có tài khoản, một thư kèm liên kết đặt lại mật khẩu đã được gửi. Liên kết dùng được một lần trong 30 phút. Kiểm tra cả thư mục spam.</Notice>
           : <form onSubmit={submit} className="flex flex-col gap-3">
             <label className="flex flex-col gap-1.5 text-[13px] font-semibold">Email đăng nhập
@@ -49,6 +49,7 @@ export function ResetPassword() {
   const loc = useLocation()
   const nav = useNavigate()
   const [token] = useState(() => new URLSearchParams(loc.hash.replace(/^#/, '')).get('token') ?? '')  // read on the first render, so there is no flash of "no link"
+  const [invite] = useState(() => new URLSearchParams(loc.hash.replace(/^#/, '')).get('kind') === 'invite')  // an invitation says "create", a reset says "new"
   const reset = useResetPassword()
   const [pw, setPw] = useState('')
   const [again, setAgain] = useState('')
@@ -56,8 +57,8 @@ export function ResetPassword() {
   const mismatch = again.length > 0 && again !== pw
   const submit = (e: FormEvent) => { e.preventDefault(); reset.mutate({ token, password: pw }) }
   return (
-    <Frame title="Đặt mật khẩu mới" sub="Chọn mật khẩu cho tài khoản của bạn">
-      {reset.isSuccess ? <><Notice tone="ok">Đã đặt mật khẩu mới. Mọi thiết bị đang đăng nhập đã bị đăng xuất.</Notice>
+    <Frame title={invite ? 'Tạo mật khẩu' : 'Đặt mật khẩu mới'} sub={invite ? 'Chào mừng! Chọn mật khẩu để vào tài khoản của bạn' : 'Chọn mật khẩu cho tài khoản của bạn'}>
+      {reset.isSuccess ? <><Notice tone="ok">{invite ? 'Đã tạo mật khẩu. Bạn đăng nhập bằng email này và mật khẩu vừa chọn.' : 'Đã đặt mật khẩu mới. Mọi thiết bị đang đăng nhập đã bị đăng xuất.'}</Notice>
         <p className="mt-4"><Link to="/login" className="text-sm font-semibold text-accent underline">Đăng nhập</Link></p></>
         : !token ? <><Notice tone="bad">Liên kết thiếu hoặc không đầy đủ. Hãy mở đúng liên kết trong thư, hoặc xin liên kết mới.</Notice>
           <p className="mt-4"><Link to="/forgot" className="text-sm font-semibold text-accent underline">Xin liên kết mới</Link></p></>

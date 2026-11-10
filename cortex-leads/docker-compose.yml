@@ -18,5 +18,17 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+  redis:
+    # One number per person, their sign-in token version (auth/versions.py). Nothing here is the truth: emptying it only makes the next requests
+    # ask Postgres. No persistence needed; never evict, so a stale number cannot outlive its expiry by being half-removed.
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "6390:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
 volumes:
   cl_pgdata:

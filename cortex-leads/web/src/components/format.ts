@@ -42,6 +42,9 @@ export function full(iso: string): string {
   return `${p2(p.d)}/${p2(p.mo)}/${p.y} ${p2(p.h)}:${p2(p.mi)}`
 }
 
+/** "dd/mm/yyyy" in the business's zone: an expiry date, where the clock time would be noise. */
+export const dateOnly = (iso: string) => full(iso).slice(0, 10)
+
 /** What a list row shows: the time today, "Hôm qua", then the date. "Today" is the business's day. */
 export function when(iso: string, now = new Date()): string {
   const days = Math.round((dayOf(parts(now)) - dayOf(parts(new Date(iso)))) / 86_400_000)

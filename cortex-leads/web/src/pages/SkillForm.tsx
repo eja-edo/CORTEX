@@ -34,7 +34,7 @@ export function SkillForm() {
   const { id } = useParams()
   const skill = useSkill(id)
   if (id && skill.isPending) return <Loading />
-  if (id && (skill.isError || !skill.data?.form || !skill.data.can.edit)) return <div className="p-8"><Notice tone="warn">Kỹ năng này không sửa được ở đây (không tạo từ form, hoặc đã bị xoá).</Notice></div>
+  if (id && (skill.isError || !skill.data?.form || !skill.data.can.edit)) return <div className="p-4 sm:p-8"><Notice tone="warn">Kỹ năng này không sửa được ở đây (không tạo từ form, hoặc đã bị xoá).</Notice></div>
   return <Editor id={id} initial={id ? skill.data!.form! : BLANK} status={skill.data?.status} sandbox={skill.data?.sandbox} />
 }
 
@@ -58,7 +58,7 @@ function Editor({ id, initial, status, sandbox }: { id?: string; initial: SkillS
 
   if (opts.isPending) return <Loading />
   if (opts.isError) return <ErrorBox onRetry={() => opts.refetch()} />
-  if (!opts.data.has_sandbox) return <div className="p-8"><Notice tone="warn">Doanh nghiệp chưa có sandbox chăm sóc khách. Hãy tạo ở mục Sandbox trước.</Notice></div>
+  if (!opts.data.has_sandbox) return <div className="p-4 sm:p-8"><Notice tone="warn">Thiếu việc «Chăm sóc khách» của AI. Nhờ người hỗ trợ kỹ thuật thêm.</Notice></div>
   const errors = preview.data?.errors ?? []
   const sum = preview.data?.summary
   const editing = !!id
@@ -66,22 +66,22 @@ function Editor({ id, initial, status, sandbox }: { id?: string; initial: SkillS
   const save = () => (editing ? edit.mutate(spec, { onSuccess: () => nav(`/skills/${id}`) }) : create.mutate(spec, { onSuccess: () => nav('/skills') }))
 
   return (
-    <div className="flex h-full flex-col gap-5 overflow-y-auto p-8">
+    <div className="flex h-full flex-col gap-5 overflow-y-auto p-4 sm:p-6 lg:p-8 [&>*]:shrink-0">
       <p className="text-[13px] text-ink-2"><Link to="/skills" className="hover:underline">Kỹ năng</Link> / {editing && <><Link to={`/skills/${id}`} className="hover:underline">{spec.slug && `tuy-chinh-${spec.slug}`}</Link> / </>}<b className="text-ink">{editing ? 'Sửa' : 'Tạo kỹ năng'}</b></p>
       <PageHeader title={editing ? `Sửa kỹ năng tuy-chinh-${spec.slug}` : 'Tạo kỹ năng từ mẫu'} />
       {editing && <Notice tone="ai"><span><b>Bạn đang sửa kỹ năng này.</b> {status === 'draft' ? 'Đang là bản nháp nên chưa ảnh hưởng khách.' : 'Lưu sẽ áp dụng ngay.'} Mỗi lần sửa được lưu lại và khôi phục được. {status === 'shadow' ? 'Kỹ năng đang chạy thử: số lượt thử tính lại từ đầu vì nội dung đã đổi. ' : ''}Tên kỹ năng không đổi được.{sandbox ? ` Chạy trong sandbox ${sandbox}.` : ''}</span></Notice>}
-      <div className="flex min-h-0 flex-1 gap-5">
-        <Card className="flex min-w-0 flex-1 flex-col gap-5 p-6">
+      <div className="flex min-h-0 flex-col gap-5 xl:flex-1 xl:flex-row">
+        <Card className="flex min-w-0 flex-1 flex-col gap-5 p-4 sm:p-6">
           <div className="flex flex-col gap-1.5"><span className="text-[13px] font-semibold">Mẫu</span>
-            <div role="radiogroup" aria-label="Mẫu" className="flex gap-3">{opts.data.templates.map((t) => (
+            <div role="radiogroup" aria-label="Mẫu" className="flex flex-col gap-3 sm:flex-row">{opts.data.templates.map((t) => (
               <button key={t.id} role="radio" aria-checked={spec.template === t.id} onClick={() => set('template', t.id)}
                 className={`flex-1 rounded-[10px] border p-3.5 text-left text-sm font-semibold ${spec.template === t.id ? 'border-2 border-accent bg-accent-soft' : 'border-line'}`}>{t.label}</button>))}</div></div>
-          <div className="flex gap-4">
+          <div className="flex flex-col gap-4 sm:flex-row">
             <Field label="Tên ngắn" hint="Chữ thường, số, gạch ngang"><input className={input} value={spec.slug} disabled={editing} onChange={(e) => set('slug', e.target.value)} placeholder="nhac-gia" /></Field>
             <Field label="Mô tả một câu"><input className={input} value={spec.description} onChange={(e) => set('description', e.target.value)} placeholder="Hỏi lại khách đã hỏi giá rồi im quá nửa ngày" /></Field>
           </div>
           {spec.template === 'khach_im' && (
-            <div className="flex gap-4">
+            <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap">
               <Field label="Hỏi lại sau khi khách im (giờ)"><input type="number" min={4} max={72} className={input} value={spec.after_hours} onChange={(e) => set('after_hours', Number(e.target.value))} /></Field>
               <Field label="Chỉ với khách có ý định"><select className={input} value={spec.intent ?? ''} onChange={(e) => set('intent', e.target.value || null)}>
                 <option value="">Mọi khách</option>{opts.data.intents.map((i) => <option key={i.id} value={i.id}>{i.label}</option>)}</select></Field>
@@ -93,7 +93,7 @@ function Editor({ id, initial, status, sandbox }: { id?: string; initial: SkillS
           <Chips label="Cụm không được nói thêm" hint="Cộng thêm vào các cụm cấm sẵn của doanh nghiệp, không thay thế." values={spec.never_say} onChange={(v) => set('never_say', v)} />
           <Chips label="Việc phải chuyển cho người thêm" hint="Cộng thêm vào: giảm giá, khiếu nại, ngoài catalog, đòi gặp người." values={spec.must_handoff} onChange={(v) => set('must_handoff', v)} />
         </Card>
-        <div className="flex w-96 shrink-0 flex-col gap-4">
+        <div className="flex shrink-0 flex-col gap-4 xl:w-96">
           <Card className="flex flex-col gap-3 p-5" >
             <h2 className="text-[15px] font-bold">Kỹ năng này sẽ làm gì</h2>
             {!sum ? <p className="text-[13px] text-ink-3">{ok ? 'Đang kiểm tra…' : 'Điền tên, mô tả và cách làm để xem.'}</p> : <>

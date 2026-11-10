@@ -6,13 +6,15 @@ from fastapi import APIRouter
 from cortex_leads.console import (
     assistant,
     audit,
+    catalog,
     classes,
     customer_data,
     google,
     grading,
     inbox,
     lessons,
-    onboarding,
+    mfa,
+    picker,
     recovery,
     sandboxes,
     session,
@@ -20,9 +22,10 @@ from cortex_leads.console import (
     skills,
     sources,
     team,
+    templates,
     tools,
 )
 
 router = APIRouter()
-for part in (session, inbox, skills, sandboxes, assistant, audit, sources, team, tools, lessons, grading, google, classes, settings, recovery, customer_data, onboarding):
+for part in (session, mfa, inbox, skills, sandboxes, assistant, audit, sources, team, tools, lessons, grading, google, classes, settings, recovery, customer_data, catalog, templates, picker):
     router.include_router(part.router)

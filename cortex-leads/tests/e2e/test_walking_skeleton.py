@@ -203,16 +203,17 @@ def test_a9_one_send_path_tool_outbox_worker():
               "/api/v1/conversations/{conversation_id}/outcome", "/api/v1/conversations/{conversation_id}/reply",
               "/api/v1/drafts/{draft_id}/action", "/api/v1/facts/{fact_id}/{verb}", "/api/v1/kill-switch", "/api/v1/proposals",
               "/api/v1/proposals/{proposal_id}/{verb}", "/api/v1/sandboxes", "/api/v1/sandboxes/{sandbox_id}/{verb}",
-              "/api/v1/session", "/api/v1/session/login", "/api/v1/session/logout", "/api/v1/skills", "/api/v1/skills/form-options",
+              "/api/v1/session", "/api/v1/session/login", "/api/v1/session/logout", "/api/v1/session/refresh", "/api/v1/skills", "/api/v1/skills/form-options",
               "/api/v1/skills/preview", "/api/v1/skills/{skill_id}", "/api/v1/skills/{skill_id}/{verb}",
               "/api/v1/sandboxes/{sandbox_id}", "/api/v1/sandboxes/{sandbox_id}/send-mode", "/api/v1/sandboxes/{sandbox_id}/tools/{tool}", "/api/v1/sandboxes/{sandbox_id}/tools/{tool}/{state}",
               "/api/v1/skills/{skill_id}/revert", "/api/v1/sources", "/api/v1/sources/mcp/describe", "/api/v1/sources/{source_id}", "/api/v1/sources/{source_id}/review",
               "/api/v1/sources/{source_id}/sandbox", "/api/v1/sources/{source_id}/{verb}", "/api/v1/tools",
               "/api/v1/session/password", "/api/v1/session/sessions", "/api/v1/session/sessions/{session_id}/revoke", "/api/v1/session/logout-all",
-              "/api/v1/team", "/api/v1/team/{user_id}", "/api/v1/team/{user_id}/reset-password", "/api/v1/team/{user_id}/end-sessions",
+              "/api/v1/team", "/api/v1/team/{user_id}", "/api/v1/team/{user_id}/send-link", "/api/v1/team/{user_id}/end-sessions",
               "/api/v1/audit", "/api/v1/audit/export", "/api/v1/audit/verify", "/api/v1/audit/{event_id}",
               "/api/v1/lessons", "/api/v1/lessons/{lesson_id}", "/api/v1/lessons/upload/session", "/api/v1/lessons/{lesson_id}/media", "/api/v1/grading", "/api/v1/grading/{item_id}", "/api/v1/grading/{item_id}/decision",
               "/api/v1/assignments", "/api/v1/assignments/ai", "/api/v1/assignments/{draft_id}/decision",
+              "/api/v1/assignments/{assignment_id}", "/api/v1/assignments/{assignment_id}/publish", "/api/v1/classes/{class_id}/classroom-options",
               "/api/v1/google/accounts", "/api/v1/google/accounts/connect", "/api/v1/google/accounts/{account_id}/revoke", "/api/v1/google/accounts/{account_id}/courses",
               "/api/v1/google/callback", "/api/v1/google/classroom-sources", "/api/v1/classes", "/api/v1/classes/{class_id}",
               "/api/v1/google/accounts/{account_id}/folders", "/api/v1/google/lesson-sources", "/api/v1/google/sources/{kind}/{source_id}/active",
@@ -221,8 +222,23 @@ def test_a9_one_send_path_tool_outbox_worker():
     # WP39-43 settings (owner only, tests/console): none of them sends to a customer; "gửi thử" goes to a staff push destination via notify/
     known |= {"/api/v1/settings/business", "/api/v1/settings/ai", "/api/v1/settings/notify-targets", "/api/v1/settings/notify-targets/{target_id}",
               "/api/v1/settings/notify-targets/{target_id}/test", "/api/v1/settings/channels", "/api/v1/settings/channels/{connector_id}",
-              "/api/v1/customers/{conversation_id}/export", "/api/v1/customers/{conversation_id}/erase", "/api/v1/onboarding",
+              "/api/v1/customers/{conversation_id}/export", "/api/v1/customers/{conversation_id}/erase",
               "/api/v1/auth/recovery", "/api/v1/auth/forgot", "/api/v1/auth/reset"}
+    # Dữ liệu (price list): reading and a CSV import into catalog_item; nothing here reaches a customer
+    known |= {"/api/v1/catalog", "/api/v1/catalog/template", "/api/v1/catalog/import"}
+    # Bài tập mẫu: kinds of class and the ready-made assignments that fill the compose form; nothing here reaches a customer
+    known |= {"/api/v1/class-kinds", "/api/v1/class-kinds/{kind_id}", "/api/v1/class-kinds/{kind_id}/templates", "/api/v1/assignment-templates/{template_id}",
+              "/api/v1/google/picker", "/api/v1/google/picker/token"}  # the Drive picker: a narrowed access token for the browser, nothing sent to a customer
+    known |= {"/api/v1/team/{user_id}/classes"}  # WP46: which classes a teacher is in charge of; nothing here reaches a customer
+    # two-step sign-in: the code step of sign-in, the person's own setup, and the owner turning it off for staff; nothing here reaches a customer
+    known |= {"/api/v1/session/mfa", "/api/v1/account/mfa", "/api/v1/account/mfa/setup", "/api/v1/account/mfa/enable", "/api/v1/account/mfa/disable",
+              "/api/v1/account/mfa/recovery-codes", "/api/v1/team/{user_id}/mfa/disable"}
+    # WP47 platform admin: businesses, their accounts, pausing the AI (which only ever stops sending); nothing here reaches a customer
+    known |= {"/api/admin/session", "/api/admin/session/login", "/api/admin/session/mfa", "/api/admin/session/logout", "/api/admin/tenants",
+              "/api/admin/tenants/{tenant_id}", "/api/admin/tenants/{tenant_id}/sandboxes/ensure", "/api/admin/tenants/{tenant_id}/ai", "/api/admin/ai",
+              "/api/admin/tenants/{tenant_id}/owners", "/api/admin/tenants/{tenant_id}/users/{user_id}/send-link",
+              "/api/admin/tenants/{tenant_id}/users/{user_id}/mfa/reset", "/api/admin/tenants/{tenant_id}/users/{user_id}/end-sessions",
+              "/api/admin/tenants/{tenant_id}/users/{user_id}"}
     assert {p for p in create_app().openapi()["paths"] if not p.startswith("/staff")} == known
 
     # Network libraries are imported only by the LLM provider, the outbound worker (customers, A9) and the

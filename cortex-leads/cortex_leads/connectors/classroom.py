@@ -14,6 +14,7 @@ import httpx
 from cortex_leads.config import get_settings
 from cortex_leads.connectors.google_auth import TokenSource
 from cortex_leads.core.errors import CortexError
+from cortex_leads.core.timefmt import wire
 
 CLASSROOM_API = "https://classroom.googleapis.com/v1"
 DRIVE_API = "https://www.googleapis.com/drive/v3"
@@ -23,6 +24,8 @@ SCOPES = ["https://www.googleapis.com/auth/classroom.courses.readonly",
           "https://www.googleapis.com/auth/drive.readonly"]  # reading what students attach: this sign-in is for GRADING only
 POST_SCOPES = ["https://www.googleapis.com/auth/classroom.courses.readonly",
                "https://www.googleapis.com/auth/classroom.announcements"]  # a lesson recap posted to a course's stream: nothing else in Classroom is touched
+COURSE_SCOPES = ["https://www.googleapis.com/auth/classroom.courses"]  # making a new course for a class: asked for on its own, so an account that only posts or grades cannot also create or change courses
+TOPIC_SCOPES = ["https://www.googleapis.com/auth/classroom.topics"]  # filing a piece of work under a topic. Asked for along with grading but never REQUIRED (not in KINDS): an account connected before it keeps working, and only topics wait for a new sign-in
 DRIVE_ONLY_SCOPES = ["https://www.googleapis.com/auth/drive.file"]  # a Drive target's sign-in: only what Cortex creates itself, nothing else in that Drive
 PAGES = 20
 EXPORTABLE = {"application/vnd.google-apps.document": "text/plain"}
@@ -55,6 +58,8 @@ class CourseWork:
     due: datetime | None
     ours: bool  # created by this app's Cloud project: the only course work whose grades we may write
     work_type: str = "ASSIGNMENT"
+    topic_id: str | None = None
+    scheduled: datetime | None = None  # a DRAFT with a time: Classroom publishes it itself then
 
 
 @dataclass(frozen=True)
@@ -83,7 +88,7 @@ def _when(s: str | None) -> datetime | None:
 
 def _work(course_id: str, w: dict[str, Any]) -> CourseWork:
     return CourseWork(w["id"], course_id, w.get("title", ""), w.get("description", ""), w.get("maxPoints"), w.get("state", "PUBLISHED"),
-                      _due(w), bool(w.get("associatedWithDeveloper")), w.get("workType", "ASSIGNMENT"))
+                      _due(w), bool(w.get("associatedWithDeveloper")), w.get("workType", "ASSIGNMENT"), w.get("topicId"), _when(w.get("scheduledTime")))
 
 
 def _submission(course_id: str, w_id: str, s: dict[str, Any]) -> Submission:
@@ -192,19 +197,93 @@ class ClassroomClient:
                     out.write(chunk)
 
     # -- writing: only code a person's approval has reached --------------------------------------------
+    async def create_course(self, name: str) -> dict[str, str]:
+        """A new course owned by the signed-in teacher ({id, name, url, state}). The state is NOT asked for in the request: Google answers a create
+        with `courseState: ACTIVE` with 403 `@CourseStateDenied` to a teacher who may create courses (a personal Gmail among them). It is created
+        provisioned, then moved to ACTIVE if Google lets this account do that; if not, the course is still made and `state` says where it stands."""
+        r = await self._call("POST", f"{self._base}/courses", json={"name": name[:750], "ownerId": "me"})
+        c = r.json()
+        if c.get("courseState", "PROVISIONED") != "ACTIVE":
+            try:
+                c = (await self._call("PATCH", f"{self._base}/courses/{c['id']}", params={"updateMask": "courseState"}, json={"courseState": "ACTIVE"})).json()
+            except ClassroomError as e:
+                if e.code != "PERMISSION_DENIED":
+                    raise
+        return {"id": str(c["id"]), "name": c.get("name", name), "url": c.get("alternateLink", ""), "state": c.get("courseState", "PROVISIONED")}
+
     async def create_coursework(self, course_id: str, *, title: str, description: str, max_points: int, due: datetime | None,
-                                published: bool, materials: list[dict[str, Any]] | None = None) -> CourseWork:
-        """`materials`: [{kind: drive, id, share} | {kind: link, url}], attached to the work as the teacher chose them."""
+                                published: bool, materials: list[dict[str, Any]] | None = None, topic_id: str | None = None,
+                                scheduled: datetime | None = None, assignees: list[str] | None = None) -> CourseWork:
+        """`materials`: [{kind: drive, id, share} | {kind: link, url} | {kind: youtube, id} | {kind: form, url}], attached as the teacher chose them.
+        `scheduled`: Classroom itself publishes it then (it is a DRAFT until that time, so `published` is ignored). `assignees`: student ids; none = the whole class."""
         body: dict[str, Any] = {"title": title, "description": description, "maxPoints": max_points, "workType": "ASSIGNMENT",
-                                "state": "PUBLISHED" if published else "DRAFT"}
+                                "state": "PUBLISHED" if published and not scheduled else "DRAFT"}
         if materials:
             body["materials"] = [material_body(x) for x in materials]
         if due:
-            due = due.astimezone(UTC)
-            body |= {"dueDate": {"year": due.year, "month": due.month, "day": due.day},
-                     "dueTime": {"hours": due.hour, "minutes": due.minute}}
+            body |= _due_body(due)
+        if topic_id:
+            body["topicId"] = topic_id
+        if scheduled:
+            body["scheduledTime"] = wire(scheduled)
+        if assignees:
+            body |= {"assigneeMode": "INDIVIDUAL_STUDENTS", "individualStudentsOptions": {"studentIds": assignees}}
         r = await self._call("POST", f"{self._base}/courses/{course_id}/courseWork", json=body)
         return _work(course_id, r.json())
+
+    async def patch_coursework(self, work: CourseWork, **changes: Any) -> CourseWork:
+        """Changes what Classroom lets be changed after a piece of work exists: title, description, max_points, due, topic_id, scheduled (a value of
+        None clears the due date, the topic or the schedule). Its attachments cannot be changed through the API, only on the Classroom page.
+        Only work this app created: Google refuses the rest, so it is refused here before asking."""
+        if not work.ours:
+            raise ClassroomError("NOT_OURS")
+        fields = {"title": "title", "description": "description", "max_points": "maxPoints", "topic_id": "topicId", "scheduled": "scheduledTime"}
+        body: dict[str, Any] = {}
+        mask: list[str] = []
+        for key, value in changes.items():
+            if key == "due":
+                mask += ["dueDate", "dueTime"]
+                body |= _due_body(value) if value else {}
+            elif key in fields:
+                mask.append(fields[key])
+                if value is not None:
+                    body[fields[key]] = wire(value) if key == "scheduled" else value
+            else:
+                raise ClassroomError("INVALID_ARGUMENT")
+        if not mask:
+            return work
+        r = await self._call("PATCH", f"{self._base}/courses/{work.course_id}/courseWork/{work.id}", params={"updateMask": ",".join(mask)}, json=body)
+        return _work(work.course_id, r.json())
+
+    async def publish_coursework(self, work: CourseWork) -> CourseWork:
+        """A draft made visible to students now. One way only: Classroom does not let published work go back to a draft."""
+        if not work.ours:
+            raise ClassroomError("NOT_OURS")
+        r = await self._call("PATCH", f"{self._base}/courses/{work.course_id}/courseWork/{work.id}", params={"updateMask": "state"},
+                             json={"state": "PUBLISHED"})
+        return _work(work.course_id, r.json())
+
+    async def delete_coursework(self, work: CourseWork) -> None:
+        """Deletes the work in Classroom, with its students' submissions. Only work this app created."""
+        if not work.ours:
+            raise ClassroomError("NOT_OURS")
+        await self._call("DELETE", f"{self._base}/courses/{work.course_id}/courseWork/{work.id}")
+
+    async def get_coursework(self, course_id: str, coursework_id: str) -> CourseWork:
+        return _work(course_id, (await self._call("GET", f"{self._base}/courses/{course_id}/courseWork/{coursework_id}")).json())
+
+    async def topics(self, course_id: str) -> list[dict[str, str]]:
+        raw = await self._pages(f"{self._base}/courses/{course_id}/topics", "topic")
+        return [{"id": str(t["topicId"]), "name": t.get("name", "")} for t in raw]
+
+    async def create_topic(self, course_id: str, name: str) -> dict[str, str]:
+        r = await self._call("POST", f"{self._base}/courses/{course_id}/topics", json={"name": name[:100]})
+        return {"id": str(r.json()["topicId"]), "name": r.json().get("name", name)}
+
+    async def students(self, course_id: str) -> list[dict[str, str]]:
+        """The class list ({id, name}), for giving a piece of work to some of the students."""
+        raw = await self._pages(f"{self._base}/courses/{course_id}/students", "students")
+        return [{"id": str(x["userId"]), "name": ((x.get("profile") or {}).get("name") or {}).get("fullName", "")} for x in raw]
 
     async def create_announcement(self, course_id: str, *, text: str, published: bool) -> str:
         """Posts to the course's stream and returns the announcement's id. A DRAFT is seen only by the course's teachers, who publish it
@@ -228,10 +307,21 @@ class ClassroomClient:
         await self._call("POST", f"{self._base}/courses/{work.course_id}/courseWork/{work.id}/studentSubmissions/{submission_id}:return", json={})
 
 
+def _due_body(due: datetime) -> dict[str, Any]:
+    due = due.astimezone(UTC)
+    return {"dueDate": {"year": due.year, "month": due.month, "day": due.day}, "dueTime": {"hours": due.hour, "minutes": due.minute}}
+
+
 def material_body(material: dict[str, Any]) -> dict[str, Any]:
-    """One stored attachment as Classroom's `Material`. A Drive file is shared with students as the teacher chose (view, edit, or a copy each)."""
-    if material["kind"] == "drive":
+    """One stored attachment as Classroom's `Material`. A Drive file is shared with students as the teacher chose (view, edit, or a copy each);
+    a YouTube video and a Google Form are shown by Classroom as such, not as a plain link."""
+    kind = material["kind"]
+    if kind == "drive":
         return {"driveFile": {"driveFile": {"id": material["id"]}, "shareMode": material.get("share", "VIEW")}}
+    if kind == "youtube":
+        return {"youtubeVideo": {"id": material["id"]}}
+    if kind == "form":
+        return {"form": {"formUrl": material["url"]}}
     return {"link": {"url": material["url"]}}
 
 

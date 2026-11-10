@@ -26,7 +26,24 @@ export const setCsrf = (token: string) => {
   csrf = token
 }
 
-export async function api<T>(method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, body?: unknown): Promise<T> {
+/** One refresh at a time: a page that fires five requests as the access token runs out asks once, and all five wait for the answer. */
+let refreshing: Promise<boolean> | null = null
+function refreshSession(): Promise<boolean> {
+  refreshing ??= fetch('/api/v1/session/refresh', { method: 'POST', credentials: 'same-origin' })
+    .then(async (res) => {
+      if (!res.ok) return false
+      const me = (await res.json().catch(() => null)) as { csrf?: string } | null
+      if (me?.csrf) setCsrf(me.csrf)  // the same sign-in, so the same token; set anyway in case the page was reloaded
+      return true
+    })
+    .catch(() => false)
+    .finally(() => { refreshing = null })
+  return refreshing
+}
+
+/** The access token is short-lived and the refresh token (an httpOnly cookie the page never sees) is long-lived. A 401 means the access token ran out:
+ *  swap it once and repeat the call. Signing in and refreshing themselves are never retried. */
+export async function api<T>(method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, body?: unknown, retried = false): Promise<T> {
   const res = await fetch(`/api/v1${path}`, {
     method,
     credentials: 'same-origin',
@@ -36,6 +53,7 @@ export async function api<T>(method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   })
+  if (res.status === 401 && !retried && path !== '/session/login' && path !== '/session/refresh' && (await refreshSession())) return api<T>(method, path, body, true)
   const data = await res.json().catch(() => null)
   if (!res.ok) throw new ApiError(res.status, data?.detail ?? null)
   return data as T
@@ -118,6 +136,14 @@ const REFUSALS: Record<string, string> = {
   NO_FORM: 'Kỹ năng này không tạo từ form nên không sửa ở đây được.',
   DELETED: 'Kỹ năng này đã bị xoá: hãy khôi phục trước.',
   NOT_DELETED: 'Kỹ năng này chưa bị xoá.',
+  BAD_SCHEDULE: 'Giờ hẹn đăng phải ở tương lai.',
+  BAD_DUE: 'Hạn nộp phải ở tương lai và sau giờ hẹn đăng.',
+  LOCKED: 'Tệp đính kèm và danh sách học sinh không đổi được sau khi đã tạo trên Classroom; hãy sửa trên Classroom.',
+  ALREADY_PUBLISHED: 'Bài đã đăng cho học sinh rồi.',
+  NOT_EDITABLE: 'Bài này không còn sửa được (đã bỏ hoặc đã xoá).',
+  NO_DRIVE: 'Lớp này chưa nối Drive của giáo viên nên chưa tải tệp lên được. Hãy chọn tệp từ Google Drive thay thế.',
+  BAD_TYPE: 'Chỉ nhận PDF, Word, PowerPoint, Excel, văn bản, ảnh, âm thanh và mp4.',
+  TOO_LARGE: 'Tệp quá lớn (tối đa 25 MB).',
 }
 export function explain(e: unknown): string {
   if (e instanceof ApiError) {

@@ -11,12 +11,14 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
+from cortex_leads.auth.perms import Perm
 from cortex_leads.config import get_settings
 from cortex_leads.connectors.drive_store import CHUNK, FOLDER_NAME, DriveError, open_uploader
 from cortex_leads.connectors.google_accounts import secret_of_account
 from cortex_leads.console.auth import Session, need
 from cortex_leads.console.classes import class_rows
 from cortex_leads.console.sandboxes import label_of
+from cortex_leads.console.scope import my_classes, need_class
 from cortex_leads.console.trail import audit
 from cortex_leads.core.timefmt import wire
 from cortex_leads.db import models as m
@@ -78,20 +80,23 @@ def _row(lesson: m.Lesson, sandbox: m.Sandbox, source: m.Class | None = None) ->
 
 
 @router.get("/lessons")
-async def list_lessons(class_id: UUID | None = None, sess: Session = need("lessons.read")) -> dict[str, Any]:
+async def list_lessons(class_id: UUID | None = None, sess: Session = need(Perm.LESSONS_READ)) -> dict[str, Any]:
     async with tenant_session(sess.caller.tenant_id) as s:
+        mine = await my_classes(s, sess)
         q = (select(m.Lesson, m.Sandbox, m.Class).join(m.Sandbox, m.Sandbox.id == m.Lesson.sandbox_id)
              .join(m.Class, m.Class.id == m.Lesson.class_id).order_by(m.Lesson.created_at.desc()).limit(LIMIT))
+        if mine is not None:
+            q = q.where(m.Lesson.class_id.in_(mine))
         found = (await s.execute(q.where(m.Lesson.class_id == class_id) if class_id else q)).all()
         sandbox_ok = (await s.execute(select(m.Sandbox.id).where(m.Sandbox.purpose == "lesson_recap", m.Sandbox.status == "active").limit(1))).first() is not None
-        classes = [c for c in await class_rows(s) if c["active"]]
+        classes = [c for c in await class_rows(s, only=mine) if c["active"]]
     return {"items": [_row(lesson, sandbox, source) for lesson, sandbox, source in found], "limit": LIMIT,
             "can_upload": sandbox_ok and any(c["can_upload"] for c in classes), "max_mb": uploads.get_settings().UPLOAD_MAX_MB,
             "classes": [{"id": c["id"], "name": c["name"], "can_upload": c["can_upload"], "lessons": c["lessons"]["done"] + c["lessons"]["failed"] + c["lessons"]["waiting"]} for c in classes]}
 
 
 @router.get("/lessons/{lesson_id}")
-async def get_lesson(lesson_id: UUID, sess: Session = need("lessons.read")) -> dict[str, Any]:
+async def get_lesson(lesson_id: UUID, sess: Session = need_class(Perm.LESSONS_READ)) -> dict[str, Any]:
     async with tenant_session(sess.caller.tenant_id) as s:
         lesson = await s.get(m.Lesson, lesson_id)
         if lesson is None:
@@ -137,7 +142,7 @@ def upload_origin(request: Request) -> str:
 
 
 @router.post("/lessons/upload/session", status_code=201)
-async def start_upload(body: NewUpload, request: Request, sess: Session = need("lessons.upload")) -> dict[str, Any]:
+async def start_upload(body: NewUpload, request: Request, sess: Session = need(Perm.LESSONS_UPLOAD)) -> dict[str, Any]:
     """Opens an upload to the teacher's Drive and hands the browser its session URL; the browser then sends the recording straight to Google,
     so it never passes through this server. The URL lets its holder write ONE new file, in the folder, under the name and with the properties
     fixed here, until it is finished or expires; nothing more, and it is given only to this signed-in person. Nothing is processed here: the
@@ -163,9 +168,10 @@ async def start_upload(body: NewUpload, request: Request, sess: Session = need("
             raise HTTPException(409, {"code": "NO_SANDBOX", "message": "Chưa có sandbox Tổng kết buổi học đang chạy"})
         if not await live_skills_for(s, sandbox.id, "lesson.recorded"):
             raise HTTPException(409, {"code": "NO_SKILL", "message": "Sandbox chưa bật kỹ năng tổng kết buổi học"})
+        mine = await my_classes(s, sess)
         classes = [c for c in (await s.execute(select(m.Class).where(
             m.Class.recap_sandbox_id == sandbox.id, m.Class.source_kind == "drive", m.Class.active.is_(True), m.Class.owned.is_(True),
-            m.Class.drive_account_id.is_not(None)))).scalars()]
+            m.Class.drive_account_id.is_not(None)))).scalars() if mine is None or c.id in mine]
         chosen = next((c for c in classes if c.id == body.class_id), None) if body.class_id is not None else (classes[0] if len(classes) == 1 else None)
         if chosen is None:
             raise HTTPException(409 if not classes else 422, {"code": "NO_CLASS" if not classes else "BAD_CLASS",
@@ -206,7 +212,7 @@ DRIVE_REFUSALS = {"UNAUTHENTICATED": (502, "Phiên Google để xem bản ghi đ
 
 
 @router.get("/lessons/{lesson_id}/media", response_model=None)
-async def lesson_media(lesson_id: UUID, request: Request, sess: Session = need("lessons.read")) -> StreamingResponse:
+async def lesson_media(lesson_id: UUID, request: Request, sess: Session = need_class(Perm.LESSONS_READ)) -> StreamingResponse:
     """The recording, for the player (Range works, so it can seek), private to this business's signed-in people. It is streamed THROUGH Cortex
     from the Drive folder it sits in (the folder's service account) and is not kept: nothing here stores the recording."""
     async with tenant_session(sess.caller.tenant_id) as s:
@@ -223,7 +229,7 @@ async def lesson_media(lesson_id: UUID, request: Request, sess: Session = need("
 
 
 @router.delete("/lessons/{lesson_id}")
-async def delete_lesson(lesson_id: UUID, sess: Session = need("lessons.upload")) -> dict[str, Any]:
+async def delete_lesson(lesson_id: UUID, sess: Session = need_class(Perm.LESSONS_UPLOAD)) -> dict[str, Any]:
     """Removes a recording: it goes to the bin of the class's Drive folder and its transcript and recap are dropped here. Only in a folder Cortex made:
     in a folder the teacher already had, the file would be found again and summarised again, so that one is deleted in Drive."""
     async with tenant_session(sess.caller.tenant_id) as s:
@@ -247,7 +253,7 @@ async def delete_lesson(lesson_id: UUID, sess: Session = need("lessons.upload"))
 
 
 @router.post("/lessons/{lesson_id}/release")
-async def release_lesson(lesson_id: UUID, sess: Session = need("lessons.release")) -> dict[str, Any]:
+async def release_lesson(lesson_id: UUID, sess: Session = need_class(Perm.LESSONS_RELEASE)) -> dict[str, Any]:
     """A teacher has read the recap and lets it go out: to the class's Mezon channel now, and to its Classroom course on the next pass. Only for a
     recap that waits (a class set to `review`); once released it cannot be taken back, because it has been sent."""
     tid = sess.caller.tenant_id

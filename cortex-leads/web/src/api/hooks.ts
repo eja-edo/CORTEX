@@ -2,12 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ApiError, api, get, post, put, setCsrf, uploadToDrive } from './client'
 import { setTimezone } from '../components/format'
 import { keepPreviousData } from '@tanstack/react-query'
-import type {
-  AssignmentList, GradeDecision, GradeDetail, GradeList, LessonDetail, LessonList, NewAssignment, Member, MySession, McpTool, NewSource, SandboxDetail, SourceDetail, SourceList, ToolInSandbox, ToolList,
-  AuditDetail, AuditList, AuditQuery, AuditVerify, ChatReply, ChatTurn, ConvFilter, ConvList, Conversation, FormOptions, Me, Proposal, SandboxList, SkillDetail, SkillList,
-  SkillPreview, SkillSpec, ClassItem, ClassAssignments, GoogleCourse, GoogleFolder, GoogleList, GradingMode, RecapMode,
-  AiOverview, BusinessSettings, Channels, EraseResult, NewChannelResult, NotifyTargets, Onboarding,
-} from './types'
+import type { AiOverview, AssignmentEdit, AssignmentList, AssignmentTemplate, AssignmentTemplateIn, AuditDetail, AuditList, AuditQuery, AuditVerify, BusinessSettings, CatalogImport, CatalogList, Channels, ChatReply, ChatTurn, ClassAssignments, ClassItem, ClassKind, ClassroomOptions, Conversation, ConvFilter, ConvList, EraseResult, FormOptions, GoogleCourse, GoogleFolder, GoogleList, GradeDecision, GradeDetail, GradeList, GradingMode, LessonDetail, LessonList, LoginResult, McpTool, Me, Member, MfaSetup, MfaStatus, MfaWithCodes, MySession, NewAssignment, NewChannelResult, NewClassResult, NewSource, NotifyTargets, PickerInfo, PickerToken, Proposal, RecapMode, Role, SandboxDetail, SandboxList, SkillDetail, SkillList, SkillPreview, SkillSpec, SourceDetail, SourceList, ToolInSandbox, ToolList } from './types'
 
 /** null = not signed in (a 401 is an answer here, not an error). */
 export function useSession() {
@@ -29,15 +24,45 @@ export function useSession() {
   })
 }
 
+function signedIn(qc: ReturnType<typeof useQueryClient>, me: Me) {
+  setCsrf(me.csrf)
+  setTimezone(me.timezone)
+  qc.setQueryData(['session'], me)
+}
+
+/** The password step. With two-step sign-in on, the answer is `{ mfa_required: true }` and nobody is signed in until `useLoginCode`. */
 export function useLogin() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (b: { email: string; password: string }) => post<Me>('/session/login', b),
-    onSuccess: (me) => {
-      setCsrf(me.csrf)
-      setTimezone(me.timezone)
-      qc.setQueryData(['session'], me)
-    },
+    mutationFn: (b: { email: string; password: string }) => post<LoginResult>('/session/login', b),
+    onSuccess: (r) => { if ('csrf' in r) signedIn(qc, r) },
+  })
+}
+
+/** The code step: a 6-digit code from the app, or one recovery code. */
+export function useLoginCode() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (code: string) => post<Me & { recovery_left?: number }>('/session/mfa', { code }),
+    onSuccess: (me) => signedIn(qc, me),
+  })
+}
+
+export const useMfaStatus = () => useQuery({ queryKey: ['mfa'], queryFn: () => get<MfaStatus>('/account/mfa') })
+function useMfaChange<A, R>(fn: (a: A) => Promise<R>) {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: fn, onSuccess: () => qc.invalidateQueries({ queryKey: ['mfa'] }) })
+}
+export const useMfaSetup = () => useMutation({ mutationFn: (password: string) => post<MfaSetup>('/account/mfa/setup', { password }) })
+export const useMfaEnable = () => useMfaChange((code: string) => post<MfaWithCodes>('/account/mfa/enable', { code }))
+export const useMfaDisable = () => useMfaChange((b: { password: string; code: string }) => post<MfaStatus>('/account/mfa/disable', b))
+export const useMfaNewCodes = () => useMfaChange((b: { password: string; code: string }) => post<MfaWithCodes>('/account/mfa/recovery-codes', b))
+/** The owner, for a staff member or teacher who lost their phone. */
+export function useTeamMfaOff() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (b: { id: string; password: string }) => post<{ mfa: false; sessions_ended: number }>(`/team/${b.id}/mfa/disable`, { password: b.password }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['team'] }),
   })
 }
 
@@ -216,9 +241,10 @@ function useTeamChange<V, R>(run: (v: V) => Promise<R>) {
   const qc = useQueryClient()
   return useMutation({ mutationFn: run, onSuccess: () => qc.invalidateQueries({ queryKey: ['team'] }) })
 }
-export const useAddMember = () => useTeamChange((b: { email: string; name: string; role: 'owner' | 'staff' }) => post<{ id: string; email: string; temporary_password: string }>('/team', b))
-export const useUpdateMember = () => useTeamChange(({ id, ...b }: { id: string; role?: 'owner' | 'staff'; status?: 'active' | 'disabled'; name?: string }) => api<Member>('PATCH', `/team/${id}`, b))
-export const useResetMember = () => useTeamChange((id: string) => post<{ temporary_password: string; email: string }>(`/team/${id}/reset-password`))
+export const useAddMember = () => useTeamChange((b: { email: string; name: string; role: Role }) => post<{ id: string; email: string; staff_ref: string; mail_sent: boolean; kind: 'invite' | 'reset' }>('/team', b))
+export const useUpdateMember = () => useTeamChange(({ id, ...b }: { id: string; role?: Role; status?: 'active' | 'disabled'; name?: string; email?: string; phone?: string; birth_date?: string | null; national_id?: string }) => api<Member & { mail_sent?: boolean }>('PATCH', `/team/${id}`, b))
+export const useSetTeacherClasses = () => useTeamChange(({ id, class_ids }: { id: string; class_ids: string[] }) => api<Member>('PUT', `/team/${id}/classes`, { class_ids }))
+export const useSendMemberLink = () => useTeamChange((id: string) => post<{ id: string; email: string; mail_sent: boolean; kind: 'invite' | 'reset' }>(`/team/${id}/send-link`))
 export const useEndMemberSessions = () => useTeamChange((id: string) => post<{ ended: number }>(`/team/${id}/end-sessions`))
 
 export function useSendMode(sandbox: string) {
@@ -272,8 +298,14 @@ function useAssignmentChange<V, R = unknown>(run: (v: V) => Promise<R>) {
 export const useCreateAssignment = () => useAssignmentChange((b: NewAssignment) => post('/assignments', b))
 export const useAiAssignment = () => useAssignmentChange((b: { class_id: string; topic: string; level: string; minutes: number }) => post('/assignments/ai', b))
 export const useAssignmentDecision = () =>
-  useAssignmentChange((b: { id: string; action: 'approve' | 'reject'; publish?: boolean; due?: string | null }) => post(`/assignments/${b.id}/decision`, { action: b.action, publish: b.publish ?? false, due: b.due ?? null }))
-
+  useAssignmentChange((b: { id: string; action: 'approve' | 'reject'; publish?: boolean; due?: string | null; scheduled?: string | null }) =>
+    post(`/assignments/${b.id}/decision`, { action: b.action, publish: b.publish ?? false, due: b.due ?? null, scheduled: b.scheduled ?? null }))
+export const useEditAssignment = () => useAssignmentChange(({ id, ...b }: { id: string } & AssignmentEdit) => api('PATCH', `/assignments/${id}`, b))
+export const usePublishAssignment = () => useAssignmentChange((id: string) => post(`/assignments/${id}/publish`))
+export const useDeleteAssignment = () => useAssignmentChange((id: string) => api('DELETE', `/assignments/${id}`))
+/** The course's topics and students, to choose from when posting. */
+export const useClassroomOptions = (classId: string, enabled = true) =>
+  useQuery({ queryKey: ['classroom-options', classId], enabled, retry: false, queryFn: () => get<ClassroomOptions>(`/classes/${classId}/classroom-options`) })
 export function useUploadLesson() {
   const qc = useQueryClient()
   return useMutation({
@@ -292,7 +324,7 @@ function useClassChange<V, R>(run: (v: V) => Promise<R>) {
   const qc = useQueryClient()
   return useMutation({ mutationFn: run, onSuccess: () => { qc.invalidateQueries({ queryKey: ['classes'] }); qc.invalidateQueries({ queryKey: ['lessons'] }); qc.invalidateQueries({ queryKey: ['google'] }); qc.invalidateQueries({ queryKey: ['class-assignments'] }); qc.invalidateQueries({ queryKey: ['grading'] }) } })
 }
-export const useAddClass = () => useClassChange((b: { sandbox_id: string; account_id: string; name: string; folder: string; webhook_url?: string; classroom_account_id?: string; classroom_course_id?: string; classroom_course_name?: string; recap_mode?: RecapMode }) => post('/classes', b))
+export const useAddClass = () => useClassChange((b: { sandbox_id: string; account_id: string; name: string; folder: string; webhook_url?: string; classroom_account_id?: string; classroom_course_id?: string; classroom_course_name?: string; recap_mode?: RecapMode; classroom_new?: boolean; grade_sandbox_id?: string }) => post<NewClassResult>('/classes', b))
 export const useEditClass = () => useClassChange(({ id, ...b }: { id: string; name?: string; webhook_url?: string | null; active?: boolean; classroom_account_id?: string; classroom_course_id?: string; classroom_course_name?: string; recap_mode?: RecapMode; grading_mode?: GradingMode }) => api<ClassItem>('PATCH', `/classes/${id}`, b))
 export const useRelinkClass = () => useClassChange((b: { id: string; account_id: string; folder: string }) => api<ClassItem>('POST', `/classes/${b.id}/relink`, { account_id: b.account_id, folder: b.folder }))
 export const useDeleteClass = () => useClassChange((id: string) => api<{ deleted: string }>('DELETE', `/classes/${id}`))
@@ -345,7 +377,6 @@ function useChannelChange<V, R>(run: (v: V) => Promise<R>) {
     mutationFn: run,
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['settings', 'channels'] })
-      qc.invalidateQueries({ queryKey: ['onboarding'] })
       qc.invalidateQueries({ queryKey: ['sandboxes'] })
     },
   })
@@ -354,8 +385,39 @@ export const useAddChannel = () => useChannelChange((b: { kind: string; sandbox_
 export const useRemoveChannel = () => useChannelChange((id: string) => api('DELETE', `/settings/channels/${id}`))
 export const useAiOverview = () => useQuery({ queryKey: ['settings', 'ai'], queryFn: () => get<AiOverview>('/settings/ai') })
 
-export const useOnboarding = () => useQuery({ queryKey: ['onboarding'], queryFn: () => get<Onboarding>('/onboarding') })
 export const useRecovery = () => useQuery({ queryKey: ['recovery'], queryFn: () => get<{ enabled: boolean }>('/auth/recovery'), retry: false })
 export const useForgot = () => useMutation({ mutationFn: (email: string) => post('/auth/forgot', { email }) })
 export const useResetPassword = () => useMutation({ mutationFn: (b: { token: string; password: string }) => post('/auth/reset', b) })
 export const useEraseCustomer = () => useMutation({ mutationFn: (conversationId: string) => post<EraseResult>(`/customers/${conversationId}/erase`, { confirm: true }), onSuccess: () => undefined })
+
+export const useCatalog = () => useQuery({ queryKey: ['catalog'], queryFn: () => get<CatalogList>('/catalog') })
+export const getCatalogTemplate = () => get<{ filename: string; csv: string }>('/catalog/template')
+/** `dry_run` only reports; the second call (dry_run false) saves, and then the list is read again. */
+export function useImportCatalog() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (b: { csv: string; dry_run: boolean }) => post<CatalogImport>('/catalog/import', b),
+    onSuccess: (r) => { if (!r.dry_run) { void qc.invalidateQueries({ queryKey: ['catalog'] }) } },
+  })
+}
+
+/** Class kinds and the assignment templates of each (bài tập mẫu). */
+export const useClassKinds = () => useQuery({ queryKey: ['class-kinds'], queryFn: () => get<{ items: ClassKind[] }>('/class-kinds') })
+function useKindChange<V, R>(run: (v: V) => Promise<R>) {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: run, onSettled: () => { for (const k of ['class-kinds', 'kind-templates']) qc.invalidateQueries({ queryKey: [k] }) } })
+}
+export const useCreateKind = () => useKindChange((name: string) => post<ClassKind>('/class-kinds', { name }))
+export const useRenameKind = () => useKindChange((b: { id: string; name: string }) => api('PATCH', `/class-kinds/${b.id}`, { name: b.name }))
+export const useDeleteKind = () => useKindChange((id: string) => api('DELETE', `/class-kinds/${id}`))
+export const useKindTemplates = (kindId: string) =>
+  useQuery({ queryKey: ['kind-templates', kindId], enabled: Boolean(kindId), queryFn: () => get<{ kind: { id: string; name: string }; items: AssignmentTemplate[] }>(`/class-kinds/${kindId}/templates`) })
+export const useSaveTemplate = () =>
+  useKindChange((b: { kindId: string; id?: string; body: AssignmentTemplateIn }) => (b.id ? api<AssignmentTemplate>('PUT', `/assignment-templates/${b.id}`, b.body) : post<AssignmentTemplate>(`/class-kinds/${b.kindId}/templates`, b.body)))
+export const useDeleteTemplate = () => useKindChange((id: string) => api('DELETE', `/assignment-templates/${id}`))
+
+/** Google's own file dialog for attachments (the Drive picker). `classId` picks the class's own account to start with. */
+export const usePickerInfo = (classId?: string) =>
+  useQuery({ queryKey: ['picker', classId ?? ''], retry: false, queryFn: () => get<PickerInfo>(`/google/picker${classId ? `?class_id=${classId}` : ''}`) })
+/** Asked each time the dialog opens: the token lives about an hour and is never kept. */
+export const usePickerToken = () => useMutation({ mutationFn: ({ accountId, classId }: { accountId: string; classId?: string }) => post<PickerToken>('/google/picker/token', { account_id: accountId, class_id: classId }) })

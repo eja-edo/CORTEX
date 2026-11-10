@@ -4,12 +4,12 @@ AI đứng sau nhân viên tư vấn: không để rơi khách tiềm năng. Xem
 
 ```bash
 make setup     # venv + deps
-make db-up     # Postgres 16 :5544 (roles cl_owner / cl_app / cl_supervisor)
+make db-up     # Postgres 16 :5544 (roles cl_owner / cl_app / cl_supervisor) và Redis 7 :6390
 make migrate   # alembic upgrade head (owner URL)
 make test      # pytest (app role, RLS có hiệu lực)
 ```
 
-Cấu hình: biến `CL_*` (xem `.env.test`). Thiếu secret hoặc dùng secret đã lộ -> lỗi khi khởi động.
+Cấu hình: biến `CL_*` (xem `.env.test`). Đăng nhập console dùng access token JWT 15 phút cộng refresh token 7 ngày (`CL_ACCESS_TOKEN_MINUTES`, `CL_REFRESH_TOKEN_DAYS`, `CL_SESSION_ABSOLUTE_HOURS`); muốn thu hồi tức thì khi chạy **nhiều tiến trình** phải đặt `CL_REDIS_URL` (ví dụ `redis://localhost:6390/0`). Không đặt thì mỗi tiến trình tự nhớ trong bộ nhớ, chỉ hợp cho một tiến trình (phát triển, test). Redis chỉ giữ `user id → version` và chỉ là bộ đệm của DB, mất nó không làm mất việc đăng xuất. `CL_JWT_SECRET` để đổi khoá ký (không đặt thì suy ra từ `CL_CONNECTOR_SECRET_KEY`; đổi nó đăng xuất mọi người). Thiếu secret hoặc dùng secret đã lộ -> lỗi khi khởi động.
 
 Quên mật khẩu qua email (tuỳ chọn, mặc định tắt): đặt `CL_PUBLIC_BASE_URL` (địa chỉ công khai của console) và một trong hai: `CL_SMTP_HOST` + `CL_MAIL_FROM` (kèm `CL_SMTP_PORT`, `CL_SMTP_USER`, `CL_SMTP_PASSWORD`, `CL_SMTP_STARTTLS`), hoặc `CL_MAIL_DIR` (phát triển: mỗi thư là một tệp trong thư mục đó, mở tệp lấy liên kết). `python -m dev.local setup` tự đặt `CL_MAIL_DIR=data/mail`. Hồ sơ doanh nghiệp, kênh, nơi nhận thông báo và chế độ gửi chỉnh trong console, mục **Cài đặt**; việc đầu tiên cần làm nằm ở **Bắt đầu**.
 
@@ -57,6 +57,7 @@ asyncio.run(main())
 PYEOF
 
 # 4. Catalog (CSV: code,name,category,price,unit,valid_until). Giá trong nháp chỉ lấy từ đây.
+#    Trong giao diện: mục «Dữ liệu» (tải tệp mẫu, kiểm tra trước, rồi lưu). Lệnh dưới dùng cùng luật nhập:
 $PY -m cortex_leads.cli import-catalog data/catalog.csv --tenant $TENANT
 
 # 5. API (ingest + duyệt nháp + supervisor)
@@ -102,7 +103,7 @@ Mỗi slot là một dòng catalog `category=lich_hoc_thu`: `valid_until` = gi�
 `worker` chạy `cron` mỗi lượt: 07:45 mỗi ngày danh sách khách chưa được trả lời (hiện ở đầu `/staff`, nút "Xong"), thứ Hai 08:00 báo cáo tuần (cần sandbox `owner_digest`):
 
 ```bash
-python -m cortex_leads.cli create-sandbox --tenant <T> --purpose owner_digest
+python -m cortex_leads.cli ensure-sandboxes --tenant <T>   # doanh nghiệp tạo trước 2026-11-07; doanh nghiệp mới đã có sẵn mọi sandbox
 python -m cortex_leads.cli cron          # chạy tay một lượt
 ```
 Báo cáo xem ở `/staff/digest` bằng API key role `owner`. Chỉ có số, không có chữ của khách.
@@ -151,7 +152,7 @@ Tool `external_lookup` đọc nguồn này cho các lượt chạy nội bộ; l
 Thả bản ghi buổi học vào một thư mục (Drive hoặc thư mục máy); Cortex chuyển thành chữ, viết tổng kết + bài tập về nhà, và đăng vào kênh Mezon của đội. Cần `ffmpeg`; chuyển chữ tại chỗ cần `pip install faster-whisper` (hoặc `CL_TRANSCRIBER=api` + `CL_WHISPER_API_KEY`, nhưng khi đó âm thanh rời máy: xem R117).
 
 ```bash
-.venv/bin/python -m cortex_leads.cli create-sandbox --tenant $T --purpose lesson_recap
+.venv/bin/python -m cortex_leads.cli create-sandbox --tenant $T --purpose lesson_recap   # đã có sẵn từ create-tenant: lệnh chỉ in sandbox_id
 .venv/bin/python -m cortex_leads.cli add-lesson-source --tenant $T --sandbox $S --ref ~/bai-ghi   # thư mục trên máy, để thử; thư mục Drive nối ở console (Cài đặt → Kết nối Google)
 .venv/bin/python -m cortex_leads.cli add-notify-target --tenant $T --kind mezon --chat-id https://<webhook của kênh>
 .venv/bin/python -m cortex_leads.cli lessons           # vòng lặp riêng, --once để chạy một lượt
@@ -171,7 +172,7 @@ Thử không cần tài khoản Google (Classroom giả có sẵn 3 học sinh, 
 ```bash
 .venv/bin/python -m dev.local.fake_classroom 8302 &
 export CL_CLASSROOM_API_BASE=http://127.0.0.1:8302/v1 CL_GOOGLE_TOKEN_URL=http://127.0.0.1:8302/token
-.venv/bin/python -m cortex_leads.cli create-sandbox --tenant $T --purpose classroom_grader
+.venv/bin/python -m cortex_leads.cli create-sandbox --tenant $T --purpose classroom_grader   # đã có sẵn, như trên
 # nối lớp: console, Cài đặt → Kết nối Google (không còn lệnh dòng lệnh)
 .venv/bin/python -m cortex_leads.cli import-grading-guide --tenant $T --source $SRC --coursework-id w1 --file guide.yaml
 .venv/bin/python -m cortex_leads.cli classroom --once     # chấm; vòng lặp: bỏ --once
@@ -220,6 +221,22 @@ Máy chủ MCP chỉ có 4 công cụ đọc (`list_dropped_leads`, `read_conver
 
 Sau `pip install -e .` các lệnh `python -m bridges.pancake.run` và `python -m cortex_leads.*` chạy được từ mọi thư mục (nhưng `data/` là đường dẫn tương đối theo cwd).
 
+## Chọn tệp đính kèm từ Google Drive (WP45)
+
+Nút **Chọn từ Google Drive** trong form soạn bài và form bài tập mẫu mở hộp thoại chọn tệp của Google (Google Picker) trên Drive của tài khoản Google đã nối. Máy chủ chỉ đưa cho trình duyệt một access token ngắn hạn thu hẹp còn `drive.file` (refresh token không rời máy chủ), nên cần bật một lần:
+
+1. Google Cloud → dự án của `CL_GOOGLE_OAUTH_CLIENT_ID` → **APIs & Services → Library** → bật **Google Picker API**.
+2. **Credentials → Create credentials → API key**; **Application restrictions: Websites** và thêm địa chỉ trang (vd. `https://cortex.example.vn/*`; khi chạy thử `http://localhost:5173/*`); **API restrictions: Google Picker API**.
+3. Lấy **Project number** (Dashboard → Project info; số, không phải project id).
+4. Đặt biến môi trường rồi chạy lại máy chủ:
+
+```bash
+export CL_GOOGLE_PICKER_API_KEY=<API key của bước 2>
+export CL_GOOGLE_PROJECT_NUMBER=<project number của bước 3>
+```
+
+Địa chỉ trang cũng phải nằm trong **Authorized JavaScript origins** của OAuth client. Tài khoản Google đã nối từ trước phải có quyền Drive (`drive.file`); chưa có thì form báo và chủ trung tâm kết nối lại ở Cài đặt → Kết nối Google. Đây là cách duy nhất để đính kèm tệp vào bài tập hay bài tập mẫu (đã bỏ "Tải tệp từ máy" và "Dán địa chỉ" ở giao diện). Chưa đặt hai biến: nút tắt kèm lời giải thích và chưa đính kèm được tệp nào. Chưa kiểm trên Google thật.
+
 ## Nhật ký hoạt động (WP28)
 
 Mọi đăng nhập (kể cả thất bại), đăng xuất, bị từ chối, và mọi việc người làm trong console được ghi vào `audit_event`
@@ -238,7 +255,21 @@ nhân viên chỉ xem dòng của mình. Kiểm chuỗi băm từ terminal: `pyt
 
 Console đăng nhập bằng **email + mật khẩu**, không phải khoá API. Tạo tài khoản đầu tiên (chủ) bằng dòng lệnh, các nhân viên sau đó do chủ thêm ở `/app/team`:
 ```bash
-python -m cortex_leads.cli create-user --tenant <uuid> --email chu@trungtam.vn --name "Chủ trung tâm" --role owner   # in mật khẩu tạm, phải đổi ở lần đầu
-python -m cortex_leads.cli reset-password --email chu@trungtam.vn                                                 # chủ quên mật khẩu
+python -m cortex_leads.cli create-user --tenant <uuid> --email chu@trungtam.vn --name "Chủ trung tâm" --role owner   # không --password: gửi thư mời (cần SMTP + PUBLIC_BASE_URL), người đó tự chọn mật khẩu; có --password: chủ đầu tiên của máy chủ chưa có thư
+python -m cortex_leads.cli reset-mfa --email chu@trungtam.vn                                                      # chủ mất điện thoại và hết mã dự phòng: tắt xác thực 2 lớp, đăng xuất mọi thiết bị
+python -m cortex_leads.cli reset-password --email chu@trungtam.vn                                                 # chủ quên mật khẩu và không nhận được thư: hỏi mật khẩu mới ở terminal (không in, không sinh)
 ```
+
+**Vai trò** có ba: `owner`, `staff`, `teacher`. Giáo viên chỉ thấy các lớp chủ giao ở Nhân viên & quyền. Trong lớp đó họ xem và tải bản ghi, duyệt tổng kết, soạn, đăng, xoá bài tập, chấm bài, đổi tên lớp và chế độ tổng kết, chấm bài (trừ bật tự ghi điểm). Họ không có Hộp thư, kỹ năng, sandbox, dữ liệu; không đổi được kết nối Google, khoá học, webhook; không tạo, tắt, xoá lớp. Với nhiều lớp dùng chung một tài khoản Google, hộp chọn tệp của giáo viên chỉ có tab tải lên, xem giới hạn ở REVIEW R165.
 `python -m dev.local setup` tạo sẵn một chủ và một nhân viên và in email + mật khẩu. Phiên hết sau 12 giờ hoặc 2 giờ không hoạt động; 5 lần sai khoá email 15 phút. Sau reverse proxy đặt `CL_TRUST_PROXY_HEADERS=true` để chống đoán theo địa chỉ đúng. Chi tiết: DESIGN §5.15.
+
+## Trang quản trị nền tảng (WP47)
+
+Dành cho **người vận hành máy chủ**, không phải chủ trung tâm: `/app/admin`. Trang này xem danh sách doanh nghiệp, tạo doanh nghiệp (đủ sandbox, chủ đầu tiên nhận thư mời), bổ sung sandbox thiếu, dừng hoặc chạy lại AI (một sandbox, một doanh nghiệp, hoặc mọi doanh nghiệp), và cứu tài khoản (gửi lại thư mời hoặc liên kết đặt lại mật khẩu, tắt xác thực 2 lớp, đăng xuất mọi thiết bị, mời thêm chủ). Trang không thấy khách, hội thoại hay mật khẩu của ai.
+
+Tài khoản admin chỉ tạo được bằng dòng lệnh. Xác thực 2 lớp được cài ngay trong lệnh: dán khoá vào ứng dụng xác thực, nhập một mã để xác nhận, rồi cất 10 mã dự phòng:
+```bash
+python -m cortex_leads.cli create-admin --email ops@cortex.example.vn --name "Vận hành"   # hỏi mật khẩu (không in), cài TOTP, in mã dự phòng một lần
+python -m cortex_leads.cli reset-admin-mfa --email ops@cortex.example.vn                  # admin mất điện thoại và hết mã dự phòng: khoá mới, phiên cũ kết thúc
+```
+Phiên hết sau 30 phút không hoạt động (`CL_ADMIN_IDLE_MINUTES`) hoặc 8 giờ (`CL_ADMIN_SESSION_HOURS`). Tắt 2 lớp của người khác và dừng mọi doanh nghiệp cần mã 6 số đang hiện. Tạo doanh nghiệp và mời chủ cần gửi được thư (`CL_SMTP_*` hoặc `CL_MAIL_DIR`, cùng `CL_PUBLIC_BASE_URL`); chưa có thư thì vẫn dùng `create-tenant` + `create-user --password`. Chi tiết: DESIGN §5.16.

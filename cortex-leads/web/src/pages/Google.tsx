@@ -4,11 +4,11 @@ import { useSearchParams } from 'react-router-dom'
 import { explain } from '../api/client'
 import { useConnectGoogle, useDeleteGoogle, useGoogle, useReconnectGoogle, useRevokeGoogle } from '../api/hooks'
 import type { GoogleAccount } from '../api/types'
+import { SHead, fieldCls } from '../components/settingsUi'
 import { Time } from '../components/Time'
 import { Badge, Button, Card, ErrorBox, Loading, Menu, Modal, Notice } from '../components/ui'
 
-const input = 'rounded-lg border border-line px-3 py-2.5 text-sm font-normal'
-const KIND = { classroom: 'Chấm bài Classroom', classroom_post: 'Đăng tổng kết lên Classroom', drive: 'Drive', drive_read: 'Đọc thư mục Drive' } as const
+const KIND = { classroom: 'Chấm bài Classroom', classroom_post: 'Đăng tổng kết lên Classroom', classroom_create: 'Tạo lớp trên Classroom', drive: 'Drive', drive_read: 'Đọc thư mục Drive' } as const
 const BACK_ERRORS: Record<string, string> = {
   BAD_STATE: 'Phiên kết nối đã hết hạn hoặc không hợp lệ. Hãy bấm kết nối lại.', DENIED: 'Bạn đã không đồng ý cấp quyền, nên chưa nối gì.',
   NO_REFRESH_TOKEN: 'Google không trả về mã làm mới. Vào myaccount.google.com/permissions, gỡ quyền của ứng dụng này rồi kết nối lại.',
@@ -30,23 +30,27 @@ function Outcome() {
 function ConnectForm({ configured }: { configured: boolean }) {
   const connect = useConnectGoogle()
   const [label, setLabel] = useState('')
-  const [kinds, setKinds] = useState<Record<string, boolean>>({ classroom: true, classroom_post: true, drive: true, drive_read: true })
+  const [kinds, setKinds] = useState<Record<string, boolean>>({ classroom: true, classroom_post: true, classroom_create: true, drive: true, drive_read: false }) // reading all of Drive is opt-in
   const chosen = Object.keys(kinds).filter((k) => kinds[k])
   const submit = (e: FormEvent) => { e.preventDefault(); connect.mutate({ label: label.trim(), kinds: chosen }, { onSuccess: (r) => window.location.assign(r.url) }) }
   return (
-    <Card className="p-5"><form onSubmit={submit} className="flex flex-col gap-3">
-      <h2 className="text-[15px] font-bold">Kết nối một tài khoản Google</h2>
-      <p className="text-[13px] text-ink-2">Mỗi giáo viên (hoặc tài khoản của trung tâm) kết nối một lần. Cần hai tài khoản khác nhau thì kết nối hai lần, rồi chọn tài khoản nào dùng cho lớp hay Drive nào.</p>
-      <div className="flex flex-wrap items-end gap-4">
-        <label className="flex flex-col gap-1.5 text-[13px] font-semibold">Tên gọi<input className={input} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Google của cô Lan" /></label>
-        <fieldset className="flex flex-col gap-1.5 text-[13px]"><legend className="mb-1.5 font-semibold">Dùng cho</legend>
-          <span className="flex flex-wrap gap-4">{(['classroom', 'classroom_post', 'drive', 'drive_read'] as const).map((k) => (
-            <label key={k} className="flex items-center gap-2"><input type="checkbox" checked={kinds[k]} onChange={(e) => setKinds({ ...kinds, [k]: e.target.checked })} />
-              {k === 'classroom' ? 'Classroom: chấm bài, giao bài' : k === 'classroom_post' ? 'Đăng tổng kết buổi học lên Classroom' : k === 'drive' ? 'Drive: thư mục của lớp, tải bản ghi lên' : 'Đọc thư mục Drive có sẵn (bản ghi Google Meet)'}</label>))}</span></fieldset>
-        <Button variant="primary" type="submit" busy={connect.isPending} disabled={!configured || label.trim().length < 2 || chosen.length === 0}><Plug className="size-4" aria-hidden />Đăng nhập bằng Google</Button>
+    <Card className="overflow-hidden"><form onSubmit={submit}>
+      <SHead title="Kết nối một tài khoản Google" desc="Mỗi giáo viên (hoặc tài khoản của trung tâm) kết nối một lần. Cần hai tài khoản khác nhau thì kết nối hai lần, rồi chọn tài khoản nào dùng cho lớp hay Drive nào." />
+      <div className="flex flex-col gap-[18px] px-4 py-5 sm:px-6">
+        <label className="flex flex-col gap-1.5 text-[13px] font-semibold">Tên gọi<input className={fieldCls} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Google của cô Lan" /></label>
+        <details className="group rounded-lg border border-line px-3.5 py-2.5 text-sm">
+          <summary className="cursor-pointer list-none text-[13px] marker:hidden"><b>Quyền cấp cho Cortex:</b> <span className="text-ink-2">{chosen.length === 4 && !kinds.drive_read ? 'Classroom và Drive, đủ cho lớp học' : `${chosen.length} quyền đã chọn`}</span> <span className="font-semibold text-accent group-open:hidden">· Tuỳ chỉnh</span></summary>
+          <div className="mt-3 flex flex-col gap-3">
+        <fieldset className="flex flex-col gap-2 text-sm"><legend className="mb-2 text-[13px] font-semibold">Dùng cho</legend>
+            {(['classroom', 'classroom_post', 'classroom_create', 'drive', 'drive_read'] as const).map((k) => (
+              <label key={k} className="flex items-center gap-2.5"><input type="checkbox" className="size-[18px] accent-accent" checked={kinds[k]} onChange={(e) => setKinds({ ...kinds, [k]: e.target.checked })} />
+                {k === 'classroom' ? 'Classroom: chấm bài, giao bài' : k === 'classroom_post' ? 'Đăng tổng kết buổi học lên Classroom' : k === 'classroom_create' ? 'Tạo lớp mới trên Classroom (khi thêm lớp)' : k === 'drive' ? 'Drive: thư mục của lớp, tải bản ghi lên' : 'Đọc thư mục Drive có sẵn (bản ghi Google Meet)'}</label>))}</fieldset>
+          <p className="rounded-lg bg-app px-3.5 py-2.5 text-xs leading-relaxed text-ink-2">«Drive» chỉ cho Cortex thấy những tệp do chính Cortex tạo. «Đọc thư mục Drive có sẵn» cho Cortex đọc (không sửa) mọi tệp trong Drive của tài khoản này: chỉ chọn khi cần theo dõi thư mục bản ghi đã có.</p>
+          </div>
+        </details>
+        {connect.isError && <p role="alert" className="text-[13px] text-bad">{explain(connect.error)}</p>}
+        <div><Button variant="primary" type="submit" className="h-10" busy={connect.isPending} disabled={!configured || label.trim().length < 2 || chosen.length === 0}><Plug className="size-4" aria-hidden />Đăng nhập bằng Google</Button></div>
       </div>
-      <p className="text-xs text-ink-3">«Drive» chỉ cho Cortex thấy những tệp do chính Cortex tạo. «Đọc thư mục Drive có sẵn» cho Cortex đọc (không sửa) mọi tệp trong Drive của tài khoản này: chỉ tick khi cần theo dõi thư mục bản ghi bạn đã có.</p>
-      {connect.isError && <p role="alert" className="text-[13px] text-bad">{explain(connect.error)}</p>}
     </form></Card>
   )
 }
@@ -55,6 +59,7 @@ function ConnectForm({ configured }: { configured: boolean }) {
 const PERMS = [
   { key: 'classroom', title: 'Chấm bài trên Classroom', hint: 'Đọc lớp và bài nộp, ghi điểm' },
   { key: 'classroom_post', title: 'Đăng tổng kết lên Classroom', hint: 'Đăng thông báo vào lớp' },
+  { key: 'classroom_create', title: 'Tạo lớp trên Classroom', hint: 'Tạo khoá học mới khi thêm lớp' },
   { key: 'drive', title: 'Lưu bản ghi vào Drive', hint: 'Chỉ thấy tệp do Cortex tạo' },
   { key: 'drive_read', title: 'Đọc Drive có sẵn', hint: 'Đọc thư mục bản ghi đã có (Google Meet)' },
 ] as const
@@ -89,12 +94,12 @@ function Account({ a }: { a: GoogleAccount }) {
   const off = a.status === 'revoked'
   const missing = PERMS.filter((p) => !a.can[p.key])
   return (
-    <div role="row" className="flex flex-col gap-4 border-t border-line px-5 py-5 first:border-t-0">
+    <div role="row" className="flex flex-col gap-4 border-t border-line px-4 py-5 first:border-t-0 sm:px-5">
       <div className="flex flex-wrap items-center gap-3">
         <span className="grid size-10 shrink-0 place-items-center rounded-full bg-accent-soft text-sm font-bold text-accent" aria-hidden>{a.label.slice(0, 1).toUpperCase()}</span>
-        <span className="min-w-0 flex-1"><b className="block truncate text-sm">{a.label}</b><span className="block truncate text-xs text-ink-2">{a.email ?? 'Không rõ email'} · nối <Time iso={a.connected_at} as="when" /></span></span>
+        <span className="min-w-0 flex-1 basis-44"><b className="block truncate text-sm">{a.label}</b><span className="block truncate text-xs text-ink-2">{a.email ?? 'Không rõ email'} · nối <Time iso={a.connected_at} as="when" /></span></span>
         <Badge tone={off ? 'bad' : 'ok'}>{off ? 'Đã ngắt' : 'Đang kết nối'}</Badge>
-        <Button busy={reconnect.isPending} onClick={() => reconnect.mutate({ id: a.id, kinds: ['classroom', 'classroom_post', 'drive', 'drive_read'] }, { onSuccess: (r) => window.location.assign(r.url) })}><RefreshCw className="size-3.5" aria-hidden />Kết nối lại</Button>
+        <Button busy={reconnect.isPending} onClick={() => reconnect.mutate({ id: a.id, kinds: ['classroom', 'classroom_post', 'classroom_create', 'drive', 'drive_read'] }, { onSuccess: (r) => window.location.assign(r.url) })}><RefreshCw className="size-3.5" aria-hidden />Kết nối lại</Button>
         <Menu label="Thêm thao tác" items={[
           ...(off ? [] : [{ label: 'Ngắt kết nối', icon: <Power className="size-4" aria-hidden />, onClick: () => setDialog('revoke') }]),
           { label: 'Xóa tài khoản', icon: <Trash2 className="size-4" aria-hidden />, danger: true, divider: !off, onClick: () => setDialog('delete') }]} />
@@ -122,14 +127,13 @@ function Account({ a }: { a: GoogleAccount }) {
 export function GoogleSection() {
   const q = useGoogle()
   return (
-    <section aria-labelledby="google-h" className="flex flex-col gap-5">
-      <div><h2 id="google-h" className="text-lg font-bold">Kết nối Google</h2>
-        <p className="text-[13px] text-ink-2">Các tài khoản Google đã kết nối và quyền mỗi tài khoản đã cấp. Lớp, thư mục Drive và webhook được chọn ở trang Bài giảng.</p></div>
+    <section aria-label="Kết nối Google" className="flex flex-col gap-4">
       <Outcome />
       {q.isPending ? <Loading /> : q.isError ? <ErrorBox onRetry={() => q.refetch()} /> : <>
-        {!q.data.configured && <Notice tone="warn">Máy chủ chưa được cấu hình để đăng nhập Google. Người quản trị cần đặt <code>CL_GOOGLE_OAUTH_CLIENT_ID</code>, <code>CL_GOOGLE_OAUTH_CLIENT_SECRET</code> và <code>CL_PUBLIC_BASE_URL</code>, rồi đăng ký địa chỉ <code>/api/v1/google/callback</code> trong Google Cloud.</Notice>}
+        {!q.data.configured && <Notice tone="warn">Máy chủ chưa bật đăng nhập Google. Nhờ người hỗ trợ kỹ thuật bật tính năng này.</Notice>}
         <Card className="overflow-hidden">
-          {q.data.items.length === 0 ? <p className="p-6 text-center text-ink-3">Chưa kết nối tài khoản Google nào.</p> : q.data.items.map((a) => <Account key={a.id} a={a} />)}
+          <SHead title="Tài khoản Google đã kết nối" desc="Lớp, thư mục Drive và webhook được chọn ở trang Lớp học." />
+          {q.data.items.length === 0 ? <p className="px-6 py-9 text-center text-ink-3">Chưa kết nối tài khoản Google nào.</p> : q.data.items.map((a) => <Account key={a.id} a={a} />)}
         </Card>
         <ConnectForm configured={q.data.configured} />
       </>}

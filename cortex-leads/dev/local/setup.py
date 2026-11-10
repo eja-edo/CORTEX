@@ -91,13 +91,16 @@ async def _seed(connector_secret: str, staff_key: str, sup_key: str) -> dict[str
             latest = max((r for r in rows_sk if r.name == name), key=lambda r: r.version)
             for status in ("shadow", "live"):
                 await promote(s, sid, name, latest.version, status)
-    from cortex_leads.auth.passwords import temporary_password
+        from cortex_leads.sandbox.bringup import ensure_sandboxes
+        await ensure_sandboxes(s, tid)  # the other kinds, as `create-tenant` makes them
+    import secrets
+
     from cortex_leads.auth.users import create_user
 
     logins = {}
     async with tenant_session(tid) as s:
         for role, ref, email, name in (("owner", "owner", "chu@trungtam.test", "Chủ trung tâm"), ("staff", "nv1", "nv1@trungtam.test", "Nhân viên một")):
-            pw = temporary_password()
+            pw = secrets.token_urlsafe(12) + "7a"  # a throwaway for the local demo only; it is written to the gitignored local.env
             await create_user(s, tid, email=email, name=name, role=role, password=pw, created_by="dev.local setup", staff_ref=ref)
             logins[f"LOCAL_{role.upper()}_EMAIL"], logins[f"LOCAL_{role.upper()}_PASSWORD"] = email, pw
     return {**logins, "LOCAL_TENANT_ID": str(tid), "LOCAL_SANDBOX_ID": str(sid), "LOCAL_CONNECTOR_ID": cid,

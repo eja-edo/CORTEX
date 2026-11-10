@@ -167,3 +167,38 @@ Môi trường: Postgres 16 thật, DB riêng (`cortex_leads_qa`, `_qa2`, `_qa3`
 - **Điện thoại/màn hẹp**; tài khoản `staff` trong trình duyệt (đăng nhập tay trong kịch bản chụp ảnh không thành công; phần quyền được kiểm bằng API ở trên).
 - Chưa chạy lại 3 test cron ở giờ khác để xác nhận R147.
 - Tải: không đo ngoài 6 yêu cầu đồng thời.
+
+
+### 5b. Giai đoạn 1: bỏ trùng lặp + màn Dữ liệu (Agent B, 2026-11-02)
+| Hạng mục | Kết quả |
+|---|---|
+| A9: danh sách đường API trong test e2e | **Đạt**: chỉ thêm ba đường `/catalog`, `/catalog/template`, `/catalog/import`; phần kiểm "chỉ một đường gửi tin" và "thư viện mạng chỉ ở notify/outbound/llm/connectors/cells" không đổi |
+| Phân quyền | **Đạt**: chưa đăng nhập 401; thiếu hoặc sai CSRF 403; nhân viên 403 cả khi `dry_run`, và `role` trong thân bị bỏ qua |
+| A1/A3 | **Đạt**: `catalog_item` có RLS FORCE; ba doanh nghiệp, `tenant_id` trong thân không đổi gì, dữ liệu của B và C nguyên vẹn |
+| Ngữ nghĩa nhập | **Đạt**: dry_run không ghi gì (đếm `catalog_item`, `audit_event` trước/sau); nhập hai lần = 0 thay đổi; đổi giá = phiên bản 2, dòng cũ `active=false`, không mất `attrs` (`suc_chua`); mục vắng trong tệp không bị tắt |
+| A7 | **Đạt**: nháp viết với giá cũ, nhập giá mới, gửi bằng đường AI bị chặn `UNVERIFIED_CLAIM`, không có outbox; dòng cũ còn là lịch sử |
+| Audit | **Đạt**: chỉ số đếm, không có tên hay số điện thoại của dòng |
+| Nhập đồng thời cùng một mã | **Đạt**: hai yêu cầu cùng lúc không sập, còn đúng một dòng `active` |
+| Tệp đối kháng (26 trường hợp + giới hạn) | **Không đạt 3 trường hợp**: R154 (ô > 131072 ký tự), R155 (`\r` đơn lẻ), R156 (`valid_until` gần năm 0001) đều trả 500. 23 trường hợp còn lại trả 200/422 sạch (NaN, Infinity, 1e999, 17 chữ số, âm, UTF-16, cp1258, NUL, BOM, SQL, tiêu đề đảo/thiếu/thừa/trùng, rỗng, 2000/2001/100.000 dòng, mã và tên quá dài, ô bắt đầu bằng `= + - @` lưu như chữ, mẫu CSV không xuất lại) |
+| Giao diện (Chrome headless, 1440px, bản chạy thật) | **Đạt**: màn Dữ liệu khớp bản vẽ (4 ô thống kê, tìm kiếm, lọc, bảng); hộp thoại hai bước hiện đúng "2 mục mới / 1 dòng lỗi: Dòng 3 …"; Công cụ không còn tab Kênh; Sandbox → Chế độ gửi chỉ đọc kèm liên kết, Kênh & dữ liệu có liên kết sang Cài đặt và Dữ liệu; Kênh/Thông báo ẩn ô chọn sandbox khi chỉ có một; nhân viên thấy `/data` không có nút nhập, gõ `/settings` bị đưa về `/inbox` |
+| Bật "Tự gửi" | **Đạt**: ở Cài đặt → AI bấm "Tự gửi" hiện hộp xác nhận (cảnh báo + "Bật tự gửi" / "Không"); không còn nút ghi nào ở Sandbox |
+| Web vitest / tsc / build / ruff | 218/218 pass / sạch / sạch / test mới của B và tệp mới của A sạch (4 cảnh báo ruff còn lại là `tests/console/test_auth.py` có từ trước) |
+| Ngoài quyền | **Không phát hiện**: `guard/`, `outbound/`, `tools/`, `migrations/` không bị sửa |
+
+Lỗi theo mức: **Trung bình** R154, R155 (500 với tệp hợp lệ về kích thước; R155 gặp thật với CSV Mac). **Thấp** R156, R157, R158. Không có lỗi nghiêm trọng.
+
+| Phần | Quyết định | Điều kiện |
+|---|---|---|
+| Bỏ trùng lặp giao diện (Công cụ, Sandbox, ô chọn sandbox) | **Cho qua** | — |
+| Màn Dữ liệu và API catalog | **Cho qua có điều kiện** | Sửa R154, R155 (bắt `csv.Error`, một chỗ) trước khi cho người ngoài nhập tệp; R156, R157 sửa cùng lúc |
+| Onboarding trỏ `/data` | **Cho qua** | — |
+
+Chưa kiểm được: trạng thái rỗng của màn Dữ liệu trong trình duyệt (chỉ có vitest), mở tệp mẫu bằng Excel thật, giao diện điện thoại, hiệu năng bảng với 2000 dòng. Số test thật: `tests/console tests/core tests/e2e tests/outbound tests/bridges` **553 pass, 0 fail** (9 phút 53 giây, chạy trước khi thêm test của B); `tests/tools guard booking ingest db memory` **114 pass**; test của B (`test_qa_phase1_catalog.py`, `test_qa_phase1_a7.py`) **36 pass, 3 xfail có chủ đích** (R154, R155, R156). Chưa chạy: các thư mục `cells clock connectors cron domain grader lessons llm mcp_server notify privacy review runner sandbox skills staff_ui supervisor triggers` (phase 1 không chạm tới).
+
+
+## 6. Giai đoạn 1 của việc đơn giản hoá cấu hình (2026-11-02)
+Một việc, một nhà: bỏ chỗ trùng lặp trước, chưa đổi kiến trúc. Bản vẽ Pencil: khung 25 (Dữ liệu) và 26 (hộp thoại nhập CSV).
+- **Bỏ trùng:** tab "Kênh" của Công cụ đã xoá (kênh chỉ sửa ở Cài đặt → Kênh nhắn tin). Sandbox → Chế độ gửi chuyển thành chỉ đọc kèm liên kết "Đổi ở Cài đặt → AI"; bước xác nhận khi bật tự gửi chuyển theo về Cài đặt → AI, nơi duy nhất còn ghi chế độ này. Sandbox → Kênh & dữ liệu có liên kết tới nơi quản lý kênh và thông báo, và tới màn Dữ liệu.
+- **Ẩn khái niệm sandbox khi chỉ có một:** "Đưa tin vào" (Kênh) và "Nhận tin của" (Thông báo) chỉ hiện từ hai sandbox trở lên.
+- **Màn Dữ liệu (`/data`, quyền `catalog.read` cho mọi người, `catalog.manage` chỉ chủ):** danh sách bảng giá và lịch học đang dùng (4 ô thống kê, tìm kiếm, lọc nhóm), tải tệp mẫu, nhập CSV hai bước (kiểm tra không ghi gì, rồi lưu). Logic nhập tách thành `cortex_leads/catalog/importer.py`, dùng chung với `cli import-catalog` và cầu nối Google Sheet. Bước "bảng giá" của màn Bắt đầu trỏ tới đây.
+- **Chưa làm (giai đoạn 2-3):** trang Kết nối hợp nhất, bảng "Tình trạng hệ thống", gộp menu, mô hình mặc định + ghi đè. Hạn chế còn lại: REVIEW R150–R153.

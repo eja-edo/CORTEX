@@ -19,6 +19,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from pydantic import ValidationError
 from sqlalchemy import func, or_, select
 
+from cortex_leads.auth.roles import ApiRole
 from cortex_leads.channels.policy import window_state
 from cortex_leads.config import get_settings
 from cortex_leads.core.errors import CortexError
@@ -100,7 +101,7 @@ async def session_dep(request: Request) -> Session:
     async with system_session() as s:
         row = await s.get(m.ApiKey, key_id)
         tenant = await s.get(m.Tenant, row.tenant_id) if row else None
-    if row is None or row.revoked_at or row.role not in ("staff", "owner") or tenant is None:
+    if row is None or row.revoked_at or row.role not in (ApiRole.STAFF, ApiRole.OWNER) or tenant is None:
         raise login
     return Session(Caller(row.tenant_id, row.role, row.staff_ref), _sig("csrf|" + cookie)[:32],
                    ZoneInfo(tenant.timezone))
@@ -165,7 +166,7 @@ async def login(request: Request, api_key: str = Form(...), csrf: str = Form("")
         row = (await s.execute(select(m.ApiKey).where(
             m.ApiKey.key_hash == hashlib.sha256(api_key.strip().encode()).hexdigest(),
             m.ApiKey.revoked_at.is_(None)))).scalar_one_or_none()
-    if row is None or row.role not in ("staff", "owner"):
+    if row is None or row.role not in (ApiRole.STAFF, ApiRole.OWNER):
         return _redirect("/staff/login?msg=bad")
     exp = int(time.time()) + TTL_S
     resp = _redirect("/staff")
@@ -267,10 +268,10 @@ async def queue(request: Request, msg: str = "", sess: Session = S) -> HTMLRespo
         bookings = await _bookings(s, now, sess.tz)
         tasks = await _tasks(s, now, sess.tz)
         pending_proposals = (await s.execute(select(func.count()).select_from(m.Proposal).where(
-            m.Proposal.status == "pending"))).scalar_one() if c.role == "owner" else 0
+            m.Proposal.status == "pending"))).scalar_one() if c.role == ApiRole.OWNER else 0
         await _audit(s, c, "staff_ui.queue", {"drafts": len(cards), "facts": len(facts), "bookings": len(bookings)})
     return page("queue.html", cards=cards, facts=facts, bookings=bookings, tasks=tasks, csrf=sess.csrf,
-                msg=MSGS.get(msg, ""), owner=c.role == "owner", proposals=pending_proposals)
+                msg=MSGS.get(msg, ""), owner=c.role == ApiRole.OWNER, proposals=pending_proposals)
 
 
 ACTION_TEXT = {"tune_skill": "Thử bản mới của kỹ năng (chạy thử, chưa bật)", "rollback_skill": "Quay về phiên bản trước của kỹ năng", "pause_sandbox": "Tạm dừng AI của sandbox này",
@@ -282,7 +283,7 @@ EVIDENCE_TEXT = {"runs": "lượt chạy", "blocked": "bị chặn", "decided": 
 @router.get("/proposals", response_class=HTMLResponse)
 async def proposals(msg: str = "", sess: Session = S) -> HTMLResponse:
     c = sess.caller
-    if c.role != "owner":  # AI tổng speaks to the owner; a staff member neither sees nor decides it
+    if c.role != ApiRole.OWNER:  # AI tổng speaks to the owner; a staff member neither sees nor decides it
         return _redirect("/staff?msg=bad")  # type: ignore[return-value]
     async with tenant_session(c.tenant_id) as s:
         rows = (await s.execute(select(m.Proposal, m.Sandbox.name).join(m.Sandbox, m.Sandbox.id == m.Proposal.sandbox_id)
@@ -299,7 +300,7 @@ async def proposals(msg: str = "", sess: Session = S) -> HTMLResponse:
 async def proposal_verb(proposal_id: UUID, verb: str, csrf: str = Form(""), sess: Session = S) -> RedirectResponse:
     check_csrf(sess, csrf)
     c = sess.caller
-    if verb not in ("accept", "dismiss") or c.role != "owner":
+    if verb not in ("accept", "dismiss") or c.role != ApiRole.OWNER:
         raise HTTPException(404, "not found")
     try:
         async with tenant_session(c.tenant_id) as s:
@@ -320,7 +321,7 @@ async def _care_sandbox(s: Any) -> m.Sandbox | None:
 @router.get("/skills", response_class=HTMLResponse)
 async def skills(msg: str = "", sess: Session = S) -> HTMLResponse:
     c = sess.caller
-    if c.role != "owner":  # shaping what the AI does is the owner's call
+    if c.role != ApiRole.OWNER:  # shaping what the AI does is the owner's call
         return _redirect("/staff?msg=bad")  # type: ignore[return-value]
     async with tenant_session(c.tenant_id) as s:
         sb = await _care_sandbox(s)
@@ -357,7 +358,7 @@ def _spec_from_form(f: dict[str, str]) -> FormSpec:
 
 @router.get("/skills/new", response_class=HTMLResponse)
 async def skill_form(template: str = "khach_im", sess: Session = S) -> HTMLResponse:
-    if sess.caller.role != "owner" or template not in TEMPLATES:
+    if sess.caller.role != ApiRole.OWNER or template not in TEMPLATES:
         return _redirect("/staff?msg=bad")  # type: ignore[return-value]
     return page("skill_form.html", template=template, title=TEMPLATES[template], v={}, errors=[], csrf=sess.csrf, msg="")
 
@@ -367,7 +368,7 @@ async def skill_create(request: Request, sess: Session = S) -> HTMLResponse:
     c = sess.caller
     form = {k: str(v) for k, v in (await request.form()).items()}
     check_csrf(sess, form.get("csrf", ""))
-    if c.role != "owner":
+    if c.role != ApiRole.OWNER:
         raise HTTPException(404, "not found")
     errors: list[str] = []
     try:
@@ -393,7 +394,7 @@ async def skill_create(request: Request, sess: Session = S) -> HTMLResponse:
 async def skill_verb(skill_id: UUID, verb: str, csrf: str = Form(""), sess: Session = S) -> RedirectResponse:
     check_csrf(sess, csrf)
     c = sess.caller
-    if verb not in ("trial", "live", "off", "again") or c.role != "owner":
+    if verb not in ("trial", "live", "off", "again") or c.role != ApiRole.OWNER:
         raise HTTPException(404, "not found")
     try:
         async with tenant_session(c.tenant_id) as s:
@@ -418,7 +419,7 @@ async def skill_verb(skill_id: UUID, verb: str, csrf: str = Form(""), sess: Sess
 async def skill_trial(skill_id: UUID, sess: Session = S) -> HTMLResponse:
     """What the skill wrote while on trial, for the owner to read by hand before turning it on."""
     c = sess.caller
-    if c.role != "owner":
+    if c.role != ApiRole.OWNER:
         return _redirect("/staff?msg=bad")  # type: ignore[return-value]
     async with tenant_session(c.tenant_id) as s:
         r = await s.get(m.SkillVersion, skill_id)
@@ -462,7 +463,7 @@ DIGEST_ROWS = [("new_conversations", "Khách mới"), ("customer_messages", "Tin
 @router.get("/digest", response_class=HTMLResponse)
 async def digest(sess: Session = S) -> HTMLResponse:
     c, now = sess.caller, datetime.now(UTC)
-    if c.role != "owner":  # the owner's numbers (DESIGN §2.1: the rows about a person go to that person first)
+    if c.role != ApiRole.OWNER:  # the owner's numbers (DESIGN §2.1: the rows about a person go to that person first)
         return _redirect("/staff?msg=bad")  # type: ignore[return-value]
     async with tenant_session(c.tenant_id) as s:
         found = (await s.execute(select(m.Digest).order_by(m.Digest.period_start.desc()).limit(6))).scalars().all()

@@ -72,3 +72,7 @@ cortex-leads/data/
 cortex-leads/.venv/
 !cortex-leads/.env.test
 *.egg-info/
+
+# Báo cáo thực tập (không đưa lên repo)
+BaoCao_assets/
+.~lock.*

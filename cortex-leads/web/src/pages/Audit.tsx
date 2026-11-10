@@ -6,7 +6,8 @@ import type { AuditItem, AuditQuery } from '../api/types'
 import { DateRange, type Range } from '../components/DateRange'
 import { Time } from '../components/Time'
 import { full } from '../components/format'
-import { Badge, Button, Card, Empty, ErrorBox, Loading, Notice, PageHeader, type Tone } from '../components/ui'
+import { Badge, Button, Card, Empty, ErrorBox, Loading, Notice, PageHeader, STACK_CELL, STACK_ROW, type Tone } from '../components/ui'
+import { Role } from '../api/enums'
 
 const RESULT: Record<AuditItem['result'], { label: string; tone: Tone }> = {
   success: { label: 'Thành công', tone: 'ok' },
@@ -26,7 +27,7 @@ export function Pager({ page, pages, total, size, onPage, onSize }: { page: numb
   const to = Math.min(page * size, total)
   const btn = 'flex h-8 min-w-8 items-center justify-center rounded-lg border border-line px-2 text-[13px] disabled:cursor-not-allowed disabled:text-ink-3'
   return (
-    <nav aria-label="Phân trang" className="flex items-center justify-between gap-4 border-t border-line px-4 py-3 text-[13px] text-ink-2">
+    <nav aria-label="Phân trang" className="flex shrink-0 flex-wrap items-center justify-between gap-4 border-t border-line bg-surface px-4 py-3 text-[13px] text-ink-2">
       <span>Hiển thị {from}–{to} / {total} dòng</span>
       <div className="flex items-center gap-1.5">
         <button className={btn} disabled={page <= 1} onClick={() => onPage(page - 1)}>Trước</button>
@@ -48,10 +49,10 @@ function Detail({ id, onClose }: { id: string; onClose: () => void }) {
   const { data: e, isPending, isError } = useAuditEvent(id)
   const row = (k: string, v: string | null | undefined) => v ? <div key={k}><dt className="text-[11px] text-ink-3">{k}</dt><dd className="break-all font-medium">{v}</dd></div> : null
   return (
-    <aside aria-label="Chi tiết sự kiện" className="fixed inset-y-0 right-0 z-10 flex w-[420px] flex-col gap-4 overflow-y-auto border-l border-line bg-surface p-5 shadow-xl">
+    <aside aria-label="Chi tiết sự kiện" className="fixed inset-y-0 right-0 z-40 flex w-full max-w-[420px] flex-col gap-4 overflow-y-auto border-l border-line bg-surface p-5 shadow-xl">
       <div className="flex items-start gap-2">
         <h2 className="flex-1 text-base font-bold">{e?.summary ?? 'Chi tiết'}</h2>
-        <button aria-label="Đóng" onClick={onClose} className="text-ink-3 hover:text-ink"><X className="size-4" /></button>
+        <button aria-label="Đóng" onClick={onClose} className="grid size-8 shrink-0 place-items-center rounded-lg text-ink-3 hover:bg-app hover:text-ink max-lg:size-10"><X className="size-4" /></button>
       </div>
       {isPending && <Loading />}
       {isError && <ErrorBox>Không mở được sự kiện này.</ErrorBox>}
@@ -75,7 +76,7 @@ function Detail({ id, onClose }: { id: string; onClose: () => void }) {
 
 export function Audit() {
   const { data: me } = useSession()
-  const owner = me?.role === 'owner'
+  const owner = me?.role === Role.OWNER
   const [q, setQ] = useState<AuditQuery>({ page: 1, page_size: 20 })
   const [range, setRange] = useState<Range>({})
   const [search, setSearch] = useState('')
@@ -85,11 +86,11 @@ export function Audit() {
   const set = (patch: Partial<AuditQuery>) => setQ((p) => ({ ...p, page: 1, ...patch }))
   const field = 'h-9 rounded-lg border border-line bg-surface px-2.5 text-[13px]'
   return (
-    <div className="flex h-full flex-col gap-4 overflow-y-auto p-6">
+    <div className="flex h-full flex-col gap-4 overflow-y-auto p-4 sm:p-6 [&>*]:shrink-0">
       <PageHeader title="Nhật ký hoạt động" subtitle={owner ? 'Ai làm gì, lúc nào, từ đâu. Không ghi nội dung tin nhắn hay khoá truy cập.' : 'Các việc bạn đã làm trong hệ thống.'}
-        action={owner ? <div className="flex gap-2">
+        action={owner ? <div className="flex flex-wrap gap-2">
           <Button busy={verify.isPending} onClick={() => verify.mutate()}><ShieldCheck className="size-4" aria-hidden />Kiểm tra toàn vẹn</Button>
-          <a href={`/api/v1/audit/export?${auditQueryString({ ...q, page: undefined, page_size: undefined })}`} className="inline-flex h-9 items-center gap-2 rounded-lg border border-line bg-surface px-3 text-[13px] font-semibold"><Download className="size-4" aria-hidden />Xuất CSV</a>
+          <a href={`/api/v1/audit/export?${auditQueryString({ ...q, page: undefined, page_size: undefined })}`} className="inline-flex h-9 items-center gap-2 rounded-lg border border-line bg-surface px-3 text-[13px] font-semibold max-lg:h-10"><Download className="size-4" aria-hidden />Xuất CSV</a>
         </div> : undefined} />
       {verify.data && (verify.data.ok
         ? <Notice tone="ok">Nhật ký nguyên vẹn: {verify.data.checked} dòng liên kết đúng.</Notice>
@@ -103,28 +104,28 @@ export function Audit() {
           <select className={field} value={q.category ?? ''} onChange={(e) => set({ category: e.target.value || undefined })}><option value="">Tất cả</option>{Object.entries(data?.categories ?? {}).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
         <label className="flex flex-col gap-1 text-[11px] text-ink-3">Kết quả
           <select className={field} value={q.result ?? ''} onChange={(e) => set({ result: e.target.value || undefined })}><option value="">Tất cả</option>{Object.entries(RESULT).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select></label>
-        <label className="flex flex-1 flex-col gap-1 text-[11px] text-ink-3">Tìm
-          <input className={`${field} min-w-48`} placeholder="Tóm tắt, IP, mã yêu cầu…" value={search} onChange={(e) => setSearch(e.target.value)} /></label>
+        <label className="flex min-w-0 flex-1 basis-48 flex-col gap-1 text-[11px] text-ink-3">Tìm
+          <input className={`${field} w-full min-w-0`} placeholder="Tóm tắt, IP, mã yêu cầu…" value={search} onChange={(e) => setSearch(e.target.value)} /></label>
         <Button type="submit">Tìm</Button>
       </form>
-      <Card className="overflow-hidden">
+      <Card className="flex flex-col overflow-hidden md:min-h-80 md:flex-1">
         {isPending ? <Loading /> : isError ? <ErrorBox onRetry={() => refetch()}>Không tải được nhật ký.</ErrorBox> : !data.items.length ? <Empty>Không có sự kiện nào khớp bộ lọc.</Empty> : (
-          <table className="w-full text-left text-[13px]">
-            <thead className="border-b border-line text-[11px] uppercase tracking-wide text-ink-3">
+          <div className="min-h-0 flex-1 overflow-auto"><table className="w-full text-left text-[13px] max-md:block">
+            <thead className="sticky top-0 border-b border-line bg-surface text-[11px] uppercase tracking-wide text-ink-3 max-md:hidden">
               <tr><th className="px-4 py-2.5 font-semibold">Thời điểm</th><th className="px-2 py-2.5 font-semibold">Người thực hiện</th><th className="px-2 py-2.5 font-semibold">Việc đã làm</th><th className="px-2 py-2.5 font-semibold">Kết quả</th><th className="px-2 py-2.5 font-semibold">IP</th></tr>
             </thead>
-            <tbody>
+            <tbody className="max-md:block">
               {data.items.map((e) => (
-                <tr key={e.id} tabIndex={0} onClick={() => setOpen(e.id)} onKeyDown={(k) => k.key === 'Enter' && setOpen(e.id)} className="cursor-pointer border-b border-line last:border-0 hover:bg-app">
-                  <td className="whitespace-nowrap px-4 py-2.5"><Time iso={e.at} as="dateTime" /></td>
-                  <td className="px-2 py-2.5 font-medium">{e.actor}</td>
-                  <td className="px-2 py-2.5">{e.summary}{e.has_metadata && <Badge className="ml-2">metadata</Badge>}</td>
-                  <td className="px-2 py-2.5"><Badge tone={RESULT[e.result].tone}>{RESULT[e.result].label}</Badge></td>
-                  <td className="whitespace-nowrap px-2 py-2.5 text-ink-2">{e.ip ?? '–'}</td>
+                <tr key={e.id} tabIndex={0} onClick={() => setOpen(e.id)} onKeyDown={(k) => k.key === 'Enter' && setOpen(e.id)} className={`cursor-pointer border-b border-line last:border-0 hover:bg-app ${STACK_ROW}`}>
+                  <td data-label="Thời điểm" className={`whitespace-nowrap px-4 py-2.5 ${STACK_CELL}`}><Time iso={e.at} as="dateTime" /></td>
+                  <td data-label="Người thực hiện" className={`px-2 py-2.5 font-medium ${STACK_CELL}`}>{e.actor}</td>
+                  <td data-label="Việc đã làm" className={`px-2 py-2.5 max-md:col-span-2 ${STACK_CELL}`}>{e.summary}{e.has_metadata && <Badge className="ml-2">metadata</Badge>}</td>
+                  <td data-label="Kết quả" className={`px-2 py-2.5 ${STACK_CELL}`}><Badge tone={RESULT[e.result].tone}>{RESULT[e.result].label}</Badge></td>
+                  <td data-label="IP" className={`whitespace-nowrap px-2 py-2.5 text-ink-2 ${STACK_CELL}`}>{e.ip ?? '–'}</td>
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         )}
         {data && <Pager page={data.page} pages={data.pages} total={data.total} size={data.page_size} onPage={(page) => setQ((p) => ({ ...p, page }))} onSize={(page_size) => setQ((p) => ({ ...p, page: 1, page_size }))} />}
       </Card>

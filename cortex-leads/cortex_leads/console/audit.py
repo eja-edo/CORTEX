@@ -11,6 +11,7 @@ from fastapi.responses import Response
 from sqlalchemy import func, or_, select
 
 from cortex_leads.audit.service import verify
+from cortex_leads.auth.perms import Perm
 from cortex_leads.console.auth import Session, need
 from cortex_leads.console.trail import audit
 from cortex_leads.core.timefmt import wire
@@ -35,7 +36,7 @@ def _item(r: m.AuditEvent, *, detail: bool = False) -> dict[str, Any]:
 def _filters(sess: Session, *, start: datetime | None, end: datetime | None, actor: str | None, category: str | None, result: str | None,
              q: str | None) -> list[Any]:
     conds: list[Any] = [m.AuditEvent.tenant_id == sess.caller.tenant_id]
-    if not sess.can("audit.all"):
+    if not sess.can(Perm.AUDIT_ALL):
         conds.append(m.AuditEvent.actor == sess.actor)  # staff see their own trail, nothing about colleagues
     elif actor:
         conds.append(m.AuditEvent.actor == actor)
@@ -66,7 +67,7 @@ def _day(sess: Session, d: str | None, plus: int = 0) -> datetime | None:
 
 @router.get("/audit")
 async def list_events(
-    sess: Session = need("audit.own"), page: int = Query(1, ge=1, le=100_000), page_size: int = Query(20), date_from: str | None = None,
+    sess: Session = need(Perm.AUDIT_OWN), page: int = Query(1, ge=1, le=100_000), page_size: int = Query(20), date_from: str | None = None,
     date_to: str | None = None, actor: str | None = Query(None, max_length=120), category: Literal[tuple(CATEGORIES)] | None = None,  # type: ignore[valid-type]
     result: Literal["success", "denied", "failed"] | None = None, q: str | None = Query(None, max_length=80),
 ) -> dict[str, Any]:
@@ -78,14 +79,14 @@ async def list_events(
         rows = (await s.execute(select(m.AuditEvent).where(*conds).order_by(m.AuditEvent.seq.desc())
                                 .limit(page_size).offset((page - 1) * page_size))).scalars().all()
         actors = [a for (a,) in (await s.execute(select(m.AuditEvent.actor).where(m.AuditEvent.tenant_id == sess.caller.tenant_id)
-                                                 .distinct().order_by(m.AuditEvent.actor))).all()] if sess.can("audit.all") else [sess.actor]
+                                                 .distinct().order_by(m.AuditEvent.actor))).all()] if sess.can(Perm.AUDIT_ALL) else [sess.actor]
     pages = max(1, -(-total // page_size))
     return {"items": [_item(r) for r in rows], "total": total, "page": page, "page_size": page_size, "pages": pages,
             "page_sizes": list(PAGE_SIZES), "actors": actors, "categories": CATEGORIES}
 
 
 @router.get("/audit/export")
-async def export(sess: Session = need("audit.admin"), date_from: str | None = None, date_to: str | None = None, category: str | None = None,
+async def export(sess: Session = need(Perm.AUDIT_ADMIN), date_from: str | None = None, date_to: str | None = None, category: str | None = None,
                  result: str | None = None, q: str | None = Query(None, max_length=80)) -> Response:
     conds = _filters(sess, start=_day(sess, date_from), end=_day(sess, date_to, 1), actor=None, category=category, result=result, q=q)
     async with tenant_session(sess.caller.tenant_id) as s:
@@ -106,15 +107,15 @@ def _safe(v: Any) -> str:
 
 
 @router.get("/audit/verify")
-async def check(sess: Session = need("audit.admin")) -> dict[str, Any]:
+async def check(sess: Session = need(Perm.AUDIT_ADMIN)) -> dict[str, Any]:
     async with tenant_session(sess.caller.tenant_id) as s:
         return await verify(s, sess.caller.tenant_id)
 
 
 @router.get("/audit/{event_id}")
-async def one(event_id: UUID, sess: Session = need("audit.own")) -> dict[str, Any]:
+async def one(event_id: UUID, sess: Session = need(Perm.AUDIT_OWN)) -> dict[str, Any]:
     async with tenant_session(sess.caller.tenant_id) as s:
         r = await s.get(m.AuditEvent, event_id)
-    if r is None or r.tenant_id != sess.caller.tenant_id or (not sess.can("audit.all") and r.actor != sess.actor):
+    if r is None or r.tenant_id != sess.caller.tenant_id or (not sess.can(Perm.AUDIT_ALL) and r.actor != sess.actor):
         raise HTTPException(404, "event not found")
     return _item(r, detail=True)

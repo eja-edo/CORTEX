@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from cortex_leads.auth.roles import ApiRole
 from cortex_leads.channels.policy import window_state
 from cortex_leads.core.context import RunContext, Scope, StaffPrincipal
 from cortex_leads.core.envelope import BlockedCode, ToolResult
@@ -22,7 +23,7 @@ from cortex_leads.skills.registry import TURN_EVENT
 from cortex_leads.tools.registry import default_registry
 
 router = APIRouter()
-STAFF = require("staff", "owner")
+STAFF = require(ApiRole.STAFF, ApiRole.OWNER)
 CLOCK = Depends(get_now)  # overridable in tests; staff_ui passes `now` explicitly
 DraftStatus = Literal["proposed", "approved", "sent", "edited", "self", "skipped", "expired", "blocked",
                       "failed"]

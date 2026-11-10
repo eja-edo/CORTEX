@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
+from cortex_leads.auth.perms import Perm
 from cortex_leads.config import get_settings
 from cortex_leads.connectors import mcp_remote
 from cortex_leads.connectors.http_readonly import ConnectorError, pin_of, validate_source
@@ -63,7 +64,7 @@ async def _attachable(s: Any) -> list[m.Sandbox]:
 
 
 @router.get("/sources")
-async def list_sources(sess: Session = need("sources.manage")) -> dict[str, Any]:
+async def list_sources(sess: Session = need(Perm.SOURCES_MANAGE)) -> dict[str, Any]:
     now = datetime.now(UTC)
     async with tenant_session(sess.caller.tenant_id) as s:
         sbs = {x.id: x for x in (await s.execute(select(m.Sandbox))).scalars()}
@@ -77,7 +78,7 @@ async def list_sources(sess: Session = need("sources.manage")) -> dict[str, Any]
 
 
 @router.get("/sources/{source_id}")
-async def source_detail(source_id: UUID, sess: Session = need("sources.manage")) -> dict[str, Any]:
+async def source_detail(source_id: UUID, sess: Session = need(Perm.SOURCES_MANAGE)) -> dict[str, Any]:
     async with tenant_session(sess.caller.tenant_id) as s:
         c = await s.get(m.ToolConnector, source_id)
         if c is None:
@@ -102,7 +103,7 @@ def _source(b: Describe) -> dict[str, Any]:
 
 
 @router.post("/sources/mcp/describe")
-async def describe_mcp(body: Describe, sess: Session = need("sources.manage")) -> dict[str, Any]:
+async def describe_mcp(body: Describe, sess: Session = need(Perm.SOURCES_MANAGE)) -> dict[str, Any]:
     """What the server offers, to choose exactly one tool and pin it. The key is used for this call only."""
     try:
         tools = await mcp_remote.describe({**_source(body), "expose": [], "tool_pin": ""}, body.secret.encode() if body.secret else None)
@@ -121,7 +122,7 @@ class NewSource(Describe):
 
 
 @router.post("/sources", status_code=201)
-async def create_source(body: NewSource, sess: Session = need("sources.manage")) -> dict[str, Any]:
+async def create_source(body: NewSource, sess: Session = need(Perm.SOURCES_MANAGE)) -> dict[str, Any]:
     source = _source(body)
     secret = Fernet(get_settings().CONNECTOR_SECRET_KEY).encrypt(body.secret.encode()) if body.secret else None
     try:
@@ -176,7 +177,7 @@ async def _change(source_id: UUID, sess: Session, verb: str, *, summary: str) ->
 
 
 @router.post("/sources/{source_id}/review")
-async def review_source(source_id: UUID, sess: Session = need("sources.manage")) -> dict[str, str]:
+async def review_source(source_id: UUID, sess: Session = need(Perm.SOURCES_MANAGE)) -> dict[str, str]:
     """After the server changed the tool: read the definition again and, if it is still read-only, pin it as the new approved one."""
     async with tenant_session(sess.caller.tenant_id) as s:
         c = await s.get(m.ToolConnector, source_id)
@@ -199,7 +200,7 @@ async def review_source(source_id: UUID, sess: Session = need("sources.manage"))
 
 
 @router.post("/sources/{source_id}/{verb}")
-async def source_verb(source_id: UUID, verb: Literal["lock", "unlock"], sess: Session = need("sources.manage")) -> dict[str, str]:
+async def source_verb(source_id: UUID, verb: Literal["lock", "unlock"], sess: Session = need(Perm.SOURCES_MANAGE)) -> dict[str, str]:
     c = await _change(source_id, sess, verb, summary="Khoá nguồn" if verb == "lock" else "Khôi phục nguồn")
     return {"state": _state(c)}
 
@@ -209,7 +210,7 @@ class Move(BaseModel):
 
 
 @router.put("/sources/{source_id}/sandbox")
-async def move_source(source_id: UUID, body: Move, sess: Session = need("sources.manage")) -> dict[str, str]:
+async def move_source(source_id: UUID, body: Move, sess: Session = need(Perm.SOURCES_MANAGE)) -> dict[str, str]:
     async with tenant_session(sess.caller.tenant_id) as s:
         c = await s.get(m.ToolConnector, source_id)
         if c is None:

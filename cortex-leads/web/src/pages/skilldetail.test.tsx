@@ -16,12 +16,12 @@ describe('Chi tiết kỹ năng', () => {
   it('shows what the person wrote, the limits, the sandbox and where to edit', async () => {
     server({ 'GET /session': OWNER, 'GET /skills/s2': DETAIL })
     renderApp('/skills/s2')
-    expect(await screen.findByRole('heading', { name: 'tuy-chinh-nhac-gia' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Kỹ năng riêng: nhac-gia' })).toBeInTheDocument()
     expect(screen.getByText(/Nhắc nhẹ, nêu đúng một lợi ích/)).toBeInTheDocument()
     expect(screen.getByText('1 lần mỗi khách')).toBeInTheDocument()
     expect(screen.getByText('24 giờ')).toBeInTheDocument()
     expect(screen.getByText('chốt ngay hôm nay')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Chăm sóc khách' })).toHaveAttribute('href', '/sandboxes')
+    expect(screen.getByRole('link', { name: 'Chăm sóc khách' })).toHaveAttribute("href", "/settings?tab=ai")
     expect(screen.getByRole('link', { name: /Sửa/ })).toHaveAttribute('href', '/skills/s2/edit')
   })
 
@@ -59,7 +59,7 @@ describe('Chi tiết kỹ năng', () => {
   it('shows staff the content but not the history, and no delete', async () => {
     server({ 'GET /session': STAFF, 'GET /skills/s2': { ...DETAIL, history: [] } })
     renderApp('/skills/s2')
-    await screen.findByRole('heading', { name: 'tuy-chinh-nhac-gia' })
+    await screen.findByRole('heading', { name: 'Kỹ năng riêng: nhac-gia' })
     expect(screen.queryByRole('button', { name: /Xoá \(khoá\)/ })).toBeNull()
     await userEvent.click(screen.getByRole('tab', { name: /Lịch sử chỉnh sửa/ }))
     expect(screen.getByText('Chỉ chủ xem được lịch sử chỉnh sửa.')).toBeInTheDocument()
@@ -97,10 +97,10 @@ describe('Danh sách có tab Đã xoá', () => {
     const gone = { ...SKILLS.items[2], id: 's9', name: 'tuy-chinh-cu', deleted: true, status: 'retired' as const, can: { ...SKILLS.items[2].can, restore: true, edit: false, delete: false, trial: false } }
     server({ 'GET /session': OWNER, 'GET /skills': { ...SKILLS, items: [...SKILLS.items, gone], counts: { ...SKILLS.counts, deleted: 1 } } })
     renderApp('/skills')
-    await screen.findByText('tuy-chinh-nhac-gia')
-    expect(screen.queryByText('tuy-chinh-cu')).toBeNull()
+    await screen.findByText('Kỹ năng riêng: nhac-gia')
+    expect(screen.queryByText('Kỹ năng riêng: cu')).toBeNull()
     await userEvent.click(screen.getByRole('tab', { name: /Đã xoá/ }))
-    expect(await screen.findByText('tuy-chinh-cu')).toBeInTheDocument()
-    expect(screen.queryByText('tuy-chinh-nhac-gia')).toBeNull()
+    expect(await screen.findByText('Kỹ năng riêng: cu')).toBeInTheDocument()
+    expect(screen.queryByText('Kỹ năng riêng: nhac-gia')).toBeNull()
   })
 })

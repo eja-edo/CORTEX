@@ -41,9 +41,13 @@ class FakeClassroom:
         self.uploaded: dict[str, dict] = {}       # id -> {"name", "parents", "bytes": bytearray, "mime"}
         self.trashed: set[str] = set()             # files moved to the bin
         self.announcements: dict[str, dict] = {}   # what was posted to a course's stream
+        self.topics: dict[str, dict] = {}          # topicId -> {"topicId", "name", "_course"}
+        self.deleted_work: set[str] = set()        # course work removed through the API
         self._sessions: dict[str, dict] = {}
         self.write_refused_in: str | None = None  # a folder id in which new files are refused, like a narrow sign-in in a folder it did not make
         self.drive_refuses: str | None = None     # "storage" | "scope" | "auth": make the next uploads fail like Google would
+        self.course_refuses = False               # a teacher Google does not let make courses: creating one is 403
+        self.activate_refuses = False             # an account Google lets create a course but not move it to ACTIVE
         self._n = 0
 
     def _id(self, prefix: str) -> str:
@@ -155,8 +159,25 @@ class FakeClassroom:
             if q.get("fields"):
                 return self._json(200, {"mimeType": f["mimeType"], "size": str(len(f["bytes"]) if "bytes" in f else len(f["text"]))})
             return httpx.Response(200, content=f["bytes"]) if "bytes" in f else httpx.Response(200, text=f["text"])
+        if path == "/v1/courses" and req.method == "POST":
+            if self.course_refuses:
+                return self._json(403, {"error": {"status": "PERMISSION_DENIED"}})
+            if body.get("courseState") == "ACTIVE":  # what Google does to a teacher who is not an admin: the state may not be asked for on create
+                return self._json(403, {"error": {"status": "PERMISSION_DENIED", "message": "@CourseStateDenied"}})
+            cid = self._id("nc")
+            self.courses[cid] = {"id": cid, "name": body.get("name", ""), "courseState": "PROVISIONED", "ownerId": body.get("ownerId"),
+                                 "alternateLink": f"https://classroom.google.com/c/{cid}"}
+            return self._json(200, self.courses[cid])
         if path == "/v1/courses":
             return self._json(200, {"courses": list(self.courses.values())})
+        if (m := re.fullmatch(r"/v1/courses/(\w+)", path)) and req.method == "PATCH":
+            c = self.courses.get(m[1])
+            if c is None:
+                return self._json(404, {})
+            if self.activate_refuses:
+                return self._json(403, {"error": {"status": "PERMISSION_DENIED", "message": "@CourseStateDenied"}})
+            c.update(body)
+            return self._json(200, c)
         if m := re.fullmatch(r"/v1/courses/(\w+)", path):
             c = self.courses.get(m[1])
             return self._json(200, c) if c else self._json(404, {})
@@ -169,9 +190,53 @@ class FakeClassroom:
         if m := re.fullmatch(r"/v1/courses/(\w+)/students/(\w+)", path):
             s = self.students.get(m[2])
             return self._json(200, s) if s else self._json(404, {})
+        if m := re.fullmatch(r"/v1/courses/(\w+)/topics", path):
+            if m[1] not in self.courses:
+                return self._json(404, {})
+            if req.method == "GET":
+                return self._json(200, {"topic": [self._public(t) for t in self.topics.values() if t["_course"] == m[1]]})
+            tid = self._id("t")
+            self.topics[tid] = {"topicId": tid, "name": body.get("name", ""), "_course": m[1]}
+            return self._json(200, self._public(self.topics[tid]))
+        if m := re.fullmatch(r"/v1/courses/(\w+)/students", path):
+            return self._json(200, {"students": list(self.students.values())})
+        if m := re.fullmatch(r"/v1/courses/(\w+)/courseWork/(\w+)", path):
+            work = self.work.get(m[2])
+            if work is None or work["_course"] != m[1]:
+                return self._json(404, {})
+            if req.method == "GET":
+                return self._json(200, self._public(work))
+            if not work["associatedWithDeveloper"]:  # Google: only the project that made the work may change or delete it
+                return self._json(403, {"error": {"status": "PERMISSION_DENIED"}})
+            if req.method == "DELETE":
+                del self.work[m[2]]
+                self.deleted_work.add(m[2])
+                return self._json(200, {})
+            mask = q.get("updateMask", [""])[0].split(",")
+            allowed = {"title", "description", "state", "dueDate", "dueTime", "maxPoints", "scheduledTime", "topicId"}  # NOT materials
+            if not mask or any(f not in allowed for f in mask):
+                return self._json(400, {"error": {"status": "INVALID_ARGUMENT"}})
+            if "state" in mask and (work["state"] != "DRAFT" or body.get("state") != "PUBLISHED"):
+                return self._json(400, {"error": {"status": "INVALID_ARGUMENT"}})
+            for f in mask:
+                if f in body:
+                    work[f] = body[f]
+                else:
+                    work.pop(f, None)
+            if "state" in mask:
+                work.pop("scheduledTime", None)
+            return self._json(200, self._public(work))
         if m := re.fullmatch(r"/v1/courses/(\w+)/courseWork", path):
             if req.method == "GET":
-                return self._json(200, {"courseWork": [self._public(w) for w in self.work.values() if w["_course"] == m[1]]})
+                states = q.get("courseWorkStates", [])
+                return self._json(200, {"courseWork": [self._public(w) for w in self.work.values()
+                                                       if w["_course"] == m[1] and (not states or w["state"] in states)]})
+            if m[1] not in self.courses:
+                return self._json(404, {})
+            if body.get("topicId") and body["topicId"] not in self.topics:
+                return self._json(400, {"error": {"status": "INVALID_ARGUMENT"}})
+            if body.get("scheduledTime") and body.get("state") != "DRAFT":  # Classroom: a schedule only goes with a draft
+                return self._json(400, {"error": {"status": "INVALID_ARGUMENT"}})
             wid = self._id("w")
             self.work[wid] = {**{k: v for k, v in body.items()}, "id": wid, "associatedWithDeveloper": True, "_course": m[1],
                               "state": body.get("state", "PUBLISHED")}
@@ -244,7 +309,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(res.content)
 
-    do_GET = do_POST = do_PATCH = _serve
+    do_GET = do_POST = do_PATCH = do_DELETE = _serve
 
     def log_message(self, *args: object) -> None:
         pass

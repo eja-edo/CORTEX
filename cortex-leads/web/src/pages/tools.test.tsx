@@ -172,8 +172,8 @@ describe('Chi tiết sandbox', () => {
     const s = server({ 'GET /session': OWNER, 'GET /sandboxes/sb1': SB, 'GET /sandboxes': SANDBOXES, 'POST /sandboxes/sb1/tools/book_slot/on': { tool: 'book_slot', on: true },
       'GET /sandboxes/sb1/tools/book_slot': { ...SB.tools[1], sandbox: 'Chăm sóc khách', safety: ['Chỗ được khoá, không vượt sức chứa'], if_off: null } })
     renderApp('/sandboxes/sb1?tab=tools')
-    expect(await screen.findByRole('img', { name: 'tra-loi-khach · Giữ chỗ học thử: Kỹ năng cần nhưng sandbox đã tắt' })).toBeInTheDocument()
-    expect(screen.getByRole('img', { name: 'tuy-chinh-nhac-gia · Giữ chỗ học thử: Bị khoá với kỹ năng từ form' })).toBeInTheDocument()
+    expect(await screen.findByRole('img', { name: 'Trả lời khách · Giữ chỗ học thử: Kỹ năng cần nhưng việc này đã tắt' })).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: 'Kỹ năng riêng: nhac-gia · Giữ chỗ học thử: Bị khoá với kỹ năng từ form' })).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Giữ chỗ học thử' }))
     const sw = await screen.findByRole('switch', { name: 'Cho phép dùng' })
     expect(sw).not.toBeChecked()
@@ -183,25 +183,29 @@ describe('Chi tiết sandbox', () => {
 })
 
 describe('Chế độ gửi', () => {
-  it('shows manual by default, which skills could ever send alone, and asks before turning auto on', async () => {
-    const s = server({ 'GET /session': OWNER, 'GET /sandboxes/sb1': SB, 'GET /sandboxes': SANDBOXES, 'POST /sandboxes/sb1/send-mode': { send_mode: 'auto', changed: true } })
+  it('only shows the mode and which skills could ever send alone: changing it is done in Cài đặt → AI', async () => {
+    const s = server({ 'GET /session': OWNER, 'GET /sandboxes/sb1': SB, 'GET /sandboxes': SANDBOXES })
     renderApp('/sandboxes/sb1?tab=send')
-    expect(await screen.findByRole('radio', { name: /Duyệt tay/, checked: true })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Chế độ gửi tin cho khách' })).toBeInTheDocument()
     expect(screen.getByText('Soạn nháp: kỹ năng này luôn chờ nhân viên duyệt.')).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('radio', { name: /Tự gửi khi đủ điều kiện/ }))
-    expect(s.posted('/sandboxes/sb1/send-mode')).toHaveLength(0) // a question first
-    const group = screen.getByRole('group', { name: 'Xác nhận bật tự gửi' })
-    expect(within(group).getByText(/không ai duyệt/)).toBeInTheDocument()
-    await userEvent.click(within(group).getByRole('button', { name: 'Bật tự gửi' }))
-    await waitFor(() => expect(s.posted('/sandboxes/sb1/send-mode')[0].body).toEqual({ mode: 'auto' }))
+    expect(screen.queryByRole('radio', { name: /Tự gửi khi đủ điều kiện/ })).toBeNull() // no second place that can write it
+    expect(screen.getByRole('link', { name: /Đổi ở Cài đặt → AI/ })).toHaveAttribute('href', '/settings?tab=ai')
+    expect(s.calls.some((c) => c.method === 'POST')).toBe(false)
   })
 
-  it('goes back to manual in one click, and warns when no channel could send anyway', async () => {
-    const s = server({ 'GET /session': OWNER, 'GET /sandboxes': SANDBOXES, 'POST /sandboxes/sb1/send-mode': { send_mode: 'manual', changed: true },
+  it('warns when auto is on but no channel could send anyway', async () => {
+    server({ 'GET /session': OWNER, 'GET /sandboxes': SANDBOXES,
       'GET /sandboxes/sb1': { ...SB, send: { ...SB.send, mode: 'auto', auto_possible: false, channels: [{ kind: 'messenger', can_send: false, problems: ['Kênh chưa bật gửi từ hệ thống'] }] } } })
     renderApp('/sandboxes/sb1?tab=send')
     expect(await screen.findByText('Kênh chưa bật gửi từ hệ thống')).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('radio', { name: /Duyệt tay/ }))
-    await waitFor(() => expect(s.posted('/sandboxes/sb1/send-mode')[0].body).toEqual({ mode: 'manual' }))
+    expect(screen.getByText(/vẫn chờ nhân viên/)).toBeInTheDocument()
+  })
+
+  it('links the channels and the push targets to where they are managed, and the catalog count to Dữ liệu', async () => {
+    server({ 'GET /session': OWNER, 'GET /sandboxes/sb1': SB, 'GET /sandboxes': SANDBOXES })
+    renderApp('/sandboxes/sb1?tab=data')
+    expect(await screen.findByRole('link', { name: /Quản lý kênh ở Cài đặt → Kênh nhắn tin/ })).toHaveAttribute('href', '/settings?tab=channels')
+    expect(screen.getByRole('link', { name: /Quản lý nơi nhận thông báo/ })).toHaveAttribute('href', '/settings?tab=notify')
+    expect(screen.getByRole('link', { name: 'Xem ở Dữ liệu' })).toHaveAttribute('href', '/data')
   })
 })

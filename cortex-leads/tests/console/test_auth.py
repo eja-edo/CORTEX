@@ -3,7 +3,7 @@ import hashlib
 from datetime import timedelta
 
 from sqlalchemy import text
-from support import PASSWORD, account_for_key, h, sign_in
+from support import PASSWORD, account_for_key, activate, h, sign_in
 from wp5_support import rows
 
 from cortex_leads.auth.passwords import hash_password, strength_errors, verify_password
@@ -102,16 +102,30 @@ async def test_malformed_sign_in_bodies_are_refused_before_any_hashing(app_clien
 
 
 # --- sessions ----------------------------------------------------------------------------------------
-async def test_the_cookie_is_opaque_and_the_database_keeps_only_a_hash_of_its_secret(app_client, world, api_key_factory, owner_engine):
+async def test_the_cookie_is_a_signed_token_that_cannot_be_altered_or_forged(app_client, world, api_key_factory, owner_engine):
+    import base64
+    import json
+
+    import jwt as pyjwt
     csrf, email = await as_(app_client, world, api_key_factory, "staff", "nv1")
     cookie = app_client.cookies.get("cl_session")
-    sid, secret = cookie.split(".", 1)
+    head, body, sig = cookie.split(".")
+    claims = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+    assert claims["r"] == "staff" and claims["em"] == email and "password" not in cookie.lower() and csrf
     async with owner_engine.begin() as c:
-        row = (await c.execute(text("select secret_hash, expires_at, ip from auth_session where id = :i"), {"i": sid})).one()
-    assert row.secret_hash == hashlib.sha256(secret.encode()).hexdigest() and secret not in row.secret_hash and row.ip
-    assert cookie.count(".") == 1 and email not in cookie and csrf
-    app_client.cookies.set("cl_session", f"{sid}.{'A' * len(secret)}", path="/")  # right session, wrong secret
-    assert (await app_client.get("/api/v1/session")).status_code == 401
+        row = (await c.execute(text("select expires_at, ip from auth_session where id = :i"), {"i": claims["sid"]})).one()
+    assert row.ip  # the list of devices still knows where it was
+    owner_claims = {**claims, "r": "owner"}
+    for bad in (
+        f"{head}.{base64.urlsafe_b64encode(json.dumps(owner_claims).encode()).decode().rstrip('=')}.{sig}",  # edited: the signature no longer fits
+        pyjwt.encode(owner_claims, "some-other-key", algorithm="HS256"),  # signed by someone else
+        pyjwt.encode(owner_claims, key=None, algorithm="none"),  # no signature at all
+        f"{head}.{body}.", f"{head}.{body}", cookie[:-3] + "AAA", "",
+    ):
+        app_client.cookies.set("cl_session", bad, path="/")
+        assert (await app_client.get("/api/v1/session")).status_code == 401, bad[:40]
+    app_client.cookies.set("cl_session", cookie, path="/")
+    assert (await app_client.get("/api/v1/session")).status_code == 200
 
 
 async def test_logout_ends_the_session_on_the_server_so_a_copied_cookie_is_dead(app_client, world, api_key_factory):
@@ -122,48 +136,67 @@ async def test_logout_ends_the_session_on_the_server_so_a_copied_cookie_is_dead(
     assert (await app_client.get("/api/v1/session")).status_code == 401
 
 
-async def test_sessions_end_after_their_absolute_and_idle_limits(app_client, world, api_key_factory, owner_engine):
-    await as_(app_client, world, api_key_factory, "staff", "nv1")
-    sid = app_client.cookies.get("cl_session").split(".")[0]
-    async with owner_engine.begin() as c:
-        await c.execute(text("update auth_session set last_seen_at = now() - interval '3 hours' where id = :i"), {"i": sid})
-    assert (await app_client.get("/api/v1/session")).status_code == 401  # idle for longer than 2 hours
-    await as_(app_client, world, api_key_factory, "staff", "nv1")
-    sid = app_client.cookies.get("cl_session").split(".")[0]
-    async with owner_engine.begin() as c:
-        await c.execute(text("update auth_session set expires_at = now() - interval '1 second' where id = :i"), {"i": sid})
-    assert (await app_client.get("/api/v1/session")).status_code == 401  # past its absolute end, however active
+async def _token_made_at(world, email, *, now, auth_time=None):
+    """What the server would have handed out at `now`: the clock is the token's own, so no test has to wait."""
+    from sqlalchemy import select
+
+    from cortex_leads.auth import tokens
+    from cortex_leads.db.session import tenant_session
+    async with tenant_session(world.t.id) as s:
+        user = (await s.execute(select(m.AppUser).where(m.AppUser.email == email))).scalar_one()
+        sid = (await s.execute(select(m.AuthSession.id).where(m.AuthSession.user_id == user.id, m.AuthSession.revoked_at.is_(None)))).scalars().first()
+        return tokens.issue(user, await s.get(m.Tenant, user.tenant_id), sid, auth_time or now, now), sid
 
 
-async def test_activity_keeps_a_session_alive_but_only_writes_now_and_then(app_client, world, api_key_factory, owner_engine):
-    await as_(app_client, world, api_key_factory, "staff", "nv1")
-    sid = app_client.cookies.get("cl_session").split(".")[0]
-    async with owner_engine.begin() as c:
-        await c.execute(text("update auth_session set last_seen_at = now() - interval '90 minutes' where id = :i"), {"i": sid})
+async def test_an_access_token_ends_at_its_own_time_and_never_past_the_end_of_the_sign_in(app_client, world, api_key_factory):
+    from datetime import UTC, datetime
+    _, email = await as_(app_client, world, api_key_factory, "staff", "nv1")
+    now = datetime.now(UTC)
+    short, _ = await _token_made_at(world, email, now=now - timedelta(minutes=20))
+    app_client.cookies.set("cl_session", short, path="/")
+    assert (await app_client.get("/api/v1/session")).status_code == 401  # an access token lives minutes, not hours
+    long_ago, _ = await _token_made_at(world, email, now=now, auth_time=now - timedelta(days=31))
+    app_client.cookies.set("cl_session", long_ago, path="/")
+    assert (await app_client.get("/api/v1/session")).status_code == 401  # past the end of the sign-in, however it was renewed
+    fresh, _ = await _token_made_at(world, email, now=now)
+    app_client.cookies.set("cl_session", fresh, path="/")
     assert (await app_client.get("/api/v1/session")).status_code == 200
-    async with owner_engine.begin() as c:
-        seen = (await c.execute(text("select now() - last_seen_at from auth_session where id = :i"), {"i": sid})).scalar_one()
-    assert seen < timedelta(minutes=1)  # slid forward
-    assert (await app_client.get("/api/v1/session")).status_code == 200
 
 
-async def test_a_disabled_person_is_out_on_the_very_next_request(app_client, world, api_key_factory, owner_engine):
+async def _change(world, email, **kw):
+    """What the console does when an owner changes a person: through the account rules, which raise the person's version."""
+    from datetime import UTC, datetime
+
+    from sqlalchemy import select
+
+    from cortex_leads.auth.users import change_role_or_status
+    from cortex_leads.db.session import tenant_session
+    async with tenant_session(world.t.id) as s:
+        user = (await s.execute(select(m.AppUser).where(m.AppUser.email == email))).scalar_one()
+        await change_role_or_status(s, user, role=kw.get("role"), status=kw.get("status"), now=datetime.now(UTC))
+
+
+async def test_a_disabled_person_is_out_on_the_very_next_request(app_client, world, api_key_factory):
     _, email = await as_(app_client, world, api_key_factory, "staff", "nv1")
     assert (await app_client.get("/api/v1/session")).status_code == 200
-    async with owner_engine.begin() as c:
-        await c.execute(text("update app_user set status = 'disabled' where lower(email) = :e"), {"e": email})
+    await _change(world, email, status="disabled")
     assert (await app_client.get("/api/v1/session")).status_code == 401
     assert (await login(app_client, email)).status_code == 401  # and cannot come back, with the same answer as a wrong password
     assert [e.metadata_["reason"] for e in await rows(world, m.AuditEvent) if e.action == "login.failed"] == ["disabled"]
 
 
-async def test_a_demotion_takes_effect_on_the_next_request_without_signing_in_again(app_client, world, api_key_factory, owner_engine):
+async def test_a_demotion_ends_the_old_token_and_the_next_sign_in_has_the_new_role(app_client, world, api_key_factory):
     csrf, email = await as_(app_client, world, api_key_factory, "owner")
     assert (await app_client.get("/api/v1/audit/verify")).status_code == 200
-    async with owner_engine.begin() as c:
-        await c.execute(text("update app_user set role = 'staff' where lower(email) = :e"), {"e": email})
+    from cortex_leads.auth.users import create_user
+    from cortex_leads.db.session import tenant_session
+    async with tenant_session(world.t.id) as s:  # the business keeps an owner, so this one can step down
+        await create_user(s, world.t.id, email="chu-khac@example.vn", name="Chủ Khác", role="owner", password=GOOD, created_by="test")
+    await _change(world, email, role="staff")  # the token carries the role, so a change of role ends it: no stale owner token survives
+    assert (await app_client.get("/api/v1/audit/verify")).status_code == 401
+    app_client.cookies.clear()
+    assert (await login(app_client, email)).json()["role"] == "staff"
     assert (await app_client.get("/api/v1/audit/verify")).status_code == 403
-    assert (await app_client.get("/api/v1/session")).json()["role"] == "staff"
     assert csrf
 
 
@@ -183,7 +216,9 @@ async def test_changing_the_password_needs_the_current_one_and_ends_the_other_se
         r = await app_client.post("/api/v1/session/password", json={"current": PASSWORD, "new": GOOD}, headers=h(csrf))
         assert r.status_code == 200 and r.json()["other_sessions_ended"] == 1
         assert (await other.get("/api/v1/session")).status_code == 401  # the other device is out
-    assert (await app_client.get("/api/v1/session")).status_code == 200  # this one stays
+    app_client.cookies.clear()  # a browser takes the new cookie the password change handed back; this test jar would keep both
+    app_client.cookies.set("cl_session", r.cookies.get("cl_session"), path="/")
+    assert (await app_client.get("/api/v1/session")).status_code == 200  # this one stays, on the version it was given
     app_client.cookies.clear()
     assert (await login(app_client, email, PASSWORD)).status_code == 401 and (await login(app_client, email, GOOD)).status_code == 200
     ev = {e.action for e in await rows(world, m.AuditEvent)}
@@ -227,23 +262,64 @@ async def test_nobody_can_end_someone_elses_session(app_client, world, api_key_f
 
 
 # --- accounts ----------------------------------------------------------------------------------------
-async def test_the_owner_adds_a_person_with_a_temporary_password_they_must_replace(app_client, world, api_key_factory):
+async def test_the_owner_invites_a_person_who_chooses_their_own_password_from_a_mailed_link(app_client, world, api_key_factory, mail):
     csrf, _ = await as_(app_client, world, api_key_factory, "owner")
     r = await app_client.post("/api/v1/team", json={"email": "Minh.Tran@Example.vn", "name": "Trần Minh", "role": "staff"}, headers=h(csrf))
     assert r.status_code == 201 and r.json()["email"] == "minh.tran@example.vn" and r.json()["staff_ref"] == "minh-tran"
-    temp = r.json()["temporary_password"]
-    assert len(temp) >= 12 and temp not in (await app_client.get("/api/v1/team")).text  # shown once, never listed
+    assert r.json()["mail_sent"] is True and "password" not in r.text.lower()  # no password exists to hand over
+    assert [x["to"] for x in mail.sent] == ["minh.tran@example.vn"] and "https://cortex.example.vn/app/reset#token=" in mail.sent[0]["body"]
+    listed = next(u for u in (await app_client.get("/api/v1/team")).json()["items"] if u["email"] == "minh.tran@example.vn")
+    assert listed["invited"] is True
     row = next(u for u in await rows(world, m.AppUser) if u.email == "minh.tran@example.vn")
-    assert temp not in row.password_hash and row.must_change_password
+    assert row.password_hash == "!"  # not a hash of anything: no input can match it
     app_client.cookies.clear()
-    me = (await login(app_client, "minh.tran@example.vn", temp)).json()
-    assert me["must_change_password"] is True
-    csrf2 = me["csrf"]
-    blocked = await app_client.get("/api/v1/conversations?filter=all")
-    assert blocked.status_code == 403 and blocked.json()["detail"]["code"] == "PASSWORD_CHANGE_REQUIRED"  # nothing else until a new password
-    assert (await app_client.get("/api/v1/session")).status_code == 200
-    assert (await app_client.post("/api/v1/session/password", json={"current": temp, "new": GOOD}, headers=h(csrf2))).status_code == 200
+    for guess in ("", "!", PASSWORD, GOOD, "Trần Minh"):  # nobody can walk in before the link is used
+        assert (await login(app_client, "minh.tran@example.vn", guess)).status_code in (401, 422)
+    assert (await activate(app_client, mail, GOOD)).status_code == 200
+    assert (await login(app_client, "minh.tran@example.vn", GOOD)).status_code == 200
     assert (await app_client.get("/api/v1/conversations?filter=all")).status_code == 200
+    assert (await activate(app_client, mail, "Another-pass-7391")).status_code == 400  # the link works once
+    csrf_owner, _ = await as_(app_client, world, api_key_factory, "owner")
+    assert next(u for u in (await app_client.get("/api/v1/team")).json()["items"] if u["email"] == "minh.tran@example.vn")["invited"] is False
+    blob = " ".join(str(e.metadata_) + e.summary for e in await rows(world, m.AuditEvent))
+    assert GOOD not in blob and mail.sent[0]["body"].split("token=")[1].split()[0] not in blob
+
+
+async def test_nobody_is_invited_when_the_server_cannot_send_mail(app_client, world, api_key_factory):
+    csrf, _ = await as_(app_client, world, api_key_factory, "owner")
+    r = await app_client.post("/api/v1/team", json={"email": "an@example.vn", "name": "Văn An", "role": "staff"}, headers=h(csrf))
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "MAIL_OFF"
+    assert not any(u.email == "an@example.vn" for u in await rows(world, m.AppUser))  # and no account was left behind with a way in
+
+
+async def test_a_failed_mail_leaves_a_waiting_account_the_owner_can_send_again(app_client, world, api_key_factory, mail):
+    csrf, _ = await as_(app_client, world, api_key_factory, "owner")
+    mail.fail = True
+    made = (await app_client.post("/api/v1/team", json={"email": "an@example.vn", "name": "Văn An", "role": "staff"}, headers=h(csrf))).json()
+    assert made["mail_sent"] is False and mail.sent == []
+    mail.fail = False
+    again = (await app_client.post(f"/api/v1/team/{made['id']}/send-link", headers=h(csrf))).json()
+    assert again["mail_sent"] is True and again["kind"] == "invite" and len(mail.sent) == 1
+    app_client.cookies.clear()
+    assert (await activate(app_client, mail, GOOD)).status_code == 200
+
+
+async def test_sending_again_cancels_the_earlier_link(app_client, world, api_key_factory, mail):
+    csrf, _ = await as_(app_client, world, api_key_factory, "owner")
+    made = (await app_client.post("/api/v1/team", json={"email": "an@example.vn", "name": "Văn An", "role": "staff"}, headers=h(csrf))).json()
+    await app_client.post(f"/api/v1/team/{made['id']}/send-link", headers=h(csrf))
+    app_client.cookies.clear()
+    assert (await activate(app_client, mail, GOOD, 0)).status_code == 400
+    assert (await activate(app_client, mail, GOOD, 1)).status_code == 200
+
+
+async def test_the_invitation_link_expires(app_client, world, api_key_factory, mail, owner_engine):
+    csrf, _ = await as_(app_client, world, api_key_factory, "owner")
+    await app_client.post("/api/v1/team", json={"email": "an@example.vn", "name": "Văn An", "role": "staff"}, headers=h(csrf))
+    async with owner_engine.begin() as c:
+        await c.execute(text("update password_reset set expires_at = now() - interval '1 minute'"))
+    app_client.cookies.clear()
+    assert (await activate(app_client, mail, GOOD)).status_code == 400
 
 
 async def test_accounts_are_the_owners_to_manage_and_staff_are_refused(app_client, world, api_key_factory):
@@ -253,7 +329,7 @@ async def test_accounts_are_the_owners_to_manage_and_staff_are_refused(app_clien
     assert not any(u.email == "x@y.vn" for u in await rows(world, m.AppUser))
 
 
-async def test_email_is_unique_across_businesses_and_bad_input_is_refused(app_client, world, api_key_factory, tenant_factory):
+async def test_email_is_unique_across_businesses_and_bad_input_is_refused(app_client, world, api_key_factory, tenant_factory, mail):
     csrf, _ = await as_(app_client, world, api_key_factory, "owner")
     other = await tenant_factory()
     from cortex_leads.auth.users import create_user
@@ -267,67 +343,152 @@ async def test_email_is_unique_across_businesses_and_bad_input_is_refused(app_cl
         assert (await app_client.post("/api/v1/team", json=bad, headers=h(csrf))).status_code in (422,)
 
 
-async def test_the_last_owner_cannot_be_removed_and_nobody_changes_their_own_standing(app_client, world, api_key_factory):
+async def test_the_last_owner_cannot_be_removed_and_nobody_changes_their_own_standing(app_client, world, api_key_factory, mail):
     csrf, email = await as_(app_client, world, api_key_factory, "owner")
     me = next(u for u in (await app_client.get("/api/v1/team")).json()["items"] if u["you"])
     r = await app_client.patch(f"/api/v1/team/{me['id']}", json={"status": "disabled"}, headers=h(csrf))
     assert r.status_code == 409 and r.json()["detail"]["code"] == "SELF_CHANGE"
     new = (await app_client.post("/api/v1/team", json={"email": "chu2@example.vn", "name": "Chủ Hai", "role": "owner"}, headers=h(csrf))).json()
     assert (await app_client.patch(f"/api/v1/team/{new['id']}", json={"role": "staff"}, headers=h(csrf))).status_code == 200  # two owners: fine
-    assert (await app_client.post(f"/api/v1/team/{me['id']}/reset-password", headers=h(csrf))).status_code == 409  # not for yourself
+    assert (await app_client.post(f"/api/v1/team/{me['id']}/send-link", headers=h(csrf))).status_code == 409  # not for yourself
 
 
-async def test_a_business_always_keeps_an_active_owner(app_client, world, api_key_factory, owner_engine):
+async def test_a_business_always_keeps_an_active_owner(app_client, world, api_key_factory, owner_engine, mail):
     csrf, email = await as_(app_client, world, api_key_factory, "owner")
     new = (await app_client.post("/api/v1/team", json={"email": "chu2@example.vn", "name": "Chủ Hai", "role": "owner"}, headers=h(csrf))).json()
     async with owner_engine.begin() as c:  # the first owner leaves, outside the console
         await c.execute(text("update app_user set status = 'disabled' where lower(email) = :e"), {"e": email})
     app_client.cookies.clear()
-    csrf2 = (await login(app_client, "chu2@example.vn", new["temporary_password"])).json()["csrf"]
-    await app_client.post("/api/v1/session/password", json={"current": new["temporary_password"], "new": GOOD}, headers=h(csrf2))
+    await activate(app_client, mail, GOOD)
+    csrf2 = (await login(app_client, "chu2@example.vn", GOOD)).json()["csrf"]
     me = next(u for u in (await app_client.get("/api/v1/team")).json()["items"] if u["you"])
     assert (await app_client.patch(f"/api/v1/team/{me['id']}", json={"role": "staff"}, headers=h(csrf2))).json()["detail"]["code"] == "SELF_CHANGE"
 
 
-async def test_disabling_a_person_ends_their_sessions_and_opening_them_again_works(app_client, world, api_key_factory):
+async def test_disabling_a_person_ends_their_sessions_and_opening_them_again_works(app_client, world, api_key_factory, mail):
     csrf, _ = await as_(app_client, world, api_key_factory, "owner")
     made = (await app_client.post("/api/v1/team", json={"email": "an@example.vn", "name": "Văn An", "role": "staff"}, headers=h(csrf))).json()
     owner_cookie = app_client.cookies.get("cl_session")
     app_client.cookies.clear()
-    await login(app_client, "an@example.vn", made["temporary_password"])
+    await activate(app_client, mail, GOOD)
+    await login(app_client, "an@example.vn", GOOD)
     an_cookie = app_client.cookies.get("cl_session")
     app_client.cookies.set("cl_session", owner_cookie, path="/")
     assert next(u for u in (await app_client.get("/api/v1/team")).json()["items"] if u["email"] == "an@example.vn")["sessions"] == 1
     assert (await app_client.patch(f"/api/v1/team/{made['id']}", json={"status": "disabled"}, headers=h(csrf))).json()["status"] == "disabled"
+    assert (await app_client.post(f"/api/v1/team/{made['id']}/send-link", headers=h(csrf))).status_code == 409  # a locked account gets no link
     app_client.cookies.set("cl_session", an_cookie, path="/")
     assert (await app_client.get("/api/v1/session")).status_code == 401
     app_client.cookies.set("cl_session", owner_cookie, path="/")
     await app_client.patch(f"/api/v1/team/{made['id']}", json={"status": "active"}, headers=h(csrf))
     app_client.cookies.clear()
-    assert (await login(app_client, "an@example.vn", made["temporary_password"])).status_code == 200
+    assert (await login(app_client, "an@example.vn", GOOD)).status_code == 200
     acts = {e.action for e in await rows(world, m.AuditEvent)}
     assert {"user.created", "user.updated"} <= acts
 
 
-async def test_a_reset_gives_a_new_temporary_password_and_ends_every_sign_in(app_client, world, api_key_factory):
+async def test_a_typo_in_an_invited_email_is_fixed_and_the_invitation_goes_to_the_right_address(app_client, world, api_key_factory, mail):
+    csrf, _ = await as_(app_client, world, api_key_factory, "owner")
+    made = (await app_client.post("/api/v1/team", json={"email": "an@gmail.comd", "name": "Văn An", "role": "staff"}, headers=h(csrf))).json()
+    r = await app_client.patch(f"/api/v1/team/{made['id']}", json={"email": "An@Gmail.com", "name": "Văn An B"}, headers=h(csrf))
+    assert r.status_code == 200 and r.json()["email"] == "an@gmail.com" and r.json()["name"] == "Văn An B" and r.json()["mail_sent"] is True
+    assert [x["to"] for x in mail.sent] == ["an@gmail.comd", "an@gmail.com"]
+    app_client.cookies.clear()
+    assert (await activate(app_client, mail, GOOD, 0)).status_code == 400  # the link that went to the wrong address is dead
+    assert (await activate(app_client, mail, GOOD, 1)).status_code == 200
+    assert (await login(app_client, "an@gmail.com", GOOD)).status_code == 200
+
+
+async def test_moving_the_email_of_an_account_in_use_signs_them_out_voids_links_and_tells_the_old_address(app_client, world, api_key_factory, mail):
+    csrf, _ = await as_(app_client, world, api_key_factory, "owner")
+    owner_cookie = app_client.cookies.get("cl_session")
+    made = (await app_client.post("/api/v1/team", json={"email": "an@example.vn", "name": "Văn An", "role": "staff"}, headers=h(csrf))).json()
+    app_client.cookies.clear()
+    await activate(app_client, mail, GOOD)
+    await login(app_client, "an@example.vn", GOOD)
+    an_cookie = app_client.cookies.get("cl_session")
+    app_client.cookies.set("cl_session", owner_cookie, path="/")
+    await app_client.post(f"/api/v1/team/{made['id']}/send-link", headers=h(csrf))  # a reset link to the old address, still unused
+    r = await app_client.patch(f"/api/v1/team/{made['id']}", json={"email": "An.Moi@Example.vn"}, headers=h(csrf))
+    assert r.status_code == 200 and r.json()["email"] == "an.moi@example.vn"
+    app_client.cookies.set("cl_session", an_cookie, path="/")
+    assert (await app_client.get("/api/v1/session")).status_code == 401  # signed out everywhere
+    app_client.cookies.clear()
+    assert (await activate(app_client, mail, "Another-pass-7391", 1)).status_code == 400  # the reset link that went to the old address is dead
+    assert (await login(app_client, "an@example.vn", GOOD)).status_code == 401
+    assert (await login(app_client, "an.moi@example.vn", GOOD)).status_code == 200  # same password, new name
+    told = mail.sent[-1]
+    assert told["to"] == "an@example.vn" and "an.moi@example.vn" in told["body"]
+    ev = [e for e in await rows(world, m.AuditEvent) if e.action == "user.updated"][-1]
+    assert ev.metadata_.get("email_moved") is True
+
+
+async def test_the_owner_edits_their_own_details_but_not_their_own_role_or_standing(app_client, world, api_key_factory, mail):
+    csrf, email = await as_(app_client, world, api_key_factory, "owner")
+    me = next(u for u in (await app_client.get("/api/v1/team")).json()["items"] if u["you"])
+    r = await app_client.patch(f"/api/v1/team/{me['id']}", json={"name": "Chủ Mới Tên", "phone": "0912 345 678"}, headers=h(csrf))
+    assert r.status_code == 200 and r.json()["name"] == "Chủ Mới Tên" and r.json()["phone"] == "0912 345 678"
+    assert (await app_client.patch(f"/api/v1/team/{me['id']}", json={"role": "staff"}, headers=h(csrf))).json()["detail"]["code"] == "SELF_CHANGE"
+    moved = await app_client.patch(f"/api/v1/team/{me['id']}", json={"email": "chu.moi@example.vn"}, headers=h(csrf))
+    assert moved.status_code == 200
+    assert (await app_client.get("/api/v1/session")).status_code == 200  # the session they are using stays
+
+
+async def test_phone_birth_date_and_id_number_are_kept_checked_and_never_logged(app_client, world, api_key_factory, mail, owner_engine):
+    csrf, _ = await as_(app_client, world, api_key_factory, "owner")
+    made = (await app_client.post("/api/v1/team", json={"email": "an@example.vn", "name": "Văn An", "role": "staff"}, headers=h(csrf))).json()
+    url = f"/api/v1/team/{made['id']}"
+    r = await app_client.patch(url, json={"phone": "+84 912 345 678", "birth_date": "1990-04-04", "national_id": "079 000 000 003"}, headers=h(csrf))
+    assert r.status_code == 200 and r.json()["birth_date"] == "1990-04-04" and r.json()["national_id"] == "079000000003"
+    listed = next(u for u in (await app_client.get("/api/v1/team")).json()["items"] if u["id"] == made["id"])
+    assert listed["phone"] == "+84 912 345 678" and listed["national_id"] == "079000000003"
+    async with owner_engine.begin() as c:  # on disk the number is not readable
+        stored = (await c.execute(text("select national_id_enc from app_user where email = 'an@example.vn'"))).scalar_one()
+    assert stored and "079000000003" not in stored
+    blob = " ".join(str(e.metadata_) + e.summary + str(getattr(e, "changes", "")) for e in await rows(world, m.AuditEvent))
+    assert "079000000003" not in blob and "912 345" not in blob and "1990-04-04" not in blob
+    assert any(e.action == "user.updated" for e in await rows(world, m.AuditEvent))
+    for bad in ({"phone": "abc"}, {"national_id": "12345"}, {"birth_date": "2999-01-01"}, {"birth_date": "1800-01-01"}):
+        assert (await app_client.patch(url, json=bad, headers=h(csrf))).status_code == 422, bad
+    cleared = await app_client.patch(url, json={"phone": "", "national_id": None, "birth_date": None}, headers=h(csrf))
+    assert cleared.json()["phone"] is None and cleared.json()["national_id"] is None and cleared.json()["birth_date"] is None
+    untouched = await app_client.patch(url, json={"name": "Văn An Hai"}, headers=h(csrf))  # a request that does not mention them leaves them alone
+    assert untouched.status_code == 200
+
+
+async def test_an_invited_email_cannot_take_another_accounts_address(app_client, world, api_key_factory, mail):
+    csrf, _ = await as_(app_client, world, api_key_factory, "owner")
+    await app_client.post("/api/v1/team", json={"email": "a@example.vn", "name": "Văn A", "role": "staff"}, headers=h(csrf))
+    b = (await app_client.post("/api/v1/team", json={"email": "b@example.vn", "name": "Văn B", "role": "staff"}, headers=h(csrf))).json()
+    r = await app_client.patch(f"/api/v1/team/{b['id']}", json={"email": "a@example.vn"}, headers=h(csrf))
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "EMAIL_TAKEN"
+    assert (await app_client.patch(f"/api/v1/team/{b['id']}", json={"email": "khong-phai-email"}, headers=h(csrf))).status_code == 422
+
+
+async def test_a_reset_link_leaves_the_old_password_until_used_then_ends_every_sign_in(app_client, world, api_key_factory, mail):
     csrf, _ = await as_(app_client, world, api_key_factory, "owner")
     made = (await app_client.post("/api/v1/team", json={"email": "an@example.vn", "name": "Văn An", "role": "staff"}, headers=h(csrf))).json()
     owner_cookie = app_client.cookies.get("cl_session")
     app_client.cookies.clear()
-    await login(app_client, "an@example.vn", made["temporary_password"])
+    await activate(app_client, mail, GOOD)
+    await login(app_client, "an@example.vn", GOOD)
     an_cookie = app_client.cookies.get("cl_session")
     app_client.cookies.set("cl_session", owner_cookie, path="/")
-    reset = (await app_client.post(f"/api/v1/team/{made['id']}/reset-password", headers=h(csrf))).json()
-    assert reset["temporary_password"] != made["temporary_password"]
+    sent = (await app_client.post(f"/api/v1/team/{made['id']}/send-link", headers=h(csrf))).json()
+    assert sent["kind"] == "reset" and sent["mail_sent"] is True and "password" not in str(sent).lower().replace("password.", "")
+    app_client.cookies.set("cl_session", an_cookie, path="/")
+    assert (await app_client.get("/api/v1/session")).status_code == 200  # nothing changes until they use the link
+    app_client.cookies.clear()
+    assert (await activate(app_client, mail, "Another-pass-7391")).status_code == 200
     app_client.cookies.set("cl_session", an_cookie, path="/")
     assert (await app_client.get("/api/v1/session")).status_code == 401
     app_client.cookies.clear()
-    assert (await login(app_client, "an@example.vn", made["temporary_password"])).status_code == 401  # the old one is gone
-    assert (await login(app_client, "an@example.vn", reset["temporary_password"])).json()["must_change_password"] is True
-    assert all(reset["temporary_password"] not in str(e.metadata_) + e.summary for e in await rows(world, m.AuditEvent))
+    assert (await login(app_client, "an@example.vn", GOOD)).status_code == 401  # the old one is gone
+    assert (await login(app_client, "an@example.vn", "Another-pass-7391")).status_code == 200
+    assert "password.link_sent" in {e.action for e in await rows(world, m.AuditEvent)}
 
 
-async def test_another_business_cannot_see_or_touch_my_people(app_client, world, api_key_factory, tenant_factory):
+async def test_another_business_cannot_see_or_touch_my_people(app_client, world, api_key_factory, tenant_factory, mail):
     csrf, _ = await as_(app_client, world, api_key_factory, "owner")
     mine = (await app_client.post("/api/v1/team", json={"email": "an@example.vn", "name": "Văn An", "role": "staff"}, headers=h(csrf))).json()
     other = await tenant_factory()
@@ -336,7 +497,7 @@ async def test_another_business_cannot_see_or_touch_my_people(app_client, world,
     csrf2 = await sign_in(app_client, key)
     assert "an@example.vn" not in (await app_client.get("/api/v1/team")).text
     for call in (app_client.patch(f"/api/v1/team/{mine['id']}", json={"status": "disabled"}, headers=h(csrf2)),
-                 app_client.post(f"/api/v1/team/{mine['id']}/reset-password", headers=h(csrf2)),
+                 app_client.post(f"/api/v1/team/{mine['id']}/send-link", headers=h(csrf2)),
                  app_client.post(f"/api/v1/team/{mine['id']}/end-sessions", headers=h(csrf2))):
         assert (await call).status_code == 404
     assert next(u for u in await rows(world, m.AppUser) if u.email == "an@example.vn").status == "active"
@@ -372,15 +533,20 @@ OWNER_ONLY = {
     ("GET", "/api/v1/sources"), ("POST", "/api/v1/sources"), ("GET", "/api/v1/sources/{source_id}"), ("POST", "/api/v1/sources/mcp/describe"),
     ("POST", "/api/v1/sources/{source_id}/review"), ("POST", "/api/v1/sources/{source_id}/{verb}"), ("PUT", "/api/v1/sources/{source_id}/sandbox"),
     ("GET", "/api/v1/audit/export"), ("GET", "/api/v1/audit/verify"),
-    ("GET", "/api/v1/team"), ("POST", "/api/v1/team"), ("PATCH", "/api/v1/team/{user_id}"), ("POST", "/api/v1/team/{user_id}/reset-password"),
-    ("POST", "/api/v1/team/{user_id}/end-sessions"),
+    ("GET", "/api/v1/team"), ("POST", "/api/v1/team"), ("PATCH", "/api/v1/team/{user_id}"), ("POST", "/api/v1/team/{user_id}/send-link"),
+    ("POST", "/api/v1/team/{user_id}/end-sessions"), ("PUT", "/api/v1/team/{user_id}/classes"),
+    ("POST", "/api/v1/team/{user_id}/mfa/disable"),  # staff and teachers only; the owner confirms with their own password
     ("GET", "/api/v1/settings/business"), ("PUT", "/api/v1/settings/business"), ("GET", "/api/v1/settings/ai"), ("GET", "/api/v1/settings/notify-targets"),
     ("POST", "/api/v1/settings/notify-targets"), ("DELETE", "/api/v1/settings/notify-targets/{target_id}"), ("POST", "/api/v1/settings/notify-targets/{target_id}/test"),
     ("GET", "/api/v1/settings/channels"), ("POST", "/api/v1/settings/channels"), ("DELETE", "/api/v1/settings/channels/{connector_id}"),
-    ("GET", "/api/v1/customers/{conversation_id}/export"), ("POST", "/api/v1/customers/{conversation_id}/erase"), ("GET", "/api/v1/onboarding"),
+    ("GET", "/api/v1/customers/{conversation_id}/export"), ("POST", "/api/v1/customers/{conversation_id}/erase"),
+    ("POST", "/api/v1/catalog/import"),
 }
 FOR_ANYONE_SIGNED_IN = {
+    ("GET", "/api/v1/catalog"), ("GET", "/api/v1/catalog/template"),
     ("GET", "/api/v1/session"), ("POST", "/api/v1/session/logout"), ("POST", "/api/v1/session/password"), ("GET", "/api/v1/session/sessions"),
+    ("GET", "/api/v1/account/mfa"), ("POST", "/api/v1/account/mfa/setup"), ("POST", "/api/v1/account/mfa/enable"), ("POST", "/api/v1/account/mfa/disable"),
+    ("POST", "/api/v1/account/mfa/recovery-codes"),
     ("POST", "/api/v1/session/sessions/{session_id}/revoke"), ("POST", "/api/v1/session/logout-all"),
     ("GET", "/api/v1/conversations"), ("GET", "/api/v1/conversations/{conversation_id}"), ("POST", "/api/v1/drafts/{draft_id}/action"),
     ("POST", "/api/v1/conversations/{conversation_id}/reply"), ("POST", "/api/v1/conversations/{conversation_id}/booking"),
@@ -393,11 +559,20 @@ FOR_ANYONE_SIGNED_IN = {
     ("GET", "/api/v1/grading"), ("GET", "/api/v1/grading/{item_id}"), ("POST", "/api/v1/grading/{item_id}/decision"), ("POST", "/api/v1/grading/{item_id}/grade"),
     ("GET", "/api/v1/classes/{class_id}/assignments"), ("POST", "/api/v1/assignments/{assignment_id}/grade"),
     ("GET", "/api/v1/assignments"), ("POST", "/api/v1/assignments"), ("POST", "/api/v1/assignments/ai"), ("POST", "/api/v1/assignments/{draft_id}/decision"),
+    ("PATCH", "/api/v1/assignments/{assignment_id}"), ("POST", "/api/v1/assignments/{assignment_id}/publish"), ("DELETE", "/api/v1/assignments/{assignment_id}"),
+    ("GET", "/api/v1/class-kinds"), ("POST", "/api/v1/class-kinds"), ("PATCH", "/api/v1/class-kinds/{kind_id}"), ("DELETE", "/api/v1/class-kinds/{kind_id}"),
+    ("GET", "/api/v1/class-kinds/{kind_id}/templates"), ("POST", "/api/v1/class-kinds/{kind_id}/templates"), ("PUT", "/api/v1/assignment-templates/{template_id}"),
+    ("DELETE", "/api/v1/assignment-templates/{template_id}"),
+    ("GET", "/api/v1/google/picker"), ("POST", "/api/v1/google/picker/token"),
+    ("GET", "/api/v1/classes/{class_id}/classroom-options"),
 }
 # The callback trusts only its signed state. The recovery calls are for someone who cannot sign in: they answer the same whoever asks
 # (forgot), or need the secret link (reset), and both are rate limited.
-PUBLIC = {("POST", "/api/v1/session/login"), ("GET", "/api/v1/google/callback"), ("GET", "/api/v1/auth/recovery"), ("POST", "/api/v1/auth/forgot"),
+PUBLIC = {("POST", "/api/v1/session/login"), ("POST", "/api/v1/session/mfa"), ("POST", "/api/v1/session/refresh"), ("GET", "/api/v1/google/callback"), ("GET", "/api/v1/auth/recovery"), ("POST", "/api/v1/auth/forgot"),
           ("POST", "/api/v1/auth/reset")}
+
+
+CLASS_PATHS = tuple("/api/v1/" + x for x in ("lessons", "grading", "classes", "assignments", "assignment-templates", "class-kinds", "google/picker"))
 
 
 def _api_routes():
@@ -416,7 +591,7 @@ def test_every_endpoint_has_been_given_a_decision():
 async def test_staff_are_refused_every_owner_endpoint_and_nobody_unsigned_gets_anything(app_client, world, api_key_factory):
     zero = "00000000-0000-0000-0000-000000000000"
     fill = lambda p: (p.replace("{verb}", "lock").replace("{state}", "off").replace("{tool}", "send_message").replace("{proposal_id}", zero)
-                      .replace("{sandbox_id}", zero).replace("{skill_id}", zero).replace("{source_id}", zero).replace("{user_id}", zero).replace("{account_id}", zero).replace("{class_id}", zero)
+                      .replace("{sandbox_id}", zero).replace("{skill_id}", zero).replace("{source_id}", zero).replace("{user_id}", zero).replace("{account_id}", zero).replace("{class_id}", zero).replace("{kind_id}", zero).replace("{template_id}", zero)
                       .replace("{target_id}", zero).replace("{connector_id}", "conn_x").replace("{conversation_id}", zero))
     for method, path in sorted(OWNER_ONLY | FOR_ANYONE_SIGNED_IN):
         r = await app_client.request(method, fill(path).replace("{event_id}", zero).replace("{session_id}", zero).replace("{conversation_id}", zero)
@@ -427,9 +602,13 @@ async def test_staff_are_refused_every_owner_endpoint_and_nobody_unsigned_gets_a
         r = await app_client.request(method, fill(path), json={}, headers=h(csrf))
         assert r.status_code == 403, (method, path, r.status_code)
         assert r.json()["detail"]["code"] == "FORBIDDEN"
-    for method, path in sorted(FOR_ANYONE_SIGNED_IN):
-        r = await app_client.request(method, fill(path).replace("{event_id}", zero).replace("{session_id}", zero).replace("{conversation_id}", zero)
-                                     .replace("{draft_id}", zero).replace("{booking_id}", zero).replace("{fact_id}", zero).replace("{lesson_id}", zero).replace("{item_id}", zero).replace("{draft_id}", zero), json={}, headers=h(csrf))
+    plain = lambda p: (fill(p).replace("{event_id}", zero).replace("{session_id}", zero).replace("{conversation_id}", zero)
+                       .replace("{draft_id}", zero).replace("{booking_id}", zero).replace("{fact_id}", zero).replace("{lesson_id}", zero).replace("{item_id}", zero))
+    for method, path in sorted(x for x in FOR_ANYONE_SIGNED_IN if x[1].startswith(CLASS_PATHS)):  # first: a sign-out below would make the rest answer 401
+        r = await app_client.request(method, plain(path), json={}, headers=h(csrf))
+        assert r.status_code == 403 and r.json()["detail"]["code"] == "FORBIDDEN", (method, path, r.status_code)  # customer care has no part in the classes (2026-11-06)
+    for method, path in sorted(x for x in FOR_ANYONE_SIGNED_IN if not x[1].startswith(CLASS_PATHS)):
+        r = await app_client.request(method, plain(path), json={}, headers=h(csrf))
         assert r.status_code != 403 or "owner only" in r.text or path.startswith("/api/v1/skills") or path.startswith("/api/v1/audit"), (method, path, r.status_code)
 
 
@@ -438,16 +617,40 @@ async def test_the_api_is_never_cached_and_the_console_cannot_be_framed(app_clie
     assert r.headers["Cache-Control"] == "no-store" and r.headers["X-Frame-Options"] == "DENY" and r.headers["X-Content-Type-Options"] == "nosniff"
 
 
-async def test_the_command_line_makes_an_account_and_resets_a_lost_owner_password(world, app_client):
+async def test_the_command_line_makes_an_account_and_resets_a_lost_owner_password(world, app_client, monkeypatch, mail):
     import argparse
+    import getpass
 
     from cortex_leads.cli import cmd_create_user, cmd_reset_password
     await cmd_create_user(argparse.Namespace(tenant=world.t.id, email="chu@cli.test", name="Chủ Dòng Lệnh", role="owner", password=GOOD))
     assert (await login(app_client, "chu@cli.test", GOOD)).status_code == 200
     stolen = app_client.cookies.get("cl_session")
+    answers = iter(["Mat-khau-cli-8842", "Mat-khau-cli-8842"])
+    monkeypatch.setattr(getpass, "getpass", lambda *_: next(answers))  # typed at the terminal, never an argument or an output
     await cmd_reset_password(argparse.Namespace(email="chu@cli.test"))
     app_client.cookies.set("cl_session", stolen, path="/")
     assert (await app_client.get("/api/v1/session")).status_code == 401  # every sign-in ended
     assert (await login(app_client, "chu@cli.test", GOOD)).status_code == 401
-    assert next(u for u in await rows(world, m.AppUser) if u.email == "chu@cli.test").must_change_password is True
+    assert (await login(app_client, "chu@cli.test", "Mat-khau-cli-8842")).status_code == 200
     assert "cli" in [e.actor for e in await rows(world, m.AuditEvent) if e.action == "password.reset"][0]
+
+
+async def test_the_command_line_invites_by_mail_and_prints_no_password(world, app_client, mail, capsys):
+    import argparse
+
+    from cortex_leads.cli import cmd_create_user
+    await cmd_create_user(argparse.Namespace(tenant=world.t.id, email="moi@cli.test", name="Người Mời", role="staff", password=None))
+    out = capsys.readouterr().out
+    assert "invite=sent" in out and "password" not in out.lower() and len(mail.sent) == 1
+    assert (await activate(app_client, mail, GOOD)).status_code == 200
+
+
+async def test_the_command_line_refuses_to_invite_when_mail_is_off(world):
+    import argparse
+
+    import pytest
+
+    from cortex_leads.cli import cmd_create_user
+    with pytest.raises(SystemExit):
+        await cmd_create_user(argparse.Namespace(tenant=world.t.id, email="moi@cli.test", name="Người Mời", role="staff", password=None))
+    assert not any(u.email == "moi@cli.test" for u in await rows(world, m.AppUser))

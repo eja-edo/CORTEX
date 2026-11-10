@@ -22,6 +22,8 @@ dependencies = [
   "jinja2",            # WP13 trang duyệt
   "python-multipart",  # WP13 form
   "pypdf",             # WP34: the text of a student's PDF
+  "PyJWT>=2.8",        # console sign-in token
+  "redis>=5,<8",       # where the "everything before this version is signed out" number is cached
 ]
 
 [project.optional-dependencies]

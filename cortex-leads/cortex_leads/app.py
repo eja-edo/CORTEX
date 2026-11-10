@@ -13,6 +13,7 @@ _ROUTERS = [
     ("cortex_leads.review.facts_api", "/review"),  # WP9
     ("cortex_leads.staff_ui.routes", "/staff"),  # WP13
     ("cortex_leads.console.api", "/api/v1"),  # WP27: the main UI's JSON
+    ("cortex_leads.admin.api", "/api/admin"),  # WP47: the platform admin page, its own sign-in
 ]
 
 

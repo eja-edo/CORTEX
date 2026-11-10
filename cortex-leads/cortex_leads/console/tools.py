@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import func, select
 
+from cortex_leads.auth.perms import Perm
 from cortex_leads.console.auth import Session, need
 from cortex_leads.console.flow import feeds_and_pushes
 from cortex_leads.console.sandboxes import PURPOSE_LINES, label_of
@@ -67,7 +68,7 @@ async def _skills(s: Any, sandbox_id: UUID) -> list[m.SkillVersion]:
 
 
 @router.get("/tools")
-async def list_tools(sess: Session = need("tools.manage")) -> dict[str, Any]:
+async def list_tools(sess: Session = need(Perm.TOOLS_MANAGE)) -> dict[str, Any]:
     async with tenant_session(sess.caller.tenant_id) as s:
         sandboxes = (await s.execute(select(m.Sandbox).order_by(m.Sandbox.created_at))).scalars().all()
         sources = (await s.execute(select(func.count()).select_from(m.ToolConnector).where(m.ToolConnector.deleted_at.is_(None)))).scalar_one()
@@ -120,7 +121,7 @@ def _send_view(sb: m.Sandbox, skills: list[m.SkillVersion], conns: list[m.Connec
 
 
 @router.get("/sandboxes/{sandbox_id}")
-async def sandbox_detail(sandbox_id: UUID, sess: Session = need("tools.manage")) -> dict[str, Any]:
+async def sandbox_detail(sandbox_id: UUID, sess: Session = need(Perm.TOOLS_MANAGE)) -> dict[str, Any]:
     async with tenant_session(sess.caller.tenant_id) as s:
         sb = await s.get(m.Sandbox, sandbox_id)
         if sb is None:
@@ -153,7 +154,7 @@ async def sandbox_detail(sandbox_id: UUID, sess: Session = need("tools.manage"))
 
 
 @router.get("/sandboxes/{sandbox_id}/tools/{tool}")
-async def tool_in_sandbox(sandbox_id: UUID, tool: str, sess: Session = need("tools.manage")) -> dict[str, Any]:
+async def tool_in_sandbox(sandbox_id: UUID, tool: str, sess: Session = need(Perm.TOOLS_MANAGE)) -> dict[str, Any]:
     d = await sandbox_detail(sandbox_id, sess)
     t = next((x for x in d["tools"] if x["name"] == tool), None)
     if t is None:
@@ -164,7 +165,7 @@ async def tool_in_sandbox(sandbox_id: UUID, tool: str, sess: Session = need("too
 
 
 @router.post("/sandboxes/{sandbox_id}/tools/{tool}/{state}")
-async def switch_tool(sandbox_id: UUID, tool: str, state: Literal["on", "off"], sess: Session = need("tools.manage")) -> dict[str, Any]:
+async def switch_tool(sandbox_id: UUID, tool: str, state: Literal["on", "off"], sess: Session = need(Perm.TOOLS_MANAGE)) -> dict[str, Any]:
     async with tenant_session(sess.caller.tenant_id) as s:
         sb = await s.get(m.Sandbox, sandbox_id)
         if sb is None:

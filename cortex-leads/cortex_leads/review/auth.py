@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import Depends, Header, HTTPException
 from sqlalchemy import select
 
+from cortex_leads.auth.roles import ApiRole
 from cortex_leads.db import models as m
 from cortex_leads.db.session import system_session
 
@@ -18,7 +19,7 @@ class Caller:
     staff_ref: str | None
 
 
-def require(*roles: str) -> Callable[..., object]:
+def require(*roles: ApiRole) -> Callable[..., object]:
     async def dep(x_api_key: str | None = Header(default=None)) -> Caller:
         if not x_api_key:
             raise HTTPException(401, "missing X-Api-Key")

@@ -1,4 +1,6 @@
-export type Role = 'staff' | 'owner'
+import type { Perm, Role } from './enums'
+
+export type { Perm, Role }
 export interface Me {
   role: Role
   staff_ref: string | null
@@ -7,8 +9,7 @@ export interface Me {
   csrf: string
   email: string
   name: string
-  must_change_password: boolean
-  permissions: string[]
+  permissions: Perm[]
   ai: 'running' | 'paused' | 'none'
   mode: 'auto' | 'manual' | 'mixed'
   needs_person: number
@@ -334,17 +335,22 @@ export interface McpTool {
 }
 
 export interface Member {
+  mfa: boolean  // two-step sign-in is on (the owner may turn it off for staff and teachers)
   id: string
   email: string
   name: string
   role: Role
   staff_ref: string
   status: 'active' | 'disabled'
-  must_change_password: boolean
+  invited: boolean
+  phone: string | null
+  birth_date: string | null
+  national_id: string | null
   last_login_at: string | null
   created_at: string
   sessions: number
   you: boolean
+  classes: { id: string; name: string }[]  // the classes a teacher is in charge of
 }
 export interface MySession {
   id: string
@@ -364,6 +370,11 @@ export interface LessonItem {
 export interface LessonList { items: LessonItem[]; limit: number; can_upload: boolean; max_mb: number; classes: { id: string; name: string; can_upload: boolean; lessons: number }[] }
 export type RecapMode = 'auto' | 'review'
 export type GradingMode = 'manual' | 'review' | 'auto_write'
+/** What `POST /classes` made: the class, its Drive folder (when Cortex made it), the Classroom course it is tied to, and whether grading was connected. */
+export interface NewClassResult {
+  id: string; name: string; folder_url: string | null; grading: boolean
+  classroom: { course_id: string; course: string | null; url: string | null; created: boolean } | null
+}
 export interface ClassItem {
   id: string; name: string; sandbox_id: string | null; sandbox: string; grader_sandbox_id: string | null; account: string | null; account_id: string | null; linked: boolean; active: boolean; since: string; folder: string; folder_url: string | null; owned: boolean; can_upload: boolean
   webhook: string | null; has_webhook: boolean; lessons: { done: number; failed: number; waiting: number; held: number }
@@ -394,17 +405,30 @@ export interface GradeDetail extends GradeItem {
   decided_by: string | null; decided_at: string | null
 }
 export interface GradeDecision { action: 'approve' | 'reject'; scores?: Record<string, number>; feedback?: string }  // where the grade goes is the class's policy, not a choice per submission
-export interface AssignmentDraft {
+export type AssignmentDraft = {
   id: string; class_id: string; course: string | null; title: string; description: string; max_points: number; criteria: Criterion[]; answer_key: string | null; check_prompt?: string | null; language: string | null; origin: 'teacher' | 'ai'; materials: Material[]
   status: 'draft' | 'created' | 'rejected' | 'failed'; due: string | null; publish: boolean; error: string | null; created_by: string | null; created_at: string
-}
+} & PostingInfo
+/** Where a piece of work stands in Classroom: not made yet, a draft there, waiting for its time, out to the students, or made by a teacher in Classroom. */
+export type Posting = 'draft' | 'classroom_draft' | 'scheduled' | 'published' | 'classroom' | 'deleted'
+export interface PostingInfo { posting: Posting; topic: { id: string | null; name: string | null } | null; scheduled: string | null; assignees: { id: string; name: string }[] | null }
 export type Material = { kind: 'drive'; id: string; title: string; share: 'VIEW' | 'EDIT' | 'STUDENT_COPY' } | { kind: 'link'; url: string; title: string }
+  | { kind: 'youtube'; id: string; title: string; url: string } | { kind: 'form'; url: string; title: string }
 export interface MaterialIn { url: string; title?: string; share: 'VIEW' | 'EDIT' | 'STUDENT_COPY' }
 export interface AssignmentList { items: AssignmentDraft[]; sources: { id: string; label: string }[] }
-export interface NewAssignment { class_id: string; title: string; description: string; max_points: number; criteria: Criterion[]; answer_key: string | null; check_prompt?: string | null; language: string | null; materials: MaterialIn[] }
+export interface NewAssignment {
+  class_id: string; title: string; description: string; max_points: number; criteria: Criterion[]; answer_key: string | null; check_prompt?: string | null; language: string | null; materials: MaterialIn[]
+  due?: string | null; publish?: boolean; scheduled?: string | null; topic_name?: string | null; assignees?: { id: string; name: string }[]
+}
+/** Only the fields that are sent change; null clears a due date, a topic or a schedule. */
+export interface AssignmentEdit {
+  title?: string; description?: string; max_points?: number; criteria?: Criterion[]; answer_key?: string | null; check_prompt?: string | null
+  due?: string | null; scheduled?: string | null; topic_name?: string | null
+}
+export interface ClassroomOptions { topics: { id: string; name: string }[]; students: { id: string; name: string }[]; problems: Record<string, string> }
 
 export interface GoogleAccount {
-  id: string; label: string; email: string | null; status: 'active' | 'revoked'; can: { classroom: boolean; classroom_post: boolean; drive: boolean; drive_read: boolean }
+  id: string; label: string; email: string | null; status: 'active' | 'revoked'; can: { classroom: boolean; classroom_post: boolean; classroom_create: boolean; drive: boolean; drive_read: boolean }
   connected_at: string; connected_by: string; used_by: { kind: 'classroom' | 'drive' | 'folder'; name: string; sandbox: string }[]
   refs: GoogleRef[]
 }
@@ -412,7 +436,7 @@ export interface GoogleAccount {
 export interface GoogleRef { kind: 'folder' | 'post' | 'classroom' | 'target'; id: string; name: string; active: boolean }
 export interface GoogleList {
   configured: boolean; items: GoogleAccount[]; sources: GoogleSource[]; sandboxes: { id: string; title: string; purpose: string }[]
-  kinds: { id: 'classroom' | 'classroom_post' | 'drive' | 'drive_read'; label: string }[]
+  kinds: { id: 'classroom' | 'classroom_post' | 'classroom_create' | 'drive' | 'drive_read'; label: string }[]
 }
 export interface GoogleSource {
   kind: 'classroom' | 'drive' | 'folder'; id: string; name: string; sandbox: string; active: boolean; account: string | null; account_id: string | null; legacy: boolean
@@ -421,11 +445,11 @@ export interface GoogleFolder { id: string; name: string; connected: boolean }
 export interface GoogleCourse { id: string; name: string; section: string; connected: boolean }
 
 /** One piece of work of a class, with where its submissions stand: the rows of a class page's "Bài tập" tab. */
-export interface ClassAssignment {
+export type ClassAssignment = {
   id: string; title: string; state: 'draft' | 'created'; ours: boolean; gradable: boolean; max_points: number | null; due: string | null; created_at: string
   counts: Record<'pending' | 'proposed' | 'approved' | 'rejected' | 'skipped' | 'failed' | 'waiting', number>; submissions: number
   description: string | null; criteria: Criterion[]; materials: Material[]; answer_key: string | null; check_prompt: string | null; language: string | null
-}
+} & PostingInfo
 export interface ClassAssignments { class: { id: string; name: string; grading_mode: GradingMode }; items: ClassAssignment[] }
 
 // --- Cài đặt (WP39-43) ---
@@ -477,20 +501,51 @@ export interface AiOverview {
   disclosure: string
   sandboxes: { id: string; title: string; send_mode: 'auto' | 'manual'; status: 'active' | 'paused'; skills: { name: string; status: string; sends: boolean }[]; never_say: string[]; must_handoff: string[] }[]
 }
-export interface OnboardingStep {
-  id: string
-  title: string
-  done: boolean
-  count: number
-  href: string | null
-  hint: string
-}
-export interface Onboarding {
-  steps: OnboardingStep[]
-  complete: boolean
-  done: number
-}
 export interface EraseResult {
   erased: Record<string, number>
   not_reached: string[]
 }
+
+export interface CatalogRow {
+  code: string
+  name: string
+  category: string | null
+  price: number | null
+  unit: string | null
+  valid_until: string | null
+  version: number
+  state: 'ok' | 'soon' | 'expired'
+}
+export interface CatalogList {
+  items: CatalogRow[]
+  categories: string[]
+  stats: { active: number; soon: number; expired: number; last_import_at: string | null }
+  can_import: boolean
+}
+export interface CatalogImport {
+  new: number
+  changed: number
+  unchanged: number
+  errors: { line: number; message: string }[]
+  to_save: number
+  dry_run: boolean
+}
+
+export interface ClassKind { id: string; name: string; templates: number }
+/** The compose form's fields, all optional but the name; picking one fills the form. */
+export interface AssignmentTemplateIn {
+  name: string; title: string | null; description: string | null; max_points: number | null; criteria: Criterion[] | null; answer_key: string | null
+  check_prompt: string | null; language: string | null; topic_name: string | null; materials: MaterialIn[]
+}
+export interface AssignmentTemplate extends AssignmentTemplateIn { id: string; kind_id: string; criteria: Criterion[]; created_by: string | null; created_at: string }
+
+/** The Drive picker: which connected accounts can open Google's file dialog, and which to start with. */
+export interface PickerInfo { configured: boolean; default_account_id: string | null; browse: boolean; accounts: { id: string; label: string; email: string | null; can_pick: boolean }[] }
+/** A one-hour access token narrowed to `drive.file`, for the browser only. */
+export interface PickerToken { token: string; expires_in: number; api_key: string; app_id: string; email: string | null }
+
+/** What sign-in answers: the person, or a request for the second step (the password was right; no session yet). */
+export type LoginResult = Me | { mfa_required: true }
+export interface MfaStatus { enabled: boolean; enabled_at: string | null; recovery_left: number }
+export interface MfaSetup { secret: string; uri: string }
+export type MfaWithCodes = MfaStatus & { recovery_codes: string[] }

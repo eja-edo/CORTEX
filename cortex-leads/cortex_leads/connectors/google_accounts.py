@@ -15,19 +15,24 @@ from cryptography.fernet import Fernet, InvalidToken
 
 from cortex_leads.config import get_settings
 from cortex_leads.connectors import classroom
-from cortex_leads.connectors.google_auth import authorization_url, exchange_code, token_url
+from cortex_leads.connectors.google_auth import (
+    RefreshToken,
+    authorization_url,
+    exchange_code,
+    token_url,
+)
 from cortex_leads.core.errors import CortexError
 
 STATE_TTL_S = 600
 # What each thing needs from Google. Asked for separately, so a teacher who only wants recordings is never asked for Classroom.
-KINDS = {"classroom": classroom.SCOPES, "classroom_post": classroom.POST_SCOPES, "drive": classroom.DRIVE_ONLY_SCOPES,
+KINDS = {"classroom": classroom.SCOPES, "classroom_post": classroom.POST_SCOPES, "classroom_create": classroom.COURSE_SCOPES, "drive": classroom.DRIVE_ONLY_SCOPES,
          "drive_read": ["https://www.googleapis.com/auth/drive.readonly"]}  # drive_read: watch a folder the teacher already has (Meet recordings), which `drive.file` cannot see
 IDENTITY = ["openid", "email"]
 CALLBACK_PATH = "/api/v1/google/callback"
 
 
 class GoogleSetupError(CortexError):
-    """`.code`: NOT_CONFIGURED (no OAuth client or no public address on this server) | BAD_STATE | NO_REFRESH_TOKEN | EXCHANGE_FAILED"""
+    """`.code`: NOT_CONFIGURED (no OAuth client or no public address on this server) | BAD_STATE | NO_REFRESH_TOKEN | EXCHANGE_FAILED | TOKEN_REFUSED (Google would not issue an access token: the sign-in was revoked or Google did not answer)"""
 
     def __init__(self, code: str) -> None:
         super().__init__(code)
@@ -58,7 +63,8 @@ def client() -> tuple[str, str, str]:
 
 
 def scopes_for(kinds: list[str]) -> list[str]:
-    return IDENTITY + [x for k in kinds for x in KINDS[k]]
+    optional = classroom.TOPIC_SCOPES if "classroom" in kinds else []
+    return IDENTITY + [x for k in kinds for x in KINDS[k]] + optional
 
 
 def begin(tenant_id: UUID, actor: str, label: str, kinds: list[str], reconnect: UUID | None = None) -> str:
@@ -144,3 +150,16 @@ async def revoke_at_google(secret: bytes) -> None:
             await http.post(token_url().replace("/token", "/revoke"), data={"token": json.loads(secret)["refresh_token"]})
     except httpx.HTTPError:
         pass
+
+
+async def short_lived_token(secret: bytes, scope: str) -> tuple[str, int]:
+    """A fresh access token narrowed to `scope`, and its lifetime in seconds: the one thing of a sign-in that may leave the server (WP44, the
+    Drive picker needs it in the browser). The refresh token never does. Raises GoogleSetupError(TOKEN_REFUSED)."""
+    data = json.loads(secret)
+    http = new_http()
+    try:
+        return await RefreshToken(data["client_id"], data["client_secret"], data["refresh_token"], http, scope=scope).fresh()
+    except httpx.HTTPError:
+        raise GoogleSetupError("TOKEN_REFUSED") from None
+    finally:
+        await http.aclose()

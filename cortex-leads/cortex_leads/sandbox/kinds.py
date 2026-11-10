@@ -52,10 +52,10 @@ KINDS: dict[str, SandboxKind] = {k.purpose: k for k in (
         "owner_digest", "Báo cáo cho chủ", "Số liệu tuần và đề xuất của AI tổng, không nhắn khách",
         "digest_template@1", "owner_digest", "Báo cáo tuần, đề xuất của AI tổng. Không bao giờ nhắn khách.",
         jobs=_owner_digest_jobs),
-    SandboxKind(  # made from the command line: it needs a folder of recordings connected, which the console cannot do yet
+    SandboxKind(  # no card: every tenant has it from the start (`ensure_sandboxes`), and a class is what connects a folder to it
         "lesson_recap", "Tổng kết buổi học", "Bản ghi buổi học thành tổng kết và bài tập về nhà cho đội, không nhắn khách",
         "lesson_recapper@1", "lesson_recap", listed=False),
-    SandboxKind(  # made from the command line: it needs a Classroom course connected and a grading guide per assignment
+    SandboxKind(  # no card, as above: a class connects a Classroom course to it
         "classroom_grader", "Chấm bài Classroom", "Chấm bài nộp theo thang điểm của giáo viên và soạn bài tập; giáo viên duyệt mọi điểm",
         "classroom_grader@1", "classroom_grader", listed=False),
     SandboxKind(

@@ -5,8 +5,9 @@ import { explain } from '../api/client'
 import { useAskGrading, useClassAssignments, useGrading } from '../api/hooks'
 import type { GradeItem } from '../api/types'
 import { Time } from '../components/Time'
-import { Badge, Button, Card, Empty, ErrorBox, Loading, Notice, Tabs } from '../components/ui'
+import { Badge, Button, Card, Empty, ErrorBox, Loading, Notice, SidePanel, Tabs } from '../components/ui'
 import { AssignmentBody } from './Assignments'
+import { EditWork, PostingChips, WorkActions } from './ManageWork'
 import { num, SubmissionDetail, TONE } from './Grading'
 
 type Part = 'brief' | 'students'
@@ -24,38 +25,45 @@ export function AssignmentPage() {
   const [part, setPart] = useState<Part>(picked ? 'students' : 'brief')
   const [tab, setTab] = useState<Tab>(picked ? 'all' : 'proposed')
   const [term, setTerm] = useState('')
+  const [editing, setEditing] = useState(false)
   const q = useGrading(tab === 'other' ? 'all' : tab, { assignmentId })
   const ask = useAskGrading()
   const pick = (id: string | null) => setParams(id ? { item: id } : {}, { replace: true })
-  if (works.isPending) return <div className="p-8"><Loading /></div>
-  if (works.isError) return <div className="p-8"><ErrorBox onRetry={() => works.refetch()} /></div>
-  if (!work) return <div className="flex flex-col gap-4 p-8"><Link to={`/classes/${classId}?tab=assignments`} className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-accent"><ArrowLeft className="size-4" aria-hidden />Về lớp</Link><Notice tone="warn">Không có bài tập này.</Notice></div>
+  if (works.isPending) return <div className="p-4 sm:p-8"><Loading /></div>
+  if (works.isError) return <div className="p-4 sm:p-8"><ErrorBox onRetry={() => works.refetch()} /></div>
+  if (!work) return <div className="flex flex-col gap-4 p-4 sm:p-8"><Link to={`/classes/${classId}?tab=assignments`} className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-accent"><ArrowLeft className="size-4" aria-hidden />Về lớp</Link><Notice tone="warn">Không có bài tập này.</Notice></div>
   const counts = q.data?.counts ?? work.counts
   const needle = term.trim().toLowerCase()
   const items = (q.data?.items ?? []).filter((i) => (tab !== 'other' || OTHER.includes(i.status)) && (!needle || i.student.toLowerCase().includes(needle)))
   const mode = works.data.class.grading_mode
   return (
-    <div className="flex h-full flex-col gap-5 overflow-y-auto p-6 lg:px-10 lg:py-7 [&>*]:shrink-0">
-      <nav aria-label="Vị trí" className="flex items-center gap-2 text-[13px]">
-        <ArrowLeft className="size-3.5 text-ink-2" aria-hidden /><Link to="/classes" className="font-medium text-ink-2 hover:text-accent">Lớp học</Link><span className="text-ink-3">/</span>
+    <div className="flex h-full flex-col gap-5 overflow-y-auto p-4 sm:p-6 lg:px-10 lg:py-7 [&>*]:shrink-0">
+      <nav aria-label="Vị trí" className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[13px]">
+        <ArrowLeft className="size-3.5 text-ink-2" aria-hidden /><Link to="/classes" className="font-medium whitespace-nowrap text-ink-2 hover:text-accent">Lớp học</Link><span className="text-ink-3">/</span>
         <Link to={`/classes/${classId}?tab=assignments`} className="font-medium text-ink-2 hover:text-accent">{works.data.class.name}</Link><span className="text-ink-3">/</span><b>{work.title}</b>
       </nav>
-      <header className="flex flex-wrap items-center gap-3">
-        <div className="min-w-0 flex-1">
-          <h1 className="truncate text-2xl font-bold">{work.title}</h1>
-          <div className="mt-1.5 flex flex-wrap gap-1.5">
-            <Badge tone={work.ours ? 'ok' : 'neutral'}>{work.ours ? 'Cortex tạo · ghi điểm được' : 'Tạo trên Classroom · chỉ gợi ý điểm'}</Badge>
-            {work.max_points !== null && <Badge>{num(work.max_points)} điểm</Badge>}
-            {!work.gradable && <Badge tone="warn">Chưa có thang điểm</Badge>}
-            {work.due && <Badge>Hạn <Time iso={work.due} as="when" /></Badge>}
+      <header className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <h1 className="text-2xl leading-tight font-bold">{work.title}</h1>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <Badge tone={work.ours ? 'ok' : 'neutral'}>{work.ours ? 'Cortex tạo · ghi điểm được' : 'Tạo trên Classroom · chỉ gợi ý điểm'}</Badge>
+              {work.max_points !== null && <Badge>{num(work.max_points)} điểm</Badge>}
+              {!work.gradable && <Badge tone="warn">Chưa có thang điểm</Badge>}
+              {work.due && <Badge><span>Hạn <Time iso={work.due} as="when" /></span></Badge>}
+            </div>
+            {work.ours && <div className="mt-1.5"><PostingChips a={work} /></div>}
           </div>
+          {work.counts.pending > 0 && <Button variant="primary" busy={ask.all.isPending} onClick={() => ask.all.mutate(work.id)}>Chấm bằng AI cả {work.counts.pending} bài</Button>}
         </div>
-        {work.counts.pending > 0 && <Button variant="primary" busy={ask.all.isPending} onClick={() => ask.all.mutate(work.id)}>Chấm bằng AI cả {work.counts.pending} bài</Button>}
+        {work.ours && !editing && <WorkActions key={`${work.posting}-${work.scheduled}-${work.title}`} a={work} onEdit={() => setEditing(true)} />}
       </header>
+      {work.ours && editing && <Card className="max-w-3xl p-4 sm:p-6"><EditWork key={`${work.posting}-${work.scheduled}-${work.title}`} a={work} classId={classId} onDone={() => setEditing(false)} /></Card>}
       {ask.all.isError && <Notice tone="bad">{explain(ask.all.error)}</Notice>}
       {ask.all.isSuccess && <Notice tone="ok">Đã gửi {ask.all.data.queued} bài cho AI.</Notice>}
       {mode === 'manual' && work.counts.pending === 0 && <Notice tone="ai">Lớp này để chế độ thủ công: bài nộp mới sẽ chờ bạn bấm «Chấm bằng AI».</Notice>}
       {!work.gradable && <Notice tone="warn">Bài tập này chưa có thang điểm nên AI không chấm. Nhờ chủ nhập thang điểm.</Notice>}
+      {!editing && <>
       <Tabs value={part} onChange={setPart} tabs={[{ id: 'brief', label: 'Đề bài' }, { id: 'students', label: 'Học sinh', count: work.submissions }]} />
       {part === 'brief' ? <Card className="max-w-3xl p-5"><AssignmentBody a={work} /></Card> : (
         <div className="flex flex-col gap-4">
@@ -78,9 +86,10 @@ export function AssignmentPage() {
                   {i.flags.length > 0 && <Badge tone="bad">Bài có câu xin điểm</Badge>}{i.problems > 0 && <Badge tone="warn">{i.problems} lưu ý</Badge>}{i.reason && <span className="text-bad">{i.reason}</span>}</p>
               </button>))}
           </div>
-          <Card className="self-start p-5">{picked ? <SubmissionDetail key={picked} id={picked} /> : <Empty>Chọn một bài nộp để xem và duyệt điểm.</Empty>}</Card>
+          <SidePanel at="lg" label="Bài nộp" open={!!picked} onClose={() => pick(null)} className="rounded-xl border border-line lg:self-start"><div className="p-5 max-lg:pt-0">{picked ? <SubmissionDetail key={picked} id={picked} /> : <Empty>Chọn một bài nộp để xem và duyệt điểm.</Empty>}</div></SidePanel>
         </div>)}
         </div>)}
+      </>}
     </div>
   )
 }

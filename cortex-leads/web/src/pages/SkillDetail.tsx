@@ -6,6 +6,8 @@ import { useRevertSkill, useSession, useSkill, useSkillVerb } from '../api/hooks
 import type { SkillDetail as Detail, SkillStatus } from '../api/types'
 import { Time } from '../components/Time'
 import { Badge, Button, Card, ErrorBox, Label, Loading, Notice, PageHeader, Tabs, type Tone } from '../components/ui'
+import { skillTitle } from '../components/skillName'
+import { Role } from '../api/enums'
 
 const STATUS: Record<SkillStatus, [string, Tone]> = { live: ['Đang bật', 'ok'], shadow: ['Đang chạy thử', 'warn'], draft: ['Bản nháp', 'neutral'], retired: ['Đã tắt', 'neutral'] }
 const FIELD: Record<string, string> = {
@@ -76,36 +78,36 @@ export function SkillDetail() {
   const [tab, setTab] = useState<Tab>('content')
   const [confirm, setConfirm] = useState(false)
   if (q.isPending) return <Loading />
-  if (q.isError) return <div className="p-8"><ErrorBox onRetry={() => q.refetch()}>Không mở được kỹ năng này.</ErrorBox></div>
+  if (q.isError) return <div className="p-4 sm:p-8"><ErrorBox onRetry={() => q.refetch()}>Không mở được kỹ năng này.</ErrorBox></div>
   const d = q.data
-  const owner = me?.role === 'owner'
+  const owner = me?.role === Role.OWNER
   const [label, tone] = STATUS[d.status]
   const go = (v: 'trial' | 'live' | 'off' | 'again' | 'delete' | 'restore') => verb.mutate({ id: d.id, verb: v })
   return (
-    <div className="flex h-full flex-col gap-5 overflow-y-auto p-8">
-      <p className="text-[13px] text-ink-2"><Link to="/skills" className="hover:underline">Kỹ năng</Link> / <b className="text-ink">{d.name}</b></p>
-      <PageHeader title={d.name} subtitle={d.description}
-        action={<div className="flex items-center gap-2">
+    <div className="flex h-full flex-col gap-5 overflow-y-auto p-4 sm:p-6 lg:p-8 [&>*]:shrink-0">
+      <p className="text-[13px] text-ink-2"><Link to="/skills" className="hover:underline">Kỹ năng</Link> / <b className="text-ink">{skillTitle(d.name)}</b></p>
+      <PageHeader title={skillTitle(d.name)} subtitle={d.description}
+        action={<div className="flex flex-wrap items-center gap-2">
           {d.can.edit && <Link to={`/skills/${d.id}/edit`}><Button><Pencil className="size-4" aria-hidden />Sửa</Button></Link>}
           {owner && d.can.off && <Button busy={verb.isPending} onClick={() => go('off')}>Tắt kỹ năng</Button>}
           {owner && d.can.trial && <Button variant="primary" busy={verb.isPending} onClick={() => go('trial')}>Chạy thử</Button>}
           {owner && d.status === 'shadow' && <Button variant="primary" disabled={!d.can.live} busy={verb.isPending} onClick={() => go('live')}>{d.can.live ? 'Bật' : `Bật (cần đủ ${d.min_trial_runs} lượt)`}</Button>}
           {owner && d.can.again && <Button busy={verb.isPending} onClick={() => go('again')}>Bật lại</Button>}
         </div>} />
-      <div className="-mt-3 flex items-center gap-2"><Badge tone={d.deleted ? 'bad' : tone}>{d.deleted ? 'Đã xoá' : `${label} · bản ${d.version}`}</Badge>
-        {d.source === 'card' && <Badge tone="ai">Từ thẻ chiến lược</Badge>}<span className="text-xs text-ink-3">Tạo <Time iso={d.created_at} as="when" /></span></div>
+      <div className="-mt-3 flex flex-wrap items-center gap-2"><Badge tone={d.deleted ? 'bad' : tone}>{d.deleted ? 'Đã xoá' : label}</Badge>
+        {d.source === 'card' && <Badge tone="ai">Từ thẻ chiến lược</Badge>}<span className="text-xs text-ink-3"><span className="font-mono">{d.name}</span> · bản {d.version} · tạo <Time iso={d.created_at} as="when" /></span></div>
       {d.deleted && (
         <Notice tone="bad" action={owner && <Button busy={verb.isPending} onClick={() => go('restore')}><ArchiveRestore className="size-4" aria-hidden />Khôi phục</Button>}>
           Kỹ năng đã bị xoá{d.deleted_by ? ` bởi ${d.deleted_by}` : ''}{d.deleted_at && <> lúc <Time iso={d.deleted_at} as="dateTime" /></>}{'. '}Nội dung và lịch sử vẫn còn.</Notice>)}
       {verb.isError && <Notice tone="bad">{explain(verb.error)}</Notice>}
       <Tabs value={tab} onChange={setTab} tabs={[{ id: 'content', label: 'Nội dung' }, { id: 'history', label: 'Lịch sử chỉnh sửa', count: d.history.length }, { id: 'trial', label: 'Nháp thử', count: d.trial_drafts.length }]} />
-      <div className="flex min-h-0 gap-5">
+      <div className="flex min-h-0 flex-col gap-5 xl:flex-row">
         <div className="flex min-w-0 flex-1 flex-col gap-4">
           {tab === 'content' && <Facts d={d} />}{tab === 'history' && <HistoryList d={d} owner={!!owner} />}{tab === 'trial' && <Trial d={d} />}
         </div>
-        <div className="flex w-90 shrink-0 flex-col gap-4">
+        <div className="flex shrink-0 flex-col gap-4 xl:w-90">
           <Card className="flex flex-col gap-3 p-5"><Label>Liên kết</Label>
-            <div><p className="text-[11px] text-ink-3">CHẠY TRONG SANDBOX</p><Link to="/sandboxes" className="text-[13px] font-semibold text-accent">{d.sandbox}</Link></div>
+            <div><p className="text-[11px] text-ink-3">THUỘC VIỆC</p><Link to="/settings?tab=ai" className="text-[13px] font-semibold text-accent">{d.sandbox}</Link></div>
             <div><p className="text-[11px] text-ink-3">CÔNG CỤ DÙNG</p>{d.tools.map((t) => <p key={t} className="text-[13px]">✓ {t}</p>)}
               <Link to="/tools" className="text-xs font-semibold text-accent">Xem ma trận quyền</Link></div></Card>
           {owner && d.history.length > 0 && tab !== 'history' && <Card className="flex flex-col gap-2 p-5"><Label>Lần sửa gần nhất</Label><div className="flex items-center gap-2 text-xs text-ink-3"><History className="size-3.5" aria-hidden /><Time iso={d.history[0].at} as="dateTime" /> · {d.history[0].actor}</div><p className="text-[13px]">{d.history[0].summary}</p></Card>}

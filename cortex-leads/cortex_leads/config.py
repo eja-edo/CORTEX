@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     GOOGLE_TOKEN_URL: str = "https://oauth2.googleapis.com/token"  # dev: the fake Classroom answers at http://127.0.0.1:8302/token
     GOOGLE_OAUTH_CLIENT_ID: str | None = None  # the OAuth client of this deployment (Google Cloud console, type "Web application"); redirect URI: <PUBLIC_BASE_URL>/api/v1/google/callback
     GOOGLE_OAUTH_CLIENT_SECRET: str | None = None
+    GOOGLE_PICKER_API_KEY: str | None = None  # browser API key (Google Cloud, "Google Picker API" enabled, restricted to this site's address): lets teachers pick Drive files in a Google-hosted dialog
+    GOOGLE_PROJECT_NUMBER: str | None = None  # the Cloud project's NUMBER (not its id): the Picker's "app id", so a file picked there is granted to this app under `drive.file`
     GRADER_SEND_IMAGES: bool = False  # photos of a student's work go to the model AS THEY ARE (names in a picture cannot be masked): turn on only with a model under a DPA, or for invented data
     UPLOAD_PER_USER_DAY: int = 20  # recordings one person may start sending to Drive per 24 hours (the bytes no longer pass here, so this is the brake)
     UPLOAD_PER_TENANT_DAY: int = 100
@@ -41,8 +43,14 @@ class Settings(BaseSettings):
     PUBLIC_BASE_URL: str | None = None  # link in the push, e.g. https://cortex.example.vn
     TRUST_PROXY_HEADERS: bool = False  # read the client address from X-Forwarded-For (only behind a proxy you control)
     CELL: str = "c1"  # which cell this process serves (own database, own workers); see cells/router.py
-    SESSION_ABSOLUTE_HOURS: int = 12  # a sign-in ends this long after it began, whatever the activity
-    SESSION_IDLE_MINUTES: int = 120  # ...or this long after the last request
+    SESSION_ABSOLUTE_HOURS: int = 720  # a sign-in ends this long after it began (30 days), however often its refresh token was renewed
+    ACCESS_TOKEN_MINUTES: int = 15  # the access token (cookie `cl_session`): short, so what it says about a person is never old
+    REFRESH_TOKEN_DAYS: int = 7  # the refresh token (cookie `cl_refresh`): good this long from its last use; each use swaps it for a new one
+    REFRESH_REUSE_GRACE_SECONDS: int = 10  # an old refresh token seen again within this long is two tabs racing, not a theft
+    JWT_SECRET: str | None = None  # signs the sign-in token; unset = derived from CONNECTOR_SECRET_KEY. Changing it signs everyone out
+    REDIS_URL: str | None = None  # e.g. redis://localhost:6390/0. Unset = one process remembers sign-outs in memory (development, tests)
+    REDIS_PREFIX: str = "cl"
+    VERSION_CACHE_SECONDS: int = 300  # how long a cached token version may be believed if a write to Redis was lost; the database is the truth
     LOGIN_MAX_FAILURES: int = 5  # wrong passwords for one account before it is locked
     LOGIN_LOCK_MINUTES: int = 15
     LOGIN_IP_MAX_FAILURES: int = 30  # wrong passwords from one address in LOGIN_IP_WINDOW_MINUTES before it is locked
@@ -56,8 +64,11 @@ class Settings(BaseSettings):
     MAIL_FROM: str | None = None  # e.g. "Cortex <no-reply@cortex.example.vn>"
     MAIL_DIR: str | None = None  # development: write each mail as a file here instead of sending it
     RESET_LINK_MINUTES: int = 30
+    INVITE_LINK_HOURS: int = 72  # how long the link in an invitation to a new account stays valid
     RESET_MAX_PER_EMAIL_HOUR: int = 3
     RESET_MAX_PER_IP_HOUR: int = 10
+    ADMIN_IDLE_MINUTES: int = 30  # the platform admin page (WP47): signed out after this long without a request
+    ADMIN_SESSION_HOURS: int = 8  # ...and this long after signing in, however busy
     INGEST_MAX_SKEW_S: int = 300
     INGEST_MAX_BATCH: int = 100
 

@@ -1,4 +1,4 @@
-"""WP43: exporting and erasing one customer's data, and the first-run checklist."""
+"""WP43: exporting and erasing one customer's data."""
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -182,32 +182,3 @@ async def test_an_unknown_conversation_is_not_found(owner):
     zero = "00000000-0000-0000-0000-000000000000"
     assert (await client.get(f"/api/v1/customers/{zero}/export")).status_code == 404
     assert (await client.post(f"/api/v1/customers/{zero}/erase", json={"confirm": True}, headers=hd)).status_code == 404
-
-
-# --- onboarding --------------------------------------------------------------------------------------
-async def test_the_checklist_reads_what_exists_and_nothing_else(owner, tenant_factory, api_key_factory, app_client):
-    client, _ = owner
-    empty = await tenant_factory("Mới")
-    _, key = await api_key_factory(empty, "owner", None)
-    client.cookies.clear()
-    await sign_in(client, key)
-    r = (await client.get("/api/v1/onboarding")).json()
-    assert [s["id"] for s in r["steps"]] == ["channel", "catalog", "skills", "first_draft"] and r["done"] == 0 and r["complete"] is False
-    assert all(not s["done"] for s in r["steps"]) and r["steps"][0]["href"] == "/settings?tab=channels"
-    assert "cli import-catalog" in next(s for s in r["steps"] if s["id"] == "catalog")["hint"]
-
-
-async def test_each_step_turns_done_when_its_thing_exists(owner, full):
-    client, _ = owner
-    r = (await client.get("/api/v1/onboarding")).json()
-    steps = {s["id"]: s for s in r["steps"]}
-    assert steps["channel"]["done"] and steps["catalog"]["done"] and steps["skills"]["done"]  # the world has a connector, a price and two live skills
-    assert steps["first_draft"]["done"]  # `full` added drafts to a conversation
-    assert r["complete"] is True and r["done"] == 4
-
-
-async def test_a_channel_that_was_switched_off_no_longer_counts(owner, world):
-    client, hd = owner
-    assert next(s for s in (await client.get("/api/v1/onboarding")).json()["steps"] if s["id"] == "channel")["done"]
-    await client.delete(f"/api/v1/settings/channels/{world.cn.id}", headers=hd)
-    assert not next(s for s in (await client.get("/api/v1/onboarding")).json()["steps"] if s["id"] == "channel")["done"]

@@ -8,8 +8,20 @@ from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 DEFAULT_DIST = Path(__file__).resolve().parents[2] / "web" / "dist"
+from cortex_leads.config import get_settings
+
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
        "connect-src 'self' https://www.googleapis.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+# What Google's own file dialog (the Picker) needs on top: its loader and scripts, its frame, its thumbnails. Added only when the Picker is configured.
+PICKER_CSP = ("default-src 'self'; script-src 'self' https://apis.google.com https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://www.gstatic.com; "
+              "img-src 'self' data: https://*.googleusercontent.com https://*.gstatic.com https://*.google.com; "
+              "connect-src 'self' https://www.googleapis.com https://content.googleapis.com https://apis.google.com; "
+              "frame-src https://docs.google.com https://drive.google.com https://content.googleapis.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+
+
+def csp() -> str:
+    s = get_settings()
+    return PICKER_CSP if s.GOOGLE_PICKER_API_KEY and s.GOOGLE_PROJECT_NUMBER else CSP
 
 
 def mount_spa(app: FastAPI, dist: Path | None = None) -> bool:
@@ -31,7 +43,7 @@ def mount_spa(app: FastAPI, dist: Path | None = None) -> bool:
             return FileResponse(target)
         if path.startswith("assets/") or "." in path.rsplit("/", 1)[-1]:  # a missing file is a 404, not the app
             raise HTTPException(404, "not found")
-        return FileResponse(index, headers={"Cache-Control": "no-store", "Content-Security-Policy": CSP,
+        return FileResponse(index, headers={"Cache-Control": "no-store", "Content-Security-Policy": csp(),
                                             "X-Frame-Options": "DENY", "X-Content-Type-Options": "nosniff"})
 
     return True

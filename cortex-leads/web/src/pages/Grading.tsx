@@ -56,7 +56,7 @@ export function SubmissionDetail({ id }: { id: string }) {
   return (
     <div className="flex flex-col gap-4">
       <div><h2 className="text-base font-bold">{d.student}</h2><p className="text-xs text-ink-2">{d.work_title}</p>
-        <div className="mt-1.5 flex gap-1.5"><Badge tone={TONE[d.status]}>{d.status_label}</Badge>{d.written && <Badge tone="ok">{d.decided_by === 'auto' ? 'Tự động ghi lên Classroom' : 'Đã ghi lên Classroom'}</Badge>}{!d.ours && <Badge>Chỉ gợi ý điểm</Badge>}{d.content_kind.map((k) => <Badge key={k} tone={k === 'audio' || k === 'video' || k === 'image' ? 'warn' : 'neutral'}>{KIND[k] ?? k}</Badge>)}</div></div>
+        <div className="mt-1.5 flex flex-wrap gap-1.5"><Badge tone={TONE[d.status]}>{d.status_label}</Badge>{d.written && <Badge tone="ok">{d.decided_by === 'auto' ? 'Tự động ghi lên Classroom' : 'Đã ghi lên Classroom'}</Badge>}{!d.ours && <Badge>Chỉ gợi ý điểm</Badge>}{d.content_kind.map((k) => <Badge key={k} tone={k === 'audio' || k === 'video' || k === 'image' ? 'warn' : 'neutral'}>{KIND[k] ?? k}</Badge>)}</div></div>
       {d.reason && <Notice tone={d.status === 'failed' ? 'bad' : 'warn'}>{d.reason}</Notice>}
       {d.status === 'pending' && <Notice tone="warn" action={<Button variant="primary" busy={ask.one.isPending} onClick={() => ask.one.mutate(d.id)}>Chấm bằng AI</Button>}>Lớp này để chế độ thủ công: AI chưa đọc bài này. Bấm để nhờ AI chấm.</Notice>}
       {ask.one.isSuccess && <Notice tone="ok">Đã gửi cho AI, đề xuất điểm sẽ hiện sau ít phút.</Notice>}
@@ -76,7 +76,7 @@ export function GradingLink() {
   const { id } = useParams()
   const q = useGradeItem(id ?? null)
   if (!id) return <Navigate to="/classes" replace />
-  if (q.isPending) return <div className="p-8"><Loading /></div>
-  if (q.isError) return <div className="p-8"><ErrorBox onRetry={() => q.refetch()} /></div>
+  if (q.isPending) return <div className="p-4 sm:p-8"><Loading /></div>
+  if (q.isError) return <div className="p-4 sm:p-8"><ErrorBox onRetry={() => q.refetch()} /></div>
   return <Navigate to={`/classes/${q.data.class_id}/assignments/${q.data.assignment_id}?item=${id}`} replace />
 }

@@ -45,11 +45,17 @@ class _Cached:
 
 
 class RefreshToken(_Cached):
-    def __init__(self, client_id: str, client_secret: str, refresh_token: str, http: httpx.AsyncClient) -> None:
+    def __init__(self, client_id: str, client_secret: str, refresh_token: str, http: httpx.AsyncClient, scope: str | None = None) -> None:
         super().__init__()
         self._form = {"grant_type": "refresh_token", "client_id": client_id, "client_secret": client_secret,
                       "refresh_token": refresh_token}
+        if scope:  # Google lets a refresh ask for a SUBSET of what was granted: the token then carries only that
+            self._form["scope"] = scope
         self._http = http
+
+    async def fresh(self) -> tuple[str, int]:
+        """A new access token and its lifetime in seconds, bypassing the cache (a token that is handed out must be a whole fresh one)."""
+        return await self._fresh()
 
     async def _fresh(self) -> tuple[str, int]:
         r = await self._http.post(token_url(), data=self._form)

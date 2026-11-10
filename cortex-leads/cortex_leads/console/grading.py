@@ -9,8 +9,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, update
 
+from cortex_leads.auth.perms import Perm
+from cortex_leads.connectors.classroom import ClassroomError
 from cortex_leads.console.assistant import get_gateway
 from cortex_leads.console.auth import Session, need
+from cortex_leads.console.scope import ensure_class, my_classes, need_class
 from cortex_leads.console.trail import audit
 from cortex_leads.core.timefmt import wire
 from cortex_leads.db import models as m
@@ -47,6 +50,9 @@ REFUSALS = {
     "UNAUTHENTICATED": (502, "Phiên kết nối Google của lớp này đã hết hạn hoặc bị thu hồi. Hãy vào Cài đặt → Kết nối Google, kết nối lại tài khoản rồi nối lại lớp"),
     "UPSTREAM": (502, "Google không trả lời, hãy thử lại sau ít phút"), "NOT_FOUND_COURSE": (404, "Không tìm thấy khoá học trên Classroom"),
     "BAD_SHAPE": (502, "AI soạn chưa đúng khuôn, hãy thử lại"), "LLM_ERROR": (503, "Chưa gọi được AI"),
+    "BAD_SCHEDULE": (422, "Giờ hẹn đăng phải ở tương lai"), "BAD_GUIDE": (422, "Thang điểm hoặc đề bài chưa đúng"),
+    "NOT_EDITABLE": (409, "Bài này không còn sửa được (đã bỏ hoặc đã xoá)"), "LOCKED": (409, "Tệp đính kèm và danh sách học sinh không đổi được sau khi đã tạo trên Classroom; hãy sửa trên Classroom"),
+    "ALREADY_PUBLISHED": (409, "Bài đã đăng cho học sinh rồi"),
 }
 
 
@@ -73,10 +79,13 @@ def _row(i: m.GradeItem, a: m.Assignment) -> dict[str, Any]:
 @router.get("/grading")
 async def list_grading(status: Literal["pending", "proposed", "approved", "rejected", "skipped", "failed", "waiting", "all"] = "proposed",
                        class_id: UUID | None = None, assignment_id: UUID | None = None,
-                       sess: Session = need("grading.use")) -> dict[str, Any]:
+                       sess: Session = need(Perm.GRADING_USE)) -> dict[str, Any]:
     """`class_id` / `assignment_id` narrow the list and its counts to one class or one piece of work."""
     async with tenant_session(sess.caller.tenant_id) as s:
         scope = []
+        mine = await my_classes(s, sess)
+        if mine is not None:  # on top of the filters below: naming another class's work narrows to nothing, it does not widen
+            scope.append(m.GradeItem.assignment_id.in_(select(m.Assignment.id).where(m.Assignment.class_id.in_(mine))))
         if assignment_id is not None:
             scope.append(m.GradeItem.assignment_id == assignment_id)
         elif class_id is not None:
@@ -95,7 +104,7 @@ async def list_grading(status: Literal["pending", "proposed", "approved", "rejec
 
 
 @router.get("/grading/{item_id}")
-async def get_grading(item_id: UUID, sess: Session = need("grading.use")) -> dict[str, Any]:
+async def get_grading(item_id: UUID, sess: Session = need_class(Perm.GRADING_USE)) -> dict[str, Any]:
     async with tenant_session(sess.caller.tenant_id) as s:
         item = await s.get(m.GradeItem, item_id)
         if item is None:
@@ -116,7 +125,7 @@ async def _queue_pending(s: Any, where: list[Any]) -> int:
 
 
 @router.post("/grading/{item_id}/grade")
-async def grade_one(item_id: UUID, sess: Session = need("grading.use")) -> dict[str, Any]:
+async def grade_one(item_id: UUID, sess: Session = need_class(Perm.GRADING_USE)) -> dict[str, Any]:
     """Asks the AI to grade one submission that is waiting for that (a class in `manual` mode)."""
     async with tenant_session(sess.caller.tenant_id) as s:
         item = await s.get(m.GradeItem, item_id)
@@ -129,7 +138,7 @@ async def grade_one(item_id: UUID, sess: Session = need("grading.use")) -> dict[
 
 
 @router.post("/assignments/{assignment_id}/grade")
-async def grade_all(assignment_id: UUID, sess: Session = need("grading.use")) -> dict[str, Any]:
+async def grade_all(assignment_id: UUID, sess: Session = need_class(Perm.GRADING_USE)) -> dict[str, Any]:
     """Asks the AI to grade every submission of one piece of work that is waiting for that."""
     async with tenant_session(sess.caller.tenant_id) as s:
         work = await s.get(m.Assignment, assignment_id)
@@ -149,7 +158,7 @@ class Decision(BaseModel):
 
 
 @router.post("/grading/{item_id}/decision")
-async def grading_decision(item_id: UUID, body: Decision, sess: Session = need("grading.use")) -> dict[str, Any]:
+async def grading_decision(item_id: UUID, body: Decision, sess: Session = need_class(Perm.GRADING_USE)) -> dict[str, Any]:
     write = body.write
     if write is None:
         async with tenant_session(sess.caller.tenant_id) as s:
@@ -171,10 +180,18 @@ async def grading_decision(item_id: UUID, body: Decision, sess: Session = need("
 
 
 # --- assignments ------------------------------------------------------------------------------
+def _posting(d: m.Assignment) -> dict[str, Any]:
+    """How the work stands in Classroom, as the teacher thinks of it: not made yet, a draft there, waiting for its time, or out to the students."""
+    where = ("classroom" if d.origin != "app" else "draft" if d.state in ("draft", "rejected", "failed") else "deleted" if d.state == "deleted" else "scheduled" if d.scheduled_at
+             else "published" if d.publish else "classroom_draft")
+    return {"posting": where, "topic": {"id": d.topic_id, "name": d.topic_name} if d.topic_name or d.topic_id else None, "scheduled": wire(d.scheduled_at),
+            "assignees": d.assignees}
+
+
 def _draft(d: m.Assignment, course: str | None = None) -> dict[str, Any]:
     return {"id": str(d.id), "class_id": str(d.class_id), "course": course, "title": d.title, "description": d.description, "max_points": d.max_points and float(d.max_points), "criteria": d.criteria,
             "answer_key": d.answer_key, "check_prompt": d.check_prompt, "language": d.language, "materials": d.materials, "origin": d.authored_by, "status": d.state, "due": wire(d.due_at), "publish": d.publish, "error": d.error,
-            "created_by": d.created_by, "created_at": wire(d.created_at)}
+            "created_by": d.created_by, "created_at": wire(d.created_at), **_posting(d)}
 
 
 async def _class_and_sandbox(s: Any, class_id: UUID) -> tuple[m.Class, m.Sandbox]:
@@ -185,16 +202,18 @@ async def _class_and_sandbox(s: Any, class_id: UUID) -> tuple[m.Class, m.Sandbox
 
 
 @router.get("/assignments")
-async def list_assignments(class_id: UUID | None = None, sess: Session = need("grading.use")) -> dict[str, Any]:
+async def list_assignments(class_id: UUID | None = None, sess: Session = need(Perm.GRADING_USE)) -> dict[str, Any]:
     async with tenant_session(sess.caller.tenant_id) as s:
-        classes = {x.id: x for x in (await s.execute(select(m.Class).where(m.Class.active.is_(True), m.Class.grader_sandbox_id.is_not(None)))).scalars()}
+        mine = await my_classes(s, sess)
+        classes = {x.id: x for x in (await s.execute(select(m.Class).where(m.Class.active.is_(True), m.Class.grader_sandbox_id.is_not(None)))).scalars()
+                   if mine is None or x.id in mine}
         sources = [{"id": str(x.id), "label": x.course_name or x.name} for x in classes.values()]
         items = [_draft(d, classes[d.class_id].name) for d in await assignments.drafts(s, class_id) if d.class_id in classes]  # a class that is switched off has no drafts to act on
     return {"items": items, "sources": sources}
 
 
 @router.get("/classes/{class_id}/assignments")
-async def class_assignments(class_id: UUID, sess: Session = need("grading.use")) -> dict[str, Any]:
+async def class_assignments(class_id: UUID, sess: Session = need_class(Perm.GRADING_USE)) -> dict[str, Any]:
     """Every piece of work of a class (Cortex's drafts and the ones a teacher made in Classroom) with where its submissions stand."""
     async with tenant_session(sess.caller.tenant_id) as s:
         cls = await s.get(m.Class, class_id)
@@ -213,8 +232,13 @@ async def class_assignments(class_id: UUID, sess: Session = need("grading.use"))
                     "max_points": float(a.max_points) if a.max_points is not None else None, "due": wire(a.due_at), "created_at": wire(a.created_at),
                     "counts": {k: c.get(k, 0) for k in ("pending", "proposed", "approved", "rejected", "skipped", "failed")} | {"waiting": sum(c.get(k, 0) for k in WAITING)},
                     "submissions": sum(c.values()), "description": a.description, "criteria": a.criteria or [], "materials": a.materials or [],
-                    "answer_key": a.answer_key, "check_prompt": a.check_prompt, "language": a.language})
+                    "answer_key": a.answer_key, "check_prompt": a.check_prompt, "language": a.language, **_posting(a)})
     return {"class": {"id": str(cls.id), "name": cls.name, "grading_mode": cls.grading_mode}, "items": out}
+
+
+class Student(BaseModel):
+    id: str = Field(min_length=1, max_length=64)
+    name: str = Field(default="", max_length=200)
 
 
 class NewAssignment(BaseModel):
@@ -227,10 +251,16 @@ class NewAssignment(BaseModel):
     check_prompt: str | None = Field(default=None, max_length=4000)
     language: str | None = Field(default=None, pattern=r"^[a-z]{2}$")
     materials: list[assignments.MaterialIn] = Field(default_factory=list, max_length=assignments.MAX_MATERIALS)
+    due: datetime | None = None
+    publish: bool = False
+    scheduled: datetime | None = None
+    topic_id: str | None = Field(default=None, max_length=64)
+    topic_name: str | None = Field(default=None, max_length=100)
+    assignees: list[Student] = Field(default_factory=list, max_length=500)
 
 
 @router.post("/assignments", status_code=201)
-async def create_assignment(body: NewAssignment, sess: Session = need("grading.use")) -> dict[str, Any]:
+async def create_assignment(body: NewAssignment, sess: Session = need(Perm.GRADING_USE)) -> dict[str, Any]:
     try:
         out = AssignmentOut(title=body.title, description=body.description, max_points=body.max_points, criteria=body.criteria,
                             answer_key=body.answer_key, language=body.language, check_prompt=body.check_prompt)
@@ -241,8 +271,17 @@ async def create_assignment(body: NewAssignment, sess: Session = need("grading.u
     except ValueError as e:
         raise HTTPException(422, {"code": "BAD_MATERIAL", "message": f"Tệp đính kèm chưa đúng: {e}"}) from None
     async with tenant_session(sess.caller.tenant_id) as s:
+        await ensure_class(s, sess, body.class_id)
         cls, sb = await _class_and_sandbox(s, body.class_id)
-        d = assignments.add_draft(s, sb, cls, out, origin="teacher", by=sess.actor, now=datetime.now(UTC), materials=materials)
+        now = datetime.now(UTC)
+        try:
+            assignments._check_times(now, body.due, body.scheduled)
+        except DecisionRefused as e:
+            raise refuse(e) from None
+        topic_name = (body.topic_name or "").strip() or None
+        d = assignments.add_draft(s, sb, cls, out, origin="teacher", by=sess.actor, now=now, materials=materials, due=body.due,
+                                  publish=body.publish, scheduled=body.scheduled, topic_id=body.topic_id if topic_name else None,
+                                  topic_name=topic_name, assignees=[x.model_dump() for x in body.assignees])
         await s.flush()
         await audit(sess, s, "config", "assignment.drafted", f"Soạn bài tập «{d.title}»", obj=("assignment", str(d.id), d.title))
         return _draft(d, cls.name)
@@ -256,8 +295,9 @@ class AiRequest(BaseModel):
 
 
 @router.post("/assignments/ai", status_code=201)
-async def ai_assignment(body: AiRequest, sess: Session = need("grading.use"), gateway: LLMGateway = Depends(get_gateway)) -> dict[str, Any]:
+async def ai_assignment(body: AiRequest, sess: Session = need(Perm.GRADING_USE), gateway: LLMGateway = Depends(get_gateway)) -> dict[str, Any]:
     async with tenant_session(sess.caller.tenant_id) as s:
+        await ensure_class(s, sess, body.class_id)
         cls, sb = await _class_and_sandbox(s, body.class_id)
         skills = await live_skills_for(s, sb.id, "assignment.requested")
         if not skills:
@@ -276,21 +316,115 @@ class AssignmentDecision(BaseModel):
     action: Literal["approve", "reject"]
     publish: bool = False
     due: datetime | None = None
+    scheduled: datetime | None = None
 
 
 @router.post("/assignments/{draft_id}/decision")
-async def assignment_decision(draft_id: UUID, body: AssignmentDecision, sess: Session = need("grading.use")) -> dict[str, Any]:
+async def assignment_decision(draft_id: UUID, body: AssignmentDecision, sess: Session = need_class(Perm.GRADING_USE)) -> dict[str, Any]:
     try:
         if body.action == "reject":
             await assignments.reject(sess.caller.tenant_id, draft_id, by=sess.actor)
             out: dict[str, Any] = {"status": "rejected"}
         else:
-            out = await assignments.approve(sess.caller.tenant_id, draft_id, by=sess.actor, publish=body.publish, due=body.due, client_factory=_client)
+            out = await assignments.approve(sess.caller.tenant_id, draft_id, by=sess.actor, publish=body.publish, due=body.due, scheduled=body.scheduled,
+                                      client_factory=_client)
     except DecisionRefused as e:
         raise refuse(e) from None
     async with tenant_session(sess.caller.tenant_id) as s:
         d = await s.get(m.Assignment, draft_id)
         text = f"Tạo bài tập «{d.title}» trên Classroom" if out["status"] == "created" else f"Bỏ bản nháp bài tập «{d.title}»"
         await audit(sess, s, "config", f"assignment.{out['status']}", text, obj=("assignment", str(d.id), d.title),
-                    metadata={"publish": body.publish})
+                    metadata={"publish": body.publish, "scheduled": body.scheduled and wire(body.scheduled)})
+    return out
+
+
+class AssignmentEdit(BaseModel):
+    """Only the fields that are sent change; `null` clears a due date, a topic or a schedule."""
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=6000)
+    max_points: int | None = Field(default=None, ge=1, le=100)
+    criteria: list[dict[str, Any]] | None = Field(default=None, min_length=1, max_length=12)
+    answer_key: str | None = Field(default=None, max_length=8000)
+    check_prompt: str | None = Field(default=None, max_length=4000)
+    language: str | None = Field(default=None, pattern=r"^[a-z]{2}$")
+    due: datetime | None = None
+    scheduled: datetime | None = None
+    topic_id: str | None = Field(default=None, max_length=64)
+    topic_name: str | None = Field(default=None, max_length=100)
+    materials: list[assignments.MaterialIn] | None = Field(default=None, max_length=assignments.MAX_MATERIALS)
+    assignees: list[Student] | None = Field(default=None, max_length=500)
+
+
+@router.patch("/assignments/{assignment_id}")
+async def edit_assignment(assignment_id: UUID, body: AssignmentEdit, sess: Session = need_class(Perm.GRADING_USE)) -> dict[str, Any]:
+    """A draft is changed here only; work already in Classroom is changed there too (title, description, points, due date, topic, schedule)."""
+    said = body.model_dump(exclude_unset=True)
+    if not said:
+        raise HTTPException(422, {"code": "NOTHING", "message": "Chưa có gì để sửa"})
+    for must in ("title", "description", "max_points", "criteria"):  # a field that is sent may not be emptied: only dates and the topic can be cleared
+        if must in said and said[must] is None:
+            raise HTTPException(422, {"code": "BAD_FIELD", "message": f"Không được để trống {must}"})
+    if "materials" in said and body.materials is not None:
+        try:
+            said["materials"] = assignments.to_materials(body.materials)
+        except ValueError as e:
+            raise HTTPException(422, {"code": "BAD_MATERIAL", "message": f"Tệp đính kèm chưa đúng: {e}"}) from None
+    if "assignees" in said:
+        said["assignees"] = [x.model_dump() for x in body.assignees or []] or None
+    if "topic_name" in said and not (said["topic_name"] or "").strip():
+        said["topic_name"], said["topic_id"] = None, None
+    elif "topic_name" in said:
+        said["topic_name"] = said["topic_name"].strip()
+        said.setdefault("topic_id", None)
+    try:
+        out = await assignments.update(sess.caller.tenant_id, assignment_id, said, by=sess.actor, client_factory=_client)
+    except DecisionRefused as e:
+        raise refuse(e) from None
+    async with tenant_session(sess.caller.tenant_id) as s:
+        d = await s.get(m.Assignment, assignment_id)
+        await audit(sess, s, "config", "assignment.edited", f"Sửa bài tập «{d.title}»", obj=("assignment", str(d.id), d.title),
+                    metadata={"changed": sorted(said), "in_classroom": d.state == "created"})
+        return {**out, **_draft(d)}
+
+
+@router.post("/assignments/{assignment_id}/publish")
+async def publish_assignment(assignment_id: UUID, sess: Session = need_class(Perm.GRADING_USE)) -> dict[str, Any]:
+    try:
+        out = await assignments.publish_now(sess.caller.tenant_id, assignment_id, by=sess.actor, client_factory=_client)
+    except DecisionRefused as e:
+        raise refuse(e) from None
+    async with tenant_session(sess.caller.tenant_id) as s:
+        d = await s.get(m.Assignment, assignment_id)
+        await audit(sess, s, "config", "assignment.published", f"Đăng bài tập «{d.title}» cho học sinh", obj=("assignment", str(d.id), d.title))
+    return out
+
+
+@router.delete("/assignments/{assignment_id}")
+async def delete_assignment(assignment_id: UUID, sess: Session = need_class(Perm.GRADING_USE)) -> dict[str, Any]:
+    """Takes the work down from Classroom too, with the students' submissions; what waited to be graded is skipped."""
+    try:
+        out = await assignments.remove(sess.caller.tenant_id, assignment_id, by=sess.actor, client_factory=_client)
+    except DecisionRefused as e:
+        raise refuse(e) from None
+    async with tenant_session(sess.caller.tenant_id) as s:
+        d = await s.get(m.Assignment, assignment_id)
+        await audit(sess, s, "config", "assignment.deleted", f"Xoá bài tập «{d.title}» khỏi Classroom", obj=("assignment", str(d.id), d.title))
+    return out
+
+
+@router.get("/classes/{class_id}/classroom-options")
+async def classroom_options(class_id: UUID, sess: Session = need_class(Perm.GRADING_USE)) -> dict[str, Any]:
+    """What the teacher can choose from when posting: the course's topics and its students. Asked of Classroom each time (not kept here)."""
+    async with tenant_session(sess.caller.tenant_id) as s:
+        cls = await s.get(m.Class, class_id)
+        if cls is None or not cls.active or cls.grader_sandbox_id is None:
+            raise HTTPException(404, {"code": "NOT_FOUND", "message": "Không có lớp này hoặc lớp chưa nối khoá học Classroom"})
+        course = cls.course_id
+        client = _client(cls)
+    out: dict[str, Any] = {"topics": [], "students": [], "problems": {}}
+    for key, call in (("topics", client.topics), ("students", client.students)):
+        try:
+            out[key] = await call(course)
+        except ClassroomError as e:  # one list missing (an older sign-in without the topics permission) does not take the other down
+            out["problems"][key] = e.code
     return out

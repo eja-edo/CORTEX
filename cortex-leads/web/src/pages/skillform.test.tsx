@@ -82,6 +82,6 @@ describe('Tạo kỹ năng', () => {
   it('tells the owner to create a sandbox first when there is none', async () => {
     server({ 'GET /session': OWNER, 'GET /skills/form-options': { ...OPTIONS, has_sandbox: false } })
     renderApp('/skills/new')
-    expect(await screen.findByText(/chưa có sandbox chăm sóc khách/)).toBeInTheDocument()
+    expect(await screen.findByText(/Thiếu việc «Chăm sóc khách» của AI/)).toBeInTheDocument()
   })
 })

@@ -6,7 +6,6 @@ reaches neither a server log nor a Referer header); only a hash of the token is 
 the mail holds the link, never a password. Using it ends every sign-in of that person."""
 import hashlib
 import logging
-import secrets
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
@@ -15,10 +14,10 @@ from sqlalchemy import text, update
 
 from cortex_leads.audit import context as audit_context
 from cortex_leads.audit.service import record
-from cortex_leads.auth import passwords, throttle
+from cortex_leads.auth import links, passwords, throttle
+from cortex_leads.auth.links import enabled, token_hash
 from cortex_leads.auth.users import AccountError, lookup_for_login, set_password
 from cortex_leads.config import get_settings
-from cortex_leads.core.ids import uuid7
 from cortex_leads.db import models as m
 from cortex_leads.db.session import system_session, tenant_session
 from cortex_leads.notify.mailer import MailError, get_mailer
@@ -29,17 +28,8 @@ HOUR = timedelta(hours=1)
 GENERIC = {"status": "ok"}  # the whole answer to "send me a link", whoever asks
 
 
-def enabled() -> bool:
-    """A link needs somewhere to send the mail from and a public address to put in it."""
-    return get_mailer() is not None and bool(get_settings().PUBLIC_BASE_URL)
-
-
 def _key(prefix: str, value: str | None) -> str:
     return prefix + hashlib.sha256((value or "unknown").strip().lower().encode()).hexdigest()[:32]
-
-
-def token_hash(token: str) -> str:
-    return hashlib.sha256(token.encode()).hexdigest()
 
 
 @router.get("/recovery")
@@ -51,13 +41,6 @@ class Forgot(BaseModel):
     email: str = Field(min_length=3, max_length=254)
 
 
-def _mail_text(name: str, link: str, minutes: int) -> tuple[str, str]:
-    body = (f"Xin chào {name},\n\nCó người (hy vọng là bạn) vừa xin đặt lại mật khẩu của tài khoản Cortex này. "
-            f"Mở liên kết dưới đây trong {minutes} phút để chọn mật khẩu mới:\n\n{link}\n\n"
-            "Liên kết chỉ dùng được một lần. Nếu không phải bạn xin, hãy bỏ qua thư này: mật khẩu hiện tại vẫn dùng được và không ai đổi được nó.\n")
-    return "Đặt lại mật khẩu Cortex", body
-
-
 async def _send_link(email: str, ip: str | None) -> None:
     """Runs after the answer. Nothing here can change what the person asking saw."""
     try:
@@ -66,16 +49,11 @@ async def _send_link(email: str, ip: str | None) -> None:
         if user is None or user.status != "active" or mailer is None:
             return
         cfg = get_settings()
-        now = datetime.now(UTC)
-        token = secrets.token_urlsafe(32)
         async with tenant_session(user.tenant_id) as s:
-            await s.execute(update(m.PasswordReset).where(m.PasswordReset.user_id == user.id, m.PasswordReset.used_at.is_(None)).values(used_at=now))
-            s.add(m.PasswordReset(id=uuid7(), tenant_id=user.tenant_id, user_id=user.id, token_hash=token_hash(token),
-                                  expires_at=now + timedelta(minutes=cfg.RESET_LINK_MINUTES), ip=ip))
+            token = await links.issue(s, user, minutes=cfg.RESET_LINK_MINUTES, ip=ip)
             await record(s, user.tenant_id, actor="system:recovery", role="system", category="auth", action="password.reset_requested",
                          summary="Có yêu cầu đặt lại mật khẩu qua email", obj=("user", str(user.id), user.display_name))
-        link = f"{cfg.PUBLIC_BASE_URL.rstrip('/')}/app/reset#token={token}"  # type: ignore[union-attr]  # enabled() checked it
-        subject, body = _mail_text(user.display_name, link, cfg.RESET_LINK_MINUTES)
+        subject, body = links.reset_mail(user.display_name, links.url(token, invite=False), cfg.RESET_LINK_MINUTES)
         await mailer.send(user.email, subject, body)
     except MailError as e:
         log.warning("password reset mail was not sent (%s)", e)  # never the address
@@ -133,7 +111,7 @@ async def reset(body: Reset) -> dict[str, str]:
         if claimed is None or user is None or user.status != "active":
             raise BAD_LINK
         try:
-            ended = await set_password(s, user, body.password, must_change=False, now=now)
+            ended = await set_password(s, user, body.password, now=now)
         except AccountError as e:  # a weak password: the link is not spent (this transaction rolls back), so they can try again
             raise HTTPException(422, {"code": e.code, "message": e.message}) from None
         await s.execute(update(m.PasswordReset).where(m.PasswordReset.user_id == user.id, m.PasswordReset.used_at.is_(None)).values(used_at=now))

@@ -516,7 +516,12 @@ async def test_the_ai_drafts_an_assignment_and_nothing_exists_in_classroom_until
     ("https://docs.google.com/document/d/DOC1/edit", {"kind": "drive", "id": "DOC1", "title": "", "share": "VIEW"}),
     ("https://drive.google.com/open?id=OLD9", {"kind": "drive", "id": "OLD9", "title": "", "share": "VIEW"}),
     ("https://drive.google.com/drive/folders/FOLD2", {"kind": "drive", "id": "FOLD2", "title": "", "share": "VIEW"}),
-    ("https://docs.google.com/forms/d/FORM1/viewform", {"kind": "link", "url": "https://docs.google.com/forms/d/FORM1/viewform", "title": ""}),
+    ("https://docs.google.com/forms/d/FORM1/viewform", {"kind": "form", "url": "https://docs.google.com/forms/d/FORM1/viewform", "title": ""}),
+    ("https://forms.gle/abc", {"kind": "form", "url": "https://forms.gle/abc", "title": ""}),
+    ("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=3", {"kind": "youtube", "id": "dQw4w9WgXcQ", "title": "", "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}),
+    ("https://youtu.be/dQw4w9WgXcQ", {"kind": "youtube", "id": "dQw4w9WgXcQ", "title": "", "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}),
+    ("https://www.youtube.com/embed/dQw4w9WgXcQ", {"kind": "youtube", "id": "dQw4w9WgXcQ", "title": "", "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}),
+    ("https://www.youtube.com/watch?v=short", {"kind": "link", "url": "https://www.youtube.com/watch?v=short", "title": ""}),
     ("https://example.com/bai?x=1", {"kind": "link", "url": "https://example.com/bai?x=1", "title": ""})])
 def test_an_address_becomes_a_drive_file_or_a_link(url, expected):
     assert assignments.to_material(assignments.MaterialIn(url=url)) == expected
@@ -707,3 +712,210 @@ async def test_the_check_prompt_goes_from_the_draft_to_the_guide_of_the_work_tha
     r = await assignments.approve(t.id, draft_id, by="co.lan", publish=False, due=NOW + timedelta(days=3), client_factory=factory, now=NOW)
     (guide,) = [g for g in await rows(t, m.Assignment) if g.coursework_id == r["coursework_id"]]
     assert guide.check_prompt == CHECK
+
+
+
+# --- posting the way Classroom does: topic, schedule, some students, edit, publish later, delete ----------------------------------------
+async def created(lab, **kw):
+    t, _, _, fc, factory = lab
+    draft_id = await make_draft(lab, llm(DRAFT)[0])
+    kw.setdefault("publish", True)
+    kw.setdefault("due", NOW + timedelta(days=3))
+    r = await assignments.approve(t.id, draft_id, by="co.lan", client_factory=factory, now=NOW, **kw)
+    return draft_id, r["coursework_id"], r
+
+
+async def row_of(t, aid):
+    async with tenant_session(t.id) as s:
+        return await s.get(m.Assignment, aid)
+
+
+async def test_the_work_is_filed_under_a_topic_the_teacher_names_and_the_topic_is_made_once(lab):
+    t, _, _, fc, factory = lab
+    for _ in range(2):
+        draft_id = await make_draft(lab, llm(DRAFT)[0])
+        async with tenant_session(t.id) as s:
+            (await s.get(m.Assignment, draft_id)).topic_name = "Tuần 5"
+        r = await assignments.approve(t.id, draft_id, by="co.lan", publish=True, due=None, client_factory=factory, now=NOW)
+    assert [x["name"] for x in fc.topics.values()] == ["Tuần 5"]  # the second one found it (any capitals), it did not make another
+    topic = next(iter(fc.topics))
+    assert fc.work[r["coursework_id"]]["topicId"] == topic and (await row_of(t, draft_id)).topic_id == topic
+
+
+async def test_a_scheduled_work_waits_in_classroom_as_a_draft_and_is_not_shown_as_published(lab):
+    t, _, _, fc, factory = lab
+    when = NOW + timedelta(days=1)
+    draft_id, wid, r = await created(lab, publish=True, scheduled=when, due=NOW + timedelta(days=5))
+    assert r["published"] is False and r["scheduled"] is True
+    assert fc.work[wid]["state"] == "DRAFT" and fc.work[wid]["scheduledTime"] == "2026-10-23T09:00:00Z"
+    row = await row_of(t, draft_id)
+    assert row.publish is False and row.scheduled_at == when
+
+
+async def test_a_schedule_in_the_past_or_after_the_due_date_is_refused_and_nothing_is_made(lab):
+    t, _, _, fc, factory = lab
+    before = len(fc.work)
+    draft_id = await make_draft(lab, llm(DRAFT)[0])
+    for kw, code in (({"scheduled": NOW - timedelta(hours=1)}, "BAD_SCHEDULE"),
+                     ({"scheduled": NOW + timedelta(days=3), "due": NOW + timedelta(days=2)}, "BAD_DUE")):
+        with pytest.raises(DecisionRefused) as e:
+            await assignments.approve(t.id, draft_id, by="x", publish=True, client_factory=factory, now=NOW, **({"due": None} | kw))
+        assert e.value.code == code
+    assert len(fc.work) == before and (await row_of(t, draft_id)).state == "draft"
+
+
+async def test_work_given_to_some_students_names_them_to_classroom(lab):
+    t, _, _, fc, factory = lab
+    draft_id = await make_draft(lab, llm(DRAFT)[0])
+    async with tenant_session(t.id) as s:
+        (await s.get(m.Assignment, draft_id)).assignees = [{"id": "u1", "name": "An"}, {"id": "u3", "name": "Dũng"}]
+    r = await assignments.approve(t.id, draft_id, by="co.lan", publish=True, due=None, client_factory=factory, now=NOW)
+    w = fc.work[r["coursework_id"]]
+    assert w["assigneeMode"] == "INDIVIDUAL_STUDENTS" and w["individualStudentsOptions"] == {"studentIds": ["u1", "u3"]}
+
+
+async def test_youtube_and_form_attachments_are_sent_as_such(lab):
+    t, _, _, fc, factory = lab
+    draft_id = await make_draft(lab, llm(DRAFT)[0])
+    async with tenant_session(t.id) as s:
+        (await s.get(m.Assignment, draft_id)).materials = [{"kind": "youtube", "id": "dQw4w9WgXcQ"}, {"kind": "form", "url": "https://forms.gle/abc"}]
+    r = await assignments.approve(t.id, draft_id, by="co.lan", publish=True, due=None, client_factory=factory, now=NOW)
+    assert fc.work[r["coursework_id"]]["materials"] == [{"youtubeVideo": {"id": "dQw4w9WgXcQ"}}, {"form": {"formUrl": "https://forms.gle/abc"}}]
+
+
+async def test_editing_work_in_classroom_changes_it_there_first_and_here_after(lab):
+    t, _, _, fc, factory = lab
+    draft_id, wid, _ = await created(lab)
+    new_due = NOW + timedelta(days=7)
+    await assignments.update(t.id, draft_id, {"title": "Đã đổi tên", "description": "Mô tả mới, dài đủ để qua kiểm tra.", "due": new_due,
+                                              "topic_name": "Ôn tập"}, by="co.lan", client_factory=factory, now=NOW)
+    w = fc.work[wid]
+    assert w["title"] == "Đã đổi tên" and w["dueDate"] == {"year": 2026, "month": 10, "day": 29} and w["topicId"] in fc.topics
+    row = await row_of(t, draft_id)
+    assert (row.title, row.due_at, row.topic_name) == ("Đã đổi tên", new_due, "Ôn tập")
+    await assignments.update(t.id, draft_id, {"due": None, "topic_name": None}, by="co.lan", client_factory=factory, now=NOW)  # cleared in both places
+    assert "dueDate" not in fc.work[wid] and "topicId" not in fc.work[wid]
+    assert (await row_of(t, draft_id)).due_at is None
+
+
+async def test_changing_the_points_keeps_the_grading_guide_adding_up_or_refuses(lab):
+    t, _, _, fc, factory = lab
+    draft_id, wid, _ = await created(lab)
+    with pytest.raises(DecisionRefused) as e:  # criteria add up to 10: 20 points would leave the guide wrong
+        await assignments.update(t.id, draft_id, {"max_points": 20}, by="x", client_factory=factory, now=NOW)
+    assert e.value.code == "BAD_GUIDE" and fc.work[wid]["maxPoints"] == 10
+    await assignments.update(t.id, draft_id, {"max_points": 20, "criteria": [{"id": "thi", "label": "Đúng thì", "points": 20, "descriptor": ""}]},
+                             by="x", client_factory=factory, now=NOW)
+    assert fc.work[wid]["maxPoints"] == 20 and float((await row_of(t, draft_id)).max_points) == 20
+
+
+async def test_the_grading_guide_is_edited_here_without_touching_classroom(lab):
+    t, _, _, fc, factory = lab
+    draft_id, wid, _ = await created(lab)
+    fc.calls.clear()
+    await assignments.update(t.id, draft_id, {"answer_key": "have + V3", "check_prompt": "Chấm theo đáp án"}, by="x", client_factory=factory, now=NOW)
+    assert not [c for c in fc.calls if c[0] in ("PATCH", "POST", "DELETE")] and (await row_of(t, draft_id)).answer_key == "have + V3"
+
+
+async def test_attachments_and_students_cannot_change_once_the_work_exists(lab):
+    t, _, _, _fc, factory = lab
+    draft_id, *_ = await created(lab)
+    for field, value in (("materials", [{"kind": "link", "url": "https://example.com"}]), ("assignees", [{"id": "u1", "name": "An"}])):
+        with pytest.raises(DecisionRefused) as e:
+            await assignments.update(t.id, draft_id, {field: value}, by="x", client_factory=factory, now=NOW)
+        assert e.value.code == "LOCKED"
+
+
+async def test_a_draft_is_edited_here_only_attachments_included(lab):
+    t, _, _, fc, factory = lab
+    before = len(fc.work)
+    draft_id = await make_draft(lab, llm(DRAFT)[0])
+    await assignments.update(t.id, draft_id, {"title": "Khác", "materials": [{"kind": "link", "url": "https://example.com"}]}, by="x",
+                             client_factory=factory, now=NOW)
+    row = await row_of(t, draft_id)
+    assert (row.title, row.materials, row.state) == ("Khác", [{"kind": "link", "url": "https://example.com"}], "draft") and len(fc.work) == before
+
+
+async def test_work_a_teacher_made_in_classroom_is_not_ours_to_change_publish_or_delete(lab):
+    t, _, src, fc, factory = lab
+    theirs = next(w for w in fc.work.values() if not w["associatedWithDeveloper"])["id"]
+    title = fc.work[theirs]["title"]
+    async with tenant_session(t.id) as s:
+        a = m.Assignment(tenant_id=t.id, class_id=src.id, coursework_id=theirs, origin="classroom", state="created", title="Bài thầy tự tạo")
+        s.add(a)
+        await s.flush()
+        aid = a.id
+    for call in (lambda: assignments.update(t.id, aid, {"title": "x"}, by="x", client_factory=factory, now=NOW),
+                 lambda: assignments.publish_now(t.id, aid, by="x", client_factory=factory),
+                 lambda: assignments.remove(t.id, aid, by="x", client_factory=factory)):
+        with pytest.raises(DecisionRefused) as e:
+            await call()
+        assert e.value.code == "NOT_FOUND"
+    assert fc.work[theirs]["title"] == title and theirs not in fc.deleted_work
+
+
+async def test_a_classroom_draft_is_shown_to_students_when_the_teacher_says_so_and_only_once(lab):
+    t, _, _, fc, factory = lab
+    draft_id, wid, _ = await created(lab, publish=False)
+    assert fc.work[wid]["state"] == "DRAFT"
+    await assignments.publish_now(t.id, draft_id, by="co.lan", client_factory=factory)
+    assert fc.work[wid]["state"] == "PUBLISHED" and (await row_of(t, draft_id)).publish is True
+    with pytest.raises(DecisionRefused) as e:
+        await assignments.publish_now(t.id, draft_id, by="co.lan", client_factory=factory)
+    assert e.value.code == "ALREADY_PUBLISHED"
+
+
+async def test_a_scheduled_work_can_be_published_now_and_the_schedule_goes(lab):
+    t, _, _, fc, factory = lab
+    draft_id, wid, _ = await created(lab, scheduled=NOW + timedelta(days=1), due=None)
+    await assignments.publish_now(t.id, draft_id, by="co.lan", client_factory=factory)
+    row = await row_of(t, draft_id)
+    assert fc.work[wid]["state"] == "PUBLISHED" and "scheduledTime" not in fc.work[wid] and (row.publish, row.scheduled_at) == (True, None)
+
+
+async def test_published_work_cannot_be_given_a_schedule_afterwards(lab):
+    t, _, _, _fc, factory = lab
+    draft_id, *_ = await created(lab, publish=True)
+    with pytest.raises(DecisionRefused) as e:
+        await assignments.update(t.id, draft_id, {"scheduled": NOW + timedelta(days=2)}, by="x", client_factory=factory, now=NOW)
+    assert e.value.code == "ALREADY_PUBLISHED"
+
+
+async def test_deleting_work_removes_it_from_classroom_and_stops_what_waited_to_be_graded(lab):
+    t, sb, src, fc, factory = lab
+    draft_id, wid, _ = await created(lab)
+    async with tenant_session(t.id) as s:
+        for status in ("pending", "proposed", "approved"):
+            s.add(m.GradeItem(tenant_id=t.id, sandbox_id=sb.id, assignment_id=draft_id, submission_id=f"s-{status}", student_ref=f"u-{status}",
+                              student_name="HS", status=status, content="bài"))
+    await assignments.remove(t.id, draft_id, by="co.lan", client_factory=factory, now=NOW)
+    assert wid not in fc.work and wid in fc.deleted_work
+    assert (await row_of(t, draft_id)).state == "deleted"
+    assert {i.submission_id: i.status for i in await rows(t, m.GradeItem) if i.assignment_id == draft_id} == {
+        "s-pending": "skipped", "s-proposed": "skipped", "s-approved": "approved"}  # a grade a teacher already approved is kept
+    assert draft_id not in [d.id for d in await assignments_list(t)]  # and it is no longer listed
+    with pytest.raises(DecisionRefused) as e:
+        await assignments.remove(t.id, draft_id, by="co.lan", client_factory=factory)
+    assert e.value.code == "NOT_EDITABLE"
+
+
+async def assignments_list(t):
+    async with tenant_session(t.id) as s:
+        return await assignments.drafts(s)
+
+
+async def test_work_already_deleted_by_hand_in_classroom_is_still_marked_deleted_here(lab):
+    t, _, _, fc, factory = lab
+    draft_id, wid, _ = await created(lab)
+    del fc.work[wid]  # the teacher removed it in Classroom
+    await assignments.remove(t.id, draft_id, by="co.lan", client_factory=factory, now=NOW)
+    assert (await row_of(t, draft_id)).state == "deleted"
+
+
+async def test_a_google_refusal_when_changing_work_leaves_our_record_as_it_was(lab):
+    t, _, _, fc, factory = lab
+    draft_id, wid, _ = await created(lab)
+    fc.work[wid]["associatedWithDeveloper"] = False  # Google no longer lets this project change it
+    with pytest.raises(DecisionRefused) as e:
+        await assignments.update(t.id, draft_id, {"title": "Khác"}, by="x", client_factory=factory, now=NOW)
+    assert e.value.code == "NOT_OURS" and (await row_of(t, draft_id)).title == "Viết 5 câu về em"

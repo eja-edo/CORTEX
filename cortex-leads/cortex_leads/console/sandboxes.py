@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from cortex_leads.auth.perms import Perm
 from cortex_leads.console.auth import Session, need
 from cortex_leads.console.flow import feeds_and_pushes, flow_line
 from cortex_leads.console.killswitch import set_paused
@@ -43,7 +44,7 @@ async def _usage(s: AsyncSession, sb: m.Sandbox, now: datetime) -> dict[str, int
 
 
 @router.get("/sandboxes")
-async def list_sandboxes(sess: Session = need("sandboxes.read")) -> dict[str, Any]:
+async def list_sandboxes(sess: Session = need(Perm.SANDBOXES_READ)) -> dict[str, Any]:
     now = datetime.now(UTC)
     async with tenant_session(sess.caller.tenant_id) as s:
         out = []
@@ -74,7 +75,7 @@ def _slug(existing: set[str], purpose: str) -> str:
 
 
 @router.post("/sandboxes", status_code=201)
-async def create_sandbox(body: NewSandbox, sess: Session = need("sandboxes.manage")) -> dict[str, Any]:
+async def create_sandbox(body: NewSandbox, sess: Session = need(Perm.SANDBOXES_MANAGE)) -> dict[str, Any]:
     tpl = next((t for t in TEMPLATES if t["id"] == body.template), None)
     if tpl is None:
         raise HTTPException(422, {"code": "UNKNOWN_TEMPLATE", "message": "Không có mẫu sandbox này"})
@@ -94,7 +95,7 @@ class SendMode(BaseModel):
 
 
 @router.post("/sandboxes/{sandbox_id}/send-mode")
-async def set_send_mode(sandbox_id: UUID, body: SendMode, sess: Session = need("sandboxes.manage")) -> dict[str, Any]:
+async def set_send_mode(sandbox_id: UUID, body: SendMode, sess: Session = need(Perm.SANDBOXES_MANAGE)) -> dict[str, Any]:
     """`manual`: every message to a customer waits for a person. `auto`: only the skills that opted in (they answer a customer who
     just wrote) may send on their own, and only through the same floor as a person's click: window, opt-out, channel, quiet hours.
     Every other skill stays a draft whatever this says. The owner's call, and a line in the activity log."""
@@ -110,7 +111,7 @@ async def set_send_mode(sandbox_id: UUID, body: SendMode, sess: Session = need("
 
 
 @router.post("/sandboxes/{sandbox_id}/{verb}")
-async def sandbox_verb(sandbox_id: UUID, verb: Literal["pause", "resume"], sess: Session = need("sandboxes.manage")) -> dict[str, Any]:
+async def sandbox_verb(sandbox_id: UUID, verb: Literal["pause", "resume"], sess: Session = need(Perm.SANDBOXES_MANAGE)) -> dict[str, Any]:
     async with tenant_session(sess.caller.tenant_id) as s:
         if await s.get(m.Sandbox, sandbox_id) is None:
             raise HTTPException(404, "sandbox not found")

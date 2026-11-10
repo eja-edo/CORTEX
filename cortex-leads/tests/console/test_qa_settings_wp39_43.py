@@ -325,7 +325,7 @@ _app_cache: dict = {}
 async def test_forgot_gives_the_same_answer_for_an_account_a_stranger_a_disabled_account_and_a_limited_address(mail, person, world, monkeypatch):
     async with tenant_session(world.t.id) as s:
         from cortex_leads.auth.users import create_user
-        u2, _ = await create_user(s, world.t.id, email="off@x.vn", name="Off", role="staff", password=PASSWORD, created_by="t", staff_ref="off")
+        u2 = await create_user(s, world.t.id, email="off@x.vn", name="Off", role="staff", password=PASSWORD, created_by="t", staff_ref="off")
         u2.status = "disabled"
     answers = []
     for email in (person, "nobody@nowhere.vn", "off@x.vn", person.upper(), f" {person} "):
@@ -498,16 +498,6 @@ async def test_the_token_is_nowhere_but_the_mail_and_the_audit_lines_name_no_tok
 async def test_the_recovery_status_is_public_and_reveals_only_on_or_off(app_client, mail):
     r = await app_client.get(f"{A}/recovery")
     assert r.status_code == 200 and r.json() == {"enabled": True}
-
-
-async def test_the_onboarding_steps_count_only_this_businesss_channel_and_conversations(three, world):
-    c = three["c"]
-    # A has its own channel (the `world` one); take it away and B's and C's channels must not make step 1 "done"
-    async with system_session() as s:
-        (await s.get(m.Connector, world.cn.id)).status = "disabled"
-    r = (await c.get("/api/v1/onboarding")).json()
-    ch = next(x for x in r["steps"] if x["id"] == "channel")
-    assert ch["done"] is False and ch["count"] == 0
 
 
 async def test_the_first_requests_from_a_new_address_at_the_same_time_do_not_crash(mail, person):

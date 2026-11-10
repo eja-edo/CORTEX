@@ -13,6 +13,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 
 from cortex_leads.audit.service import record_new
+from cortex_leads.auth.perms import Perm
+from cortex_leads.auth.roles import Role
 from cortex_leads.config import get_settings
 from cortex_leads.connectors import google_accounts as ga
 from cortex_leads.connectors.classroom import ClassroomError, open_classroom, valid_id
@@ -24,10 +26,11 @@ from cortex_leads.db import models as m
 from cortex_leads.db.session import tenant_session
 
 router = APIRouter()
-Kind = Literal["classroom", "classroom_post", "drive", "drive_read"]
-KIND_LABEL = {"classroom": "Google Classroom (chấm bài, giao bài)", "classroom_post": "Đăng tổng kết buổi học lên Google Classroom", "drive": "Google Drive (lưu bản ghi buổi học)",
+Kind = Literal["classroom", "classroom_post", "classroom_create", "drive", "drive_read"]
+KIND_LABEL = {"classroom": "Google Classroom (chấm bài, giao bài)", "classroom_post": "Đăng tổng kết buổi học lên Google Classroom",
+              "classroom_create": "Tạo lớp mới trên Google Classroom", "drive": "Google Drive (lưu bản ghi buổi học)",
               "drive_read": "Đọc thư mục Drive có sẵn (ví dụ bản ghi Google Meet)"}
-SETUP_LINES = {"NOT_CONFIGURED": "Máy chủ chưa được cấu hình đăng nhập Google (GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, PUBLIC_BASE_URL)",
+SETUP_LINES = {"NOT_CONFIGURED": "Máy chủ chưa bật đăng nhập Google. Nhờ người hỗ trợ kỹ thuật bật tính năng này",
                "BAD_STATE": "Phiên kết nối đã hết hạn hoặc không hợp lệ, hãy bấm kết nối lại", "DENIED": "Bạn đã không đồng ý cấp quyền",
                "NO_REFRESH_TOKEN": "Google không trả về mã làm mới: vào myaccount.google.com/permissions, gỡ quyền của ứng dụng này rồi kết nối lại",
                "LABEL_TAKEN": "Đã có tài khoản Google tên này, hãy đặt tên khác", "EXCHANGE_FAILED": "Google từ chối mã đăng nhập, hãy thử kết nối lại"}
@@ -109,7 +112,7 @@ async def _row(s: Any, a: m.GoogleAccount) -> dict[str, Any]:
 
 
 @router.get("/google/accounts")
-async def list_accounts(sess: Session = need("sources.manage")) -> dict[str, Any]:
+async def list_accounts(sess: Session = need(Perm.SOURCES_MANAGE)) -> dict[str, Any]:
     async with tenant_session(sess.caller.tenant_id) as s:
         rows = (await s.execute(select(m.GoogleAccount).order_by(m.GoogleAccount.created_at))).scalars().all()
         items = [await _row(s, a) for a in rows]
@@ -126,11 +129,11 @@ async def list_accounts(sess: Session = need("sources.manage")) -> dict[str, Any
 
 class Connect(BaseModel):
     label: str = Field(min_length=2, max_length=60)
-    kinds: list[Kind] = Field(min_length=1, max_length=4)
+    kinds: list[Kind] = Field(min_length=1, max_length=5)
 
 
 @router.post("/google/accounts/connect")
-async def connect(body: Connect, sess: Session = need("sources.manage")) -> dict[str, str]:
+async def connect(body: Connect, sess: Session = need(Perm.SOURCES_MANAGE)) -> dict[str, str]:
     label = body.label.strip()
     async with tenant_session(sess.caller.tenant_id) as s:
         if (await s.execute(select(m.GoogleAccount.id).where(m.GoogleAccount.label == label))).first():
@@ -179,7 +182,7 @@ async def callback(state: str = "", code: str = "", error: str = "") -> Redirect
             s.add(m.GoogleAccount(tenant_id=pending.tenant_id, label=pending.label, email=signed.email, scopes=signed.scopes, secret_enc=enc,
                                   connected_by=pending.actor))
             pending_label = pending.label
-    await record_new(pending.tenant_id, actor=pending.actor, role="owner", category="config", action="google.reconnected" if pending.reconnect else "google.connected",
+    await record_new(pending.tenant_id, actor=pending.actor, role=Role.OWNER, category="config", action="google.reconnected" if pending.reconnect else "google.connected",
                      summary=f"{'Kết nối lại' if pending.reconnect else 'Kết nối'} tài khoản Google «{pending_label}»", obj=("google_account", pending_label, pending_label),
                      metadata={"scopes": signed.scopes})
     return _back(connected=pending_label, **({"partial": ",".join(needs)} if needs else {}))
@@ -193,7 +196,7 @@ async def _account(s: Any, account_id: UUID) -> m.GoogleAccount:
 
 
 @router.post("/google/accounts/{account_id}/revoke")
-async def revoke(account_id: UUID, sess: Session = need("sources.manage")) -> dict[str, Any]:
+async def revoke(account_id: UUID, sess: Session = need(Perm.SOURCES_MANAGE)) -> dict[str, Any]:
     async with tenant_session(sess.caller.tenant_id) as s:
         a = await _account(s, account_id)
         if a.status == "revoked":
@@ -207,11 +210,11 @@ async def revoke(account_id: UUID, sess: Session = need("sources.manage")) -> di
 
 
 class Reconnect(BaseModel):
-    kinds: list[Kind] = Field(min_length=1, max_length=4)
+    kinds: list[Kind] = Field(min_length=1, max_length=5)
 
 
 @router.post("/google/accounts/{account_id}/reconnect")
-async def reconnect(account_id: UUID, body: Reconnect, sess: Session = need("sources.manage")) -> dict[str, str]:
+async def reconnect(account_id: UUID, body: Reconnect, sess: Session = need(Perm.SOURCES_MANAGE)) -> dict[str, str]:
     """Sign the same account in again (it was cut off, or more permissions are wanted): its secret and permissions are replaced and everything
     that points at it keeps working. Only the same Google user is accepted."""
     async with tenant_session(sess.caller.tenant_id) as s:
@@ -225,7 +228,7 @@ async def reconnect(account_id: UUID, body: Reconnect, sess: Session = need("sou
 
 
 @router.delete("/google/accounts/{account_id}")
-async def delete_account(account_id: UUID, sess: Session = need("sources.manage")) -> dict[str, Any]:
+async def delete_account(account_id: UUID, sess: Session = need(Perm.SOURCES_MANAGE)) -> dict[str, Any]:
     """Removes the account for good. What signed in as it keeps its data (lessons, recaps, graded work) but loses its sign-in: it says so on its own
     page and is linked to another account there. Nothing here moves or blocks anything."""
     async with tenant_session(sess.caller.tenant_id) as s:
@@ -253,7 +256,7 @@ async def _active(s: Any, account_id: UUID, kind: Kind) -> m.GoogleAccount:
 
 
 @router.get("/google/accounts/{account_id}/courses")
-async def courses(account_id: UUID, sess: Session = need("sources.manage")) -> dict[str, Any]:
+async def courses(account_id: UUID, sess: Session = need(Perm.SOURCES_MANAGE)) -> dict[str, Any]:
     async with tenant_session(sess.caller.tenant_id) as s:
         a = await _account(s, account_id)
         if a.status == "active" and ga.missing_for("classroom", a.scopes) and not ga.missing_for("classroom_post", a.scopes):
@@ -279,7 +282,7 @@ class NewClassroom(BaseModel):
 
 
 @router.post("/google/classroom-sources", status_code=201)
-async def add_classroom_source(body: NewClassroom, sess: Session = need("sources.manage")) -> dict[str, Any]:
+async def add_classroom_source(body: NewClassroom, sess: Session = need(Perm.SOURCES_MANAGE)) -> dict[str, Any]:
     if not valid_id(body.course_id):
         raise HTTPException(422, {"code": "BAD_COURSE", "message": "Mã lớp không hợp lệ"})
     tid = sess.caller.tenant_id
@@ -308,7 +311,7 @@ async def add_classroom_source(body: NewClassroom, sess: Session = need("sources
 
 
 @router.get("/google/accounts/{account_id}/folders")
-async def folders(account_id: UUID, sess: Session = need("sources.manage")) -> dict[str, Any]:
+async def folders(account_id: UUID, sess: Session = need(Perm.SOURCES_MANAGE)) -> dict[str, Any]:
     async with tenant_session(sess.caller.tenant_id) as s:
         a = await _account(s, account_id)
         if a.status != "active" or not (_can(a)["drive"] or _can(a)["drive_read"]):
@@ -331,7 +334,7 @@ class NewFolder(BaseModel):
 
 
 @router.post("/google/lesson-sources", status_code=201)
-async def add_lesson_source(body: NewFolder, sess: Session = need("sources.manage")) -> dict[str, Any]:
+async def add_lesson_source(body: NewFolder, sess: Session = need(Perm.SOURCES_MANAGE)) -> dict[str, Any]:
     tid = sess.caller.tenant_id
     async with tenant_session(tid) as s:
         sb = await s.get(m.Sandbox, body.sandbox_id)
@@ -351,7 +354,7 @@ class Switch(BaseModel):
 
 
 @router.post("/google/sources/{kind}/{source_id}/active")
-async def switch_source(kind: Literal["classroom", "folder"], source_id: UUID, body: Switch, sess: Session = need("sources.manage")) -> dict[str, Any]:
+async def switch_source(kind: Literal["classroom", "folder"], source_id: UUID, body: Switch, sess: Session = need(Perm.SOURCES_MANAGE)) -> dict[str, Any]:
     """Turn a source off (nothing more is read from it or stored to it; its history stays) or back on."""
     async with tenant_session(sess.caller.tenant_id) as s:
         row = await s.get(m.Class, source_id)

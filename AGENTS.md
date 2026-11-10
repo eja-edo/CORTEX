@@ -61,8 +61,9 @@ Chi tiết ở DESIGN §5.0.
 | A3 | Tenant, actor, scope do server điền: lấy từ connector key, API key, hoặc `RunContext`. Không bao giờ lấy từ body hay tham số LLM |
 | A7 | Validator chạy **bên trong** tool ghi. Mọi con số khách nhìn thấy phải trỏ về một dòng catalog |
 | A9 | **Chỉ một đường gửi tin cho khách:** tool `send_message` → `outbox` → worker → bridge. Hai lớp chặn do người cấu hình: skill (`send_policy` auto/manual) và bridge (`outbound`). Chế độ manual không bao giờ sinh outbox khi chưa có người duyệt; AI chỉ gửi trong cửa sổ tự do, kèm dòng xưng AI |
-| — | **Console đăng nhập bằng tài khoản** (email + mật khẩu, phiên phía server), mọi endpoint `console/` khai `need("quyền")` trong `auth/perms.py`; test `test_every_endpoint_has_been_given_a_decision` chặn endpoint không có quyết định. Mật khẩu không bao giờ vào log, nhật ký hay API |
+| — | **Console đăng nhập bằng tài khoản** (email + mật khẩu, JWT trong cookie HttpOnly; thu hồi bằng `app_user.token_version`, bộ đệm Redis chỉ là bản sao của DB), mọi endpoint `console/` khai `need("quyền")` trong `auth/perms.py`; test `test_every_endpoint_has_been_given_a_decision` chặn endpoint không có quyết định. Mật khẩu không bao giờ vào log, nhật ký hay API |
 | — | Dữ liệu cá nhân (tên, SĐT, email) được che trước mọi lời gọi LLM |
+| — | **Giáo viên chỉ chạm lớp được giao** (`console/scope.py`): endpoint trỏ tới đồ của một lớp khai `need_class("quyền")`, endpoint liệt kê hoặc nhận lớp trong body tự lọc bằng `my_classes` / `ensure_class`. Ngoài phạm vi trả 404 như thứ không tồn tại. Test `test_every_class_endpoint_says_how_it_keeps_to_a_teachers_classes` chặn endpoint chưa khai |
 | — | **Ngày giờ chỉ viết qua `core/timefmt.py` / `format.ts`** (DESIGN §5.13): UTC `Z` qua API, hiển thị theo múi giờ doanh nghiệp, giờ trong ngày không lưu thành chữ. Test `tests/core/test_conventions.py` cấm `isoformat`/`strftime` ngoài mô-đun đó |
 
 ### Bẫy đã gặp

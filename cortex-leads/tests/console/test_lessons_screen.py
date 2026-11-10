@@ -30,7 +30,7 @@ async def test_the_list_has_status_and_no_transcript(app_client, world, api_key_
     _, sb, src = await lesson(seed, world, recap=RECAP, transcript="lời của cả lớp")
     await lesson(seed, world, sb=sb, src=src, file_id="f2", name="b.mp4", status="failed", error="BAD_SHAPE", attempts=3)
     await lesson(seed, world, sb=sb, src=src, file_id="f3", name="c.mp4", status="failed", error="TRANSCRIBE_CortexError")
-    await as_(app_client, world, api_key_factory, "staff")
+    await as_(app_client, world, api_key_factory, "owner")
     r = (await app_client.get("/api/v1/lessons")).json()
     assert {x["name"] for x in r["items"]} == {"Lớp A1 - buổi 5.mp4", "b.mp4", "c.mp4"}
     done = next(x for x in r["items"] if x["has_recap"])
@@ -42,7 +42,7 @@ async def test_the_list_has_status_and_no_transcript(app_client, world, api_key_
 
 async def test_one_lesson_has_its_recap_message_and_transcript(app_client, world, api_key_factory, seed):
     row, *_ = await lesson(seed, world, recap=RECAP, transcript="lời của cả lớp")
-    await as_(app_client, world, api_key_factory, "staff")  # the teaching team, not only the owner
+    await as_(app_client, world, api_key_factory, "owner")  # the teaching team, not only the owner
     d = (await app_client.get(f"/api/v1/lessons/{row.id}")).json()
     assert d["recap"]["homework"][0]["task"] == "Bài 3 và bài 4 trang 45" and d["transcript"] == "lời của cả lớp"
     assert "Bản nháp do AI" in d["message"] and "(hạn: thứ Sáu)" in d["message"]
@@ -72,7 +72,7 @@ async def test_the_lesson_skill_is_listed_with_its_own_trigger_not_a_silent_cust
         for row in await sync_dir(s, world.t.id, sb.id, SANDBOXES_DIR / "lesson_recap" / "skills"):
             await promote(s, sb.id, row.name, row.version, "shadow")
             await promote(s, sb.id, row.name, row.version, "live")
-    await as_(app_client, world, api_key_factory, "staff")
+    await as_(app_client, world, api_key_factory, "owner")
     mine = next(x for x in (await app_client.get("/api/v1/skills")).json()["items"] if x["name"] == "tom-tat-buoi-hoc")
     assert mine["trigger"] == "Có bản ghi buổi học mới" and mine["sandbox"] == "Tổng kết buổi học"
 
@@ -84,7 +84,7 @@ async def test_a_drive_lesson_offers_its_video(app_client, world, api_key_factor
     from cortex_leads.db.session import tenant_session
     async with tenant_session(world.t.id) as s:
         await s.execute(sql("update class set source_kind = 'drive'"))
-    await as_(app_client, world, api_key_factory, "staff")
+    await as_(app_client, world, api_key_factory, "owner")
     d = (await app_client.get(f"/api/v1/lessons/{row.id}")).json()
     assert d["video_url"] == "https://drive.google.com/file/d/abc123/view" and d["message"].endswith(d["video_url"])
 
@@ -139,7 +139,7 @@ async def test_a_recap_a_class_holds_is_released_by_the_teaching_team_once_and_g
     from cortex_leads.db.session import tenant_session
     row, *_ = await lesson(seed, world, recap=RECAP, transcript="x")
     await seed(m.NotifyTarget(tenant_id=world.t.id, kind="mezon", address="https://webhook.mezon.ai/hooks/x", label="Đội"))
-    csrf = await as_(app_client, world, api_key_factory, "staff")
+    csrf = await as_(app_client, world, api_key_factory, "owner")
     d = (await app_client.get(f"/api/v1/lessons/{row.id}")).json()
     assert d["awaiting_release"] is True and d["released"] is False
     r = await app_client.post(f"/api/v1/lessons/{row.id}/release", headers=h(csrf))
@@ -154,6 +154,6 @@ async def test_a_recap_a_class_holds_is_released_by_the_teaching_team_once_and_g
 
 async def test_a_lesson_with_no_recap_yet_cannot_be_released(app_client, world, api_key_factory, seed):
     row, *_ = await lesson(seed, world, status="working")
-    csrf = await as_(app_client, world, api_key_factory, "staff")
+    csrf = await as_(app_client, world, api_key_factory, "owner")
     r = await app_client.post(f"/api/v1/lessons/{row.id}/release", headers=h(csrf))
     assert r.status_code == 409 and r.json()["detail"]["code"] == "NOT_READY"

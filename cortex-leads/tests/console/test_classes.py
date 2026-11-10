@@ -113,12 +113,12 @@ async def test_the_owner_renames_a_class_and_changes_or_removes_its_webhook(app_
     assert (await app_client.patch("/api/v1/classes/00000000-0000-0000-0000-000000000000", json={"name": "xx"}, headers=h(csrf))).status_code == 404
 
 
-async def test_staff_see_the_classes_but_cannot_change_them(app_client, world, api_key_factory, recapper, seed, drive):
+async def test_staff_are_refused_the_classes_altogether(app_client, world, api_key_factory, recapper, seed, drive):
     acct = await account(world, seed)
     owner = await as_(app_client, world, api_key_factory)
     await app_client.post("/api/v1/classes", json={"sandbox_id": str(recapper.id), "account_id": str(acct.id), "name": "Lớp A1"}, headers=h(owner))
-    staff = await as_(app_client, world, api_key_factory, "staff")
-    assert [c["name"] for c in (await app_client.get("/api/v1/classes")).json()["items"]] == ["Lớp A1"]
+    staff = await as_(app_client, world, api_key_factory, "staff")  # customer care: the classes are the owner's and the teachers'
+    assert (await app_client.get("/api/v1/classes")).status_code == 403
     r = await app_client.post("/api/v1/classes", json={"sandbox_id": str(recapper.id), "account_id": str(acct.id), "name": "Lớp C"}, headers=h(staff))
     assert r.status_code == 403
 
@@ -207,13 +207,6 @@ async def test_a_class_with_no_course_to_grade_cannot_change_how_it_grades(app_c
     assert r.status_code == 409 and r.json()["detail"]["code"] == "NO_GRADER"
 
 
-async def test_the_teaching_team_cannot_loosen_a_class(app_client, world, api_key_factory, seed):
-    cls, _ = await grader_class(world, seed, listed=True)
-    csrf = await as_(app_client, world, api_key_factory, "staff")
-    r = await app_client.patch(f"/api/v1/classes/{cls.id}", json={"grading_mode": "auto_write"}, headers=h(csrf))
-    assert r.status_code == 403
-
-
 async def test_leaving_manual_sets_waiting_submissions_going(app_client, world, api_key_factory, seed):
     cls, sb = await grader_class(world, seed, listed=True, grading_mode="manual")
     work = await seed(m.Assignment(tenant_id=world.t.id, class_id=cls.id, coursework_id="w1", title="Bài", max_points=10, criteria=[], state="created"))
@@ -223,3 +216,72 @@ async def test_leaving_manual_sets_waiting_submissions_going(app_client, world, 
     assert r.status_code == 200
     async with tenant_session(world.t.id) as s:
         assert (await s.get(m.GradeItem, item.id)).status == "queued"
+
+
+@pytest.fixture
+def classroom(monkeypatch, drive):
+    """The same fake Google answers Drive and Classroom: one class is made in one request."""
+    import httpx
+    from test_lesson_upload import Bearer
+
+    from cortex_leads.connectors.classroom import ClassroomClient
+    monkeypatch.setattr(classes, "_classroom", lambda secret: ClassroomClient(httpx.AsyncClient(transport=drive.transport()), Bearer(), base="https://x/v1"))
+    return drive
+
+
+ALL = ("drive.file", "classroom.courses", "classroom.courses.readonly", "classroom.announcements", "classroom.coursework.students", "classroom.rosters.readonly", "drive.readonly")
+
+
+async def test_one_request_makes_the_folder_the_course_and_the_grading(app_client, world, api_key_factory, recapper, seed, classroom):
+    acct = await account(world, seed, scopes=ALL)
+    grader = await seed(m.Sandbox(tenant_id=world.t.id, name="classroom_grader", purpose="classroom_grader", profile_ref="classroom_grader@1", domain_pack={}))
+    csrf = await as_(app_client, world, api_key_factory)
+    r = await app_client.post("/api/v1/classes", json={"sandbox_id": str(recapper.id), "account_id": str(acct.id), "name": "IELTS 6.5", "classroom_new": True,
+                                                       "grade_sandbox_id": str(grader.id), "recap_mode": "auto"}, headers=h(csrf))
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert [c["name"] for k, c in classroom.courses.items() if k != "c1"] == ["IELTS 6.5"] and [f["name"] for f in classroom.folders.values()] == ["IELTS 6.5"]
+    assert body["classroom"]["created"] is True and body["classroom"]["url"].startswith("https://classroom.google.com/c/") and body["folder_url"] and body["grading"] is True
+    (item,) = (await app_client.get("/api/v1/classes")).json()["items"]
+    assert item["classroom"]["course"] == "IELTS 6.5" and item["classroom"]["account_id"] == str(acct.id) and item["can_grade"] is True and item["policy"]["recap_mode"] == "auto"
+    assert classroom.courses[body["classroom"]["course_id"]]["courseState"] == "ACTIVE"  # a recap can be posted to it at once
+
+
+async def test_a_course_is_not_made_by_an_account_that_was_not_signed_in_to_create_one(app_client, world, api_key_factory, recapper, seed, classroom):
+    acct = await account(world, seed, scopes=("drive.file", "classroom.courses.readonly", "classroom.announcements"))
+    csrf = await as_(app_client, world, api_key_factory)
+    r = await app_client.post("/api/v1/classes", json={"sandbox_id": str(recapper.id), "account_id": str(acct.id), "name": "Lớp X", "classroom_new": True}, headers=h(csrf))
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "MISSING_SCOPE"
+    assert not classroom.folders and len(classroom.courses) == 1  # refused before anything was made in Google
+    assert (await app_client.get("/api/v1/classes")).json()["items"] == []
+
+
+async def test_when_google_will_not_let_the_teacher_make_a_course_no_class_is_left_half_made(app_client, world, api_key_factory, recapper, seed, classroom):
+    acct = await account(world, seed, scopes=ALL)
+    csrf = await as_(app_client, world, api_key_factory)
+    classroom.course_refuses = True
+    r = await app_client.post("/api/v1/classes", json={"sandbox_id": str(recapper.id), "account_id": str(acct.id), "name": "Lớp Y", "classroom_new": True}, headers=h(csrf))
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "CLASSROOM_PERMISSION_DENIED"
+    assert (await app_client.get("/api/v1/classes")).json()["items"] == [] and not classroom.folders  # refused first: nothing was left behind in Drive
+    classroom.course_refuses = False
+    r = await app_client.post("/api/v1/classes", json={"sandbox_id": str(recapper.id), "account_id": str(acct.id), "name": "Lớp Y", "classroom_new": True}, headers=h(csrf))
+    assert r.status_code == 201 and len(classroom.folders) == 1
+
+
+async def test_grading_needs_a_course_and_the_grading_permission(app_client, world, api_key_factory, recapper, seed, classroom):
+    acct = await account(world, seed, scopes=("drive.file", "classroom.courses", "classroom.courses.readonly", "classroom.announcements"))
+    grader = await seed(m.Sandbox(tenant_id=world.t.id, name="classroom_grader", purpose="classroom_grader", profile_ref="classroom_grader@1", domain_pack={}))
+    csrf = await as_(app_client, world, api_key_factory)
+    base = {"sandbox_id": str(recapper.id), "account_id": str(acct.id), "name": "Lớp Z", "grade_sandbox_id": str(grader.id)}
+    assert (await app_client.post("/api/v1/classes", json=base, headers=h(csrf))).json()["detail"]["code"] == "NO_COURSE"
+    r = await app_client.post("/api/v1/classes", json={**base, "classroom_new": True}, headers=h(csrf))
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "MISSING_SCOPE"
+
+
+async def test_a_course_is_made_even_when_google_will_not_activate_it_for_this_account(app_client, world, api_key_factory, recapper, seed, classroom):
+    acct = await account(world, seed, scopes=ALL)
+    csrf = await as_(app_client, world, api_key_factory)
+    classroom.activate_refuses = True
+    r = await app_client.post("/api/v1/classes", json={"sandbox_id": str(recapper.id), "account_id": str(acct.id), "name": "Lớp P", "classroom_new": True}, headers=h(csrf))
+    assert r.status_code == 201, r.text  # asking for ACTIVE on create is what Google refuses (403 @CourseStateDenied); the course itself is allowed
+    assert [c["courseState"] for k, c in classroom.courses.items() if k != "c1"] == ["PROVISIONED"]

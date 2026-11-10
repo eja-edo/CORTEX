@@ -28,6 +28,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, validates
 
+from cortex_leads.auth.roles import ApiRole
 from cortex_leads.core.ids import uuid7
 
 
@@ -60,7 +61,7 @@ def created() -> Mapped[datetime]:
 
 
 # Tables WITHOUT row level security: looked up before the tenant is known.
-NO_RLS = {"tenant", "connector", "api_key", "login_throttle"}
+NO_RLS = {"tenant", "connector", "api_key", "login_throttle", "platform_admin"}
 
 
 class Tenant(Base):
@@ -131,7 +132,7 @@ class ApiKey(Base):
     staff_ref: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = created()
     revoked_at: Mapped[datetime | None]
-    __table_args__ = (_enum("role", "staff", "owner", "supervisor"),)
+    __table_args__ = (_enum("role", *ApiRole),)
 
 
 class Contact(Base):
@@ -603,10 +604,45 @@ class Class(Base):
     )
 
 
+class ClassKind(Base):
+    """A kind of class (loại lớp), named by the business: it owns assignment templates. The compose form asks for the kind when a template is picked; no class points at a kind."""
+
+    __tablename__ = "class_kind"
+    id: Mapped[UUID] = pk()
+    tenant_id: Mapped[UUID] = tid()
+    name: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = created()
+    __table_args__ = (UniqueConstraint("tenant_id", "name"),)
+
+
+class AssignmentTemplate(Base):
+    """A ready-made assignment of a class kind (bài tập mẫu): the same fields as the compose form, all optional, so picking it fills the form
+    and the teacher finishes it. Nothing here is checked as a whole assignment; that happens when the form is saved. Dates, students and the
+    topic's Classroom id are not kept: they belong to one posting of one class."""
+
+    __tablename__ = "assignment_template"
+    id: Mapped[UUID] = pk()
+    tenant_id: Mapped[UUID] = tid()
+    kind_id: Mapped[UUID] = mapped_column(ForeignKey("class_kind.id", ondelete="CASCADE"))
+    name: Mapped[str] = mapped_column(Text)
+    title: Mapped[str | None] = mapped_column(Text)
+    description: Mapped[str | None] = mapped_column(Text)
+    max_points: Mapped[int | None]
+    criteria: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+    answer_key: Mapped[str | None] = mapped_column(Text)
+    check_prompt: Mapped[str | None] = mapped_column(Text)
+    language: Mapped[str | None] = mapped_column(Text)
+    topic_name: Mapped[str | None] = mapped_column(Text)
+    materials: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, server_default=sql_text("'[]'::jsonb"))  # as pasted: {url, title, share}
+    created_by: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = created()
+    __table_args__ = (UniqueConstraint("kind_id", "name"), Index("ix_assignment_template_kind", "tenant_id", "kind_id", "created_at"))
+
+
 class Assignment(Base):
     """A piece of course work of a class (WP38), from the moment it is a draft to the work in Classroom. `origin`: app = Cortex made it in
     Classroom, so a grade can be written back; classroom = a teacher made it there, Cortex only reads. The grading guide (`criteria`, `answer_key`,
-    `check_prompt`) lives here: no criteria, no grading. `state`: draft (not in Classroom) -> created | rejected | failed."""
+    `check_prompt`) lives here: no criteria, no grading. `state`: draft (not in Classroom) -> created | rejected | failed; created -> deleted (removed from Classroom too)."""
 
     __tablename__ = "assignment"
     id: Mapped[UUID] = pk()
@@ -626,6 +662,10 @@ class Assignment(Base):
     answer_key: Mapped[str | None] = mapped_column(Text)
     language: Mapped[str | None] = mapped_column(Text)  # of a spoken answer, so the speech model is not forced into the wrong one
     check_prompt: Mapped[str | None] = mapped_column(Text)  # the teacher's own words on HOW to check this work against the answer key
+    topic_id: Mapped[str | None] = mapped_column(Text)  # Classroom's topic the work is filed under, and its name as the teacher chose it
+    topic_name: Mapped[str | None] = mapped_column(Text)
+    scheduled_at: Mapped[datetime | None]  # Classroom publishes the work itself at this time (it sits in Classroom as a draft until then)
+    assignees: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)  # [{id, name}] when only some students get it; None = the whole class
     error: Mapped[str | None] = mapped_column(Text)
     created_by: Mapped[str | None] = mapped_column(Text)
     decided_by: Mapped[str | None] = mapped_column(Text)
@@ -634,7 +674,7 @@ class Assignment(Base):
     __table_args__ = (
         _enum("origin", "app", "classroom"),
         _enum("authored_by", "teacher", "ai"),
-        _enum("state", "draft", "created", "rejected", "failed"),
+        _enum("state", "draft", "created", "rejected", "failed", "deleted"),
         UniqueConstraint("tenant_id", "class_id", "coursework_id"),
         Index("ix_assignment_class", "tenant_id", "class_id", "created_at"),
     )
@@ -842,26 +882,52 @@ class AppUser(Base):
     role: Mapped[str] = mapped_column(Text)
     staff_ref: Mapped[str] = mapped_column(Text)  # the name drafts and conversations carry (`staff:nv1`); unique per business
     password_hash: Mapped[str] = mapped_column(Text)
-    must_change_password: Mapped[bool] = mapped_column(Boolean, server_default=sql_text("false"))
     password_changed_at: Mapped[datetime] = created()
+    phone: Mapped[str | None] = mapped_column(Text, nullable=True)
+    birth_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    national_id_enc: Mapped[str | None] = mapped_column(Text, nullable=True)  # Fernet; read only by the owner's account screen
+    # two-step sign-in (migration 0049): see auth/mfa.py. The secret is Fernet like the ID number; the recovery codes are kept only as hashes.
+    mfa_secret_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    mfa_pending_enc: Mapped[str | None] = mapped_column(Text, nullable=True)  # set up but not yet confirmed with a code
+    mfa_enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    mfa_last_step: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    mfa_recovery: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    token_version: Mapped[int] = mapped_column(Integer, server_default=sql_text("0"))  # sign-in tokens carry this; raising it ends every one of them
     status: Mapped[str] = mapped_column(Text, server_default="active")
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = created()
 
 
+class ClassTeacher(Base):
+    """Who is in charge of a class (WP46). A `teacher` account sees and runs only the classes it has a row for; `staff` and `owner` reach every
+    class and need none. Goes with the class; an account is never deleted, only disabled, so its rows stay for when it comes back."""
+
+    __tablename__ = "class_teacher"
+    id: Mapped[UUID] = pk()
+    tenant_id: Mapped[UUID] = tid()
+    class_id: Mapped[UUID] = mapped_column(ForeignKey("class.id", ondelete="CASCADE"))
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("app_user.id"))
+    assigned_by: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = created()
+    __table_args__ = (UniqueConstraint("class_id", "user_id"),)
+
+
 class AuthSession(Base):
-    """A signed-in browser. The cookie holds `<id>.<secret>`; only a hash of the secret is stored, so a database leak is not a
-    set of working sessions. Ends by expiry, idle timeout, sign-out, password change or the account being disabled."""
+    """A signed-in browser: what the list of devices shows and what signing one out marks. The cookie is a signed token naming this row
+    (`sid`). The refresh token's secret is kept only as a hash and swapped on every use; nothing here can make a token, so a database leak is not a set of working sessions."""
 
     __tablename__ = "auth_session"
     id: Mapped[UUID] = pk()
     tenant_id: Mapped[UUID] = tid()
     user_id: Mapped[UUID] = mapped_column(ForeignKey("app_user.id"))
-    secret_hash: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = created()
     last_seen_at: Mapped[datetime] = created()
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # the absolute end of this sign-in
+    refresh_hash: Mapped[str | None] = mapped_column(Text, nullable=True)  # sha256 of the current refresh token's secret; the token itself is only in the browser
+    refresh_prev_hash: Mapped[str | None] = mapped_column(Text, nullable=True)  # the one before, to tell two tabs racing from a stolen copy
+    refresh_rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    refresh_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     ip: Mapped[str | None] = mapped_column(Text, nullable=True)
     user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -893,10 +959,33 @@ class PasswordReset(Base):
     ip: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class PlatformAdmin(Base):
+    """The operator of the server (WP47, DESIGN §5.16), not a person of any business: no `tenant_id`, so no RLS, like `tenant` and
+    `login_throttle`. Signs in at /app/admin with a password and, always, a TOTP code. Same MFA columns as `app_user` so `auth/mfa.py`
+    works on both. Disabled, never deleted."""
+
+    __tablename__ = "platform_admin"
+    id: Mapped[UUID] = pk()
+    email: Mapped[str] = mapped_column(Text)
+    display_name: Mapped[str] = mapped_column(Text)
+    password_hash: Mapped[str] = mapped_column(Text)
+    mfa_secret_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    mfa_pending_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    mfa_enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    mfa_last_step: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    mfa_recovery: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    token_version: Mapped[int] = mapped_column(Integer, server_default=sql_text("0"))
+    status: Mapped[str] = mapped_column(Text, server_default="active")
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = created()
+    __table_args__ = (_enum("status", "active", "disabled"),)
+
+
 # Tables created by migrations after 0001 (0001 builds only the v0 schema from these models).
 WAVE2_TABLES = {"contact_fact", "deal", "outbox", "notify_target", "notification", "booking",
                 "staff_task", "digest", "tool_connector", "proposal", "audit_event", "app_user", "auth_session", "login_throttle", "password_reset",
-                "lesson_source", "lesson", "drive_target", "classroom_source", "grading_guide", "grade_item", "assignment_draft", "google_account", "class", "assignment"}
+                "lesson_source", "lesson", "drive_target", "classroom_source", "grading_guide", "grade_item", "assignment_draft", "google_account", "class", "assignment", "class_kind", "assignment_template", "class_teacher", "platform_admin"}
 # Supervisor views (no free-text column). DESIGN §5.6. view -> (table, columns it reads).
 SUPERVISOR_VIEWS = {
     "supervisor_fact_view": ("contact_fact", ["tenant_id", "kind", "source", "status", "created_at"]),

@@ -49,7 +49,7 @@ def public_address(monkeypatch):
     get_settings.cache_clear()
 
 
-async def as_(app_client, world, api_key_factory, role="staff"):
+async def as_(app_client, world, api_key_factory, role="owner"):
     _, key = await api_key_factory(world.t, role, "nv1" if role == "staff" else None)
     app_client.cookies.clear()
     return await sign_in(app_client, key)

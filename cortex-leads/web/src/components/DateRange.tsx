@@ -108,14 +108,14 @@ export function DateRange({ value, onChange, now }: { value: Range; onChange: (r
   return (
     <div ref={root} className="relative">
       <button type="button" aria-haspopup="dialog" aria-expanded={open} onClick={() => (open ? setOpen(false) : openIt())}
-        className={clsx('flex h-9 items-center gap-2 rounded-lg border px-3 text-[13px]', filtered || open ? 'border-accent bg-accent-soft font-semibold text-accent' : 'border-line bg-surface text-ink-2')}>
+        className={clsx('flex h-9 max-w-full items-center gap-2 rounded-lg border px-3 text-[13px] whitespace-nowrap', filtered || open ? 'border-accent bg-accent-soft font-semibold text-accent' : 'border-line bg-surface text-ink-2')}>
         <CalendarDays className="size-4" aria-hidden />Thời gian:<span className="font-semibold">{rangeLabel(value)}</span><ChevronDown className="size-4" aria-hidden />
       </button>
       {open && (
-        <div role="dialog" aria-label="Chọn khoảng thời gian" className="absolute left-0 top-full z-20 mt-1.5 w-[560px] overflow-hidden rounded-xl border border-line bg-surface shadow-xl">
-          <div className="flex">
-            <div className="flex w-44 shrink-0 flex-col gap-0.5 bg-app p-3">
-              <div className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-ink-3">Khoảng nhanh</div>
+        <div role="dialog" aria-label="Chọn khoảng thời gian" className="z-30 overflow-hidden rounded-xl border border-line bg-surface shadow-xl max-sm:fixed max-sm:inset-x-3 max-sm:top-3 max-sm:max-h-[calc(100dvh-1.5rem)] max-sm:overflow-y-auto sm:absolute sm:top-full sm:left-0 sm:mt-1.5 sm:w-[560px]">
+          <div className="flex max-sm:flex-col">
+            <div className="flex shrink-0 gap-0.5 bg-app p-3 max-sm:flex-wrap sm:w-44 sm:flex-col">
+              <div className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-ink-3 max-sm:w-full">Khoảng nhanh</div>
               {[...PRESETS, { id: 'custom' as const, label: 'Tuỳ chọn' }].map((p) => (
                 <button key={p.id} type="button" aria-pressed={draft.preset === p.id}
                   onClick={() => { if (p.id === 'custom') show({ preset: 'custom' }); else { const r = presetRange(p.id, today); show(r); setMonth(firstOf(r.to!)) } }}
@@ -140,7 +140,7 @@ export function DateRange({ value, onChange, now }: { value: Range; onChange: (r
               <p className="text-[11px] text-ink-3">Tính theo giờ của doanh nghiệp. Từ 00:00 ngày bắt đầu đến hết ngày kết thúc.</p>
             </div>
           </div>
-          <div className="flex items-center justify-between border-t border-line px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line px-4 py-3">
             <span className="text-xs text-ink-2">{summary}</span>
             <div className="flex gap-2">
               <Button type="button" onClick={() => { onChange({}); setOpen(false) }}>Xoá lọc</Button>

@@ -32,14 +32,20 @@ def hash_password(password: str) -> str:
 _DUMMY = hash_password("not-a-real-password")
 
 
+# What an invited person's account holds until they choose a password. It is not a hash of anything, so no input verifies against it:
+# nobody, the owner included, knows a password that works, and there is nothing to guess.
+UNUSABLE = "!"
+
+
 def verify_password(password: str, stored: str | None) -> bool:
+    real = stored not in (None, UNUSABLE)
     try:
-        _, n, r, p, salt, digest = (stored or _DUMMY).split("$")
+        _, n, r, p, salt, digest = (stored if real else _DUMMY).split("$")  # same work either way: timing does not tell which accounts are waiting
         got = _derive(password, base64.b64decode(salt), int(n), int(r), int(p))
         ok = hmac.compare_digest(got, base64.b64decode(digest))
     except (ValueError, TypeError):
         return False
-    return ok and stored is not None
+    return ok and real
 
 
 def strength_errors(password: str, *, email: str = "", name: str = "") -> list[str]:
@@ -61,8 +67,3 @@ def strength_errors(password: str, *, email: str = "", name: str = "") -> list[s
     if not re.search(r"[A-Za-zÀ-ỹ]", password) or not re.search(r"[0-9\W_]", password):
         errs.append("Mật khẩu cần có cả chữ và số (hoặc ký tự đặc biệt).")
     return errs
-
-
-def temporary_password() -> str:
-    """For a new account or a reset: shown once to the owner, valid only until the person sets their own."""
-    return secrets.token_urlsafe(12) + "7a"  # always has a digit and a letter

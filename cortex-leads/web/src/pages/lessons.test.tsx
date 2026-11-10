@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LessonDetail, LessonItem, LessonList } from '../api/types'
-import { OWNER, STAFF, fail, renderApp, server } from '../test/harness'
+import { OWNER, CLASS_STAFF, fail, renderApp, server } from '../test/harness'
 
 const ITEM: LessonItem = { storage: 'drive', origin: 'Google Drive', has_media: true, media_type: 'video', language: null, id: 'l1', name: 'Lớp A1 - buổi 5.mp4', status: 'done', status_label: 'Xong', attempts: 1, sandbox: 'Tổng kết buổi học',
   created_at: '2026-10-22T02:00:00Z', finished_at: '2026-10-22T02:30:00Z', has_recap: true, problem: null, class_id: 'c1', class_name: 'Lớp A1', released: true, released_at: '2026-10-22T02:31:00Z', released_by: 'auto', awaiting_release: false, classroom: null }
@@ -35,12 +35,12 @@ const CLASS = { id: 'c1', name: 'Lớp A1', sandbox_id: 'sb2', sandbox: 'Tổng 
   grader_sandbox_id: null, policy: { recap_mode: 'review' as const, grading_mode: 'review' as const, assignment_post_mode: 'manual' as const }, can_grade: false, grading: { assignments: 0, to_review: 0, pending: 0, waiting: 0, done: 0 } }
 const CLASS_B = { ...CLASS, id: 'c2', name: 'Lớp B2', webhook: null, has_webhook: false, owned: false, can_upload: false, lessons: { done: 0, failed: 0, waiting: 0, held: 0 } }
 const GOOGLE = { configured: true, sources: [], kinds: [], sandboxes: [{ id: 'sb2', title: 'Tổng kết buổi học', purpose: 'lesson_recap' }],
-  items: [{ id: 'g1', label: 'Google của cô Lan', email: null, status: 'active', can: { classroom: false, classroom_post: true, drive: true, drive_read: false }, connected_at: new Date().toISOString(), connected_by: 'x', used_by: [], refs: [] }] }
+  items: [{ id: 'g1', label: 'Google của cô Lan', email: null, status: 'active', can: { classroom: false, classroom_post: true, classroom_create: false, drive: true, drive_read: false }, connected_at: new Date().toISOString(), connected_by: 'x', used_by: [], refs: [] }] }
 const PAGE = '/classes/c1'
 
 describe('Danh sách lớp', () => {
   it('shows each class with its state, its recaps and its webhook, and opens one', async () => {
-    server({ 'GET /session': STAFF, 'GET /classes': { items: [CLASS, CLASS_B] }, 'GET /lessons?class_id=c1': LIST, 'GET /lessons': LIST })
+    server({ 'GET /session': CLASS_STAFF, 'GET /classes': { items: [CLASS, CLASS_B] }, 'GET /lessons?class_id=c1': LIST, 'GET /lessons': LIST })
     renderApp('/classes')
     expect(await screen.findByRole('link', { name: 'Lớp A1' })).toHaveAttribute('href', '/classes/c1')
     expect(screen.getByText('Webhook: webhook.mezon.ai')).toBeInTheDocument()
@@ -49,7 +49,7 @@ describe('Danh sách lớp', () => {
   })
 
   it('searches classes by name without caring for accents', async () => {
-    server({ 'GET /session': STAFF, 'GET /classes': { items: [CLASS, { ...CLASS_B, name: 'Đàm thoại' }] } })
+    server({ 'GET /session': CLASS_STAFF, 'GET /classes': { items: [CLASS, { ...CLASS_B, name: 'Đàm thoại' }] } })
     renderApp('/classes')
     await screen.findByRole('link', { name: 'Lớp A1' })
     await userEvent.type(screen.getByLabelText('Tìm lớp'), 'dam thoai')
@@ -61,7 +61,7 @@ describe('Danh sách lớp', () => {
   })
 
   it('gives staff the list only: no add, edit or delete', async () => {
-    server({ 'GET /session': STAFF, 'GET /classes': { items: [CLASS] } })
+    server({ 'GET /session': CLASS_STAFF, 'GET /classes': { items: [CLASS] } })
     renderApp('/classes')
     await screen.findByRole('link', { name: 'Lớp A1' })
     for (const name of ['Thêm lớp', 'Sửa', 'Thêm thao tác']) expect(screen.queryByRole('button', { name })).toBeNull()
@@ -80,6 +80,7 @@ describe('Danh sách lớp', () => {
     await screen.findByRole('link', { name: 'Lớp A1' })
     await userEvent.click(screen.getByRole('button', { name: 'Thêm lớp' }))
     await userEvent.type(await screen.findByLabelText('Tên lớp'), 'Lớp C3')
+    await userEvent.click(screen.getByRole('button', { name: /Kênh Mezon riêng/ }))
     await userEvent.type(screen.getByLabelText(/Webhook Mezon của lớp/), 'https://webhook.mezon.ai/hooks/x')
     await userEvent.click(screen.getByRole('button', { name: 'Tạo lớp' }))
     await waitFor(() => expect(s.posted('/classes')[0]?.body).toEqual({ sandbox_id: 'sb2', account_id: 'g1', name: 'Lớp C3', folder: 'new', webhook_url: 'https://webhook.mezon.ai/hooks/x' }))
@@ -89,6 +90,35 @@ describe('Danh sách lớp', () => {
     await userEvent.type(within(dialog).getByLabelText(/Webhook mới/), 'https://webhook.mezon.ai/hooks/b')
     await userEvent.click(within(dialog).getByRole('button', { name: 'Lưu' }))
     await waitFor(() => expect(s.calls.find((c) => c.method === 'PATCH')?.body).toEqual({ webhook_url: 'https://webhook.mezon.ai/hooks/b' }))
+  })
+
+  it('makes the folder, the Classroom course and the grading in one go, and shows the links', async () => {
+    const all = { ...GOOGLE, sandboxes: [...GOOGLE.sandboxes, { id: 'sb9', title: 'Chấm bài', purpose: 'classroom_grader' }],
+      items: [{ ...GOOGLE.items[0], can: { classroom: true, classroom_post: true, classroom_create: true, drive: true, drive_read: false } }] }
+    const s = server({ 'GET /session': OWNER, 'GET /classes': { items: [CLASS] }, 'GET /google/accounts': all,
+      'POST /classes': { id: 'c3', name: 'IELTS 6.5', folder_url: 'https://drive.google.com/drive/folders/f1', grading: true,
+        classroom: { course_id: '99', course: 'IELTS 6.5', url: 'https://classroom.google.com/c/99', created: true } } })
+    renderApp('/classes')
+    await userEvent.click(await screen.findByRole('button', { name: 'Thêm lớp' }))
+    await userEvent.type(await screen.findByLabelText('Tên lớp'), 'IELTS 6.5')
+    expect(screen.getByRole('radio', { name: /Tạo lớp mới/ })).toBeChecked()  // everything is made unless the owner says otherwise
+    expect(screen.getByLabelText(/AI chấm bài tập của lớp này/)).toBeChecked()
+    await userEvent.click(screen.getByRole('button', { name: 'Tạo lớp' }))
+    await waitFor(() => expect(s.posted('/classes')[0]?.body).toEqual({ sandbox_id: 'sb2', account_id: 'g1', name: 'IELTS 6.5', folder: 'new', classroom_new: true, grade_sandbox_id: 'sb9' }))
+    expect(await screen.findByText(/Lớp «IELTS 6.5» đã được tạo trên Google Classroom/)).toBeInTheDocument()
+    const done = within(screen.getByRole('dialog', { name: 'Thêm lớp' }))
+    expect(done.getByRole('link', { name: /Mở Classroom/ })).toHaveAttribute('href', 'https://classroom.google.com/c/99')
+    expect(done.getByRole('link', { name: /Mở thư mục/ })).toHaveAttribute('href', 'https://drive.google.com/drive/folders/f1')
+  })
+
+  it('does not offer to make a course when the account was not given that permission, and says where to fix it', async () => {
+    server({ 'GET /session': OWNER, 'GET /classes': { items: [CLASS] }, 'GET /google/accounts': GOOGLE })
+    renderApp('/classes')
+    await userEvent.click(await screen.findByRole('button', { name: 'Thêm lớp' }))
+    await screen.findByLabelText('Tên lớp')
+    expect(screen.getByRole('radio', { name: /Tạo lớp mới/ })).toBeDisabled()
+    expect(screen.getByRole('radio', { name: /Không dùng/ })).toBeChecked()
+    expect(screen.getByRole('link', { name: /Cấp quyền ở Cài đặt/ })).toBeInTheDocument()
   })
 
   it('lets the owner choose the Classroom course a class posts its recaps to', async () => {
@@ -140,16 +170,18 @@ describe('Chi tiết lớp', () => {
   const base = { 'GET /classes': { items: [CLASS, CLASS_B] }, 'GET /lessons?class_id=c1': LIST }
 
   it('says where the recordings are kept and where the recaps go', async () => {
-    server({ 'GET /session': STAFF, ...base })
+    server({ 'GET /session': CLASS_STAFF, ...base })
     renderApp(PAGE)
     expect(await screen.findByRole('heading', { name: 'Lớp A1' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /Mở trong Drive/ })).toHaveAttribute('href', 'https://drive.google.com/drive/folders/abc')
     expect(screen.getByText('webhook.mezon.ai')).toBeInTheDocument()
+    expect(screen.queryByText('Google của cô Lan')).toBeNull() // the account and the rest wait behind «Chi tiết kết nối»
+    await userEvent.click(screen.getByRole('button', { name: 'Chi tiết kết nối' }))
     expect(screen.getByText('Google của cô Lan')).toBeInTheDocument()
   })
 
   it('says a class without its own webhook uses the common channel', async () => {
-    server({ 'GET /session': STAFF, ...base, 'GET /lessons?class_id=c2': { ...LIST, items: [] } })
+    server({ 'GET /session': CLASS_STAFF, ...base, 'GET /lessons?class_id=c2': { ...LIST, items: [] } })
     renderApp('/classes/c2')
     expect(await screen.findByText('Kênh chung')).toBeInTheDocument()
     expect(screen.getAllByText(/chỉ đọc/).length).toBeGreaterThan(0)
@@ -157,7 +189,7 @@ describe('Chi tiết lớp', () => {
   })
 
   it('lists the files of the class with status and the reason one failed', async () => {
-    server({ 'GET /session': STAFF, ...base })
+    server({ 'GET /session': CLASS_STAFF, ...base })
     renderApp(PAGE)
     expect(await screen.findByText('Lớp A1 - buổi 5.mp4')).toBeInTheDocument()
     expect(screen.getByText('Thất bại')).toBeInTheDocument()
@@ -165,14 +197,14 @@ describe('Chi tiết lớp', () => {
   })
 
   it('says so when the folder has no file yet', async () => {
-    server({ 'GET /session': STAFF, ...base, 'GET /lessons?class_id=c1': { ...LIST, items: [] } })
+    server({ 'GET /session': CLASS_STAFF, ...base, 'GET /lessons?class_id=c1': { ...LIST, items: [] } })
     renderApp(PAGE)
     expect(await screen.findByText('Thả bản ghi buổi học vào đây')).toBeInTheDocument()
     expect(screen.getByLabelText('Chọn bản ghi')).toBeInTheDocument()
   })
 
   it('says there is no such class when it was deleted', async () => {
-    server({ 'GET /session': STAFF, 'GET /classes': { items: [] }, 'GET /lessons?class_id=zz': LIST })
+    server({ 'GET /session': CLASS_STAFF, 'GET /classes': { items: [] }, 'GET /lessons?class_id=zz': LIST })
     renderApp('/classes/zz')
     expect(await screen.findByText(/Không có lớp này/)).toBeInTheDocument()
   })
@@ -195,7 +227,7 @@ describe('Chi tiết lớp', () => {
 })
 
 describe('Tải lên', () => {
-  const up = (over = {}) => ({ 'GET /session': STAFF, 'GET /classes': { items: [CLASS] }, 'GET /lessons?class_id=c1': LIST, ...over })
+  const up = (over = {}) => ({ 'GET /session': CLASS_STAFF, 'GET /classes': { items: [CLASS] }, 'GET /lessons?class_id=c1': LIST, ...over })
 
   it('asks Cortex for a ticket for this class, then sends the recording to Google in chunks, and says it is in the Drive', async () => {
     vi.stubGlobal('XMLHttpRequest', FakeXHR)
@@ -328,7 +360,7 @@ describe('Nội dung tệp', () => {
   })
 
   it('a link from a message opens that lesson in its class', async () => {
-    server({ 'GET /session': STAFF, 'GET /classes': { items: [CLASS] }, 'GET /lessons?class_id=c1': LIST, 'GET /lessons/l1': withMedia() })
+    server({ 'GET /session': CLASS_STAFF, 'GET /classes': { items: [CLASS] }, 'GET /lessons?class_id=c1': LIST, 'GET /lessons/l1': withMedia() })
     renderApp('/lessons/l1')
     expect(await screen.findByLabelText('Xem lại bản ghi')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Lớp A1' })).toBeInTheDocument()
@@ -373,7 +405,7 @@ describe('Tự động hóa của lớp', () => {
 
   it('lets a teacher release a recap that a class holds, and tells where it was held', async () => {
     const held = { ...DETAIL, released: false, released_at: null, released_by: null, awaiting_release: true }
-    const s = server({ 'GET /session': STAFF, 'GET /classes': { items: [CLASS] }, 'GET /lessons?class_id=c1': { ...LIST, items: [{ ...ITEM, released: false, awaiting_release: true }] }, 'GET /lessons/l1': held, 'POST /lessons/l1/release': { released: 'l1' } })
+    const s = server({ 'GET /session': CLASS_STAFF, 'GET /classes': { items: [CLASS] }, 'GET /lessons?class_id=c1': { ...LIST, items: [{ ...ITEM, released: false, awaiting_release: true }] }, 'GET /lessons/l1': held, 'POST /lessons/l1/release': { released: 'l1' } })
     renderApp('/classes/c1?file=l1')
     expect(await screen.findByText(/đang chờ giáo viên duyệt/)).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Duyệt và gửi' }))
@@ -384,7 +416,7 @@ describe('Tự động hóa của lớp', () => {
     const WORKS = { class: { id: 'c1', name: 'Lớp A1', grading_mode: 'review' }, items: [
       { id: 'a1', title: 'Viết 5 câu', state: 'created', ours: true, gradable: true, max_points: 10, due: null, created_at: '2026-10-22T02:00:00Z', submissions: 3, description: 'Viết năm câu về kỳ nghỉ của em.', criteria: [{ id: 'ng', label: 'Ngữ pháp', points: 10, descriptor: '' }], materials: [], answer_key: null, check_prompt: null, language: null,
         counts: { pending: 0, proposed: 2, approved: 1, rejected: 0, skipped: 0, failed: 0, waiting: 0 } }] }
-    server({ 'GET /session': STAFF, 'GET /classes': { items: [GRADING_CLASS] }, 'GET /lessons?class_id=c1': LIST, 'GET /classes/c1/assignments': WORKS, 'GET /assignments?class_id=c1': { items: [{ id: 'a1', class_id: 'c1', course: null, title: 'Viết 5 câu', description: 'Viết năm câu về kỳ nghỉ của em.', max_points: 10, criteria: [], answer_key: null, language: null, origin: 'teacher', materials: [], status: 'created', due: null, publish: true, error: null, created_by: null, created_at: '2026-10-22T02:00:00Z' }], sources: [] } })
+    server({ 'GET /session': CLASS_STAFF, 'GET /classes': { items: [GRADING_CLASS] }, 'GET /lessons?class_id=c1': LIST, 'GET /classes/c1/assignments': WORKS, 'GET /assignments?class_id=c1': { items: [{ id: 'a1', class_id: 'c1', course: null, title: 'Viết 5 câu', description: 'Viết năm câu về kỳ nghỉ của em.', max_points: 10, criteria: [], answer_key: null, language: null, origin: 'teacher', materials: [], status: 'created', due: null, publish: true, error: null, created_by: null, created_at: '2026-10-22T02:00:00Z' }], sources: [] } })
     renderApp('/classes/c1?tab=assignments')
     const row = await screen.findByRole('button', { name: /Viết 5 câu/ })
     expect(within(row).getByText('2 chờ duyệt')).toBeInTheDocument()

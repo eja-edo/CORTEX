@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from cortex_leads.auth.roles import ApiRole
 from cortex_leads.core.ids import uuid7
 from cortex_leads.core.timefmt import wire
 from cortex_leads.db import models as m
@@ -17,7 +18,7 @@ from cortex_leads.memory import service as mem
 from cortex_leads.review.auth import Caller, require
 
 router = APIRouter()
-STAFF = require("staff", "owner")
+STAFF = require(ApiRole.STAFF, ApiRole.OWNER)
 
 
 class FactBody(BaseModel):

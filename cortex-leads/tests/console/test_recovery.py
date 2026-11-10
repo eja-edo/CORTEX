@@ -18,15 +18,6 @@ BASE = "https://cortex.example.vn"
 
 
 @pytest.fixture
-def mail(monkeypatch):
-    box = MemoryMailer()
-    set_mailer(box)
-    monkeypatch.setattr(get_settings(), "PUBLIC_BASE_URL", BASE)
-    yield box
-    set_mailer(None)
-
-
-@pytest.fixture
 async def person(world, api_key_factory):
     _, key = await api_key_factory(world.t, "staff", "nv1")
     return await account_for_key(key)
@@ -88,7 +79,7 @@ async def test_the_link_is_built_from_configuration_never_from_the_request_host(
 async def test_asking_gives_the_same_answer_for_an_account_a_stranger_and_a_disabled_account(app_client, mail, person, world):
     async with tenant_session(world.t.id) as s:
         from cortex_leads.auth.users import create_user
-        off, _ = await create_user(s, world.t.id, email="nghi@example.vn", name="Người Nghỉ", role="staff", password=PASSWORD, created_by="test")
+        off = await create_user(s, world.t.id, email="nghi@example.vn", name="Người Nghỉ", role="staff", password=PASSWORD, created_by="test")
         off.status = "disabled"
     answers = [await app_client.post(f"{A}/forgot", json={"email": e}) for e in (person, "khong-ai-ca@nowhere.test", "nghi@example.vn", "not an email")]
     assert {(a.status_code, a.text) for a in answers} == {(200, '{"status":"ok"}')}
@@ -107,7 +98,7 @@ async def test_the_new_password_works_the_old_does_not_and_every_sign_in_ends(ap
     app_client.cookies.clear()
     assert (await login(app_client, person, PASSWORD)).status_code == 401
     ok = await login(app_client, person, NEW)
-    assert ok.status_code == 200 and ok.json()["must_change_password"] is False
+    assert ok.status_code == 200
     events = [e for e in await rows(world, m.AuditEvent) if e.action.startswith("password.reset")]
     assert {e.action for e in events} == {"password.reset_requested", "password.reset_by_email"}
     blob = "".join(e.summary + str(e.metadata_) + e.actor for e in events)
@@ -120,7 +111,7 @@ async def test_only_a_hash_of_the_token_is_stored(app_client, mail, person, worl
     async with tenant_session(world.t.id) as s:
         (row,) = (await s.execute(text("select token_hash, used_at, expires_at - created_at as ttl from password_reset"))).all()
     assert row.token_hash != token and token not in row.token_hash and len(row.token_hash) == 64 and row.used_at is None
-    assert timedelta(minutes=29) < row.ttl <= timedelta(minutes=30)
+    assert timedelta(minutes=29) < row.ttl <= timedelta(minutes=30, seconds=1)  # created_at is the DB clock at the start of the transaction, expires_at is computed a moment later
 
 
 async def test_a_link_works_once(app_client, mail, person):
@@ -197,13 +188,13 @@ async def test_resetting_lifts_the_lock_a_guesser_put_on_the_account(app_client,
     assert (await login(app_client, person, NEW)).status_code == 200
 
 
-async def test_a_person_who_was_made_to_change_their_password_is_free_of_that_after_a_reset(app_client, mail, world):
+async def test_an_invited_account_with_no_password_can_also_be_opened_by_the_forgot_link(app_client, mail, world):
     async with tenant_session(world.t.id) as s:
         from cortex_leads.auth.users import create_user
-        await create_user(s, world.t.id, email="moi@example.vn", name="Người Mới", role="staff", created_by="test")  # temporary password: must change
+        await create_user(s, world.t.id, email="moi@example.vn", name="Người Mới", role="staff", created_by="test")  # invited: no password yet
     await app_client.post(f"{A}/forgot", json={"email": "moi@example.vn"})
     assert (await app_client.post(f"{A}/reset", json={"token": token_of(mail), "password": NEW})).status_code == 200
-    assert (await login(app_client, "moi@example.vn", NEW)).json()["must_change_password"] is False
+    assert (await login(app_client, "moi@example.vn", NEW)).status_code == 200
 
 
 async def test_the_database_shows_a_link_only_to_whoever_names_its_token_and_never_across_businesses(app_client, mail, person, world, tenant_factory):

@@ -89,7 +89,7 @@ async def test_connecting_asks_google_only_for_what_was_ticked_and_stores_one_ac
     assert query["code_challenge_method"] == ["S256"] and query["access_type"] == ["offline"]
     assert back.status_code == 303 and "connected=" in back.headers["location"] and back.headers["location"].startswith("/app/settings?")
     items = (await app_client.get("/api/v1/google/accounts")).json()["items"]
-    assert [(a["label"], a["email"], a["status"], a["can"]) for a in items] == [("Google của cô Lan", "co.lan@truong.vn", "active", {"classroom": True, "classroom_post": False, "drive": False, "drive_read": True})]
+    assert [(a["label"], a["email"], a["status"], a["can"]) for a in items] == [("Google của cô Lan", "co.lan@truong.vn", "active", {"classroom": True, "classroom_post": False, "classroom_create": False, "drive": False, "drive_read": True})]
     assert "rt-1" not in json.dumps(items)
     async with tenant_session(world.t.id) as s:
         acct = (await s.execute(select(m.GoogleAccount))).scalar_one()
@@ -149,7 +149,7 @@ async def test_revoking_ends_every_source_that_used_the_account_and_keeps_their_
     monkeypatch.setattr(ga, "new_http", fake)
     await connect(app_client, csrf, monkeypatch, label="Cô Lan", kinds=("classroom", "drive"), scope=CLASSROOM + " " + SCOPE + "drive.file")
     acct = (await app_client.get("/api/v1/google/accounts")).json()["items"][0]
-    assert acct["can"] == {"classroom": True, "classroom_post": False, "drive": True, "drive_read": True}
+    assert acct["can"] == {"classroom": True, "classroom_post": False, "classroom_create": False, "drive": True, "drive_read": True}
     await app_client.post("/api/v1/google/classroom-sources", json={"sandbox_id": str(grader.id), "account_id": acct["id"], "course_id": "111"}, headers=h(csrf))
     r = await app_client.post("/api/v1/google/lesson-sources", json={"sandbox_id": str(recapper.id), "account_id": acct["id"], "folder_id": "F" * 12}, headers=h(csrf))
     assert r.status_code == 201
@@ -197,7 +197,7 @@ async def test_a_recordings_folder_is_watched_with_the_account_and_read_as_that_
     csrf = await owner(app_client, world, api_key_factory)
     await connect(app_client, csrf, monkeypatch, label="Cô Lan", kinds=("drive_read",), scope=SCOPE + "drive.readonly", refresh="rt-lan")
     acct = (await app_client.get("/api/v1/google/accounts")).json()["items"][0]
-    assert acct["can"] == {"classroom": False, "classroom_post": False, "drive": False, "drive_read": True}
+    assert acct["can"] == {"classroom": False, "classroom_post": False, "classroom_create": False, "drive": False, "drive_read": True}
 
     class Fake:
         async def folders(self):

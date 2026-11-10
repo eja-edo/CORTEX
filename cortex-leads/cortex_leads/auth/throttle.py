@@ -54,3 +54,9 @@ async def clear_account(s: AsyncSession, email: str) -> None:
     row = await s.get(m.LoginThrottle, account_key(email))
     if row is not None:
         await s.delete(row)
+
+
+async def clear(s: AsyncSession, key: str) -> None:
+    row = await s.get(m.LoginThrottle, key)
+    if row is not None:
+        await s.delete(row)

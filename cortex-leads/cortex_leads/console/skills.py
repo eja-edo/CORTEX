@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cortex_leads.audit.service import diff
+from cortex_leads.auth.perms import Perm
 from cortex_leads.console.auth import Session, need
 from cortex_leads.console.sandboxes import label_of
 from cortex_leads.console.trail import VIEW_ONCE, audit
@@ -90,7 +91,7 @@ async def _care(s: AsyncSession) -> m.Sandbox | None:
 
 
 @router.get("/skills")
-async def list_skills(sess: Session = need("skills.read")) -> dict[str, Any]:
+async def list_skills(sess: Session = need(Perm.SKILLS_READ)) -> dict[str, Any]:
     async with tenant_session(sess.caller.tenant_id) as s:
         sandboxes = {x.id: x for x in (await s.execute(select(m.Sandbox))).scalars()}
         every = (await s.execute(select(m.SkillVersion).order_by(m.SkillVersion.name, m.SkillVersion.version.desc()))).scalars().all()
@@ -116,7 +117,7 @@ async def list_skills(sess: Session = need("skills.read")) -> dict[str, Any]:
 
 
 @router.get("/skills/form-options")
-async def form_options(sess: Session = need("skills.read")) -> dict[str, Any]:
+async def form_options(sess: Session = need(Perm.SKILLS_READ)) -> dict[str, Any]:
     async with tenant_session(sess.caller.tenant_id) as s:
         sb = await _care(s)
         intents = [{"id": k, "label": v.label} for k, v in (load_pack(sb).intents.items() if sb else [])]
@@ -125,7 +126,7 @@ async def form_options(sess: Session = need("skills.read")) -> dict[str, Any]:
 
 
 @router.get("/skills/{skill_id}")
-async def skill_detail(skill_id: UUID, sess: Session = need("skills.read")) -> dict[str, Any]:
+async def skill_detail(skill_id: UUID, sess: Session = need(Perm.SKILLS_READ)) -> dict[str, Any]:
     async with tenant_session(sess.caller.tenant_id) as s:
         r = await s.get(m.SkillVersion, skill_id)
         if r is None:
@@ -146,7 +147,7 @@ async def skill_detail(skill_id: UUID, sess: Session = need("skills.read")) -> d
     man = r.manifest
     ready = runs >= MIN_SHADOW_RUNS
     history = []
-    if sess.can("skills.manage"):
+    if sess.can(Perm.SKILLS_MANAGE):
         async with tenant_session(sess.caller.tenant_id) as s:
             ev = (await s.execute(select(m.AuditEvent).where(m.AuditEvent.object_type == "skill", m.AuditEvent.object_id == str(r.id),
                                                              m.AuditEvent.category == "config").order_by(m.AuditEvent.seq.desc()).limit(15))).scalars().all()
@@ -154,7 +155,7 @@ async def skill_detail(skill_id: UUID, sess: Session = need("skills.read")) -> d
                     "restorable": "before_spec" in (e.metadata_ or {}) and r.deleted_at is None} for e in ev]
     return {"id": str(r.id), "deleted": r.deleted_at is not None, "deleted_by": r.deleted_by,
             "deleted_at": wire(r.deleted_at) if r.deleted_at else None, "form": r.form_spec, "history": history,
-            "body": r.body if sess.can("skills.manage") else None, "sandbox": label_of(sb), "created_at": wire(r.created_at), "name": r.name, "version": r.version, "description": man.get("description", ""), "status": r.status,
+            "body": r.body if sess.can(Perm.SKILLS_MANAGE) else None, "sandbox": label_of(sb), "created_at": wire(r.created_at), "name": r.name, "version": r.version, "description": man.get("description", ""), "status": r.status,
             "source": _source(r), "trigger": trigger_text(man, load_pack(sb).intents), "runs": runs, "blocked": blocked, "ready": ready,
             "min_trial_runs": MIN_SHADOW_RUNS, "can": _can(r, ready), "trial_drafts": trial,
             "tools": [TOOL_LABELS.get(t, t) for t in man.get("requires_tools", [])], "must_handoff": man.get("must_handoff", []),
@@ -170,7 +171,7 @@ def _summary(spec: FormSpec, sandbox: m.Sandbox) -> dict[str, Any]:
 
 
 @router.post("/skills/preview")
-async def preview_skill(spec: FormSpec, sess: Session = need("skills.draft")) -> dict[str, Any]:
+async def preview_skill(spec: FormSpec, sess: Session = need(Perm.SKILLS_DRAFT)) -> dict[str, Any]:
     async with tenant_session(sess.caller.tenant_id) as s:
         sb = await _care(s)
         if sb is None:
@@ -179,7 +180,7 @@ async def preview_skill(spec: FormSpec, sess: Session = need("skills.draft")) ->
 
 
 @router.post("/skills", status_code=201)
-async def create_skill(spec: FormSpec, sess: Session = need("skills.draft")) -> dict[str, Any]:
+async def create_skill(spec: FormSpec, sess: Session = need(Perm.SKILLS_DRAFT)) -> dict[str, Any]:
     async with tenant_session(sess.caller.tenant_id) as s:
         sb = await _care(s)
         if sb is None:
@@ -210,7 +211,7 @@ async def _edit(skill_id: UUID, spec: FormSpec | None, sess: Session, revert_eve
             raise HTTPException(404, "skill not found")
         if r.form_spec is None:
             raise HTTPException(409, {"code": "NO_FORM", "message": "Kỹ năng này không tạo từ form nên không sửa ở đây được."})
-        if r.status != "draft" and not sess.can("skills.manage"):
+        if r.status != "draft" and not sess.can(Perm.SKILLS_MANAGE):
             raise HTTPException(403, "owner only")
         before = dict(r.form_spec)
         if errs := await preview(s, r.sandbox_id, spec):
@@ -227,7 +228,7 @@ async def _edit(skill_id: UUID, spec: FormSpec | None, sess: Session, revert_eve
 
 
 @router.put("/skills/{skill_id}")
-async def edit_skill(skill_id: UUID, spec: FormSpec, sess: Session = need("skills.draft")) -> dict[str, Any]:
+async def edit_skill(skill_id: UUID, spec: FormSpec, sess: Session = need(Perm.SKILLS_DRAFT)) -> dict[str, Any]:
     return await _edit(skill_id, spec, sess)
 
 
@@ -236,12 +237,12 @@ class Revert(BaseModel):
 
 
 @router.post("/skills/{skill_id}/revert")
-async def revert_skill(skill_id: UUID, body: Revert, sess: Session = need("skills.draft")) -> dict[str, Any]:
+async def revert_skill(skill_id: UUID, body: Revert, sess: Session = need(Perm.SKILLS_DRAFT)) -> dict[str, Any]:
     return await _edit(skill_id, None, sess, body.event_id)
 
 
 @router.post("/skills/{skill_id}/{verb}")
-async def skill_verb(skill_id: UUID, verb: Literal["trial", "live", "off", "again", "delete", "restore"], sess: Session = need("skills.manage")) -> dict[str, str]:
+async def skill_verb(skill_id: UUID, verb: Literal["trial", "live", "off", "again", "delete", "restore"], sess: Session = need(Perm.SKILLS_MANAGE)) -> dict[str, str]:
     """Owner only: switching what the AI does is the owner's call."""
     async with tenant_session(sess.caller.tenant_id) as s:
         r = await s.get(m.SkillVersion, skill_id)

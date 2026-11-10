@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select, text
 
+from cortex_leads.auth.perms import Perm
 from cortex_leads.console.auth import Session, need
 from cortex_leads.console.sandboxes import PURPOSE_LABELS
 from cortex_leads.console.trail import audit_new
@@ -57,7 +58,7 @@ def get_gateway() -> LLMGateway:
 
 
 @router.get("/proposals")
-async def proposals(sess: Session = need("assistant.use")) -> dict[str, Any]:
+async def proposals(sess: Session = need(Perm.ASSISTANT_USE)) -> dict[str, Any]:
     async with tenant_session(sess.caller.tenant_id) as s:
         rows = (await s.execute(select(m.Proposal, m.Sandbox.title, m.Sandbox.name, m.Sandbox.purpose).join(m.Sandbox, m.Sandbox.id == m.Proposal.sandbox_id)
                                 .where(m.Proposal.status == "pending").order_by(m.Proposal.created_at))).all()
@@ -69,7 +70,7 @@ async def proposals(sess: Session = need("assistant.use")) -> dict[str, Any]:
 
 
 @router.post("/proposals/{proposal_id}/{verb}")
-async def proposal_verb(proposal_id: UUID, verb: Literal["accept", "dismiss"], sess: Session = need("assistant.use")) -> dict[str, str]:
+async def proposal_verb(proposal_id: UUID, verb: Literal["accept", "dismiss"], sess: Session = need(Perm.ASSISTANT_USE)) -> dict[str, str]:
     try:
         async with tenant_session(sess.caller.tenant_id) as s:
             status = await decide(s, proposal_id, accept=verb == "accept", by=sess.actor, now=datetime.now(UTC))
@@ -120,7 +121,7 @@ class Chat(BaseModel):
 
 
 @router.post("/assistant/chat")
-async def chat(body: Chat, sess: Session = need("assistant.use"), gateway: LLMGateway = Depends(get_gateway)) -> dict[str, Any]:
+async def chat(body: Chat, sess: Session = need(Perm.ASSISTANT_USE), gateway: LLMGateway = Depends(get_gateway)) -> dict[str, Any]:
     if body.messages[-1].role != "user":
         raise HTTPException(422, "the last message must be the owner's question")
     now, tid = datetime.now(UTC), sess.caller.tenant_id
