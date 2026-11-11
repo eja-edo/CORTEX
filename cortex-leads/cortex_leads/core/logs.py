@@ -30,5 +30,5 @@ def setup_logging(level: str | None = None) -> None:
     _listener = logging.handlers.QueueListener(q, out, respect_handler_level=True)
     _listener.start()
     atexit.register(_listener.stop)  # flush what is still queued when the process ends
-    for noisy in ("httpx", "httpcore"):  # one line per HTTP call, and URLs can carry a token (Pancake): only warnings
+    for noisy in ("httpx", "httpx2", "httpcore"):  # one line per HTTP call, and URLs can carry a token (Pancake): only warnings
         logging.getLogger(noisy).setLevel(logging.WARNING)
