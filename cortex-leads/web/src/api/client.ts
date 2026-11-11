@@ -21,6 +21,13 @@ export class ApiError extends Error {
   }
 }
 
+/** A dropped connection (fetch rejects, so the error is not an ApiError) or a gateway answering for a server that is restarting (502/503/504)
+ *  is worth asking again. Any other answer is the server's word: asking again gets the same reply. */
+export const isTransient = (e: unknown) => !(e instanceof ApiError) || e.status === 502 || e.status === 503 || e.status === 504
+/** For react-query: up to four more tries, 1 s, 2 s, 4 s, 8 s apart (about 15 s in all), and only for a transient failure. */
+export const retryTransient = (failures: number, e: unknown) => failures < 4 && isTransient(e)
+export const retryBackoff = (attempt: number) => Math.min(1000 * 2 ** attempt, 8000)
+
 let csrf = ''
 export const setCsrf = (token: string) => {
   csrf = token

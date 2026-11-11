@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ApiError, api, get, post, put, setCsrf, uploadToDrive } from './client'
+import { ApiError, api, get, post, put, retryBackoff, retryTransient, setCsrf, uploadToDrive } from './client'
 import { setTimezone } from '../components/format'
 import { keepPreviousData } from '@tanstack/react-query'
 import type { AiOverview, AssignmentEdit, AssignmentList, AssignmentTemplate, AssignmentTemplateIn, AuditDetail, AuditList, AuditQuery, AuditVerify, BusinessSettings, CatalogImport, CatalogList, Channels, ChatReply, ChatTurn, ClassAssignments, ClassItem, ClassKind, ClassroomOptions, Conversation, ConvFilter, ConvList, EraseResult, FormOptions, GoogleCourse, GoogleFolder, GoogleList, GradeDecision, GradeDetail, GradeList, GradingMode, LessonDetail, LessonList, LoginResult, McpTool, Me, Member, MfaSetup, MfaStatus, MfaWithCodes, MySession, NewAssignment, NewChannelResult, NewClassResult, NewSource, NotifyTargets, PickerInfo, PickerToken, Proposal, RecapMode, Role, SandboxDetail, SandboxList, SkillDetail, SkillList, SkillPreview, SkillSpec, SourceDetail, SourceList, ToolInSandbox, ToolList } from './types'
@@ -8,8 +8,9 @@ import type { AiOverview, AssignmentEdit, AssignmentList, AssignmentTemplate, As
 export function useSession() {
   return useQuery({
     queryKey: ['session'],
-    retry: false,
-    refetchInterval: 30_000,
+    retry: retryTransient,  // a flaky network or a server restarting is asked again; a 401 is an answer and never retried
+    retryDelay: retryBackoff,
+    refetchInterval: 30_000,  // keeps going after a failure too, so the page reconnects on its own
     queryFn: async (): Promise<Me | null> => {
       try {
         const me = await get<Me>('/session')

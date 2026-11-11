@@ -1,7 +1,7 @@
 /** The platform admin page's own client (WP47): /api/admin, its own cookie (the browser sends it only there) and its own CSRF token.
  *  Nothing here shares state with the console's client: an admin is nobody in the console, and a person of a business is nobody here. */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ApiError } from '../api/client'
+import { ApiError, retryBackoff, retryTransient } from '../api/client'
 
 export interface AdminMe { email: string; name: string; csrf: string; expires_at: string; recovery_left?: number }
 export type AiState = 'running' | 'paused' | 'partial' | 'none'
@@ -38,7 +38,8 @@ const apost = <T>(path: string, body: unknown = {}) => adminApi<T>('POST', path,
 export function useAdminSession() {
   return useQuery({
     queryKey: ['admin', 'session'],
-    retry: false,
+    retry: retryTransient,  // only a dropped connection or a restarting server; a 401 is an answer
+    retryDelay: retryBackoff,
     refetchInterval: 60_000,
     queryFn: async (): Promise<AdminMe | null> => {
       try {

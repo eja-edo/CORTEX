@@ -46,9 +46,10 @@ function RedirectClass() {
 function Authed() {
   const { data: me, isPending, isError, refetch } = useSession()
   if (isPending) return <Loading />
-  if (isError) return <ErrorBox onRetry={() => refetch()}>Không kết nối được máy chủ.</ErrorBox>
-  if (!me) return <Navigate to="/login" replace />
-  return <Shell me={me} />
+  // A background check that fails keeps the last answer: the person goes on working instead of losing the page to one dropped request.
+  if (me) return <Shell me={me} />
+  if (isError) return <ErrorBox onRetry={() => refetch()}>Không kết nối được máy chủ. Trang sẽ tự kết nối lại khi mạng ổn định.</ErrorBox>
+  return <Navigate to="/login" replace />
 }
 
 export default function App() {

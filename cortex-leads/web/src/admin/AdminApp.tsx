@@ -68,7 +68,8 @@ function AdminShell() {
   const { data: me, isPending, isError, refetch } = useAdminSession()
   const logout = useAdminLogout()
   if (isPending) return <Loading />
-  if (isError) return <ErrorBox onRetry={() => refetch()}>Không kết nối được máy chủ.</ErrorBox>
+  // a failed background check keeps the last answer (see Authed in App.tsx)
+  if (isError && me === undefined) return <ErrorBox onRetry={() => refetch()}>Không kết nối được máy chủ. Trang sẽ tự kết nối lại khi mạng ổn định.</ErrorBox>
   if (!me) return <Navigate to="/admin/login" replace />
   return (
     <div className="flex h-full flex-col overflow-hidden">

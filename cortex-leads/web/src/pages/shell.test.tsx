@@ -1,6 +1,7 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it } from 'vitest'
+import { ApiError, isTransient, retryTransient } from '../api/client'
 import { SidePanel } from '../components/ui'
 import { CONV, LIST } from '../test/fixtures'
 import { OWNER, STAFF, fail, renderApp, server } from '../test/harness'
@@ -98,6 +99,26 @@ describe('sign-in and shell', () => {
     server({ 'GET /session': fail(500, 'boom') })
     renderApp('/inbox')
     expect(await screen.findByRole('alert')).toHaveTextContent('Không kết nối được máy chủ')
+  })
+
+  it('asks again after a dropped connection instead of showing an error at once', async () => {
+    let tries = 0
+    const s = server({
+      'GET /session': () => { if (++tries === 1) throw new TypeError('Failed to fetch'); return STAFF },
+      'GET /conversations?filter=need_human': EMPTY_LIST,
+    })
+    renderApp('/inbox')
+    expect(await screen.findByRole('navigation', {}, { timeout: 3000 })).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(s.calls.filter((c) => c.path === '/session').length).toBeGreaterThanOrEqual(2)  // the dropped one, then the retry (the shell may ask again once mounted)
+  })
+
+  it('retries only what asking again can fix', () => {
+    expect(isTransient(new TypeError('Failed to fetch'))).toBe(true)
+    for (const status of [502, 503, 504]) expect(isTransient(new ApiError(status, null))).toBe(true)
+    for (const status of [400, 401, 403, 404, 500]) expect(isTransient(new ApiError(status, null))).toBe(false)
+    expect(retryTransient(3, new TypeError('x'))).toBe(true)
+    expect(retryTransient(4, new TypeError('x'))).toBe(false)
   })
 
   it('has one "Lớp học" entry where lessons, grading and assignments used to be three, and the old addresses still lead there', async () => {
