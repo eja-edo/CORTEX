@@ -93,10 +93,10 @@ def test_sample_voice_file_has_ten_examples():
     assert sum(1 for ln in text.splitlines() if ln[:3].strip(". ").isdigit()) == 10
 
 
-def test_eval_script_runs_35_cases_on_fake(tmp_path):
+def test_eval_script_runs_40_cases_on_fake(tmp_path):
     out = tmp_path / "r.md"
     r = subprocess.run([sys.executable, "-m", "dev.eval_skills", "--provider", "fake", "--out", str(out)],
                        cwd=ROOT, capture_output=True, text=True, timeout=300)
     assert r.returncode == 0, r.stderr[-2000:]
     md = out.read_text(encoding="utf-8")
-    assert md.count("\n### ") == 35 and "35/35" in md
+    assert md.count("\n### ") == 40 and "40/40" in md

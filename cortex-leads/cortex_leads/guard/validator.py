@@ -229,8 +229,11 @@ def validate_draft(
     has_new_info: bool,
     now: datetime,
     tz: str | None = None,
+    max_chars: int | None = None,
 ) -> list[Violation]:
     v: list[Violation] = []
+    if max_chars is not None and len(text) > max_chars:  # a reply to a customer is a chat line, not an essay or homework
+        v.append(Violation(code=BlockedCode.TOO_LONG, detail=f"{len(text)}/{max_chars}"))
     if opted_out:
         v.append(Violation(code=BlockedCode.OPTED_OUT))
     if touches >= max_touches:

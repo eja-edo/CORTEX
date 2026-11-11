@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cortex_leads.channels.policy import window_state
@@ -35,6 +35,10 @@ from cortex_leads.triggers.select import select_jobs
 log = logging.getLogger(__name__)
 TURN_WAIT = timedelta(minutes=2)  # DESIGN §5.7: a `wait` moves the mark by this, at most once
 TURN_MAX_TOUCHES = 10  # turn replies are not follow-ups (N5): the follow-up cap of 3 is not theirs to spend
+TURN_MAX_CHARS = 600  # a chat line (the skill asks for 3 short sentences); an essay or done homework is blocked
+# Turn replies cost no touch, so without this one person typing non-stop (or using the business's AI for
+# homework) is answered without end and spends the whole sandbox budget. Counted per contact, before the LLM.
+TURN_RUNS_PER_CONTACT = ((timedelta(hours=1), 10, "một giờ"), (timedelta(days=1), 30, "một ngày"))
 
 
 def _tool_message(call_id: str, result: ToolResult) -> dict[str, Any]:
@@ -68,6 +72,21 @@ async def _loop(session: AsyncSession, gateway: LLMGateway, registry: ToolRegist
                                              allowlist=read_allow, effect_ceiling="read")
             messages.append(_tool_message(c.id, out))
     return None
+
+
+async def turn_runs_since(session: AsyncSession, contact_id: UUID, since: datetime) -> int:
+    """Turn runs for this contact (any of their conversations) that reached the model since `since`."""
+    return (await session.execute(select(func.count()).select_from(m.TriggerRun)
+        .join(m.FollowupJob, m.FollowupJob.id == m.TriggerRun.job_id)
+        .join(m.Conversation, m.Conversation.id == m.FollowupJob.conversation_id)
+        .where(m.Conversation.contact_id == contact_id, m.TriggerRun.event_type == TURN_EVENT,
+               m.TriggerRun.started_at > since, m.TriggerRun.tokens_in > 0))).scalar_one()
+
+
+async def _open_card(session: AsyncSession, conv_id: UUID) -> bool:
+    return (await session.execute(select(m.Draft.id).where(
+        m.Draft.conversation_id == conv_id, m.Draft.needs_human.is_(True),
+        m.Draft.status == "proposed").limit(1))).scalar() is not None
 
 
 def _log(session: AsyncSession, run: m.TriggerRun, conv: m.Conversation, decision: str,
@@ -164,7 +183,8 @@ async def run_job(session: AsyncSession, job: m.FollowupJob, gateway: LLMGateway
             h = await registry.execute(ctx, session, "draft_followup", {
                 "text": line, "reason_code": out["reason_code"], "has_new_info": True,
                 "claims": out.get("claims", []) if line == own else [],
-                "max_touches": TURN_MAX_TOUCHES, "never_say": skill.manifest.never_say, "route": route},
+                "max_touches": TURN_MAX_TOUCHES, "never_say": skill.manifest.never_say, "route": route,
+                "max_chars": max_chars},
                 allowlist=allowed, effect_ceiling="internal", idempotency_key=f"hold:{job.id}:{i}")
             if h.status == "proposed":
                 break
@@ -173,6 +193,25 @@ async def run_job(session: AsyncSession, job: m.FollowupJob, gateway: LLMGateway
                                           allowlist=allowed, effect_ceiling=profile.effect_ceiling)  # type: ignore[arg-type]
             _log(session, run, conv, "turn_hold_sent" if sent.status == "ok" else "turn_hold_failed", now,
                  skill=skill.name)
+
+    max_chars = int(skill.manifest.limits.get("max_chars", TURN_MAX_CHARS)) if turn else None
+    if turn:  # 0 token: a contact over the cap gets a person, once, never another model call
+        for span, cap, label in TURN_RUNS_PER_CONTACT:
+            if await turn_runs_since(session, conv.contact_id, now - span) < cap:
+                continue
+            if not shadow and not await _open_card(session, conv.id):
+                out = {"reason_code": "khong_ro"}
+                card = await registry.execute(ctx, session, "draft_followup", {
+                    "text": f"Khách nhắn liên tục, đã quá mức AI tự trả lời trong {label} (có thể đang nhờ AI làm "
+                            "việc ngoài tư vấn). Nhờ anh/chị xem hội thoại và trả lời khách.",
+                    "reason_code": "khong_ro", "has_new_info": True, "claims": [], "max_touches": TURN_MAX_TOUCHES,
+                    "never_say": [], "route": route}, allowlist=allowed, effect_ceiling="internal",
+                    idempotency_key=f"{job.id}:cap")
+                if card.status == "proposed":
+                    await flag_human(card.data["draft_id"])
+                    await hold()
+            return finish("blocked", "skipped", "CONTACT_CAP", decision="run_blocked", reason="contact_turn_cap",
+                          window=label)
 
     booked: str | None = None
     try:
@@ -249,13 +288,14 @@ async def run_job(session: AsyncSession, job: m.FollowupJob, gateway: LLMGateway
             {"text": out["text"], "reason_code": out.get("reason_code"),
              "has_new_info": True if turn else out.get("has_new_info"), "claims": out.get("claims", []),
              "max_touches": TURN_MAX_TOUCHES if turn else limits.get("max_touches", 2), "never_say": skill.manifest.never_say,
-             "route": route},
+             "route": route, "max_chars": None if handoff else max_chars},
             allowlist=allowed, effect_ceiling="internal", idempotency_key=str(job.id))
         if turn and not handoff and res.status == "blocked":  # one rewrite, told why, before a person is needed
             why = "; ".join(f"{v.code.value} {v.span or v.detail or ''}".strip() for v in res.violations)
             messages += [{"role": "assistant", "content": final}, {"role": "user", "content": (
                 f"Câu trả lời bị chặn: {why}. Viết lại cùng JSON: bỏ đúng các cụm bị cấm nêu trên, bỏ mọi "
                 "số/ngày không có trong catalog (kể cả số khách vừa nói), không hứa việc bạn không tự làm được. "
+                "TOO_LONG thì viết lại tối đa 3 câu ngắn, không làm hộ việc ngoài tư vấn. "
                 "Không chắc thì act handoff.")}]
             out2 = parse_json_object(await _loop(session, gateway, registry, ctx, run, messages, read_allow,
                                                  profile.max_tool_calls, profile.timeout_s))
@@ -265,7 +305,7 @@ async def run_job(session: AsyncSession, job: m.FollowupJob, gateway: LLMGateway
                 res = await registry.execute(ctx, session, "draft_followup", {
                     "text": out["text"], "reason_code": out["reason_code"], "has_new_info": True,
                     "claims": out.get("claims", []), "max_touches": TURN_MAX_TOUCHES,
-                    "never_say": skill.manifest.never_say, "route": route},
+                    "never_say": skill.manifest.never_say, "route": route, "max_chars": max_chars},
                     allowlist=allowed, effect_ceiling="internal", idempotency_key=f"{job.id}:rewrite")
         if shadow:  # written and validated like a real one, then put where only the owner reads it
             if res.status == "proposed":

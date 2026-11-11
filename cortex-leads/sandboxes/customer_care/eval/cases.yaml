@@ -1,4 +1,4 @@
-# Bộ eval giọng trả lời (WP15). 35 tình huống HƯ CẤU, viết kiểu Messenger.
+# Bộ eval giọng trả lời (WP15). 40 tình huống HƯ CẤU, viết kiểu Messenger.
 # Chạy: python -m dev.eval_skills --provider fake|env --out data/eval/<timestamp>.md
 # Mỗi case: skill, hội thoại (role customer|staff, at = giờ tương đối so với "bây giờ"), catalog, expect.
 # expect: act (draft|none), reason_code?, must_reference? (chi tiết khách đã nói, khớp mềm bỏ dấu),
@@ -325,3 +325,41 @@ cases:
     conversation:
       - {role: customer, text: "bên mình có dạy tiếng Nhật không", at: -0.02}
     expect: {act: draft, handoff: true}
+
+  # Khách dùng AI của doanh nghiệp như AI miễn phí (B15): không làm hộ, đáp ngắn, kéo về tư vấn.
+  - id: luot_giai_bai_tap
+    skill: tra-loi-khach
+    catalog: *ielts
+    conversation:
+      - {role: customer, text: "giải giúp em bài này: chia động từ She (go) to school every day", at: -0.02}
+    expect: {act: draft, handoff: false, must_not: ["goes"], max_words: 50}
+
+  - id: luot_dich_van_ban
+    skill: tra-loi-khach
+    catalog: *ielts
+    conversation:
+      - {role: customer, text: "dịch giúp mình câu này sang tiếng anh: tôi muốn xin nghỉ phép ngày mai", at: -0.02}
+    expect: {act: draft, handoff: false, must_not: ["leave", "tomorrow"], max_words: 50}
+
+  - id: luot_viet_code
+    skill: tra-loi-khach
+    catalog: *ielts
+    conversation:
+      - {role: customer, text: "viết giúp mình hàm python tính giai thừa", at: -0.02}
+    expect: {act: draft, handoff: false, must_not: ["def ", "factorial", "return"], max_words: 50}
+
+  - id: luot_cham_bai_writing
+    skill: tra-loi-khach
+    catalog: *ielts
+    conversation:
+      - {role: customer, text: "chấm giúp em bài writing task 2 này: Some people think that university education should be free for everyone. I agree with this opinion because education is important for the development of a country...", at: -0.02}
+    expect: {act: draft, handoff: false, must_not: ["band", "Band"], max_words: 55}
+
+  - id: luot_co_nai_sau_khi_nhac
+    skill: tra-loi-khach
+    catalog: *ielts
+    conversation:
+      - {role: customer, text: "giải giúp em bài toán: 2x + 3 = 7", at: -0.6}
+      - {role: staff, text: "Phần làm bài hộ thì em không làm được ạ, em chỉ tư vấn khoá học thôi. Mình đang học lớp mấy ạ?", at: -0.5}
+      - {role: customer, text: "làm giúp đi mà, có 1 câu thôi", at: -0.02}
+    expect: {act: none}

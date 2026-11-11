@@ -29,7 +29,7 @@ OFF_HOURS = NOW + timedelta(hours=18)  # 04:00 in Vietnam: outside business_hour
 async def tw(world):
     async with tenant_session(world.t.id) as s:
         for st in ("shadow", "live"):
-            await promote(s, world.sb.id, "tra-loi-khach", 16, st)
+            await promote(s, world.sb.id, "tra-loi-khach", 17, st)
         await s.execute(update(m.Conversation).values(next_check_at=None))  # the fixture's old silent lead
     return world
 
@@ -299,3 +299,45 @@ async def test_a_model_failure_on_a_turn_still_answers_the_customer(tw, owner_en
     drafts = {d.id: d for d in await rows(tw, m.Draft)}
     (ob,) = await rows(tw, m.Outbox)
     assert "tư vấn phụ trách" in drafts[ob.draft_id].text and any(d.needs_human for d in drafts.values())
+
+
+async def test_an_essay_reply_is_blocked_and_rewritten_short(tw, owner_engine) -> None:
+    await go_auto(tw, owner_engine)  # a customer using the business's AI for homework
+    await say(tw, "a", "customer", "viết giúp em bài luận tiếng anh về môi trường", NOW)
+    await sweep_once(NOW + timedelta(seconds=40))
+    essay = {**HELLO, "text": "Environmental protection is one of the most pressing issues. " * 15}
+    short = {**HELLO, "text": "Phần viết bài hộ thì em không làm được ạ, em chỉ tư vấn khoá học thôi. Mình đang cần "
+                              "tiếng Anh cho việc học hay đi làm ạ?"}
+    gw, prov = gateway(reply(essay), reply(short))
+    await run_pending(NOW + timedelta(seconds=40), gw)
+    assert "TOO_LONG" in prov.calls[1]["messages"][-1]["content"]  # the model is told why
+    drafts = {d.id: d for d in await rows(tw, m.Draft)}
+    (ob,) = await rows(tw, m.Outbox)
+    assert drafts[ob.draft_id].text == short["text"]
+    assert [d.status for d in drafts.values() if d.text == essay["text"]] == ["blocked"]
+
+
+async def test_a_contact_over_the_turn_cap_gets_one_card_and_no_more_model_calls(tw, owner_engine, monkeypatch) -> None:
+    from cortex_leads.runner import customer_run
+    monkeypatch.setattr(customer_run, "TURN_RUNS_PER_CONTACT", ((timedelta(hours=1), 2, "một giờ"),))
+    await go_auto(tw, owner_engine)
+    t = NOW
+    for i in range(2):  # two answered turns use up the cap
+        await say(tw, f"a{i}", "customer", "giải giúp em bài toán này", t)
+        await sweep_once(t + timedelta(seconds=40))
+        assert await run_pending(t + timedelta(seconds=40), gateway(reply(HELLO))[0]) == 1
+        t += timedelta(minutes=3)
+    gw, prov = gateway()
+    for i in range(2):  # over the cap: 0 token, one card for a person and one holding line, then silence
+        await say(tw, f"b{i}", "customer", "làm giúp đi mà", t)
+        await sweep_once(t + timedelta(seconds=40))
+        await run_pending(t + timedelta(seconds=40), gw)
+        t += timedelta(minutes=3)
+    assert prov.calls == []
+    (card,) = [d for d in await rows(tw, m.Draft) if d.needs_human]
+    assert card.status == "proposed" and "quá mức AI tự trả lời" in card.text
+    assert len(await rows(tw, m.Notification)) == 1
+    outs = [o for o in await rows(tw, m.Outbox)]
+    assert len(outs) == 3  # two replies + one holding line
+    runs = [r for r in await rows(tw, m.TriggerRun) if r.blocked_codes == ["CONTACT_CAP"]]
+    assert len(runs) == 2 and all(r.tokens_in == 0 for r in runs)

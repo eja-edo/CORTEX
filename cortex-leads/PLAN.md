@@ -60,7 +60,7 @@ Tổng ≤ 4.000 (DESIGN L3).
 - `envelope.py`:
   ```python
   Status = Literal["ok","proposed","blocked","not_found","ambiguous","error"]
-  class BlockedCode(StrEnum): WINDOW_CLOSED, NO_CONSENT, TOUCH_LIMIT, UNVERIFIED_CLAIM, FORBIDDEN_PHRASE, OWNER_IS_HUMAN, OPTED_OUT, NO_NEW_INFO, EFFECT_CEILING, NOT_ALLOWED, BUDGET, PAUSED
+  class BlockedCode(StrEnum): WINDOW_CLOSED, NO_CONSENT, TOUCH_LIMIT, UNVERIFIED_CLAIM, FORBIDDEN_PHRASE, OWNER_IS_HUMAN, OPTED_OUT, NO_NEW_INFO, TOO_LONG, EFFECT_CEILING, NOT_ALLOWED, BUDGET, PAUSED
   class ErrorCode(StrEnum): INVALID_ARGS, NOT_FOUND, AMBIGUOUS_REF, CONFLICT, UPSTREAM_UNAVAILABLE, PERMISSION_DENIED, INTERNAL
   class Violation(BaseModel): code: BlockedCode; span: str | None = None; detail: str | None = None
   class ErrorInfo(BaseModel): code: ErrorCode; retryable: bool = False; fields: list[str] = []

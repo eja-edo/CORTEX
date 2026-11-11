@@ -189,3 +189,10 @@ def test_the_same_instant_reads_differently_in_another_zone():
     ok = run("Lớp học thử 15/10 lúc 08:00 ạ", [{"value": "15/10", "source_id": "LH-A"}, {"value": "08:00", "source_id": "LH-A"}],
              [row], tz="America/New_York")  # 12:00 UTC = 08:00 EDT
     assert ok == []
+
+
+def test_a_reply_over_the_length_cap_is_blocked_and_no_cap_means_none() -> None:
+    essay = "Bài giải: " + "chia động từ ở thì hiện tại đơn. " * 30
+    (v,) = run(essay, max_chars=600)
+    assert v.code == BlockedCode.TOO_LONG and v.detail == f"{len(essay)}/600"
+    assert run(essay) == [] and run("Dạ em chào mình ạ.", max_chars=600) == []

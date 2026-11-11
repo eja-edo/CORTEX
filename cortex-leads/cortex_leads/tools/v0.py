@@ -117,6 +117,7 @@ class DraftArgs(ToolArgs):
     claims: list[Claim] = Field(default_factory=list, max_length=10)
     # Supplied by the runner from skill limits, not by the model (the model never sees this tool).
     max_touches: int = Field(default=2, ge=1, le=10)
+    max_chars: int | None = Field(default=None, ge=50, le=2000)  # runner-supplied, like max_touches
     never_say: list[str] = Field(default_factory=list, max_length=50)
     route: Literal["channel", "offchannel"] = "channel"  # offchannel: window closed, staff phones (R39)
 
@@ -261,7 +262,7 @@ def _make_draft_followup(clock: Clock):
         violations = validate_draft(  # DESIGN A7: the validator lives inside the write tool
             a.text, claims, rows, never_say=a.never_say, touches=conv.touches,
             max_touches=a.max_touches, opted_out=contact.opted_out or conv.state == "opted_out",
-            has_new_info=a.has_new_info, now=clock(), tz=tz)
+            has_new_info=a.has_new_info, now=clock(), tz=tz, max_chars=a.max_chars)
         run_exists = (await session.execute(
             select(m.TriggerRun.id).where(m.TriggerRun.id == ctx.run_id))).scalar()
         draft = m.Draft(
